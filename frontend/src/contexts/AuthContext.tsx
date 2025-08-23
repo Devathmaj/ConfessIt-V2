@@ -6,6 +6,7 @@ import { getCurrentUser } from '../services/api';
 
 // Used to define the structure of the User object
 export interface User {
+  id: string;
   Name: string;
   Regno: string;
   email?: string;
@@ -61,6 +62,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const decoded: any = jwtDecode(currentToken);
       setUser({
         ...userData,
+        id: decoded.sub,
         username: decoded.sub,
         user_role: userData.user_role || 'user',
       });

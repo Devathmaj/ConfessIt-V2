@@ -17,6 +17,11 @@ export const getConfessions = async (sortBy = 'popularity') => {
   return response.data;
 };
 
+export const getTotalConfessionsCount = async () => {
+    const response = await axios.get(`${API_URL}/confessions/total_count`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
 export const createConfession = async (confession: any) => {
   const response = await axios.post(`${API_URL}/confessions`, confession, { headers: getAuthHeaders() });
   return response.data;
@@ -29,6 +34,15 @@ export const reactToConfession = async (confessionId: string, reaction: string) 
     { headers: getAuthHeaders() }
   );
   return response.data;
+};
+
+export const reportConfession = async (confessionId: string, reason: string) => {
+    const response = await axios.post(
+        `${API_URL}/confessions/${confessionId}/report`,
+        { reason },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
 };
 
 // --- Comment Endpoints ---
@@ -58,6 +72,15 @@ export const dislikeComment = async (commentId: string) => {
     { headers: getAuthHeaders() }
   );
   return response.data;
+};
+
+export const reportComment = async (commentId: string, reason: string) => {
+    const response = await axios.post(
+        `${API_URL}/comments/${commentId}/report`,
+        { reason },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
 };
 
 // --- User & Auth Endpoints ---

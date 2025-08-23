@@ -1,241 +1,300 @@
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { CountdownTimer } from '@/components/ui/countdown-timer';
-import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { 
-  BarChart3, 
   Users, 
   Heart, 
-  AlertTriangle, 
-  TrendingUp, 
-  MessageSquare,
-  Shield,
+  MessageCircle,
   LogOut,
-  Eye,
-  Ban
+  ChevronRight,
+  Mail,
+  Activity,
+  Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getTotalConfessionsCount } from '../services/api';
+
+// Import the new Navigation component
 import { Navigation } from '@/components/Navigation';
 
-const mockAnalytics = [
-  { label: 'Total Users', value: '2,847', change: '+12%', icon: Users },
-  { label: 'Active Sessions', value: '1,247', change: '+8%', icon: TrendingUp },
-  { label: 'Confessions Today', value: '892', change: '+24%', icon: MessageSquare },
-  { label: 'Matches Made', value: '156', change: '+15%', icon: Heart },
-];
+// Import video and image assets
+import DashboardWebm from '@/assets/Dashboard.webm';
+import DashboardMp4 from '@/assets/Dashboard.mp4';
+import DashboardWebp from '@/assets/Dashboard.webp';
 
-const flaggedContent = [
-  { id: 1, type: 'confession', content: 'Inappropriate content example...', reporter: 'User123', time: '2 min ago' },
-  { id: 2, type: 'love-note', content: 'Spam message detected...', reporter: 'User456', time: '5 min ago' },
-  { id: 3, type: 'confession', content: 'Potentially harmful content...', reporter: 'User789', time: '8 min ago' },
-];
+// Interface for navigation items
+interface NavigationItem {
+  id: string;
+  title: string;
+  description: string;
+  icon: React.ComponentType<any>;
+  value?: string | number;
+  isLoading?: boolean;
+}
 
+// Mock data for recent activities
 const recentActivity = [
-  'User joined ConfessIt - 2 min ago',
-  'Confession reported by User123 - 3 min ago',
-  'Match made between User456 and User789 - 5 min ago',
-  'Love note sent - 7 min ago',
-  'User updated profile - 10 min ago',
+  'User "JohnDoe" signed up.',
+  'A new confession was posted anonymously.',
+  'Love note from "JaneDoe" is pending review.',
+  'Match made between two users.',
+  'User "PeterPan" updated their profile.',
 ];
 
 export const AdminDashboard = () => {
   const { user, logout } = useAuth();
+  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
+  const [totalConfessions, setTotalConfessions] = useState<number | null>(null);
+  const [isLoadingConfessions, setIsLoadingConfessions] = useState(true);
 
-  const handleRemoveContent = (contentId: number) => {
-    toast.success(`Content ${contentId} has been removed successfully 🛡️`);
+  useEffect(() => {
+    // Set profile picture URL if available
+    if (user?.profile_picture_id) {
+      setProfilePictureUrl(`http://localhost:8001/profile_pictures/${user.profile_picture_id}`);
+    }
+
+    // Fetch total confessions count
+    const fetchConfessionCount = async () => {
+      try {
+        setIsLoadingConfessions(true);
+        const count = await getTotalConfessionsCount();
+        setTotalConfessions(count);
+      } catch (error) {
+        console.error('Failed to fetch total confessions count:', error);
+        toast.error('Could not load total confessions.');
+      } finally {
+        setIsLoadingConfessions(false);
+      }
+    };
+
+    fetchConfessionCount();
+  }, [user]);
+  
+  // Data for the main navigation cards
+  const adminNavigationItems: NavigationItem[] = [
+    {
+      id: 'total-users',
+      title: 'Total Users',
+      description: 'Total registered users',
+      icon: Users,
+      value: '2,847', // Mock data
+    },
+    {
+      id: 'active-sessions',
+      title: 'Active Sessions',
+      description: 'Users currently online',
+      icon: Activity,
+      value: '1,247', // Mock data
+    },
+    {
+      id: 'total-confessions',
+      title: 'Total Confessions',
+      description: 'All confessions ever made',
+      icon: MessageCircle,
+      value: totalConfessions ?? '...',
+      isLoading: isLoadingConfessions,
+    },
+    {
+      id: 'matches-made',
+      title: 'Matches Made',
+      description: 'Successful matches',
+      icon: Heart,
+      value: '156', // Mock data
+    }
+  ];
+
+  /**
+   * Used to handle navigation to different application pages.
+   * @param {string} pageId - The identifier for the page to navigate to.
+   */
+  const handleNavigation = (pageId: string) => {
+    toast.info(`Navigating to ${pageId} section...`);
+    // Add actual navigation logic here if needed
   };
 
-  const handleViewContent = (contentId: number) => {
-    toast.info(`Viewing detailed report for content ${contentId}`);
-  };
-
+  /**
+   * Used to log the user out of the application and display a farewell message.
+   */
   const handleLogout = () => {
     logout();
-    toast.success('Admin session ended 👑');
+    toast.success('Goodbye! Come back soon ❤️');
+  };
+
+  /**
+   * A reusable card component with a refined glassmorphism style.
+   */
+  const GlassCard = ({ children, className, ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
+    <div 
+      className={`group relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg transition-all duration-300 overflow-hidden hover:bg-white/10 hover:border-white/20 ${className}`}
+      {...props}
+    >
+      <div className="absolute -inset-1 bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+      <div className="relative z-10 h-full">
+        {children}
+      </div>
+    </div>
+  );
+  
+  const StatCard = ({ item }: { item: NavigationItem }) => {
+    const IconComponent = item.icon;
+    return (
+      <GlassCard 
+        key={item.id}
+        className="p-6 flex flex-col justify-between"
+      >
+        <div className="flex justify-between items-start">
+          <div>
+            <p className="text-sm text-white/70">{item.title}</p>
+            {item.isLoading ? (
+              <div className="h-8 w-24 bg-white/20 rounded animate-pulse mt-1"></div>
+            ) : (
+              <p className="text-3xl font-bold mt-1">{item.value}</p>
+            )}
+            <p className="text-xs text-white/50 mt-2">{item.description}</p>
+          </div>
+          <div className="bg-gradient-to-br from-pink-500/20 to-rose-500/20 p-3 rounded-lg">
+            <IconComponent className="w-6 h-6 text-white" />
+          </div>
+        </div>
+      </GlassCard>
+    );
   };
 
   return (
-    <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
+    <div className="min-h-screen w-full text-white font-sans overflow-hidden">
       <Navigation />
-      <FloatingHearts />
-      
-      {/* Header */}
-      <div className="max-w-7xl mx-auto mb-8">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-          <div className="text-center lg:text-left">
-            <h1 className="text-5xl font-dancing text-romantic mb-2">
-              Admin Dashboard 👑
-            </h1>
-            <p className="text-xl text-muted-foreground">
-              Welcome, {user?.Name} - Keep ConfessIt safe and lovely!
-            </p>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <CountdownTimer />
-            <Button onClick={handleLogout} variant="outline" size="sm">
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
-          </div>
-        </div>
+
+      {/* Background Video */}
+      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10">
+        <video 
+          poster={DashboardWebp}
+          autoPlay 
+          loop 
+          muted 
+          playsInline
+          className="w-full h-full object-cover"
+        >
+          <source src={DashboardWebm} type="video/webm" />
+          <source src={DashboardMp4} type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-black/70 via-black/40 to-black/70"></div>
       </div>
 
-      <div className="max-w-7xl mx-auto space-y-8">
-        {/* Analytics Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {mockAnalytics.map((stat, index) => {
-            const IconComponent = stat.icon;
-            return (
-              <Card key={index} className="confession-card">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    {stat.label}
-                  </CardTitle>
-                  <IconComponent className="h-5 w-5 text-romantic" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-romantic">{stat.value}</div>
-                  <p className="text-xs text-green-600 font-medium">
-                    {stat.change} from yesterday
-                  </p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Flagged Content */}
-          <div className="lg:col-span-2">
-            <Card className="confession-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-2xl font-dancing text-romantic">
-                  <AlertTriangle className="w-6 h-6 text-orange-500" />
-                  Flagged Content
-                </CardTitle>
-                <CardDescription>
-                  Content that requires moderator attention
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {flaggedContent.map((item) => (
-                    <div key={item.id} className="p-4 bg-gradient-love rounded-lg border border-orange-200">
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-sm font-medium text-romantic-dark capitalize">
-                          {item.type} #{item.id}
-                        </span>
-                        <span className="text-xs text-muted-foreground">{item.time}</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground mb-3 truncate">
-                        "{item.content}"
-                      </p>
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs text-muted-foreground">
-                          Reported by: {item.reporter}
-                        </span>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleViewContent(item.id)}
-                          >
-                            <Eye className="w-3 h-3 mr-1" />
-                            View
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleRemoveContent(item.id)}
-                          >
-                            <Ban className="w-3 h-3 mr-1" />
-                            Remove
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+      <div className="min-h-screen p-4 pt-28 flex flex-col items-center justify-center relative z-10">
+        {/* Header */}
+        <header className="w-full max-w-6xl flex justify-between items-center mb-8 mt-4">
+          <div className="text-left">
+            <h1 className="text-2xl lg:text-3xl font-bold bg-gradient-to-r from-pink-300 to-purple-300 bg-clip-text text-transparent">
+              Welcome admin, {user?.Name}!
+            </h1>
+            <p className="text-sm text-white/70 mt-1">
+              Moderate and monitor the application.
+            </p>
           </div>
+          <Button 
+            onClick={handleLogout} 
+            variant="ghost" 
+            className="bg-white/5 hover:bg-white/10 text-white rounded-full text-sm px-4 py-2 border border-white/10"
+          >
+            <LogOut className="w-4 h-4 mr-2" />
+            Logout
+          </Button>
+        </header>
 
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Quick Actions */}
-            <Card className="confession-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-xl font-dancing text-romantic">
-                  <Shield className="w-5 h-5" />
-                  Quick Actions
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Button className="w-full btn-romantic" size="sm">
-                  <BarChart3 className="w-4 h-4 mr-2" />
-                  View Full Analytics
-                </Button>
-                <Button className="w-full btn-love" size="sm">
-                  <Users className="w-4 h-4 mr-2" />
-                  Manage Users
-                </Button>
-                <Button className="w-full btn-love" size="sm">
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  Content Reports
-                </Button>
-              </CardContent>
-            </Card>
+        {/* Main Content */}
+        <main className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
+          
+          {/* Left Column: Admin Info & Recent Activity */}
+          <div className="lg:col-span-4 flex flex-col gap-6">
+            {/* Admin Info Card */}
+            <GlassCard className="p-6 flex flex-col">
+              <div className="flex items-center gap-4 mb-5">
+                <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center overflow-hidden border-2 border-white/30 shadow-lg">
+                  {profilePictureUrl ? (
+                    <img
+                      src={profilePictureUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  ) : null}
+                  {!profilePictureUrl && (
+                    <span className="text-xl font-bold text-white">
+                      {user?.Name?.charAt(0)}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <p className="font-bold text-lg">{user?.Name}</p>
+                  <p className="text-sm text-white/70 mt-1">Reg: {user?.Regno}</p>
+                </div>
+              </div>
+              
+              <Button 
+                onClick={() => handleNavigation('profile')}
+                className="w-full bg-white/5 hover:bg-white/10 text-white mt-2 justify-between"
+                variant="outline"
+              >
+                <span>View Profile</span>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </GlassCard>
 
             {/* Recent Activity */}
-            <Card className="confession-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-xl font-dancing text-romantic">
-                  <TrendingUp className="w-5 h-5" />
-                  Recent Activity
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {recentActivity.map((activity, index) => (
-                    <div
-                      key={index}
-                      className="text-sm text-muted-foreground p-2 bg-gradient-love rounded animate-fade-in"
-                      style={{ animationDelay: `${index * 0.1}s` }}
-                    >
-                      {activity}
+            <GlassCard className="p-6 flex-grow flex flex-col">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <Activity className="w-5 h-5 text-pink-400" />
+                Recent Activity
+              </h3>
+              <div className="space-y-4 overflow-y-auto pr-2 -mr-2">
+                {recentActivity.map((activity, index) => (
+                  <div 
+                    key={index} 
+                    className="p-3 bg-gradient-to-r from-white/5 to-white/0 rounded-lg text-sm text-white/90 border-l-2 border-pink-500/50"
+                  >
+                    <div className="flex items-center">
+                      <div className="flex-shrink-0 mr-3">
+                        <div className="w-2 h-2 rounded-full bg-pink-500"></div>
+                      </div>
+                      <p>{activity}</p>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* System Health */}
-            <Card className="confession-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-xl font-dancing text-romantic">
-                  <Heart className="w-5 h-5 animate-pulse-heart" fill="currentColor" />
-                  System Health
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Server Status:</span>
-                  <span className="font-semibold text-green-600">Healthy</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Response Time:</span>
-                  <span className="font-semibold text-romantic">89ms</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Uptime:</span>
-                  <span className="font-semibold text-romantic">99.9%</span>
-                </div>
-              </CardContent>
-            </Card>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
           </div>
-        </div>
+
+          {/* Center Column: Main Stats */}
+          <div className="lg:col-span-8">
+            <div className="grid grid-cols-2 gap-5">
+              {adminNavigationItems.map((item) => (
+                <StatCard key={item.id} item={item} />
+              ))}
+            </div>
+            
+            {/* Love Notes Pending Review */}
+            <GlassCard className="cursor-pointer p-6 mt-5 flex items-center justify-between" onClick={() => handleNavigation('love-notes-review')}>
+              <div className="flex items-center gap-4">
+                <div className="bg-gradient-to-br from-purple-500/20 to-indigo-500/20 p-3 rounded-xl">
+                  <Mail className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold">Love Notes Pending Review</h3>
+                  <p className="text-sm text-white/70">Moderate user-submitted love notes</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-white/50" />
+            </GlassCard>
+          </div>
+        </main>
+
+        {/* Footer Note */}
+        <footer className="text-center text-xs text-white/50 mt-4 mb-6">
+          Admin Control Panel | ConfessIt
+        </footer>
       </div>
     </div>
   );

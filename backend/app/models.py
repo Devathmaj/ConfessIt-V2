@@ -6,28 +6,6 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from bson import ObjectId
 
-# Custom ObjectId class with a Pydantic validator
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, _):
-        """
-        Used to validate that the provided value is a valid ObjectId.
-        It handles cases where the value is already an ObjectId or a string.
-        """
-        if isinstance(v, ObjectId):
-            return v
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid objectid")
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, field_schema):
-        field_schema.update(type="string")
-
 class Token(BaseModel):
     """
     Pydantic model for the JWT access token response sent to the client.
@@ -49,6 +27,12 @@ class ReactionCreate(BaseModel):
 class CommentCreate(BaseModel):
     message: str
 
+class ReportCreate(BaseModel):
+    """
+    Model for creating a report (input from the client).
+    """
+    reason: str
+
 class UserInfo(BaseModel):
     """
     Represents denormalized user information to be embedded in comments.
@@ -62,7 +46,7 @@ class ConfessionComment(BaseModel):
     """
     Represents a comment on a confession post.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     confession_id: str
     user_info: UserInfo
     message: str
@@ -74,6 +58,10 @@ class ConfessionComment(BaseModel):
     dislike_count: int = 0
     
     user_reaction: Optional[str] = None
+    
+    report_count: int = 0
+    reported_by: List[str] = Field(default_factory=list)
+
 
     class Config:
         arbitrary_types_allowed = True
@@ -85,16 +73,17 @@ class Confession(BaseModel):
     """
     Represents a single confession post within the application.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     confession: str
     is_anonymous: bool
     is_comment: bool
     timestamp: Optional[datetime] = None
     user_id: str
-    times_reported: Optional[int] = 0
-    comments: List[ConfessionComment] = Field(default_factory=list)
-
+    report_count: int = 0
+    reported_by: List[str] = Field(default_factory=list)
     reactions: Dict[str, List[str]] = Field(default_factory=dict)
+    
+    comments: List[ConfessionComment] = Field(default_factory=list)
 
     heart_count: int = 0
     haha_count: int = 0
@@ -109,12 +98,29 @@ class Confession(BaseModel):
         json_encoders = {ObjectId: str}
         populate_by_name = True
 
+class Report(BaseModel):
+    """
+    Represents a report made by a user for a comment or a confession.
+    """
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    content_id: str
+    content_type: str # 'comment' or 'confession'
+    reported_by_id: str
+    reported_by_name: str
+    reason: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
 
 class UserDetails(BaseModel):
     """
     Stores detailed information for a user profile.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     Regno: str
     Name: str
     email: EmailStr
@@ -143,7 +149,7 @@ class LoginToken(BaseModel):
     """
     Represents a securely stored authentication token in the database.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     user_id: str
     token_hash: str
     issued_at: datetime
@@ -167,14 +173,14 @@ class MatchRequest(BaseModel):
     """
     Models a matchmaking request, capturing the initial interaction between two users.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    from_user: PyObjectId
-    to_user: PyObjectId
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    from_user: ObjectId
+    to_user: ObjectId
     message: str
     status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     decision_at: Optional[datetime] = None
-    conversation_id: Optional[PyObjectId] = None
+    conversation_id: Optional[ObjectId] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -185,8 +191,8 @@ class Conversation(BaseModel):
     """
     Represents a private conversation between two matched users.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    participants: List[PyObjectId]
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    participants: List[ObjectId]
     status: str = "active"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -201,12 +207,12 @@ class Message(BaseModel):
     """
     Defines the structure for a single message within a conversation.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    conversation_id: PyObjectId
-    sender: PyObjectId
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    conversation_id: ObjectId
+    sender: ObjectId
     text: str
     sent_at: datetime = Field(default_factory=datetime.utcnow)
-    read_by: List[PyObjectId] = []
+    read_by: List[ObjectId] = []
 
     class Config:
         arbitrary_types_allowed = True
@@ -217,7 +223,7 @@ class LoveNoteTemplate(BaseModel):
     """
     Stores predefined templates for Love Notes.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     name: str
     preview_image: str
     description: str
@@ -232,9 +238,9 @@ class LoveNote(BaseModel):
     """
     Represents an individual Love Note sent from one user to another.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    sender_id: PyObjectId
-    recipient_id: PyObjectId
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    sender_id: ObjectId
+    recipient_id: ObjectId
     image_base64: str
     message_text: str
     is_anonymous: bool = False
