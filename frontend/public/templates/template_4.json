@@ -1,0 +1,54 @@
+{
+  "template_name": "confession_template_4",
+  "image": "template_4.png",
+  "fields": [
+    {
+      "name": "message_text",
+      "type": "text",
+      "x": 575,
+      "y": 225,
+      "width": 771,
+      "height": 255,
+      "font": {
+        "size": 32,
+        "color": "#000000",
+        "style": "normal"
+      }
+    },
+    {
+      "name": "from_label",
+      "type": "static_text",
+      "value": "From",
+      "x": 1044,
+      "y": 540,
+      "width": 204,
+      "height": 45,
+      "font": {
+        "size": 24,
+        "color": "#555555",
+        "style": "italic"
+      }
+    },
+    {
+      "name": "sender_name",
+      "type": "text",
+      "x": 971,
+      "y": 614,
+      "width": 487,
+      "height": 63,
+      "font": {
+        "size": 28,
+        "color": "#000000",
+        "style": "bold"
+      }
+    },
+    {
+      "name": "emoji",
+      "type": "emoji",
+      "x": 844,
+      "y": 832,
+      "width": 236,
+      "height": 103
+    }
+  ]
+}
