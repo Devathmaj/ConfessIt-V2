@@ -149,32 +149,86 @@ export const LoveNotesPage = () => {
                 }
 
                 // Wrap text and render
-                wrapText(ctx, textToRender, field.x, field.y, field.width, field.font?.size || 16);
+                wrapText(ctx, textToRender, field.x, field.y, field.width, field.height, field.font?.size || 16);
             });
         };
 
     }, [selectedTemplate, noteMessage, isAnonymous, selectedEmojis, user]);
 
-    // Used to wrap text within a specified area
-    const wrapText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
-        const words = text.split(' ');
-        let line = '';
-        let currentY = y;
+    // Used to wrap text within a specified area, handling word wrapping, character wrapping for long words, and height constraints.
+    const wrapText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, maxHeight: number, lineHeight: number) => {
+        const lines: string[] = [];
+        // Split text by newline characters first to respect manual line breaks.
+        const paragraphs = text.split('\n');
 
-        for (let n = 0; n < words.length; n++) {
-            const testLine = line + words[n] + ' ';
-            const metrics = context.measureText(testLine);
-            const testWidth = metrics.width;
-            if (testWidth > maxWidth && n > 0) {
-                context.fillText(line, x + maxWidth / 2, currentY);
-                line = words[n] + ' ';
-                currentY += lineHeight;
-            } else {
-                line = testLine;
+        for (const paragraph of paragraphs) {
+            // Handle word wrapping for each paragraph.
+            const words = paragraph.split(' ');
+            let currentLine = '';
+            for (const word of words) {
+                const testLine = currentLine ? `${currentLine} ${word}` : word;
+                const metrics = context.measureText(testLine);
+                if (metrics.width > maxWidth && currentLine) {
+                    lines.push(currentLine);
+                    currentLine = word;
+                } else {
+                    currentLine = testLine;
+                }
             }
+            lines.push(currentLine);
         }
-        context.fillText(line, x + maxWidth / 2, currentY);
+        
+        // Secondary pass to handle lines that are still too wide (e.g., a single long word without spaces).
+        const wrappedLines: string[] = [];
+        lines.forEach(line => {
+            let tempLine = '';
+            if (context.measureText(line).width > maxWidth) {
+                // This line is too wide, so we break it character by character.
+                for(let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    const testLine = tempLine + char;
+                    if (context.measureText(testLine).width > maxWidth) {
+                        wrappedLines.push(tempLine);
+                        tempLine = char;
+                    } else {
+                        tempLine = testLine;
+                    }
+                }
+                wrappedLines.push(tempLine);
+            } else {
+                // The line fits, so we can add it as is.
+                wrappedLines.push(line);
+            }
+        });
+
+        // Determine which lines are visible based on the maxHeight.
+        const maxLines = Math.floor(maxHeight / lineHeight);
+        const visibleLines = wrappedLines.slice(0, maxLines);
+
+        // Add an ellipsis (...) if the text is truncated due to height constraints.
+        if (wrappedLines.length > maxLines && visibleLines.length > 0) {
+            const lastLineIndex = visibleLines.length - 1;
+            let lastLine = visibleLines[lastLineIndex];
+            let truncatedLine = lastLine;
+            while (context.measureText(truncatedLine + '...').width > maxWidth && truncatedLine.length > 0) {
+                truncatedLine = truncatedLine.slice(0, -1);
+            }
+            visibleLines[lastLineIndex] = truncatedLine + '...';
+        }
+
+        // Aligns the text block to the top of the defined area for a natural reading flow.
+        const startY = y + lineHeight / 2; // Offset by half a line height because textBaseline is 'middle'.
+
+        // Draw the visible lines onto the canvas.
+        visibleLines.forEach((line, index) => {
+            const lineY = startY + (index * lineHeight);
+             // Ensure we don't draw text outside of the designated height.
+            if (lineY < y + maxHeight + lineHeight / 2) {
+                 context.fillText(line, x + maxWidth / 2, lineY);
+            }
+        });
     };
+
 
     // Used to toggle an emoji in the selection
     const toggleEmoji = (emoji: string) => {
