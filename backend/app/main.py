@@ -4,8 +4,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-# Corrected: Use explicit relative imports within the 'app' package
-from .routers import auth, profile, matchmaking, confessions
+from .routers import auth, profile, matchmaking, confessions, love_notes
 from .dependencies import get_db
 from pymongo.database import Database
 import uvicorn
@@ -112,6 +111,7 @@ app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(matchmaking.router)
 app.include_router(confessions.router)
+app.include_router(love_notes.router)
 
 
 # ----------------------

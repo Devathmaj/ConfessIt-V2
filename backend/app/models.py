@@ -127,6 +127,8 @@ class UserDetails(BaseModel):
     interests: Optional[List[str]] = []
     isMatchmaking: bool
     isNotifications: bool
+    isLovenotesRecieve: bool = True
+    isLovenotesSend: bool = False
     reported_count: int = 0
     last_login_time: Optional[datetime] = None
     last_login_ip: Optional[str] = None

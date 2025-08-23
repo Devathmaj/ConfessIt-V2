@@ -16,6 +16,7 @@ export interface User {
   interests?: string[];
   isMatchmaking?: boolean;
   isNotifications?: boolean;
+  isLovenotesRecieve?: boolean;
   role?: 'user' | 'admin';
 }
 

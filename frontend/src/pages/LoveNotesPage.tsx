@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -7,16 +7,24 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
     Mail,
     Palette,
     Send,
     Download,
     X,
-    MessageCircle
+    MessageCircle,
+    Users,
+    Search,
+    Info
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { getAllUsers, getClasses, sendLoveNote } from '@/services/api';
 
 // Used to define the structure for a template's field
 interface TemplateField {
@@ -51,6 +59,11 @@ interface LoveNote {
     emojis: string[];
 }
 
+// Used to define the structure for a user in the recipient list
+interface Recipient extends User {
+    _id: string;
+}
+
 const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '💫', '⭐', '🌟', '💎', '👑'];
 const availableFonts = ['sans-serif', 'serif', 'monospace', 'cursive'];
 const availableFontStyles = ['normal', 'bold', 'italic'];
@@ -64,7 +77,7 @@ const mockReceivedNotes: LoveNote[] = [
         template: 'template_1.png',
         anonymous: true,
         timestamp: new Date('2024-02-14T10:30:00'),
-        emojis: ['💕', '🌟', '✨']
+        emojis: ['�', '🌟', '✨']
     },
     {
         id: '2',
@@ -90,23 +103,42 @@ export const LoveNotesPage = () => {
     const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    // Used to fetch templates from the public directory
+    // State for recipient selection modal
+    const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
+    const [allUsers, setAllUsers] = useState<Recipient[]>([]);
+    const [classes, setClasses] = useState<string[]>([]);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedClass, setSelectedClass] = useState('All');
+    const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
+
+
+    // Used to fetch templates, users, and classes
     useEffect(() => {
-        const fetchTemplates = async () => {
+        const fetchInitialData = async () => {
             try {
+                // Fetch templates
                 const templatePromises = Array.from({ length: 6 }, (_, i) =>
                     fetch(`/templates/template_${i + 1}.json`).then(res => res.json())
                 );
                 const loadedTemplates = await Promise.all(templatePromises);
                 setTemplates(loadedTemplates);
                 setSelectedTemplate(loadedTemplates[0]);
+
+                // Fetch users and classes
+                const [usersData, classesData] = await Promise.all([
+                    getAllUsers(),
+                    getClasses()
+                ]);
+                setAllUsers(usersData);
+                setClasses(['All', ...classesData]);
+
             } catch (error) {
-                console.error("Failed to load templates:", error);
-                toast.error("Could not load the note templates. Please try again later.");
+                console.error("Failed to load initial data:", error);
+                toast.error("Could not load necessary data. Please try again later.");
             }
         };
 
-        fetchTemplates();
+        fetchInitialData();
     }, []);
 
     // Used to draw the content on the canvas
@@ -152,21 +184,16 @@ export const LoveNotesPage = () => {
                         break;
                     case 'emoji':
                         if (selectedEmoji) {
-                            // Used to save the current context state
                             const originalFont = ctx.font;
-                            // Used to set a much larger font size specifically for the emoji sticker
                             ctx.font = `120px sans-serif`;
                             ctx.fillText(selectedEmoji, field.x + field.width / 2, field.y + field.height / 2);
-                            // Used to restore the original font for other fields
                             ctx.font = originalFont;
                         }
-                        return; // Skip default text rendering for emoji
+                        return; 
                 }
                 
-                // Used to construct and set the font string for the current field
                 ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
                 
-                // Used to wrap text and render it on the canvas
                 if (field.type !== 'emoji') {
                     wrapText(ctx, textToRender, field.x, field.y, field.width, field.height, fontSize);
                 }
@@ -178,11 +205,9 @@ export const LoveNotesPage = () => {
     // Used to wrap and center text within a specified area.
     const wrapText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, maxHeight: number, lineHeight: number) => {
         const lines: string[] = [];
-        // Used to split text by newline characters to respect manual line breaks.
         const paragraphs = text.split('\n');
 
         for (const paragraph of paragraphs) {
-            // Used to handle word wrapping for each paragraph.
             const words = paragraph.split(' ');
             let currentLine = '';
             for (const word of words) {
@@ -198,12 +223,10 @@ export const LoveNotesPage = () => {
             lines.push(currentLine);
         }
         
-        // Used to handle lines that are still too wide (e.g., a single long word).
         const wrappedLines: string[] = [];
         lines.forEach(line => {
             let tempLine = '';
             if (context.measureText(line).width > maxWidth) {
-                // Used to break the line character by character if it's too wide.
                 for(let i = 0; i < line.length; i++) {
                     const char = line[i];
                     const testLine = tempLine + char;
@@ -216,16 +239,13 @@ export const LoveNotesPage = () => {
                 }
                 wrappedLines.push(tempLine);
             } else {
-                // Used to add the line as is if it fits.
                 wrappedLines.push(line);
             }
         });
 
-        // Used to determine which lines are visible based on the maxHeight.
         const maxLines = Math.floor(maxHeight / lineHeight);
         const visibleLines = wrappedLines.slice(0, maxLines);
 
-        // Used to add an ellipsis if the text is truncated.
         if (wrappedLines.length > maxLines && visibleLines.length > 0) {
             const lastLineIndex = visibleLines.length - 1;
             let lastLine = visibleLines[lastLineIndex];
@@ -236,12 +256,9 @@ export const LoveNotesPage = () => {
             visibleLines[lastLineIndex] = truncatedLine + '...';
         }
 
-        // Used to calculate the total height of the rendered text block.
         const totalTextHeight = visibleLines.length * lineHeight;
-        // Used to calculate the starting Y position to vertically center the text block.
         const startY = (y + maxHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
 
-        // Used to draw the visible lines onto the canvas.
         visibleLines.forEach((line, index) => {
             const lineY = startY + (index * lineHeight);
             context.fillText(line, x + maxWidth / 2, lineY);
@@ -250,19 +267,45 @@ export const LoveNotesPage = () => {
 
     // Used to handle the selection of a single emoji sticker.
     const handleEmojiSelect = (emoji: string) => {
-        setSelectedEmoji(prev => (prev === emoji ? null : emoji)); // Toggles selection
+        setSelectedEmoji(prev => (prev === emoji ? null : emoji));
+    };
+    
+    // Used to open the recipient modal after validation
+    const handleOpenRecipientModal = () => {
+        if (!noteMessage.trim()) {
+            toast.error('Please write a message before sending!');
+            return;
+        }
+        setIsRecipientModalOpen(true);
     };
 
-    // Used to send the note
-    const sendNote = () => {
-        if (!noteMessage.trim()) {
-            toast.error('Please write a message!');
+    // Used to send the note after confirming recipient
+    const handleConfirmAndSend = async () => {
+        if (!selectedRecipient) {
+            toast.error("Please select a recipient.");
             return;
         }
 
-        toast.success('Love note sent! 💕');
-        setNoteMessage('');
-        setSelectedEmoji(null);
+        try {
+            await sendLoveNote({
+                recipient_id: selectedRecipient._id,
+                template_name: selectedTemplate?.template_name,
+                message: noteMessage,
+                stickers: selectedEmoji ? [selectedEmoji] : [],
+                is_anonymous: isAnonymous,
+            });
+            toast.success('Love note sent for review! 💕');
+            setIsRecipientModalOpen(false);
+            setNoteMessage('');
+            setSelectedEmoji(null);
+            setSelectedRecipient(null);
+            setSearchTerm('');
+            setSelectedClass('All');
+        } catch (error: any) {
+            console.error("Failed to send love note:", error);
+            const errorMessage = error.response?.data?.detail || "Failed to send love note. Please try again.";
+            toast.error(errorMessage);
+        }
     };
 
     // Used to download the note as an image
@@ -278,222 +321,319 @@ export const LoveNotesPage = () => {
         }
     };
 
+    // Used to filter users based on search term and class
+    const filteredUsers = useMemo(() => {
+        return allUsers.filter(u => {
+            const nameMatch = u.Name.toLowerCase().includes(searchTerm.toLowerCase());
+            const classMatch = selectedClass === 'All' || u.which_class === selectedClass;
+            return nameMatch && classMatch;
+        });
+    }, [allUsers, searchTerm, selectedClass]);
+
     return (
-        <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
-            <Navigation />
-            <FloatingHearts />
+        <>
+            <div className="min-h-screen p-4 pt-24">
+                <Navigation />
+                <FloatingHearts />
 
-            {/* Header */}
-            <div className="max-w-7xl mx-auto mb-8">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-                    <div className="text-center lg:text-left">
-                        <h1 className="text-5xl font-dancing text-romantic mb-2">
-                            Love Notes & Cards 💌
-                        </h1>
-                        <p className="text-xl text-muted-foreground">
-                            Create and share beautiful digital love notes
-                        </p>
+                {/* Header */}
+                <div className="max-w-7xl mx-auto mb-8">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                        <div className="text-center lg:text-left">
+                            <h1 className="text-5xl font-dancing text-romantic mb-2">
+                                Love Notes & Cards 💌
+                            </h1>
+                            <p className="text-xl text-muted-foreground">
+                                Create and share beautiful digital love notes
+                            </p>
+                        </div>
+                        <CountdownTimer />
                     </div>
-                    <CountdownTimer />
                 </div>
-            </div>
 
-            {/* Tab Navigation */}
-            <div className="max-w-7xl mx-auto mb-8">
-                <div className="flex gap-4 justify-center">
-                    <Button
-                        onClick={() => setActiveTab('create')}
-                        variant={activeTab === 'create' ? 'default' : 'outline'}
-                        className="font-dancing text-lg px-8"
-                    >
-                        <Palette className="w-5 h-5 mr-2" />
-                        Create Note
-                    </Button>
-                    <Button
-                        onClick={() => setActiveTab('inbox')}
-                        variant={activeTab === 'inbox' ? 'default' : 'outline'}
-                        className="font-dancing text-lg px-8"
-                    >
-                        <Mail className="w-5 h-5 mr-2" />
-                        Inbox ({mockReceivedNotes.length})
-                    </Button>
+                {/* Tab Navigation */}
+                <div className="max-w-7xl mx-auto mb-8">
+                    <div className="flex gap-4 justify-center">
+                        <Button
+                            onClick={() => setActiveTab('create')}
+                            variant={activeTab === 'create' ? 'default' : 'outline'}
+                            className="font-dancing text-lg px-8"
+                        >
+                            <Palette className="w-5 h-5 mr-2" />
+                            Create Note
+                        </Button>
+                        <Button
+                            onClick={() => setActiveTab('inbox')}
+                            variant={activeTab === 'inbox' ? 'default' : 'outline'}
+                            className="font-dancing text-lg px-8"
+                        >
+                            <Mail className="w-5 h-5 mr-2" />
+                            Inbox ({mockReceivedNotes.length})
+                        </Button>
+                    </div>
                 </div>
-            </div>
 
-            <div className="max-w-7xl mx-auto">
-                {activeTab === 'create' ? (
-                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                     {/* Left Column: Editor */}
-                     <div className="lg:col-span-1 space-y-6">
-                         <Card className="confession-card">
-                             <CardHeader>
-                                 <CardTitle className="text-2xl font-dancing text-romantic">Customize Your Note</CardTitle>
-                             </CardHeader>
-                             <CardContent className="space-y-6">
-                                 {/* Template Selection */}
-                                 <div>
-                                     <Label className="text-romantic font-semibold mb-3 block">Choose a Template</Label>
-                                     <div className="grid grid-cols-3 gap-3">
-                                         {templates.map((template) => (
-                                             <button
-                                                 key={template.template_name}
-                                                 onClick={() => setSelectedTemplate(template)}
-                                                 className={`p-2 rounded-lg border-2 transition-all duration-300 hover:scale-105 ${selectedTemplate?.template_name === template.template_name
-                                                         ? 'border-romantic'
-                                                         : 'border-muted hover:border-romantic'
-                                                     }`}
-                                             >
-                                                 <img src={`/templates/${template.image}`} alt={template.template_name} className="w-full h-auto rounded" />
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
+                <div className="max-w-7xl mx-auto">
+                    {activeTab === 'create' ? (
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* Left Column: Editor */}
+                        <div className="lg:col-span-1 space-y-6">
+                            <Card className="confession-card">
+                                <CardHeader>
+                                    <CardTitle className="text-2xl font-dancing text-romantic">Customize Your Note</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-6">
+                                    {/* Template Selection */}
+                                    <div>
+                                        <Label className="text-romantic font-semibold mb-3 block">Choose a Template</Label>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            {templates.map((template) => (
+                                                <button
+                                                    key={template.template_name}
+                                                    onClick={() => setSelectedTemplate(template)}
+                                                    className={`p-2 rounded-lg border-2 transition-all duration-300 hover:scale-105 ${selectedTemplate?.template_name === template.template_name
+                                                            ? 'border-romantic'
+                                                            : 'border-muted hover:border-romantic'
+                                                        }`}
+                                                >
+                                                    <img src={`/templates/${template.image}`} alt={template.template_name} className="w-full h-auto rounded" />
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
 
-                                 {/* Font Selection */}
-                                 <div>
-                                     <Label className="text-romantic font-semibold mb-3 block">Choose a Font</Label>
-                                     <div className="flex flex-wrap gap-2">
-                                         {availableFonts.map((font) => (
-                                             <button
-                                                 key={font}
-                                                 onClick={() => setSelectedFont(font)}
-                                                 className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 ${selectedFont === font
-                                                         ? 'border-romantic bg-gradient-love text-white'
-                                                         : 'border-muted hover:border-romantic'
-                                                     }`}
-                                                 style={{ fontFamily: font }}
-                                             >
-                                                 {font}
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
+                                    {/* Font Selection */}
+                                    <div>
+                                        <Label className="text-romantic font-semibold mb-3 block">Choose a Font</Label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {availableFonts.map((font) => (
+                                                <button
+                                                    key={font}
+                                                    onClick={() => setSelectedFont(font)}
+                                                    className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 ${selectedFont === font
+                                                            ? 'border-romantic bg-gradient-love text-white'
+                                                            : 'border-muted hover:border-romantic'
+                                                        }`}
+                                                    style={{ fontFamily: font }}
+                                                >
+                                                    {font}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
 
-                                 {/* Font Style Selection */}
-                                 <div>
-                                     <Label className="text-romantic font-semibold mb-3 block">Choose a Style</Label>
-                                     <div className="flex flex-wrap gap-2">
-                                         {availableFontStyles.map((style) => (
-                                             <button
-                                                 key={style}
-                                                 onClick={() => setSelectedFontStyle(style)}
-                                                 className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 capitalize ${selectedFontStyle === style
-                                                         ? 'border-romantic bg-gradient-love text-white'
-                                                         : 'border-muted hover:border-romantic'
-                                                     }`}
-                                                 style={{ 
-                                                     fontWeight: style === 'bold' ? 'bold' : 'normal',
-                                                     fontStyle: style === 'italic' ? 'italic' : 'normal'
-                                                 }}
-                                             >
-                                                 {style}
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
+                                    {/* Font Style Selection */}
+                                    <div>
+                                        <Label className="text-romantic font-semibold mb-3 block">Choose a Style</Label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {availableFontStyles.map((style) => (
+                                                <button
+                                                    key={style}
+                                                    onClick={() => setSelectedFontStyle(style)}
+                                                    className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 capitalize ${selectedFontStyle === style
+                                                            ? 'border-romantic bg-gradient-love text-white'
+                                                            : 'border-muted hover:border-romantic'
+                                                        }`}
+                                                    style={{ 
+                                                        fontWeight: style === 'bold' ? 'bold' : 'normal',
+                                                        fontStyle: style === 'italic' ? 'italic' : 'normal'
+                                                    }}
+                                                >
+                                                    {style}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
 
-                                 {/* Message Input */}
-                                 <div>
-                                     <Label htmlFor="message" className="text-romantic font-semibold">Your Message</Label>
-                                     <Textarea
-                                         id="message"
-                                         placeholder="Write your heartfelt message here..."
-                                         value={noteMessage}
-                                         onChange={(e) => setNoteMessage(e.target.value)}
-                                         rows={4}
-                                         className="resize-none"
-                                     />
-                                 </div>
+                                    {/* Message Input */}
+                                    <div>
+                                        <Label htmlFor="message" className="text-romantic font-semibold">Your Message</Label>
+                                        <Textarea
+                                            id="message"
+                                            placeholder="Write your heartfelt message here..."
+                                            value={noteMessage}
+                                            onChange={(e) => setNoteMessage(e.target.value)}
+                                            rows={4}
+                                            className="resize-none"
+                                        />
+                                    </div>
 
-                                 {/* Emoji Stickers */}
-                                 <div>
-                                     <Label className="text-romantic font-semibold mb-3 block">Add a Sticker</Label>
-                                     <div className="grid grid-cols-8 gap-2">
-                                         {emojiStickers.map((emoji) => (
-                                             <button
-                                                 key={emoji}
-                                                 onClick={() => handleEmojiSelect(emoji)}
-                                                 className={`w-10 h-10 text-lg rounded-lg border-2 transition-all duration-300 hover:scale-110 ${selectedEmoji === emoji
-                                                         ? 'border-romantic bg-gradient-love'
-                                                         : 'border-muted hover:border-romantic'
-                                                     }`}
-                                             >
-                                                 {emoji}
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
-                             </CardContent>
-                         </Card>
-                     </div>
+                                    {/* Emoji Stickers */}
+                                    <div>
+                                        <Label className="text-romantic font-semibold mb-3 block">Add a Sticker</Label>
+                                        <div className="grid grid-cols-8 gap-2">
+                                            {emojiStickers.map((emoji) => (
+                                                <button
+                                                    key={emoji}
+                                                    onClick={() => handleEmojiSelect(emoji)}
+                                                    className={`w-10 h-10 text-lg rounded-lg border-2 transition-all duration-300 hover:scale-110 ${selectedEmoji === emoji
+                                                            ? 'border-romantic bg-gradient-love'
+                                                            : 'border-muted hover:border-romantic'
+                                                        }`}
+                                                >
+                                                    {emoji}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </div>
 
-                     {/* Center Column: Live Preview */}
-                     <div className="lg:col-span-2 space-y-6">
-                         <Card className="confession-card sticky top-24">
-                             <CardHeader>
-                                 <CardTitle className="text-2xl font-dancing text-romantic">Live Preview</CardTitle>
-                             </CardHeader>
-                             <CardContent>
-                                 <canvas ref={canvasRef} className="w-full h-auto rounded-lg border-2 border-muted shadow-lg" />
-                                 <div className="flex items-center justify-between mt-4">
-                                     <div className="flex items-center space-x-2">
-                                         <Switch id="anonymous-switch" checked={isAnonymous} onCheckedChange={setIsAnonymous} />
-                                         <Label htmlFor="anonymous-switch" className="text-romantic font-semibold">Send Anonymously</Label>
-                                     </div>
-                                     <Button
-                                         onClick={downloadNote}
-                                         variant="outline"
-                                         className="font-dancing"
-                                     >
-                                         <Download className="w-4 h-4 mr-2" />
-                                         Download
-                                     </Button>
-                                 </div>
-                                 <Button
-                                     onClick={sendNote}
-                                     className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3 mt-4"
-                                 >
-                                     <Send className="w-5 h-5 mr-2" />
-                                     Send Your Love Note
-                                 </Button>
-                             </CardContent>
-                         </Card>
-                     </div>
-                 </div>
-                ) : (
-                    /* Inbox */
-                    <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {mockReceivedNotes.map((note) => {
-                                const template = templates.find(t => t.image === note.template);
-                                return (
-                                    <Card
-                                        key={note.id}
-                                        className="confession-card cursor-pointer hover:scale-105 transition-all duration-300"
-                                        onClick={() => setSelectedNote(note)}
+                        {/* Center Column: Live Preview */}
+                        <div className="lg:col-span-2 space-y-6">
+                            <Card className="confession-card sticky top-24">
+                                <CardHeader>
+                                    <CardTitle className="text-2xl font-dancing text-romantic">Live Preview</CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <canvas ref={canvasRef} className="w-full h-auto rounded-lg border-2 border-muted shadow-lg" />
+                                    <div className="flex items-center justify-between mt-4">
+                                        <div className="flex items-center space-x-2">
+                                            <Switch id="anonymous-switch" checked={isAnonymous} onCheckedChange={setIsAnonymous} />
+                                            <Label htmlFor="anonymous-switch" className="text-romantic font-semibold">Send Anonymously</Label>
+                                        </div>
+                                        <Button
+                                            onClick={downloadNote}
+                                            variant="outline"
+                                            className="font-dancing"
+                                        >
+                                            <Download className="w-4 h-4 mr-2" />
+                                            Download
+                                        </Button>
+                                    </div>
+                                    <Button
+                                        onClick={handleOpenRecipientModal}
+                                        className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3 mt-4"
                                     >
-                                        <CardContent className="p-0">
-                                            <div className={`p-4 rounded-t-lg relative overflow-hidden`}>
-                                                {template && <img src={`/templates/${template.image}`} alt="note background" className="absolute inset-0 w-full h-full object-cover" />}
-                                                <div className="text-center text-white relative z-10 bg-black/30 p-2 rounded">
-                                                    <MessageCircle className="w-8 h-8 mx-auto mb-2" fill="currentColor" />
-                                                    <p className="text-sm font-dancing">From: {note.from}</p>
-                                                </div>
-                                            </div>
-                                            <div className="p-4">
-                                                <p className="text-sm text-muted-foreground line-clamp-2">{note.message}</p>
-                                                <p className="text-xs text-muted-foreground mt-2">
-                                                    {note.timestamp.toLocaleDateString()} at {note.timestamp.toLocaleTimeString()}
-                                                </p>
-                                            </div>
-                                        </CardContent>
-                                    </Card>
-                                );
-                            })}
+                                        <Send className="w-5 h-5 mr-2" />
+                                        Send Your Love Note
+                                    </Button>
+                                </CardContent>
+                            </Card>
                         </div>
                     </div>
-                )}
+                    ) : (
+                        /* Inbox */
+                        <div className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {mockReceivedNotes.map((note) => {
+                                    const template = templates.find(t => t.image === note.template);
+                                    return (
+                                        <Card
+                                            key={note.id}
+                                            className="confession-card cursor-pointer hover:scale-105 transition-all duration-300"
+                                            onClick={() => setSelectedNote(note)}
+                                        >
+                                            <CardContent className="p-0">
+                                                <div className={`p-4 rounded-t-lg relative overflow-hidden`}>
+                                                    {template && <img src={`/templates/${template.image}`} alt="note background" className="absolute inset-0 w-full h-full object-cover" />}
+                                                    <div className="text-center text-white relative z-10 bg-black/30 p-2 rounded">
+                                                        <MessageCircle className="w-8 h-8 mx-auto mb-2" fill="currentColor" />
+                                                        <p className="text-sm font-dancing">From: {note.from}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="p-4">
+                                                    <p className="text-sm text-muted-foreground line-clamp-2">{note.message}</p>
+                                                    <p className="text-xs text-muted-foreground mt-2">
+                                                        {note.timestamp.toLocaleDateString()} at {note.timestamp.toLocaleTimeString()}
+                                                    </p>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
+
+            {/* Recipient Selection Modal */}
+            <Dialog open={isRecipientModalOpen} onOpenChange={setIsRecipientModalOpen}>
+                <DialogContent className="sm:max-w-[425px] md:max-w-lg lg:max-w-xl confession-card">
+                    <DialogHeader>
+                        <DialogTitle className="font-dancing text-3xl text-romantic">Select Your Recipient</DialogTitle>
+                        <DialogDescription>
+                            Find the special someone to send your love note to.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        {/* Important Information */}
+                        <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-md" role="alert">
+                            <p className="font-bold flex items-center"><Info className="w-5 h-5 mr-2" />Important</p>
+                            <ul className="list-disc list-inside mt-2 text-sm space-y-1">
+                                <li>You can only send <strong>one</strong> Love Note this season. Are you sure you want to use it now?</li>
+                                <li>All notes are <strong>reviewed by moderators</strong> before being delivered to the recipient.</li>
+                            </ul>
+                        </div>
+
+                        {/* Filters */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                                <Input
+                                    placeholder="Search by name..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="pl-10"
+                                />
+                            </div>
+                            <Select value={selectedClass} onValueChange={setSelectedClass}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Filter by class" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {classes.map(c => (
+                                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* User List */}
+                        <ScrollArea className="h-64 border rounded-md p-2">
+                            <div className="space-y-2">
+                                {filteredUsers.length > 0 ? filteredUsers.map(u => (
+                                    <div
+                                        key={u._id}
+                                        onClick={() => setSelectedRecipient(u)}
+                                        className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?._id === u._id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
+                                    >
+                                        <img
+                                            src={`http://localhost:8001/profile_pictures/${u.profile_picture_id || 'default.png'}`}
+                                            alt={u.Name}
+                                            className="w-10 h-10 rounded-full mr-4 object-cover"
+                                            onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/40' }}
+                                        />
+                                        <div>
+                                            <p className="font-semibold">{u.Name}</p>
+                                            <p className="text-sm text-muted-foreground">{u.which_class}</p>
+                                        </div>
+                                    </div>
+                                )) : (
+                                    <p className="text-center text-muted-foreground py-8">No users found.</p>
+                                )}
+                            </div>
+                        </ScrollArea>
+                        {selectedRecipient && (
+                            <p className="text-center text-sm text-romantic font-semibold">
+                                Selected: {selectedRecipient.Name}
+                            </p>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            onClick={handleConfirmAndSend}
+                            disabled={!selectedRecipient}
+                            className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3"
+                        >
+                            <Send className="w-5 h-5 mr-2" />
+                            Confirm & Send Note
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Full Page Note Modal */}
             {selectedNote && (
@@ -509,7 +649,7 @@ export const LoveNotesPage = () => {
                                 <X className="w-5 h-5" />
                             </Button>
 
-                            <Card className="confession-card">
+                            <Card>
                                 <CardContent className="p-0">
                                     {(() => {
                                         const template = templates.find(t => t.image === selectedNote.template);
@@ -556,6 +696,6 @@ export const LoveNotesPage = () => {
                     </div>
                 </div>
             )}
-        </div>
+        </>
     );
 };

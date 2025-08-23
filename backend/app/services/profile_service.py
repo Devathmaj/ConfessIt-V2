@@ -28,6 +28,7 @@ class UserProfileUpdate(BaseModel):
     interests: Optional[List[str]] = None
     isMatchmaking: Optional[bool] = None
     isNotifications: Optional[bool] = None
+    isLovenotesRecieve: Optional[bool] = None
 
 
 async def update_user_profile_service(

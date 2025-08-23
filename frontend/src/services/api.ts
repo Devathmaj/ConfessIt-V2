@@ -69,7 +69,6 @@ export const getCurrentUser = async (token?: string) => {
   return response.data;
 };
 
-// NEW: Function to update user profile details
 export const updateUserProfile = async (profileData: any) => {
     const response = await axios.put(`${API_URL}/profile/update`, profileData, {
         headers: getAuthHeaders(),
@@ -77,7 +76,6 @@ export const updateUserProfile = async (profileData: any) => {
     return response.data;
 };
 
-// NEW: Function to upload a profile picture
 export const uploadProfilePicture = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -99,3 +97,23 @@ export const findMatch = async () => {
     });
     return response.data;
 };
+
+// --- Love Notes Endpoints ---
+
+// Used to get all users for recipient selection
+export const getAllUsers = async () => {
+    const response = await axios.get(`${API_URL}/love-notes/users`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+// Used to get all unique classes for filtering
+export const getClasses = async () => {
+    const response = await axios.get(`${API_URL}/love-notes/classes`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+// Used to send a love note for review
+export const sendLoveNote = async (noteData: any) => {
+    const response = await axios.post(`${API_URL}/love-notes/send`, noteData, { headers: getAuthHeaders() });
+    return response.data;
+}

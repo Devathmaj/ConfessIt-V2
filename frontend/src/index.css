@@ -218,7 +218,8 @@
     transition: var(--transition-smooth);
   }
 
-  .confession-card:hover {
+  /* Used to prevent the hover effect on dialogs to stop erratic movement */
+  .confession-card:not([role='dialog']):hover {
     transform: translateY(-4px);
     box-shadow: var(--shadow-love);
   }

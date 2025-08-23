@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,12 +12,16 @@ import {
   Upload,
   Heart,
   Bell,
-  Palette
+  Palette,
+  Mail,
+  AlertCircle,
+  X
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { updateUserProfile, uploadProfilePicture } from '../services/api';
 import { ModeToggle } from '@/components/ui/ModeToggle';
 import { Navigation } from '@/components/Navigation';
+import { isEqual } from 'lodash';
 
 // Used for the emoji selector
 const avatarOptions = ['💕', '🌟', '🎨', '🌺', '🦋', '✨', '🌸', '💖', '🌙', '🎵'];
@@ -30,28 +34,64 @@ const interestOptions = [
 
 export const ProfilePage = () => {
   const { user, token, fetchAndSetUser } = useAuth();
+
+  // State for form fields
   const [emoji, setEmoji] = useState(user?.emoji || '💕');
   const [bio, setBio] = useState(user?.bio || '');
   const [interests, setInterests] = useState<string[]>(user?.interests || []);
   const [isMatchmaking, setIsMatchmaking] = useState(user?.isMatchmaking || false);
   const [isNotifications, setIsNotifications] = useState(user?.isNotifications || false);
+  const [isLovenotesRecieve, setIsLovenotesRecieve] = useState(user?.isLovenotesRecieve ?? true);
+  
+  // State for UI elements
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Memoize the initial state of the user profile from AuthContext
+  const initialProfileState = useMemo(() => {
+    if (!user) return null;
+    return {
+      emoji: user.emoji || '💕',
+      bio: user.bio || '',
+      interests: user.interests || [],
+      isMatchmaking: user.isMatchmaking || false,
+      isNotifications: user.isNotifications || false,
+      isLovenotesRecieve: user.isLovenotesRecieve ?? true,
+    };
+  }, [user]);
+
+  // Effect to sync local state when the user context changes
   useEffect(() => {
-    // Used to sync component state with the user object from AuthContext
     if (user) {
       setEmoji(user.emoji || '💕');
       setBio(user.bio || '');
       setInterests(user.interests || []);
       setIsMatchmaking(user.isMatchmaking || false);
       setIsNotifications(user.isNotifications || false);
+      setIsLovenotesRecieve(user.isLovenotesRecieve ?? true);
       if (user.profile_picture_id) {
-        // Corrected URL to fetch the profile picture
         setProfilePictureUrl(`http://localhost:8001/profile_pictures/${user.profile_picture_id}`);
       }
     }
   }, [user]);
+
+  // Effect to detect unsaved changes by comparing current state with the initial state
+  useEffect(() => {
+    if (!initialProfileState) return;
+
+    const currentState = {
+      emoji,
+      bio,
+      interests,
+      isMatchmaking,
+      isNotifications,
+      isLovenotesRecieve,
+    };
+    
+    // Use lodash's isEqual for a deep comparison, especially for the interests array
+    setHasUnsavedChanges(!isEqual(initialProfileState, currentState));
+  }, [emoji, bio, interests, isMatchmaking, isNotifications, isLovenotesRecieve, initialProfileState]);
 
   const handleInterestChange = (interest: string) => {
     setInterests(prev => 
@@ -71,9 +111,8 @@ export const ProfilePage = () => {
     }
 
     try {
-      const response = await uploadProfilePicture(file);
+      await uploadProfilePicture(file);
       toast.success('Profile picture updated successfully! 📸');
-      // Used to refresh user data to get the new picture ID
       if(token) {
         await fetchAndSetUser(token);
       }
@@ -90,24 +129,38 @@ export const ProfilePage = () => {
       interests,
       isMatchmaking,
       isNotifications,
+      isLovenotesRecieve,
     };
 
     try {
       await updateUserProfile(updatedDetails);
       toast.success('Profile updated successfully! 💕');
-       if(token) {
+      if(token) {
         await fetchAndSetUser(token);
       }
+      setHasUnsavedChanges(false); // Reset unsaved changes flag
     } catch (error) {
       toast.error('Failed to update profile.');
       console.error(error);
     }
   };
 
+  const handleDiscardChanges = () => {
+    if (initialProfileState) {
+      setEmoji(initialProfileState.emoji);
+      setBio(initialProfileState.bio);
+      setInterests(initialProfileState.interests);
+      setIsMatchmaking(initialProfileState.isMatchmaking);
+      setIsNotifications(initialProfileState.isNotifications);
+      setIsLovenotesRecieve(initialProfileState.isLovenotesRecieve);
+      toast.info('Changes have been discarded.');
+    }
+  };
+
   return (
     <div className="min-h-screen p-4 pt-24">
       <Navigation />
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto pb-24"> {/* Added padding-bottom */}
         <div className="text-center mb-8">
             <h1 className="text-5xl font-dancing text-romantic mb-2">
                 Profile
@@ -129,7 +182,6 @@ export const ProfilePage = () => {
             {/* Profile Picture Section */}
             <div className="flex flex-col items-center gap-4">
                 <div className="relative">
-                    {/* Used a theme-aware background color instead of hardcoded white */}
                     <div className="w-32 h-32 rounded-full p-1 bg-secondary">
                         <img
                             src={profilePictureUrl || `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.Name?.[0] || 'U'}`}
@@ -248,7 +300,25 @@ export const ProfilePage = () => {
                     Enable random matchmaking feature
                   </p>
                 </div>
-                <Switch checked={isMatchmaking} onCheckedChange={setIsMatchmaking} />
+                <Switch 
+                  checked={isMatchmaking} 
+                  onCheckedChange={setIsMatchmaking} 
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-romantic" />
+                    <Label className="text-romantic font-semibold">Love Notes</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Enable receiving Love Notes from others
+                  </p>
+                </div>
+                <Switch 
+                  checked={isLovenotesRecieve} 
+                  onCheckedChange={setIsLovenotesRecieve} 
+                />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -260,7 +330,10 @@ export const ProfilePage = () => {
                     Receive notifications for matches and messages
                   </p>
                 </div>
-                <Switch checked={isNotifications} onCheckedChange={setIsNotifications} />
+                <Switch 
+                  checked={isNotifications} 
+                  onCheckedChange={setIsNotifications} 
+                />
               </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -275,17 +348,40 @@ export const ProfilePage = () => {
                 <ModeToggle />
               </div>
             </div>
-
-            <Button 
-              onClick={handleSaveProfile}
-              className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing"
-            >
-              <Save className="w-4 h-4 mr-2" />
-              Save Changes
-            </Button>
           </CardContent>
         </Card>
       </div>
+
+      {/* Unsaved Changes Indicator and Action Buttons */}
+      {hasUnsavedChanges && (
+        <div className="fixed bottom-0 left-0 right-0 z-50">
+          <div className="container max-w-4xl mx-auto p-4">
+            <div className="bg-background/95 p-4 rounded-lg shadow-lg border border-border flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-amber-500">
+                <AlertCircle className="w-5 h-5" />
+                <p className="font-semibold">You have unsaved changes!</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <Button 
+                  onClick={handleDiscardChanges}
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Discard
+                </Button>
+                <Button 
+                  onClick={handleSaveProfile}
+                  className="w-full sm:w-auto bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg"
+                >
+                  <Save className="w-5 h-5 mr-2" />
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
