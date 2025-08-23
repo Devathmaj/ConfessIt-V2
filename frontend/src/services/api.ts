@@ -1,3 +1,5 @@
+// src/services/api.ts
+
 import axios from 'axios';
 
 const API_URL = 'http://localhost:8001';
@@ -113,7 +115,12 @@ export const getClasses = async () => {
 };
 
 // Used to send a love note for review
-export const sendLoveNote = async (noteData: any) => {
+export const sendLoveNote = async (noteData: {
+    recipient_id: string;
+    image_base64: string;
+    message_text: string;
+    is_anonymous: boolean;
+}) => {
     const response = await axios.post(`${API_URL}/love-notes/send`, noteData, { headers: getAuthHeaders() });
     return response.data;
 }

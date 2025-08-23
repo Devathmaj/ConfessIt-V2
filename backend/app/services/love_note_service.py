@@ -1,4 +1,3 @@
-# app/services/love_note_service.py
 
 import logging
 from pymongo.database import Database
@@ -17,9 +16,8 @@ class LoveNoteCreate(BaseModel):
     Pydantic model for creating a love note.
     """
     recipient_id: str
-    template_name: str
-    message: str
-    stickers: List[str]
+    image_base64: str
+    message_text: str
     is_anonymous: bool
 
 async def get_all_users_service(db: Database, current_user_regno: str) -> List[UserDetails]:
@@ -44,29 +42,26 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     """
     Service to create and save a new love note with 'pending_review' status.
     """
-    # For now, we assume template_name is a string that can be resolved on the client.
-    # In a real app, you might validate template_name against a templates collection.
-    
     love_note = LoveNote(
-        sender=sender.id,
-        recipient=ObjectId(note_data.recipient_id),
-        template_id=ObjectId(), # This should be linked to a real template ID in the future
-        message=note_data.message,
-        stickers=note_data.stickers,
+        sender_id=sender.id,
+        recipient_id=ObjectId(note_data.recipient_id),
+        image_base64=note_data.image_base64,
+        message_text=note_data.message_text,
         is_anonymous=note_data.is_anonymous,
-        status="pending_review" # Important: Set status for review
+        status="pending_review"
     )
 
     # Convert to a dict and insert into the database
     note_dict = love_note.model_dump(by_alias=True, exclude=["id"])
     
-    # Use sender and recipient ObjectIds
-    note_dict["sender"] = sender.id
-    note_dict["recipient"] = ObjectId(note_data.recipient_id)
-
     result = db["LoveNotes"].insert_one(note_dict)
     
     if result.inserted_id:
+        # Used to update the sender's status to indicate they have sent a love note
+        db["UserDetails"].update_one(
+            {"_id": sender.id},
+            {"$set": {"isLovenotesSend": True}}
+        )
         return {"message": "Love note sent successfully for review.", "note_id": str(result.inserted_id)}
     
     logger.error("Failed to insert love note into the database.")

@@ -1,3 +1,5 @@
+// src/contexts/AuthContext.tsx
+
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { getCurrentUser } from '../services/api'; 
@@ -6,7 +8,7 @@ import { getCurrentUser } from '../services/api';
 export interface User {
   Name: string;
   Regno: string;
-  email?: string; // <-- FIX: Added email property
+  email?: string;
   emoji: string;
   username: string;
   bio?: string;
@@ -17,7 +19,8 @@ export interface User {
   isMatchmaking?: boolean;
   isNotifications?: boolean;
   isLovenotesRecieve?: boolean;
-  role?: 'user' | 'admin';
+  isLovenotesSend?: boolean; // Used to track if the user has sent a love note
+  user_role?: 'user' | 'admin';
 }
 
 interface VerifyTokenResult {
@@ -56,11 +59,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const userData = await getCurrentUser(currentToken);
       const decoded: any = jwtDecode(currentToken);
-      const role = decoded.sub === 'admin' ? 'admin' : 'user';
       setUser({
         ...userData,
         username: decoded.sub,
-        role,
+        user_role: userData.user_role || 'user',
       });
     } catch (error) {
       console.error("Failed to fetch user data, token might be expired:", error);

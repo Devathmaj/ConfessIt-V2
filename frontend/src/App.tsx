@@ -58,8 +58,8 @@ const AppRoutes = () => {
         path="/"
         element={
           <ProtectedRoute>
-            {/* Used to redirect logged-in users from the root path to their respective dashboard. */}
-            <Navigate to={user?.role === 'admin' ? '/admin' : '/dashboard'} replace />
+            {/* Used to redirect logged-in users from the root path to their respective dashboard based on their role. */}
+            <Navigate to={user?.user_role === 'admin' ? '/admin' : '/dashboard'} replace />
           </ProtectedRoute>
         }
       />

@@ -1,3 +1,5 @@
+// src/pages/LoveNotesPage.tsx
+
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -77,7 +79,7 @@ const mockReceivedNotes: LoveNote[] = [
         template: 'template_1.png',
         anonymous: true,
         timestamp: new Date('2024-02-14T10:30:00'),
-        emojis: ['�', '🌟', '✨']
+        emojis: ['☀️', '🌟', '✨']
     },
     {
         id: '2',
@@ -91,7 +93,7 @@ const mockReceivedNotes: LoveNote[] = [
 ];
 
 export const LoveNotesPage = () => {
-    const { user } = useAuth();
+    const { user, fetchAndSetUser, token } = useAuth();
     const [activeTab, setActiveTab] = useState<'create' | 'inbox'>('create');
     const [templates, setTemplates] = useState<Template[]>([]);
     const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
@@ -272,6 +274,10 @@ export const LoveNotesPage = () => {
     
     // Used to open the recipient modal after validation
     const handleOpenRecipientModal = () => {
+        if (user?.isLovenotesSend) {
+            toast.info("You've already sent your love note this season!");
+            return;
+        }
         if (!noteMessage.trim()) {
             toast.error('Please write a message before sending!');
             return;
@@ -281,17 +287,18 @@ export const LoveNotesPage = () => {
 
     // Used to send the note after confirming recipient
     const handleConfirmAndSend = async () => {
-        if (!selectedRecipient) {
+        if (!selectedRecipient || !canvasRef.current) {
             toast.error("Please select a recipient.");
             return;
         }
 
+        const imageBase64 = canvasRef.current.toDataURL('image/png');
+
         try {
             await sendLoveNote({
                 recipient_id: selectedRecipient._id,
-                template_name: selectedTemplate?.template_name,
-                message: noteMessage,
-                stickers: selectedEmoji ? [selectedEmoji] : [],
+                image_base64: imageBase64,
+                message_text: noteMessage,
                 is_anonymous: isAnonymous,
             });
             toast.success('Love note sent for review! 💕');
@@ -301,6 +308,10 @@ export const LoveNotesPage = () => {
             setSelectedRecipient(null);
             setSearchTerm('');
             setSelectedClass('All');
+            // Used to refresh user data to get the updated isLovenotesSend status
+            if (token) {
+                fetchAndSetUser(token);
+            }
         } catch (error: any) {
             console.error("Failed to send love note:", error);
             const errorMessage = error.response?.data?.detail || "Failed to send love note. Please try again.";
@@ -504,10 +515,11 @@ export const LoveNotesPage = () => {
                                     </div>
                                     <Button
                                         onClick={handleOpenRecipientModal}
+                                        disabled={user?.isLovenotesSend}
                                         className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3 mt-4"
                                     >
                                         <Send className="w-5 h-5 mr-2" />
-                                        Send Your Love Note
+                                        {user?.isLovenotesSend ? "You've Already Sent Your Note" : "Send Your Love Note"}
                                     </Button>
                                 </CardContent>
                             </Card>

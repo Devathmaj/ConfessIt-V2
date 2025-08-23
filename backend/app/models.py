@@ -62,7 +62,7 @@ class ConfessionComment(BaseModel):
     """
     Represents a comment on a confession post.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     confession_id: str
     user_info: UserInfo
     message: str
@@ -85,7 +85,7 @@ class Confession(BaseModel):
     """
     Represents a single confession post within the application.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     confession: str
     is_anonymous: bool
     is_comment: bool
@@ -132,6 +132,7 @@ class UserDetails(BaseModel):
     reported_count: int = 0
     last_login_time: Optional[datetime] = None
     last_login_ip: Optional[str] = None
+    user_role: str = "user" 
 
     class Config:
         arbitrary_types_allowed = True
@@ -142,7 +143,7 @@ class LoginToken(BaseModel):
     """
     Represents a securely stored authentication token in the database.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     user_id: str
     token_hash: str
     issued_at: datetime
@@ -166,7 +167,7 @@ class MatchRequest(BaseModel):
     """
     Models a matchmaking request, capturing the initial interaction between two users.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     from_user: PyObjectId
     to_user: PyObjectId
     message: str
@@ -184,7 +185,7 @@ class Conversation(BaseModel):
     """
     Represents a private conversation between two matched users.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     participants: List[PyObjectId]
     status: str = "active"
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -200,7 +201,7 @@ class Message(BaseModel):
     """
     Defines the structure for a single message within a conversation.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     conversation_id: PyObjectId
     sender: PyObjectId
     text: str
@@ -216,7 +217,7 @@ class LoveNoteTemplate(BaseModel):
     """
     Stores predefined templates for Love Notes.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     name: str
     preview_image: str
     description: str
@@ -231,14 +232,13 @@ class LoveNote(BaseModel):
     """
     Represents an individual Love Note sent from one user to another.
     """
-    id: PyObjectId = Field(default_factory=PyObjectId)
-    sender: Optional[PyObjectId] = None
-    recipient: PyObjectId
-    template_id: PyObjectId
-    message: str
-    stickers: List[str] = []
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    sender_id: PyObjectId
+    recipient_id: PyObjectId
+    image_base64: str
+    message_text: str
     is_anonymous: bool = False
-    status: str = "delivered"
+    status: str = "pending_review"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     read_at: Optional[datetime] = None
 

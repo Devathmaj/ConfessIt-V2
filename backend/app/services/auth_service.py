@@ -85,9 +85,9 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
 
 def admin_required(current_user: UserDetails = Depends(get_current_user)):
     """
-    Used to verify that the current user is an admin.
+    Used to verify that the current user is an admin based on their role.
     """
-    if current_user.Regno != "admin":
+    if current_user.user_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access this resource",
@@ -120,7 +120,7 @@ async def generate_magic_link_service(request: Request, db: Database):
 
 def verify_magic_link_service(token: str, db: Database):
     """
-    Used to verify a magic link token and return a JWT access token.
+    Used to verify a magic link token and return a JWT access token and a redirect URL based on user role.
     """
     if not token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token is required")
@@ -145,6 +145,7 @@ def verify_magic_link_service(token: str, db: Database):
         expires_delta=access_token_expires
     )
 
-    redirect_url = "/admin" if user["Regno"] == "admin" else "/dashboard"
+    # Used to determine the redirect URL based on the user's role.
+    redirect_url = "/admin" if user.get("user_role") == "admin" else "/dashboard"
 
     return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}

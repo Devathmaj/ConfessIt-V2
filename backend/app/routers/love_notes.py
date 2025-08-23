@@ -1,4 +1,3 @@
-# app/routes/love_notes.py
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.database import Database
@@ -6,7 +5,7 @@ from typing import Annotated, List
 from bson import ObjectId
 
 from ..dependencies import get_db
-from ..models import UserDetails, LoveNote
+from ..models import UserDetails
 from ..services.auth_service import get_current_user
 from ..services.love_note_service import (
     LoveNoteCreate,
@@ -52,8 +51,15 @@ async def send_love_note(
     """
     Used to send a love note. The note is marked as 'pending_review'.
     """
+    # Used to check if the user has already sent a love note
+    if current_user.isLovenotesSend:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You have already sent your love note for this season."
+        )
+
     # Basic validation
-    if not note_data.message.strip():
+    if not note_data.message_text.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message cannot be empty."
