@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
-import { findMatch, getPotentialMatches } from '@/services/api';
+import { findMatch } from '@/services/api';
 import { 
   Heart, 
   MessageCircle, 
@@ -30,13 +30,24 @@ const icebreakerCards = [
   "Describe yourself in three emojis!"
 ];
 
+// --- MOCK DATA FOR ANIMATION ---
+// Used to provide a pool of fake user profiles for the slot machine animation.
+// The profile_picture_id now uses a placeholder service to avoid 404 errors.
+const mockMatches: User[] = [
+    { Name: 'Alex', Regno: '123', emoji: '😊', username: 'alex', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
+    { Name: 'Jordan', Regno: '456', emoji: '😎', username: 'jordan', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
+    { Name: 'Taylor', Regno: '789', emoji: '🤩', username: 'taylor', which_class: 'MECH', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
+    { Name: 'Casey', Regno: '101', emoji: '🥳', username: 'casey', which_class: 'CIVIL', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=C', interests: ['Art', 'Cooking'], bio: 'You get the idea.' },
+    { Name: 'Morgan', Regno: '112', emoji: '😇', username: 'morgan', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=M', interests: ['Photography', 'Travel'], bio: 'Almost done.' },
+    { Name: 'Riley', Regno: '131', emoji: '🤓', username: 'riley', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=R', interests: ['Coding', 'Sci-Fi'], bio: 'Last one!' },
+];
+
 /**
  * Renders a 3D glass-like heart that visually fills with a red liquid
  * based on the provided fill percentage. This component uses SVG filters,
  * gradients, and clipping paths to achieve its effect.
  */
 const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
-    // Defines the SVG path for the heart shape.
     const heartPathData = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z";
     const viewBoxHeight = 24;
     const liquidY = viewBoxHeight * (1 - fillPercentage / 100);
@@ -57,10 +68,7 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
                         <stop offset="100%" stopColor="#be123c" />
                     </linearGradient>
                 </defs>
-
-                {/* Group for the liquid, clipped by the heart shape */}
                 <g clipPath="url(#heart-clip)">
-                    {/* The main body of the liquid */}
                     <rect
                         x="0"
                         y={liquidY}
@@ -69,8 +77,6 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
                         fill="url(#liquid-gradient)"
                         style={{ transition: 'y 0.1s linear' }}
                     />
-                    
-                    {/* Animated wave path */}
                     <path fill="url(#liquid-gradient)">
                         <animate
                             attributeName="d"
@@ -85,8 +91,6 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
                         />
                     </path>
                 </g>
-
-                {/* The glass container with a subtle glare */}
                 <path
                     d={heartPathData}
                     strokeWidth="0.5"
@@ -110,10 +114,23 @@ export const MatchmakingPage = () => {
   const [isMatching, setIsMatching] = useState(false);
   const [matchedProfile, setMatchedProfile] = useState<User | null>(null);
   const [slotMachineUser, setSlotMachineUser] = useState<User | null>(null);
-  const [potentialMatches, setPotentialMatches] = useState<User[]>([]);
   const [heartFill, setHeartFill] = useState(0);
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState<string[]>([]);
+
+  // Used to determine the correct image source for a user profile.
+  // It checks if the picture ID is a full URL (for mock data) or a backend ID.
+  const getProfilePictureUrl = (pictureId?: string) => {
+    if (!pictureId) {
+      return 'https://placehold.co/96x96/fecdd3/be123c?text=💕';
+    }
+    // If the pictureId is a full URL (from our mock data), use it directly.
+    if (pictureId.startsWith('http')) {
+      return pictureId;
+    }
+    // Otherwise, construct the URL to the backend service.
+    return `http://localhost:8001/profile_pictures/${pictureId}`;
+  };
 
   const startMatching = async () => {
     setIsMatching(true);
@@ -122,63 +139,44 @@ export const MatchmakingPage = () => {
     setShowChat(false);
     setChatMessages([]);
 
-    try {
-      const matches = await getPotentialMatches(20);
-      if (matches.length === 0) {
-        toast.error("No potential matches found right now. Try again later!");
-        setIsMatching(false);
-        return;
+    const slotInterval = setInterval(() => {
+      const randomIndex = Math.floor(Math.random() * mockMatches.length);
+      setSlotMachineUser(mockMatches[randomIndex]);
+    }, 30);
+
+    const totalDuration = 10000;
+    const intervalDuration = 100;
+    const totalSteps = totalDuration / intervalDuration;
+    let currentStep = 0;
+
+    const fillInterval = setInterval(() => {
+      currentStep++;
+      const newFill = (currentStep / totalSteps) * 100;
+      setHeartFill(newFill);
+
+      if (currentStep >= totalSteps) {
+          clearInterval(fillInterval);
+          clearInterval(slotInterval);
+
+          findMatch()
+            .then(finalMatch => {
+              setMatchedProfile(finalMatch);
+              toast.success('Match found! 💕');
+            })
+            .catch(error => {
+              toast.error(error.response?.data?.detail || 'Could not find a match.');
+            })
+            .finally(() => {
+              setSlotMachineUser(null);
+              setIsMatching(false);
+            });
       }
-      setPotentialMatches(matches);
-
-      // Start the slot machine effect using the fetched matches
-      const slotInterval = setInterval(() => {
-        const randomIndex = Math.floor(Math.random() * matches.length);
-        setSlotMachineUser(matches[randomIndex]);
-      }, 30);
-
-      // Total duration for the matchmaking process
-      const totalDuration = 10000; // 10 seconds
-      const intervalDuration = 100; // Update every 100ms
-      const totalSteps = totalDuration / intervalDuration;
-      let currentStep = 0;
-
-      // Start the heart filling animation
-      const fillInterval = setInterval(() => {
-        currentStep++;
-        const newFill = (currentStep / totalSteps) * 100;
-        setHeartFill(newFill);
-
-        if (currentStep >= totalSteps) {
-            clearInterval(fillInterval);
-            clearInterval(slotInterval);
-
-            // Get the final match
-            findMatch()
-              .then(finalMatch => {
-                setMatchedProfile(finalMatch);
-                toast.success('Match found! 💕');
-              })
-              .catch(error => {
-                toast.error(error.response?.data?.detail || 'Could not find a match.');
-              })
-              .finally(() => {
-                setSlotMachineUser(null);
-                setIsMatching(false);
-              });
-        }
-      }, intervalDuration);
-
-    } catch (error) {
-      toast.error("Could not fetch potential matches.");
-      setIsMatching(false);
-    }
+    }, intervalDuration);
   };
 
   const sendMessage = (message: string) => {
     setChatMessages(prev => [...prev, `You: ${message}`]);
     
-    // Simulate response
     setTimeout(() => {
       const responses = [
         "That's so sweet! 💕",
@@ -199,10 +197,9 @@ export const MatchmakingPage = () => {
   const UserCard = ({ profile }: { profile: User }) => (
     <Card className="confession-card">
       <CardHeader className="items-center text-center">
-        {/* Used to display the user's profile picture within a circular frame. */}
         <div className="w-24 h-24 rounded-full p-1 bg-secondary">
             <img 
-                src={`http://localhost:8001/profile_pictures/${profile.profile_picture_id}`} 
+                src={getProfilePictureUrl(profile.profile_picture_id)} 
                 alt={profile.Name}
                 className="w-full h-full rounded-full object-cover"
             />
@@ -235,7 +232,6 @@ export const MatchmakingPage = () => {
       <Navigation />
       <FloatingHearts />
       
-      {/* Header */}
       <div className="max-w-7xl mx-auto mb-8">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
@@ -253,14 +249,12 @@ export const MatchmakingPage = () => {
       <div className="max-w-7xl mx-auto">
         {!showChat ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
-            {/* User Profile */}
             <div className="min-h-[400px] flex items-center justify-center bg-card rounded-lg p-4 border-2 border-dashed border-primary/20">
                 <div className="w-full max-w-sm">
                     {user && <UserCard profile={user} />}
                 </div>
             </div>
 
-            {/* Matching Heart */}
             <div className="flex flex-col items-center justify-center space-y-6 h-full">
               <div
                 className="relative w-48 h-48 cursor-pointer group"
@@ -292,7 +286,6 @@ export const MatchmakingPage = () => {
               )}
             </div>
 
-            {/* Matched Profile */}
             <div className="flex flex-col items-center justify-center gap-4">
                 <div className="min-h-[400px] w-full flex items-center justify-center bg-card rounded-lg p-4 border-2 border-dashed border-primary/20">
                 {isMatching && slotMachineUser ? (
@@ -300,7 +293,7 @@ export const MatchmakingPage = () => {
                     <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-card z-10" />
                     <div className="text-center animate-pulse" style={{ filter: 'blur(4px)' }}>
                         <img 
-                            src={`http://localhost:8001/profile_pictures/${slotMachineUser.profile_picture_id}`} 
+                            src={getProfilePictureUrl(slotMachineUser.profile_picture_id)} 
                             alt={slotMachineUser.Name}
                             className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg mx-auto mb-4"
                         />
@@ -323,7 +316,6 @@ export const MatchmakingPage = () => {
             </div>
           </div>
         ) : (
-          /* Chat Interface */
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2">
               <Card className="confession-card">
@@ -338,7 +330,6 @@ export const MatchmakingPage = () => {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {/* Chat Messages */}
                   <div className="h-64 overflow-y-auto border rounded-lg p-4 mb-4 space-y-2">
                     {chatMessages.length === 0 ? (
                       <p className="text-center text-muted-foreground font-dancing">
@@ -359,7 +350,6 @@ export const MatchmakingPage = () => {
                     )}
                   </div>
 
-                  {/* Prewritten Messages */}
                   <div className="space-y-2">
                     <h4 className="font-semibold text-romantic">Quick Messages:</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -380,7 +370,6 @@ export const MatchmakingPage = () => {
               </Card>
             </div>
 
-            {/* Icebreaker Cards */}
             <Card className="confession-card">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-xl font-dancing text-romantic">

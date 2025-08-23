@@ -99,10 +99,3 @@ export const findMatch = async () => {
     });
     return response.data;
 };
-
-export const getPotentialMatches = async (limit: number = 20) => {
-    const response = await axios.get(`${API_URL}/matchmaking/potential-matches?limit=${limit}`, {
-        headers: getAuthHeaders(),
-    });
-    return response.data;
-};

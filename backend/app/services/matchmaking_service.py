@@ -3,35 +3,11 @@
 import logging
 from fastapi import HTTPException, status
 from pymongo.database import Database
-from typing import List
 
 from ..models import UserDetails
 
 # Logger
 logger = logging.getLogger(__name__)
-
-def get_potential_matches_service(
-    current_user: UserDetails,
-    db: Database,
-    limit: int = 20
-) -> List[UserDetails]:
-    """
-    Service to get a list of random potential matches.
-    """
-    query = {
-        "Regno": {"$ne": current_user.Regno},
-        "gender": {"$ne": current_user.gender},
-        "isMatchmaking": True
-    }
-
-    pipeline = [
-        {"$match": query},
-        {"$sample": {"size": limit}}
-    ]
-
-    matches_cursor = db["UserDetails"].aggregate(pipeline)
-    return [UserDetails(**doc) for doc in matches_cursor]
-
 
 def find_match_service(
     current_user: UserDetails,
