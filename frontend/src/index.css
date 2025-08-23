@@ -1,0 +1,346 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Valentine's Day ConfessIt Design System */
+
+@layer base {
+  :root {
+    /* Valentine's Color Palette */
+    --background: 327 100% 98%;
+    --foreground: 330 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 330 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 330 15% 15%;
+
+    --primary: 345 83% 61%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 345 100% 75%;
+
+    --secondary: 320 25% 94%;
+    --secondary-foreground: 330 15% 25%;
+
+    --romantic: 340 82% 67%;
+    --romantic-light: 340 82% 85%;
+    --romantic-dark: 340 82% 45%;
+
+    --passion: 355 85% 63%;
+    --passion-light: 355 85% 80%;
+
+    --love: 315 100% 86%;
+    --love-deep: 315 60% 70%;
+
+    --muted: 320 20% 96%;
+    --muted-foreground: 330 10% 55%;
+
+    --accent: 340 82% 94%;
+    --accent-foreground: 340 82% 25%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 320 20% 90%;
+    --input: 320 20% 96%;
+    --ring: 345 83% 61%;
+
+    --radius: 1rem;
+
+    /* Valentine's Gradients */
+    --gradient-romantic: linear-gradient(135deg, hsl(var(--romantic)), hsl(var(--passion)));
+    --gradient-love: linear-gradient(135deg, hsl(var(--love)), hsl(var(--romantic-light)));
+    --gradient-passion: linear-gradient(135deg, hsl(var(--passion)), hsl(var(--primary)));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--romantic)) 0%, hsl(var(--passion)) 50%, hsl(var(--love-deep)) 100%);
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--love)) 100%);
+
+    /* Shadows & Effects */
+    --shadow-romantic: 0 20px 40px -10px hsl(var(--romantic) / 0.3);
+    --shadow-love: 0 10px 30px -5px hsl(var(--love-deep) / 0.4);
+    --shadow-glow: 0 0 40px hsl(var(--primary-glow) / 0.6);
+
+    /* Animations */
+    --transition-smooth: all 0.4s cubic-bezier(0.23, 1, 0.320, 1);
+    --transition-bounce: all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  .dark {
+    --background: 330 20% 8%;
+    --foreground: 320 30% 90%;
+
+    --card: 330 20% 12%;
+    --card-foreground: 320 30% 90%;
+
+    --popover: 330 20% 12%;
+    --popover-foreground: 320 30% 90%;
+
+    --primary: 345 83% 65%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 345 90% 70% / 0.3; /* Dimmed glow for dark mode */
+
+    --secondary: 330 20% 16%;
+    --secondary-foreground: 320 30% 85%;
+
+    /* Dark Romantic Palette */
+    --romantic: 340 82% 70%;
+    --romantic-light: 340 40% 20%;
+    --romantic-dark: 340 82% 85%; /* Lighter text on dark background */
+
+    --passion: 355 85% 68%;
+    --passion-light: 355 35% 22%;
+
+    --love: 315 70% 25%;
+    --love-deep: 315 60% 40%;
+
+    --muted: 330 20% 16%;
+    --muted-foreground: 320 15% 65%;
+
+    --accent: 330 20% 24%;
+    --accent-foreground: 320 30% 85%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 330 20% 20%;
+    --input: 330 20% 16%;
+    --ring: 345 83% 65%;
+    
+    /* Dark Gradients */
+    --gradient-romantic: linear-gradient(135deg, hsl(var(--romantic)), hsl(var(--passion)));
+    --gradient-love: linear-gradient(135deg, hsl(var(--love)), hsl(var(--romantic-light)));
+    --gradient-passion: linear-gradient(135deg, hsl(var(--passion)), hsl(var(--primary)));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--romantic)) 0%, hsl(var(--passion)) 50%, hsl(var(--love-deep)) 100%);
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--love)) 100%);
+
+    /* Dark Shadows & Effects */
+    --shadow-romantic: 0 15px 30px -10px hsl(var(--romantic) / 0.2);
+    --shadow-love: 0 8px 20px -5px hsl(var(--love-deep) / 0.3);
+    --shadow-glow: 0 0 30px hsl(var(--primary-glow) / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-montserrat;
+    background-image: 
+      radial-gradient(circle at 20% 80%, hsl(var(--love)) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, hsl(var(--romantic-light)) 0%, transparent 50%),
+      radial-gradient(circle at 40% 40%, hsl(var(--passion-light)) 0%, transparent 50%);
+  }
+  
+  /* Used to create a more subtle background for dark mode */
+  .dark body {
+    background-image: 
+      radial-gradient(circle at 20% 80%, hsl(var(--love) / 0.5) 0%, transparent 40%),
+      radial-gradient(circle at 80% 20%, hsl(var(--romantic-light) / 0.5) 0%, transparent 40%),
+      radial-gradient(circle at 40% 40%, hsl(var(--passion-light) / 0.5) 0%, transparent 40%);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-montserrat font-bold;
+  }
+}
+
+@layer components {
+  /* Floating Hearts Animation */
+  .floating-hearts {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .heart {
+    position: absolute;
+    color: hsl(var(--romantic));
+    animation: float-up 6s infinite linear;
+    opacity: 0;
+  }
+
+  @keyframes float-up {
+    0% {
+      opacity: 0;
+      transform: translateY(100vh) scale(0);
+    }
+    10% {
+      opacity: 1;
+      transform: translateY(90vh) scale(1);
+    }
+    90% {
+      opacity: 1;
+      transform: translateY(10vh) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(0) scale(0);
+    }
+  }
+
+  /* Heart Fill Animation */
+  .heart-fill {
+    background: var(--gradient-romantic);
+    border-radius: 50%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .heart-fill::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 0%;
+    background: var(--gradient-passion);
+    transition: height 1s cubic-bezier(0.23, 1, 0.320, 1);
+  }
+
+  .heart-fill.filling::before {
+    height: 100%;
+  }
+
+  /* Confession Card Effects */
+  .confession-card {
+    background: var(--gradient-card);
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-romantic);
+    transition: var(--transition-smooth);
+  }
+
+  .confession-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-love);
+  }
+
+  /* Sparkle Animation */
+  .sparkles {
+    position: relative;
+  }
+
+  .sparkles::before,
+  .sparkles::after {
+    content: '✨';
+    position: absolute;
+    animation: sparkle 2s infinite;
+  }
+
+  .sparkles::before {
+    top: -10px;
+    left: -10px;
+    animation-delay: 0s;
+  }
+
+  .sparkles::after {
+    bottom: -10px;
+    right: -10px;
+    animation-delay: 1s;
+  }
+
+  @keyframes sparkle {
+    0%, 100% { opacity: 0; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.2); }
+  }
+
+  /* Pulse Heart */
+  .pulse-heart {
+    animation: pulse-heart 1.5s infinite;
+  }
+
+  @keyframes pulse-heart {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+
+  /* Slot Machine Animation */
+  .slot-machine {
+    animation: slot-spin 0.1s infinite linear;
+  }
+
+  @keyframes slot-spin {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-100%); }
+  }
+
+  /* Valentine Button Variants */
+  .btn-romantic {
+    background: var(--gradient-romantic);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.75rem 2rem;
+    font-weight: 600;
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-romantic);
+  }
+
+  .btn-romantic:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-glow);
+  }
+
+  .btn-love {
+    background: var(--gradient-love);
+    color: hsl(var(--romantic-dark));
+    border: 2px solid hsl(var(--romantic));
+    border-radius: var(--radius);
+    padding: 0.75rem 2rem;
+    font-weight: 600;
+    transition: var(--transition-bounce);
+  }
+
+  .btn-love:hover {
+    background: var(--gradient-romantic);
+    color: white;
+    transform: scale(1.05);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Card flip animations */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.card-flip {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.6s;
+}
+
+.card-flip.flipped {
+  transform: rotateY(180deg);
+}
+
+.card-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+}
+
+.card-back {
+  transform: rotateY(180deg);
+}

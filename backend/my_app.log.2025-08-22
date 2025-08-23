@@ -1,0 +1,297 @@
+2025-08-22 12:23:36,842 - __main__ - INFO - Running initial database setup...
+2025-08-22 12:23:36,912 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 12:23:36,914 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 12:23:36,915 - __main__ - INFO - Initial database setup complete.
+2025-08-22 12:25:36,132 - __main__ - INFO - Running initial database setup...
+2025-08-22 12:25:36,177 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 12:25:36,179 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 12:25:36,179 - __main__ - INFO - Initial database setup complete.
+2025-08-22 12:25:41,216 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=r_tGmwTcskQsYC1bxYOwaXwoxY_K0Xbbx5rM-RathOk
+2025-08-22 12:26:06,723 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=W4iWHuOQjm0On1sWumAnd1shzWnhhg9mmSWKC-e3qrQ
+2025-08-22 12:27:08,320 - app.routers.auth - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=0y-UbaGsI4ZopCx0D85LOGvIBrjpAqlurjB2xmWEUUk
+2025-08-22 12:32:39,856 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=-0i_mLQm2oyVdJgeGGayeT1rTQ-8kUVZVwlpJiJPgow
+2025-08-22 12:39:35,923 - __main__ - INFO - Running initial database setup...
+2025-08-22 12:39:35,985 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 12:39:35,987 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 12:39:35,987 - __main__ - INFO - Initial database setup complete.
+2025-08-22 12:39:41,639 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=_ENtDOg3uxqwQpPtrbEXguHgb3d-mSlh5yRPwp6ttMg
+2025-08-22 12:41:54,635 - __main__ - INFO - Running initial database setup...
+2025-08-22 12:41:54,675 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 12:41:54,678 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 12:41:54,678 - __main__ - INFO - Initial database setup complete.
+2025-08-22 12:41:59,628 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=Twk_8_iv2iaJ-UMDr_PP1l1Shr2GsTiAfe2m5w-79oc
+2025-08-22 12:42:04,425 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-22 12:42:07,264 - app.services.confession_service - INFO - Created confession 68a8659f9c03b4c417a99749
+2025-08-22 12:43:13,249 - __main__ - INFO - Running initial database setup...
+2025-08-22 12:43:13,286 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 12:43:13,288 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 12:43:13,288 - __main__ - INFO - Initial database setup complete.
+2025-08-22 12:43:20,655 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=rOizakbqVyulm2pt5Tp7KFYfUTHlBWxO2Y4FBvoAuxs
+2025-08-22 12:43:24,715 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 12:43:31,430 - app.services.confession_service - INFO - Created confession 68a865f3de97d6a3d9cfec11
+2025-08-22 12:43:31,468 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 12:56:40,015 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 12:56:45,908 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:02:07,091 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:02:07,140 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:02:07,141 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:02:07,141 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:02:41,441 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=9F5dy7zQjwfljEaCtXREHwFszNcSQ33hrlD2zfU_tpk
+2025-08-22 13:02:47,885 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-22 13:02:50,245 - app.services.confession_service - INFO - Created confession 68a86a7a32f2d72032f6f01d
+2025-08-22 13:04:38,993 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:05:42,954 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:05:42,998 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:05:43,000 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:05:43,001 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:05:46,722 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=7-_OA5FGXXPe-uChI_Uq4ssWwvw_JSV_vsGcM9cnbSE
+2025-08-22 13:05:52,976 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:07:33,384 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:07:33,425 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:07:33,427 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:07:33,428 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:07:39,442 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=O3u7qsYJ3gn4ymbfhbHedNTMQzr6TSDnLQ6JrmNNvow
+2025-08-22 13:07:44,248 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:07:56,693 - app.services.confession_service - INFO - Created confession 68a86bacaefd515bb6e19a82
+2025-08-22 13:09:14,985 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:09:15,039 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:09:15,041 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:09:15,041 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:09:19,659 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=lZjHQ-kjSrUs-rTawTmvGbz_OAIxKVW94Xp2EnvSu38
+2025-08-22 13:09:25,197 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:13:00,006 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:13:54,088 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:13:54,146 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:13:54,148 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:13:54,148 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:14:05,756 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=alzXOBfbtB-EdplBRZMRSHmXMRU-oOcmefSj2TCJGj8
+2025-08-22 13:14:10,031 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:16:49,624 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:16:49,673 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:16:49,675 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:16:49,675 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:16:55,384 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=ZiSEt__h_B_7N1kt1f_k0IWZVZTv3llRPDcJgfdhfdg
+2025-08-22 13:16:59,558 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:19:15,219 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:19:15,263 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:19:15,266 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:19:15,266 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:19:26,515 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=CIpVro4-reObgtzbH6aixhncwMg_og-geUvFgvg5Ecc
+2025-08-22 13:19:29,411 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 13:19:30,392 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86a7a32f2d72032f6f01d with heart
+2025-08-22 13:19:31,853 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86a7a32f2d72032f6f01d with heart
+2025-08-22 13:19:32,557 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86a7a32f2d72032f6f01d with haha
+2025-08-22 13:19:33,360 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86a7a32f2d72032f6f01d with haha
+2025-08-22 13:19:34,075 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86a7a32f2d72032f6f01d with whoa
+2025-08-22 13:19:49,189 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-22 13:19:54,128 - app.services.confession_service - INFO - Created confession 68a86e7a19b9fed10942cb97
+2025-08-22 13:19:55,182 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with heart
+2025-08-22 13:20:02,944 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with heart
+2025-08-22 13:20:03,368 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with haha
+2025-08-22 13:20:32,817 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with haha
+2025-08-22 13:20:33,294 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with whoa
+2025-08-22 13:31:19,641 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:31:19,699 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:31:19,701 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:31:19,701 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:33:18,266 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=mJ1iLN4xFxq4ijAcmf4hMQdgMtlqm8Y6oixDHTJC7SM
+2025-08-22 13:34:26,507 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:35:07,904 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:35:36,233 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:45:42,214 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:45:42,243 - __main__ - ERROR - An error occurred during startup setup: 1 validation error for UserDetails
+username
+  Field required [type=missing, input_value={'Regno': 'user', 'Name':...'isNotifications': True}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.6/v/missing
+2025-08-22 13:46:10,393 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=tti-gY09bWOmdTR3ftCyEnbDDb3HvCz-NF9epuMqnHo
+2025-08-22 13:56:07,309 - __main__ - INFO - Running initial database setup...
+2025-08-22 13:56:07,354 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 13:56:07,356 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 13:56:07,356 - __main__ - INFO - Initial database setup complete.
+2025-08-22 13:56:19,159 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=K7NFIhUIhgJsNUvOmiIV4tdwT4iq_Ftkz9fMbunbEYs
+2025-08-22 13:56:24,107 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 13:56:31,065 - app.services.confession_service - INFO - Added comment 68a8770f1087fc5e1c87d3ad to confession 68a86e7a19b9fed10942cb97
+2025-08-22 13:56:36,290 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with likes
+2025-08-22 13:57:23,509 - app.services.confession_service - INFO - Added comment 68a877431087fc5e1c87d3b2 to confession 68a86e7a19b9fed10942cb97
+2025-08-22 13:57:26,485 - app.services.confession_service - INFO - Added comment 68a877461087fc5e1c87d3b5 to confession 68a86e7a19b9fed10942cb97
+2025-08-22 13:57:29,117 - app.services.confession_service - WARNING - User 68a822394be34f3ffc8728fb tried to post more than 3 comments on confession 68a86e7a19b9fed10942cb97
+2025-08-22 13:57:32,930 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 14:01:16,204 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:01:16,247 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:01:16,248 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:01:16,249 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:03:07,718 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=KxiY029UY-p6J2X14E-XQCaqghj3G9r-NOpz7LoalRY
+2025-08-22 14:06:31,483 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:06:31,525 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:06:31,528 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:06:31,529 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:07:23,616 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=wi5adIkA6FFDkpp-0ZnfNdafnDgegj-35j_a-9jAUtY
+2025-08-22 14:08:15,524 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:08:15,569 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:08:15,571 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:08:15,572 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:08:27,677 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=C9W0jDN6fOQS5HZY-SwJlSG3elhgF7TtZlaBXFdJB0o
+2025-08-22 14:08:31,328 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 14:11:31,002 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 14:11:34,478 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 14:12:19,180 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 14:14:04,912 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 14:35:54,642 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:35:54,715 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:35:54,717 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:35:54,718 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:35:58,976 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=F357cIhWuli71eiDvJF8sSn8iqQ-4-sHF4RnoQn_jTc
+2025-08-22 14:42:28,549 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:42:28,601 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:42:28,604 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:42:28,604 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:43:02,242 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=e29a1eA1UCfYtfQOOBf4pPGsCkQMpUIYVvxVEhHZOuQ
+2025-08-22 14:45:15,989 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:45:16,038 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:45:16,039 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:45:16,040 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:45:19,916 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=erGv9enYdyFiBlvxye_M-zU8C3t1Y5nGohakf249CP0
+2025-08-22 14:47:09,274 - __main__ - INFO - Running initial database setup...
+2025-08-22 14:47:09,317 - __main__ - INFO - User with Regno 'user' already exists. Skipping creation.
+2025-08-22 14:47:09,319 - __main__ - INFO - User with Regno 'admin' already exists. Skipping creation.
+2025-08-22 14:47:09,319 - __main__ - INFO - Initial database setup complete.
+2025-08-22 14:47:12,835 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=YS6Ef9dzSheME20ly8ThOfE_8KxxufpNbLBEpZItLog
+2025-08-22 15:10:10,754 - __main__ - INFO - Running initial database setup...
+2025-08-22 15:10:10,813 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 15:10:10,815 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 15:10:10,816 - __main__ - INFO - Initial database setup complete.
+2025-08-22 15:10:18,366 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=Ur44kyvwbWr9LXnhSEkN_nh9Uh2gA1ZOaAqNmVVHCug
+2025-08-22 15:17:19,832 - __main__ - INFO - Running initial database setup...
+2025-08-22 15:17:19,872 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 15:17:19,874 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 15:17:19,874 - __main__ - INFO - Initial database setup complete.
+2025-08-22 15:17:24,708 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=mGOasvUSybyMJ0CkSihPbuNV7rGmLqCR27gH3Q37bUI
+2025-08-22 15:27:06,296 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=Xfuls-qV0348pKzM_QM0nmN354tSuh1_7H0YtAq-mTI
+2025-08-22 15:27:53,121 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-22 15:27:58,961 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with heart
+2025-08-22 15:28:26,664 - app.services.confession_service - INFO - Created confession 68a88c9aa36a47953225030b
+2025-08-22 15:30:35,952 - app.routers.auth - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=yOygDPCb-kgJiI2ZqwuBJcHGgEQbz7WGg1AKPA2msTE
+2025-08-22 15:33:45,759 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=A_La-a5d7jIBTy3muOomw5jlOCjg02irGA-UqPcx8Lc
+2025-08-22 15:34:27,689 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 15:34:30,404 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with haha
+2025-08-22 15:34:32,540 - app.services.confession_service - INFO - Retrieved 2 confessions sorted by popularity
+2025-08-22 15:34:49,423 - app.services.confession_service - INFO - Created confession 68a88e19a36a47953225032f
+2025-08-22 15:34:51,286 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-22 15:58:49,867 - __main__ - INFO - Running initial database setup...
+2025-08-22 15:58:49,955 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 15:58:49,958 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 15:58:49,958 - __main__ - INFO - Initial database setup complete.
+2025-08-22 15:58:56,412 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=EP0l6LXB-TBku89rtakXJLI2zIamgY6KL_r_y9bPfog
+2025-08-22 15:59:00,564 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-22 15:59:02,119 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with whoa
+2025-08-22 16:03:12,665 - __main__ - INFO - Running initial database setup...
+2025-08-22 16:03:12,727 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 16:03:12,730 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 16:03:12,730 - __main__ - INFO - Initial database setup complete.
+2025-08-22 16:03:16,024 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=eeumQWL7HITkRjZ1wqdzfTm2UtNlQngx1-nB4gE67sg
+2025-08-22 16:03:20,528 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-22 16:03:21,592 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with haha
+2025-08-22 16:03:25,941 - app.services.confession_service - INFO - Created confession 68a894cdff43764309cffd69
+2025-08-22 16:06:52,425 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:06:56,912 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:09:08,995 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:09:18,555 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with likes
+2025-08-22 16:09:21,887 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with dislikes
+2025-08-22 16:09:24,310 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with dislikes
+2025-08-22 16:09:25,368 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with likes
+2025-08-22 16:09:26,122 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:09:26,838 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:09:27,878 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with likes
+2025-08-22 16:09:28,304 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:11:46,055 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:11:47,631 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 16:11:48,747 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 16:11:49,448 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:11:50,087 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:11:50,513 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:11:50,829 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:11:52,247 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with dislikes
+2025-08-22 16:11:52,934 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with likes
+2025-08-22 16:13:41,181 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with dislikes
+2025-08-22 16:15:45,997 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:15:51,870 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with dislikes
+2025-08-22 16:15:54,904 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:15:57,722 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 16:16:03,525 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:16:04,510 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with dislikes
+2025-08-22 16:16:05,604 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:16:55,482 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a86e7a19b9fed10942cb97 with whoa
+2025-08-22 16:17:05,491 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:17:55,875 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with dislikes
+2025-08-22 16:18:02,288 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:20:39,019 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:20:41,752 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:20:43,893 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 16:20:46,069 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:20:47,585 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with dislikes
+2025-08-22 16:20:48,225 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:20:48,616 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with likes
+2025-08-22 16:21:00,294 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a8770f1087fc5e1c87d3ad with likes
+2025-08-22 16:21:04,717 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:25:38,993 - __main__ - INFO - Running initial database setup...
+2025-08-22 16:25:39,060 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 16:25:39,062 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 16:25:39,062 - __main__ - INFO - Initial database setup complete.
+2025-08-22 16:25:42,437 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=0je82EJM11Q9oeQX6IPHRT1UTB5_jgyE76mUGopomxk
+2025-08-22 16:25:46,693 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:25:48,632 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877431087fc5e1c87d3b2 with dislikes
+2025-08-22 16:25:50,328 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a877461087fc5e1c87d3b5 with likes
+2025-08-22 16:32:29,962 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:32:41,017 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:34:00,571 - __main__ - INFO - Running initial database setup...
+2025-08-22 16:34:00,617 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 16:34:00,619 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 16:34:00,619 - __main__ - INFO - Initial database setup complete.
+2025-08-22 16:36:05,624 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=OeYunWoTjQHVgqD4CVPEBuH6m2_JQY_LvhobRPHChXk
+2025-08-22 16:36:10,654 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:36:19,779 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:36:24,165 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:36:25,405 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-22 16:36:28,648 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:36:31,427 - app.services.confession_service - WARNING - User 68a822394be34f3ffc8728fb tried to post more than 3 comments on confession 68a86e7a19b9fed10942cb97
+2025-08-22 16:36:36,290 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:41:44,029 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:41:51,989 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:41:58,971 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:42:06,974 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:42:17,010 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:43:35,960 - __main__ - INFO - Running initial database setup...
+2025-08-22 16:43:36,004 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 16:43:36,006 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 16:43:36,006 - __main__ - INFO - Initial database setup complete.
+2025-08-22 16:43:42,551 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=G2SPhqc1EJVUQaGiYZqy9yoJgnr4EqsS82sk2ytGrIw
+2025-08-22 16:43:47,625 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:43:51,302 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:43:53,144 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-22 16:43:54,220 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:43:58,086 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:44:02,206 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:44:04,987 - app.services.confession_service - INFO - Added comment 68a89e54cb7490445de0beea to confession 68a88e19a36a47953225032f
+2025-08-22 16:44:07,465 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:44:11,439 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:44:23,715 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-22 16:45:18,588 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:45:28,152 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:45:31,007 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:48:58,346 - __main__ - INFO - Running initial database setup...
+2025-08-22 16:48:58,390 - __main__ - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-22 16:48:58,392 - __main__ - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-22 16:48:58,392 - __main__ - INFO - Initial database setup complete.
+2025-08-22 16:49:07,178 - app.routers.auth - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=uG-7JbYeUOAv4dwjLXzYfYgM_AW3xZVcZrf8Vjq-7dk
+2025-08-22 16:49:12,147 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:49:16,864 - app.services.confession_service - INFO - Added comment 68a89f8c3faa9bf2e48ee22c to confession 68a88c9aa36a47953225030b
+2025-08-22 16:49:19,480 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:49:23,042 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to comment 68a89f8c3faa9bf2e48ee22c with dislikes
+2025-08-22 16:49:25,292 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:49:27,691 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-22 16:49:28,912 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:49:30,119 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:49:33,031 - app.services.confession_service - INFO - User 68a822394be34f3ffc8728fb reacted to confession 68a894cdff43764309cffd69 with whoa
+2025-08-22 16:49:34,112 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-22 16:49:37,284 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-22 16:49:39,947 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
