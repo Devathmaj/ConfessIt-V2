@@ -5,47 +5,44 @@
     {
       "name": "message_text",
       "type": "text",
-      "x": 310,
+      "x": 180,
       "y": 273,
-      "width": 1300,
-      "height": 302,
+      "width": 1570,
+      "height": 570,
       "font": {
         "size": 32,
-        "color": "#000000",
-        "style": "normal"
+        "color": "#000000"
       }
     },
     {
       "name": "from_label",
       "type": "static_text",
-      "value": "From",
-      "x": 1252,
-      "y": 650,
+      "value": "From,",
+      "x": 1230,
+      "y": 880,
       "width": 204,
       "height": 43,
       "font": {
         "size": 24,
-        "color": "#555555",
-        "style": "italic"
+        "color": "#555555"
       }
     },
     {
       "name": "sender_name",
       "type": "text",
-      "x": 1214,
-      "y": 725,
+      "x": 1114,
+      "y": 920,
       "width": 525,
       "height": 54,
       "font": {
         "size": 28,
-        "color": "#000000",
-        "style": "bold"
+        "color": "#000000"
       }
     },
     {
       "name": "emoji",
       "type": "emoji",
-      "x": 796,
+      "x": 216,
       "y": 890,
       "width": 191,
       "height": 81

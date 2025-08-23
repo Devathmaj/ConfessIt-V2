@@ -11,35 +11,32 @@
       "height": 328,
       "font": {
         "size": 32,
-        "color": "#000000",
-        "style": "normal"
+        "color": "#0078F0"
       }
     },
     {
       "name": "from_label",
       "type": "static_text",
-      "value": "From",
-      "x": 1391,
-      "y": 873,
+      "value": "From,",
+      "x": 1111,
+      "y": 821,
       "width": 243,
       "height": 63,
       "font": {
         "size": 24,
-        "color": "#555555",
-        "style": "italic"
+        "color": "#0078F0"
       }
     },
     {
       "name": "sender_name",
       "type": "text",
-      "x": 1332,
-      "y": 971,
+      "x": 1000,
+      "y": 862,
       "width": 556,
       "height": 79,
       "font": {
         "size": 28,
-        "color": "#000000",
-        "style": "bold"
+        "color": "#0078F0"
       }
     },
     {
