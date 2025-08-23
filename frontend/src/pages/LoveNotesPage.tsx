@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { CountdownTimer } from '@/components/ui/countdown-timer';
+import { FloatingHearts } from '@/components/ui/floating-hearts';
 import {
     Mail,
     Palette,
@@ -13,6 +16,7 @@ import {
     MessageCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { Navigation } from '@/components/Navigation';
 
 // Used to define the structure for a template's field
 interface TemplateField {
@@ -44,13 +48,12 @@ interface LoveNote {
     template: string;
     anonymous: boolean;
     timestamp: Date;
-    emojis: string[]; // Kept as array for mock data compatibility
+    emojis: string[];
 }
 
-const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '�', '⭐', '🌟', '💎', '👑'];
+const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '💫', '⭐', '🌟', '💎', '👑'];
 const availableFonts = ['sans-serif', 'serif', 'monospace', 'cursive'];
 const availableFontStyles = ['normal', 'bold', 'italic'];
-
 
 // Mock data for received notes
 const mockReceivedNotes: LoveNote[] = [
@@ -74,12 +77,8 @@ const mockReceivedNotes: LoveNote[] = [
     },
 ];
 
-// Mock components to replace unresolved imports
-const PlaceholderComponent = ({ name }: { name: string }) => (
-    <div className="hidden" aria-hidden="true">{name} component placeholder</div>
-);
-
 export const LoveNotesPage = () => {
+    const { user } = useAuth();
     const [activeTab, setActiveTab] = useState<'create' | 'inbox'>('create');
     const [templates, setTemplates] = useState<Template[]>([]);
     const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
@@ -148,7 +147,7 @@ export const LoveNotesPage = () => {
                         fontWeight = '900'; // Enforce extra bold
                         break;
                     case 'sender_name':
-                        textToRender = isAnonymous ? 'Anonymous' : 'Your Name';
+                        textToRender = isAnonymous ? 'Anonymous' : (user?.Name || 'Your Name');
                         fontWeight = '900'; // Enforce extra bold
                         break;
                     case 'emoji':
@@ -174,7 +173,7 @@ export const LoveNotesPage = () => {
             });
         };
 
-    }, [selectedTemplate, noteMessage, isAnonymous, selectedEmoji, selectedFont, selectedFontStyle]);
+    }, [selectedTemplate, noteMessage, isAnonymous, selectedEmoji, selectedFont, selectedFontStyle, user]);
 
     // Used to wrap and center text within a specified area.
     const wrapText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, maxHeight: number, lineHeight: number) => {
@@ -281,8 +280,8 @@ export const LoveNotesPage = () => {
 
     return (
         <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
-            <PlaceholderComponent name="Navigation" />
-            <PlaceholderComponent name="FloatingHearts" />
+            <Navigation />
+            <FloatingHearts />
 
             {/* Header */}
             <div className="max-w-7xl mx-auto mb-8">
@@ -295,7 +294,7 @@ export const LoveNotesPage = () => {
                             Create and share beautiful digital love notes
                         </p>
                     </div>
-                    <PlaceholderComponent name="CountdownTimer" />
+                    <CountdownTimer />
                 </div>
             </div>
 
