@@ -13,6 +13,36 @@ from ..websocket_manager import broadcast_new_message, broadcast_conversation_st
 # Logger
 logger = logging.getLogger(__name__)
 
+async def handle_broadcast_async(coro):
+    """Helper function to handle async broadcast operations properly"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return await coro
+    except Exception as e:
+        logger.error(f"Error in broadcast handling: {e}")
+        raise
+    finally:
+        if not asyncio.get_event_loop().is_running():
+            loop.close()
+
+def handle_broadcast(coro):
+    """Synchronous wrapper for async broadcast operations"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(handle_broadcast_async(coro))
+    except Exception as e:
+        logger.error(f"Error in broadcast handling: {e}")
+        raise
+    finally:
+        if loop and loop.is_running():
+            loop.close()
+
 def request_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
     Used to initiate a conversation request based on a match.
@@ -183,14 +213,14 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         }
     )
     
-    # Broadcast conversation status update via WebSocket
+    # Broadcast conversation status update via WebSocket - Fixed async handling
     try:
         status_data = {
             "status": "accepted",
             "accepted_by": current_user.Regno,
             "accepted_at": datetime.now(timezone.utc).isoformat()
         }
-        asyncio.create_task(broadcast_conversation_status_update(str(match_id), status_data))
+        handle_broadcast(broadcast_conversation_status_update(str(match_id), status_data))
     except Exception as e:
         logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
     
@@ -256,14 +286,14 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         }
     )
     
-    # Broadcast conversation status update via WebSocket
+    # Broadcast conversation status update via WebSocket - Fixed async handling
     try:
         status_data = {
             "status": "rejected",
             "rejected_by": current_user.Regno,
             "rejected_at": datetime.now(timezone.utc).isoformat()
         }
-        asyncio.create_task(broadcast_conversation_status_update(str(match_id), status_data))
+        handle_broadcast(broadcast_conversation_status_update(str(match_id), status_data))
     except Exception as e:
         logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
     
@@ -341,9 +371,12 @@ def send_message_service(current_user: UserDetails, match_id_str: str, message_t
     
     # Broadcast the new message to all users in the match via WebSocket
     try:
-        asyncio.create_task(broadcast_new_message(str(match_id), message_data))
+        logger.info(f"Attempting to broadcast message for match {match_id}")
+        handle_broadcast(broadcast_new_message(str(match_id), message_data))
+        logger.info(f"Successfully initiated broadcast for match {match_id}")
     except Exception as e:
         logger.error(f"Error broadcasting message via WebSocket: {e}")
+        # Don't re-raise the exception - allow the message to be saved even if broadcast fails
     
     logger.info(f"Message sent from {current_user.Regno} to {receiver_regno} in match {match_id}")
 
@@ -395,9 +428,9 @@ def get_conversation_messages_service(current_user: UserDetails, match_id_str: s
 
     conversation = Conversation(**conversation_doc)
 
-    # 5. Check if the conversation is accepted
-    if conversation.status != "accepted":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only view messages in accepted conversations.")
+    # 5. Allow viewing messages when conversation was accepted OR expired
+    if conversation.status not in ("accepted", "expired"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only view messages for accepted or expired conversations.")
 
     # 6. Get all messages for this conversation, ordered by timestamp
     from ..models import Message
@@ -432,51 +465,82 @@ def get_conversation_messages_service(current_user: UserDetails, match_id_str: s
 def get_current_conversation_service(current_user: UserDetails, db: Database):
     """
     Used to get the current active conversation for the authenticated user.
+    If there is no active (non-expired) match, return the most recent match (expired)
+    so the frontend can still display the inbox and conversation history.
     """
-    # Find the current user's match (including expired ones)
-    # We want to show expired conversations too, so we don't filter by expires_at
+    current_time = datetime.now(timezone.utc)
+
+    # Try to find an active (non-expired) match first
     current_match = db.matches.find_one({
-        "$or": [{"user_1_regno": current_user.Regno}, {"user_2_regno": current_user.Regno}]
+        "$or": [{"user_1_regno": current_user.Regno}, {"user_2_regno": current_user.Regno}],
+        "expires_at": {"$gt": current_time}
     })
-    
+
     if not current_match:
-        return {"status": "no_active_match", "message": "No match found."}
-    
-    match = Match(**current_match)
-    
-    # Get the conversation for this match
+        # No active match — try to find the most recent match (expired or not)
+        current_match = db.matches.find_one(
+            {"$or": [{"user_1_regno": current_user.Regno}, {"user_2_regno": current_user.Regno}]},
+            sort=[("expires_at", -1)]
+        )
+        if not current_match:
+            # No matches at all
+            return {"status": "no_active_match", "message": "No active match found."}
+        # mark as expired if expires_at <= now
+        match = Match(**current_match)
+        match_expires_at = match.expires_at
+        if match_expires_at.tzinfo is None:
+            match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
+        is_expired = current_time > match_expires_at
+    else:
+        match = Match(**current_match)
+        is_expired = False
+
+    # Get the conversation for this match (may or may not exist)
     conversation_doc = db.conversations.find_one({"matchId": match.id})
     if not conversation_doc:
-        return {"status": "no_conversation", "message": "No conversation exists for this match."}
-    
+        # No conversation created yet; return match info and empty conversation placeholder
+        # Return success so frontend shows the match in inbox even if expired
+        other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
+        other_user_doc = db.UserDetails.find_one({"Regno": other_user_regno})
+        other_user = UserDetails(**other_user_doc) if other_user_doc else None
+
+        return {
+            "status": "success",
+            "match": {
+                "id": str(match.id),
+                "expires_at": match.expires_at.isoformat(),
+                "created_at": match.created_at.isoformat(),
+                "is_expired": is_expired
+            },
+            "conversation": {
+                "id": None,
+                "status": "none",
+                "initiator_id": None,
+                "receiver_id": None,
+                "created_at": None,
+                "accepted_at": None
+            },
+            "other_user": {
+                "regno": other_user.Regno if other_user else None,
+                "Regno": other_user.Regno if other_user else None,
+                "name": other_user.Name if other_user else None,
+                "Name": other_user.Name if other_user else None,
+                "username": other_user.username if other_user else None,
+                "profile_picture_id": other_user.profile_picture_id if other_user else None,
+                "profile_picture": other_user.profile_picture_id if other_user else None,
+                "which_class": other_user.which_class if other_user else None,
+                "bio": other_user.bio if other_user else None,
+                "interests": other_user.interests if other_user else []
+            },
+            "is_initiator": False
+        }
+
+    # If conversation exists, return it (allow expired)
     conversation = Conversation(**conversation_doc)
-    
-    # Get the other user's details
     other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
     other_user_doc = db.UserDetails.find_one({"Regno": other_user_regno})
-    
-    if not other_user_doc:
-        return {"status": "error", "message": "Other user not found."}
-    
-    other_user = UserDetails(**other_user_doc)
-    
-    # Check if the match has expired
-    current_time = datetime.now(timezone.utc)
-    match_expires_at = match.expires_at
-    
-    # If the stored datetime is timezone-naive, assume it's UTC
-    if match_expires_at.tzinfo is None:
-        match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
-    
-    is_expired = current_time > match_expires_at
-    
-    # Debug logging
-    logger.info(f"Expiry calculation for match {match.id}:")
-    logger.info(f"  Current time (UTC): {current_time}")
-    logger.info(f"  Match expires at (UTC): {match_expires_at}")
-    logger.info(f"  Is expired: {is_expired}")
-    logger.info(f"  Time difference: {match_expires_at - current_time}")
-    
+    other_user = UserDetails(**other_user_doc) if other_user_doc else None
+
     return {
         "status": "success",
         "match": {
@@ -494,13 +558,16 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "accepted_at": conversation.acceptedAt.isoformat() if conversation.acceptedAt else None
         },
         "other_user": {
-            "regno": other_user.Regno,
-            "name": other_user.Name,
-            "username": other_user.username,
-            "profile_picture_id": other_user.profile_picture_id,
-            "which_class": other_user.which_class,
-            "bio": other_user.bio,
-            "interests": other_user.interests
+            "regno": other_user.Regno if other_user else None,
+            "Regno": other_user.Regno if other_user else None,
+            "name": other_user.Name if other_user else None,
+            "Name": other_user.Name if other_user else None,
+            "username": other_user.username if other_user else None,
+            "profile_picture_id": other_user.profile_picture_id if other_user else None,
+            "profile_picture": other_user.profile_picture_id if other_user else None,
+            "which_class": other_user.which_class if other_user else None,
+            "bio": other_user.bio if other_user else None,
+            "interests": other_user.interests if other_user else []
         },
         "is_initiator": conversation.initiatorId == current_user.Regno
     }

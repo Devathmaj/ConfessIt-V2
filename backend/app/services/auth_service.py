@@ -149,3 +149,16 @@ def verify_magic_link_service(token: str, db: Database):
     redirect_url = "/admin" if user.get("user_role") == "admin" else "/dashboard"
 
     return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
+
+def decode_token(token: str) -> dict:
+    """
+    Used to decode and validate a JWT token.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
+    except jwt.PyJWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Could not validate token: {str(e)}"
+        )

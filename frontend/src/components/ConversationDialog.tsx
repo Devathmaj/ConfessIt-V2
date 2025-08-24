@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Clock, MessageCircle, User, Heart, X, RefreshCw } from 'lucide-react';
+import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2 } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, sendMessage, rejectConversation, getConversationMessages } from '@/services/api';
 import { websocketService } from '@/services/websocket';
 import { toast } from 'sonner';
@@ -62,7 +62,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
   const [rejecting, setRejecting] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [showMobileProfile, setShowMobileProfile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentUserRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetchCurrentConversation();
@@ -128,14 +131,24 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
       console.log('Setting up WebSocket subscriptions for match:', conversationData.match.id);
       
       // Handle new messages
-      const unsubscribeNewMessage = websocketService.onNewMessage(async (data) => {
-        console.log('WebSocket: Received new message data:', data);
-        if (data.match_id === conversationData.match.id) {
-          console.log('WebSocket: Match ID matches, refreshing messages');
-          // Refresh messages without auto-scroll to preserve reading position
-          await refreshMessagesOnly(false);
-        } else {
-          console.log('WebSocket: Match ID mismatch, ignoring message');
+      const unsubscribeNewMessage = websocketService.onNewMessage((data) => {
+        console.log('WebSocket: Received new message:', data);
+        
+        // Add the new message to the messages array immediately
+        if (data.message && data.match_id === conversationData.match.id) {
+          setMessages(prevMessages => {
+            // Check if message already exists to avoid duplicates
+            if (!prevMessages.find(m => m.id === data.message.id)) {
+              return [...prevMessages, {
+                ...data.message,
+                // Set is_sender based on the current user's regno
+                is_sender: data.message.sender_id === currentUserRef.current
+              }];
+            }
+            return prevMessages;
+          });
+          // Auto-scroll for new messages
+          setShouldAutoScroll(true);
         }
       });
 
@@ -369,38 +382,93 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
     }
   };
 
+  // Setup WebSocket connection when conversation data is available
+  useEffect(() => {
+    let connectionCheckInterval: NodeJS.Timeout;
+
+    const setupWebSocket = async () => {
+      if (!conversationData?.match.id) return;
+
+      try {
+        // Check if token exists
+        const token = localStorage.getItem('accessToken');
+        if (!token) {
+          console.error('No access token found');
+          return;
+        }
+
+        // Connect to WebSocket
+        await websocketService.ensureConnection(conversationData.match.id);
+        setIsConnected(true);
+        console.log('WebSocket connected successfully');
+      } catch (error) {
+        console.error('WebSocket connection failed:', error);
+        setIsConnected(false);
+
+        // Schedule reconnection
+        connectionCheckInterval = setInterval(async () => {
+          try {
+            await websocketService.ensureConnection(conversationData.match.id);
+            setIsConnected(true);
+            clearInterval(connectionCheckInterval);
+          } catch (error) {
+            console.error('Reconnection attempt failed:', error);
+          }
+        }, 5000);
+      }
+    };
+
+    setupWebSocket();
+
+    return () => {
+      if (connectionCheckInterval) {
+        clearInterval(connectionCheckInterval);
+      }
+      websocketService.disconnect();
+    };
+  }, [conversationData?.match.id]);
+
+  // Modify handleSendMessage to use ensureConnection
   const handleSendMessage = async () => {
     if (!conversationData || !messageText.trim()) return;
     
-    console.log("ConversationDialog: handleSendMessage called, is_expired:", conversationData.match.is_expired); // Debug log
-    
-    // Check if conversation is expired
+    // Check for expiry first
     if (conversationData.match.is_expired) {
-      console.log("ConversationDialog: Message blocked - conversation expired"); // Debug log
       toast.error("Cannot send message: This conversation has expired!");
       return;
     }
-    
+
+    // Ensure WebSocket connection before sending
     try {
-      setSending(true);
-      const response = await sendMessage(conversationData.match.id, messageText);
-      setMessageText('');
-      toast.success('Message sent!');
-      
-      // Refresh only messages immediately after sending to show the new message
-      // This is more efficient than refreshing the entire conversation data
-      await refreshMessagesOnly(true); // Enable auto-scroll for sent messages
-      
-      // Notify WebSocket that message was sent (for confirmation)
-      if (response.message_id) {
-        console.log('Sending WebSocket notification for message:', response.message_id);
-        websocketService.sendMessageSentNotification(response.message_id);
-      }
+      await websocketService.ensureConnection(conversationData.match.id);
+      setIsConnected(true);
+    } catch (error) {
+      console.error('Failed to ensure WebSocket connection:', error);
+      toast.error('Connection error. Please try again.');
+      return;
+    }
+
+    // Rest of sending logic
+    try {
+        setSending(true);
+        const response = await sendMessage(conversationData.match.id, messageText);
+        setMessageText('');
+        toast.success('Message sent!');
+        
+        // Refresh only messages immediately after sending to show the new message
+        // This is more efficient than refreshing the entire conversation data
+        await refreshMessagesOnly(true); // Enable auto-scroll for sent messages
+        
+        // Notify WebSocket that message was sent (for confirmation)
+        if (response.message_id) {
+            console.log('Sending WebSocket notification for message:', response.message_id);
+            websocketService.sendMessageSentNotification(response.message_id);
+        }
     } catch (error: any) {
-      console.error("ConversationDialog: Error sending message:", error); // Debug log
-      toast.error(error.response?.data?.detail || 'Failed to send message');
+        console.error("ConversationDialog: Error sending message:", error); // Debug log
+        toast.error(error.response?.data?.detail || 'Failed to send message');
     } finally {
-      setSending(false);
+        setSending(false);
     }
   };
 
@@ -458,9 +526,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden">
-        <CardHeader className="pb-3">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <Card className="w-full max-w-4xl h-[90vh] sm:h-auto sm:max-h-[90vh] flex flex-col">
+        <CardHeader className="pb-3 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="flex items-center space-x-2">
@@ -479,9 +547,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-6">
-          {/* Other User Profile */}
-          <div className="flex items-center space-x-4 p-4 bg-muted/50 rounded-lg">
+        <CardContent className="space-y-4 flex-1 overflow-y-auto">
+          {/* User Profile - Make it collapsible on mobile */}
+          <div className="hidden sm:flex items-center space-x-4 p-4 bg-muted/50 rounded-lg">
             <img
               src={getProfilePictureUrl(conversationData.other_user.profile_picture_id)}
               alt={conversationData.other_user.name}
@@ -504,139 +572,166 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
               )}
             </div>
           </div>
-
-          {/* Conversation Status */}
-          {conversationData.conversation.status === 'pending' && (
-            <div className="text-center p-6 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <MessageCircle className="h-12 w-12 text-yellow-500 mx-auto mb-3" />
-              <h3 className="text-lg font-semibold text-yellow-800 mb-2">
-                {conversationData.is_initiator ? 'Waiting for Response' : 'Conversation Request'}
-              </h3>
-              {conversationData.is_initiator ? (
-                <p className="text-yellow-700">
-                  You've sent a conversation request to {conversationData.other_user.name}. 
-                  They'll need to accept it before you can start chatting.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-yellow-700">
-                    {conversationData.other_user.name} wants to start a conversation with you!
-                  </p>
-                  <div className="flex space-x-3 justify-center">
-                    <Button onClick={handleAcceptConversation} className="bg-green-600 hover:bg-green-700" disabled={accepting}>
-                      {accepting ? 'Accepting...' : 'Accept Conversation'}
-                    </Button>
-                    <Button onClick={handleRejectConversation} variant="outline" className="border-red-300 text-red-600 hover:bg-red-50" disabled={rejecting}>
-                      {rejecting ? 'Rejecting...' : 'Reject Conversation'}
-                    </Button>
+          
+          {/* Mobile Profile Toggle */}
+          <div className="sm:hidden">
+            <Button
+              variant="ghost"
+              className="w-full flex items-center justify-between p-2"
+              onClick={() => setShowMobileProfile(prev => !prev)}
+            >
+              <span className="flex items-center">
+                <img
+                  src={getProfilePictureUrl(conversationData.other_user.profile_picture_id)}
+                  alt={conversationData.other_user.name}
+                  className="w-8 h-8 rounded-full mr-2"
+                />
+                <span>{conversationData.other_user.name}</span>
+              </span>
+              <ChevronDown className={`w-4 h-4 transform transition-transform ${showMobileProfile ? 'rotate-180' : ''}`} />
+            </Button>
+            
+            {showMobileProfile && (
+              <div className="p-4 bg-muted/50 rounded-lg mt-2">
+                <h3 className="text-lg font-semibold">{conversationData.other_user.name}</h3>
+                <p className="text-sm text-muted-foreground">{conversationData.other_user.which_class}</p>
+                {conversationData.other_user.bio && (
+                  <p className="text-sm mt-1">"{conversationData.other_user.bio}"</p>
+                )}
+                {conversationData.other_user.interests && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {conversationData.other_user.interests.map((interest, index) => (
+                      <Badge key={index} variant="secondary" className="text-xs">
+                        {interest}
+                      </Badge>
+                    ))}
                   </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Messages Section - Adjust height based on viewport */}
+          {conversationData.conversation.status === 'accepted' && (
+            <div className="space-y-4 flex-1 flex flex-col min-h-0">
+              <div className="flex-1 overflow-y-auto">
+                {/* Message list with improved spacing */}
+                <div className="space-y-3 p-4">
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`flex ${message.is_sender ? 'justify-end' : 'justify-start'} items-end space-x-2`}
+                    >
+                      {!message.is_sender && (
+                        <img
+                          src={getProfilePictureUrl(conversationData.other_user.profile_picture_id)}
+                          alt=""
+                          className="w-6 h-6 rounded-full hidden sm:block"
+                        />
+                      )}
+                      <div
+                        className={`max-w-[75%] sm:max-w-[60%] px-3 py-2 rounded-lg ${
+                          message.is_sender
+                            ? 'bg-pink-500 text-white rounded-br-none'
+                            : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-none'
+                        }`}
+                      >
+                        <p className="text-sm break-words">{message.text}</p>
+                        <p className={`text-xs mt-1 ${
+                          message.is_sender ? 'text-pink-100' : 'text-gray-500 dark:text-gray-400'
+                        }`}>
+                          {new Date(message.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={messagesEndRef} />
                 </div>
+              </div>
+
+              {/* Input Section - Fixed at bottom */}
+              <div className="p-4 border-t bg-background">
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={messageText}
+                    onChange={(e) => setMessageText(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                    placeholder={conversationData.match.is_expired ? "Conversation expired" : "Type your message..."}
+                    className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500
+                             disabled:bg-gray-100 disabled:text-gray-500 min-h-[40px] max-h-[120px] resize-none"
+                    disabled={conversationData.match.is_expired}
+                  />
+                  <Button
+                    onClick={handleSendMessage}
+                    disabled={!messageText.trim() || sending || conversationData.match.is_expired}
+                    className={`shrink-0 ${conversationData.match.is_expired ? "bg-gray-400" : ""}`}
+                  >
+                    {sending ? (
+                      <div className="flex items-center">
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        <span>Sending</span>
+                      </div>
+                    ) : (
+                      'Send'
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Pending and Rejected States - Simplified and unified layout */}
+          {conversationData.conversation.status !== 'accepted' && (
+            <div className="text-center p-6 bg-yellow-50 border border-yellow-200 rounded-lg">
+              {conversationData.conversation.status === 'pending' && (
+                <>
+                  <MessageCircle className="h-12 w-12 text-yellow-500 mx-auto mb-3" />
+                  <h3 className="text-lg font-semibold text-yellow-800 mb-2">
+                    {conversationData.is_initiator ? 'Waiting for Response' : 'Conversation Request'}
+                  </h3>
+                  {conversationData.is_initiator ? (
+                    <p className="text-yellow-700">
+                      You've sent a conversation request to {conversationData.other_user.name}. 
+                      They'll need to accept it before you can start chatting.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-yellow-700">
+                        {conversationData.other_user.name} wants to start a conversation with you!
+                      </p>
+                      <div className="flex space-x-3 justify-center">
+                        <Button onClick={handleAcceptConversation} className="bg-green-600 hover:bg-green-700" disabled={accepting}>
+                          {accepting ? 'Accepting...' : 'Accept Conversation'}
+                        </Button>
+                        <Button onClick={handleRejectConversation} variant="outline" className="border-red-300 text-red-600 hover:bg-red-50" disabled={rejecting}>
+                          {rejecting ? 'Rejecting...' : 'Reject Conversation'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {conversationData.conversation.status === 'rejected' && (
+                <>
+                  <X className="h-12 w-12 text-red-500 mx-auto mb-3" />
+                  <h3 className="text-lg font-semibold text-red-800 mb-2">Conversation Rejected</h3>
+                  <p className="text-red-700">
+                    {conversationData.is_initiator 
+                      ? `Your conversation request to ${conversationData.other_user.name} was rejected.`
+                      : `You rejected the conversation request from ${conversationData.other_user.name}.`
+                    }
+                  </p>
+                </>
               )}
             </div>
           )}
 
-          {conversationData.conversation.status === 'rejected' && (
-            <div className="text-center p-6 bg-red-50 border border-red-200 rounded-lg">
-              <X className="h-12 w-12 text-red-500 mx-auto mb-3" />
-              <h3 className="text-lg font-semibold text-red-800 mb-2">Conversation Rejected</h3>
-              <p className="text-red-700">
-                {conversationData.is_initiator 
-                  ? `Your conversation request to ${conversationData.other_user.name} was rejected.`
-                  : `You rejected the conversation request from ${conversationData.other_user.name}.`
-                }
-              </p>
-            </div>
-          )}
-
-                     {/* Chat Interface for Accepted Conversations */}
-           {conversationData.conversation.status === 'accepted' && (
-             <div className="space-y-4">
-                               <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Chat</h3>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={async () => {
-                      // Manual refresh should preserve scroll position
-                      await refreshMessagesOnly(false); // Disable auto-scroll for manual refresh
-                    }}
-                    disabled={loadingMessages}
-                  >
-                    <RefreshCw className={`w-4 h-4 mr-2 ${loadingMessages ? 'animate-spin' : ''}`} />
-                    Refresh Messages
-                  </Button>
-                </div>
-               
-               {/* Show expired warning if conversation is expired */}
-               {conversationData.match.is_expired && (
-                 <div className="text-center p-4 bg-red-50 border border-red-200 rounded-lg">
-                   <Clock className="h-8 w-8 text-red-500 mx-auto mb-2" />
-                   <h4 className="text-lg font-semibold text-red-800 mb-1">Conversation Expired</h4>
-                   <p className="text-red-700 text-sm">
-                     This conversation has expired. You can still view messages but cannot send new ones.
-                   </p>
-                 </div>
-               )}
-               
-               <div className="border rounded-lg p-4 h-64 overflow-y-auto bg-muted/30">
-                 {loadingMessages ? (
-                   <div className="text-center text-muted-foreground py-8">
-                     <MessageCircle className="h-8 w-8 mx-auto mb-2" />
-                     <p>Loading messages...</p>
-                   </div>
-                 ) : messages.length === 0 ? (
-                   <div className="text-center text-muted-foreground py-8">
-                     <MessageCircle className="h-8 w-8 mx-auto mb-2" />
-                     <p>Start the conversation! Send your first message.</p>
-                   </div>
-                 ) : (
-                   <div className="space-y-3">
-                     {messages.map((message, index) => (
-                       <div key={message.id} className={`flex ${message.is_sender ? 'justify-end' : 'justify-start'}`}>
-                         <div className={`max-w-xs px-3 py-2 rounded-lg ${
-                           message.is_sender 
-                             ? 'bg-pink-500 text-white rounded-br-none' 
-                             : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-none'
-                         }`}>
-                           <p className="text-sm">{message.text}</p>
-                           <p className={`text-xs mt-1 ${
-                             message.is_sender ? 'text-pink-100' : 'text-gray-500 dark:text-gray-400'
-                           }`}>
-                             {new Date(message.timestamp).toLocaleTimeString([], { 
-                               hour: '2-digit', 
-                               minute: '2-digit' 
-                             })}
-                           </p>
-                         </div>
-                       </div>
-                     ))}
-                     <div ref={messagesEndRef} />
-                   </div>
-                 )}
-               </div>
-               
-               <div className="flex space-x-2">
-                 <input
-                   type="text"
-                   value={messageText}
-                   onChange={(e) => setMessageText(e.target.value)}
-                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                   placeholder={conversationData.match.is_expired ? "Conversation expired - cannot send messages" : "Type your message..."}
-                   className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 disabled:bg-gray-100 disabled:text-gray-500"
-                   disabled={conversationData.match.is_expired}
-                 />
-                 <Button 
-                   onClick={handleSendMessage} 
-                   disabled={!messageText.trim() || sending || conversationData.match.is_expired}
-                   className={conversationData.match.is_expired ? "bg-gray-400 cursor-not-allowed" : ""}
-                 >
-                   {sending ? 'Sending...' : 'Send'}
-                 </Button>
-               </div>
-             </div>
-           )}
-
-          {/* Match Info */}
+          {/* Match Info - Always visible at the bottom */}
           <div className="text-xs text-muted-foreground text-center border-t pt-4">
             <p>Match created: {new Date(conversationData.match.created_at + 'Z').toLocaleString()}</p>
             {conversationData.conversation.accepted_at && (

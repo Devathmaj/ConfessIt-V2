@@ -25,7 +25,7 @@ def check_matchmaking_status(
     return check_matchmaking_cooldown_service(current_user, db)
 
 
-@router.post("/find", response_model=UserDetails, status_code=status.HTTP_200_OK)
+@router.post("/find", status_code=status.HTTP_200_OK)
 def find_match(
     current_user: Annotated[UserDetails, Depends(get_current_user)],
     db: Database = Depends(get_db)
@@ -33,5 +33,10 @@ def find_match(
     """
     Finds a random user and consumes the user's matchmaking attempt for the cooldown period.
     This should only be called after a successful check and user confirmation.
+
+    NOTE: previously this endpoint declared response_model=UserDetails which caused the
+    service's dict payload (status, matched_with, match_id, expires_at) to be coerced
+    and the matched payload to be lost. Removing the response_model ensures the
+    full dict is returned to the frontend.
     """
     return find_match_service(current_user, db)

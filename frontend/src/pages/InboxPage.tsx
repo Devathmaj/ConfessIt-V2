@@ -292,8 +292,16 @@ export const InboxPage = () => {
     
     if (diffInMinutes <= 0) return 'Expired';
     if (diffInMinutes < 60) return `${diffInMinutes}m left`;
-    if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h left`;
-    return `${Math.floor(diffInMinutes / 1440)}d left`;
+    
+    const hours = Math.floor(diffInMinutes / 60);
+    const minutes = diffInMinutes % 60;
+    if (diffInMinutes < 1440) {
+      return `${hours}h ${minutes}m left`;
+    }
+    
+    const days = Math.floor(diffInMinutes / 1440);
+    const remainingHours = Math.floor((diffInMinutes % 1440) / 60);
+    return `${days}d ${remainingHours}h left`;
   };
 
   // Filters conversations based on the current filter and search query.

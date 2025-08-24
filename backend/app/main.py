@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations
-from .services.auth_service import get_current_user
+from .services.auth_service import get_current_user, decode_token
 from .dependencies import get_db 
 from pymongo.database import Database
 import uvicorn
@@ -143,27 +143,44 @@ app.include_router(conversations.router)
 # ----------------------
 # WebSocket Endpoints
 # ----------------------
+from fastapi import WebSocket, Depends, HTTPException
+from .services.auth_service import decode_token
+from pymongo.database import Database
+from .dependencies import get_db
+from .models import UserDetails
+
+async def get_websocket_user(
+    websocket: WebSocket,
+    db: Database = Depends(get_db)
+) -> UserDetails:
+    token = websocket.query_params.get('token')
+    if not token:
+        raise HTTPException(status_code=403, detail="No token provided")
+    
+    try:
+        payload = decode_token(token)
+        regno = payload.get("sub")
+        if not regno:
+            raise HTTPException(status_code=403, detail="Invalid token payload")
+        
+        user_doc = db["UserDetails"].find_one({"Regno": regno})
+        if not user_doc:
+            raise HTTPException(status_code=403, detail="User not found")
+            
+        return UserDetails(**user_doc)
+    except Exception as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
 @app.websocket("/ws/{match_id}")
-async def websocket_endpoint(websocket: WebSocket, match_id: str):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    match_id: str,
+    user: UserDetails = Depends(get_websocket_user)
+):
     """WebSocket endpoint for real-time messaging in a specific match"""
     try:
-        # Get user from query parameters (token-based auth for WebSocket)
-        token = websocket.query_params.get("token")
-        if not token:
-            await websocket.close(code=4001, reason="Missing authentication token")
-            return
-        
-        # Validate token and get user
-        try:
-            user = get_current_user(token)
-            user_id = user["Regno"]
-        except Exception as e:
-            logger.error(f"Invalid token for WebSocket connection: {e}")
-            await websocket.close(code=4001, reason="Invalid authentication token")
-            return
-        
         # Handle the WebSocket connection
-        await handle_websocket_connection(websocket, user_id, match_id)
+        await handle_websocket_connection(websocket, user.Regno, match_id)
         
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")

@@ -49,76 +49,86 @@ class WebSocketService {
   private pongTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
-    // Get token from localStorage
-    this.token = localStorage.getItem('token');
+    // Get token from correct localStorage key
+    this.token = localStorage.getItem('accessToken');
   }
 
-  connect(matchId: string): Promise<void> {
+  async connect(matchId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (this.isConnecting) {
-        reject(new Error('Connection already in progress'));
-        return;
-      }
-
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        if (this.matchId === matchId) {
-          resolve(); // Already connected to the same match
-          return;
-        } else {
-          this.disconnect(); // Disconnect from previous match
-        }
-      }
-
-      this.isConnecting = true;
-      this.matchId = matchId;
-
-      if (!this.token) {
-        reject(new Error('No authentication token available'));
-        this.isConnecting = false;
-        return;
-      }
-
-      const wsUrl = `ws://localhost:8001/ws/${matchId}?token=${this.token}`;
-      
       try {
+        if (this.isConnecting) {
+          console.log('Connection already in progress');
+          reject(new Error('Connection already in progress'));
+          return;
+        }
+
+        // Check if already connected to the same match
+        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.matchId === matchId) {
+          console.log('Already connected to match:', matchId);
+          resolve();
+          return;
+        }
+
+        this.isConnecting = true;
+        this.matchId = matchId;
+
+        // Get token from correct localStorage key
+        this.token = localStorage.getItem('accessToken');
+        if (!this.token) {
+          this.isConnecting = false;
+          reject(new Error('No authentication token available'));
+          return;
+        }
+
+        console.log('Initiating WebSocket connection with token:', this.token.substring(0, 10) + '...');
+        const wsUrl = `ws://localhost:8001/ws/${matchId}?token=${this.token}`;
         this.ws = new WebSocket(wsUrl);
-        
+
+        // Add message handling
+        this.ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.handleMessage(data);
+          } catch (error) {
+            console.error('Error handling WebSocket message:', error);
+          }
+        };
+
         this.ws.onopen = () => {
-          console.log(`WebSocket connected to match ${matchId}`);
+          console.log('WebSocket connection established for match:', matchId);
           this.isConnecting = false;
           this.reconnectAttempts = 0;
-          this.reconnectDelay = 1000;
           this.startPingInterval();
           resolve();
         };
 
-        this.ws.onmessage = (event) => {
-          try {
-            const message: WebSocketMessage = JSON.parse(event.data);
-            this.handleMessage(message);
-          } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
-          }
-        };
-
         this.ws.onclose = (event) => {
-          console.log(`WebSocket disconnected from match ${matchId}:`, event.code, event.reason);
+          console.log('WebSocket connection closed:', event.code, event.reason);
           this.isConnecting = false;
           this.stopPingInterval();
           
-          // Attempt to reconnect if not a normal closure
-          if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+          // Only attempt to reconnect if:
+          // 1. Not a normal closure (code 1000)
+          // 2. Not authentication error (code 1008)
+          // 3. Not maximum retries reached
+          if (event.code !== 1000 && event.code !== 1008 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.scheduleReconnect();
+          } else if (event.code === 1008) {
+            console.error('WebSocket authentication failed');
+            // Clear token and trigger re-auth
+            localStorage.removeItem('accessToken');
           }
         };
 
         this.ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown WebSocket error';
+          console.error('WebSocket error:', errorMessage);
           this.isConnecting = false;
           reject(error);
         };
 
       } catch (error) {
+        console.error('Error in connect:', error);
         this.isConnecting = false;
         reject(error);
       }
@@ -138,18 +148,45 @@ class WebSocketService {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('Max reconnection attempts reached');
+      return;
+    }
+
     this.reconnectAttempts++;
-    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
     
-    console.log(`Scheduling WebSocket reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
+    console.log(`Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
     
-    setTimeout(() => {
+    setTimeout(async () => {
       if (this.matchId) {
-        this.connect(this.matchId).catch(error => {
+        console.log('Attempting to reconnect...');
+        try {
+          // Check token before reconnecting
+          const token = localStorage.getItem('accessToken');
+          if (!token) {
+            console.error('No authentication token available for reconnection');
+            return;
+          }
+          await this.connect(this.matchId);
+          console.log('Reconnection successful');
+        } catch (error) {
           console.error('Reconnect failed:', error);
-        });
+        }
       }
     }, delay);
+  }
+
+  // Add connection check method
+  async ensureConnection(matchId: string): Promise<void> {
+    // If already connected to the correct match, do nothing
+    if (this.isConnected() && this.matchId === matchId) {
+      return;
+    }
+    
+    // Otherwise, disconnect and connect to the new match
+    this.disconnect();
+    await this.connect(matchId);
   }
 
   private startPingInterval(): void {
