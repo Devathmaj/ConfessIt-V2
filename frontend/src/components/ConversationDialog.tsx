@@ -1,0 +1,565 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Clock, MessageCircle, User, Heart, X, RefreshCw } from 'lucide-react';
+import { getCurrentConversation, acceptConversation, sendMessage, rejectConversation, getConversationMessages } from '@/services/api';
+import { toast } from 'sonner';
+
+interface ConversationDialogProps {
+  onClose: () => void;
+  onRefresh: () => void;
+  onConversationAccepted?: () => void;
+}
+
+interface ConversationData {
+  match: {
+    id: string;
+    expires_at: string;
+    created_at: string;
+    is_expired: boolean;
+  };
+  conversation: {
+    id: string;
+    status: 'pending' | 'accepted' | 'rejected';
+    initiator_id: string;
+    receiver_id: string;
+    created_at: string;
+    accepted_at?: string;
+  };
+  other_user: {
+    regno: string;
+    name: string;
+    username: string;
+    profile_picture_id: string;
+    which_class: string;
+    bio: string;
+    interests: string[];
+  };
+  is_initiator: boolean;
+}
+
+interface Message {
+  id: string;
+  text: string;
+  sender_id: string;
+  receiver_id: string;
+  timestamp: string;
+  is_sender: boolean;
+}
+
+export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose, onRefresh, onConversationAccepted }) => {
+  const [conversationData, setConversationData] = useState<ConversationData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [messageText, setMessageText] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  const [accepting, setAccepting] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetchCurrentConversation();
+    const interval = setInterval(updateTimeLeft, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refresh messages when conversation status changes to accepted
+  useEffect(() => {
+    if (conversationData && conversationData.conversation.status === 'accepted') {
+      loadConversationMessages(conversationData.match.id);
+    }
+  }, [conversationData?.conversation.status]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // Real-time message updates: Messages are refreshed in multiple ways:
+  // 1. A new message is sent (handleSendMessage) - immediate refresh
+  // 2. Conversation status changes (accept/reject) - full refresh
+  // 3. Dialog is opened (fetchCurrentConversation) - initial load
+  // 4. Periodic refresh every 3 seconds (refreshMessagesOnly) - preserves user input
+  // 5. Manual refresh button (refreshMessagesOnly) - on-demand refresh
+  // This ensures real-time updates while preserving user typing input
+
+  // Periodic refresh of messages for real-time updates
+  useEffect(() => {
+    if (conversationData?.conversation.status === 'accepted') {
+      const interval = setInterval(async () => {
+        // Use the dedicated function that only refreshes messages
+        // This preserves user input while keeping messages up-to-date
+        await refreshMessagesOnly();
+      }, 3000); // Refresh every 3 seconds
+      
+      return () => clearInterval(interval);
+    }
+  }, [conversationData?.conversation.status, conversationData?.match.id]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const fetchCurrentConversation = async () => {
+    try {
+      setLoading(true);
+      const response = await getCurrentConversation();
+      console.log("ConversationDialog: fetchCurrentConversation response:", response); // Debug log
+      if (response.status === 'success') {
+        console.log("ConversationDialog: Raw response data:", {
+          expires_at: response.match.expires_at,
+          created_at: response.match.created_at,
+          is_expired: response.match.is_expired,
+          current_time: new Date().toISOString()
+        }); // Debug log
+        setConversationData(response);
+        console.log("ConversationDialog: Conversation data set, is_expired:", response.match.is_expired); // Debug log
+        updateTimeLeft();
+        
+        // Load conversation messages if the conversation is accepted
+        // This ensures we have the latest messages when opening the dialog
+        if (response.conversation.status === 'accepted') {
+          await loadConversationMessages(response.match.id);
+        }
+      } else {
+        toast.error(response.message || 'Failed to fetch conversation');
+        onClose();
+      }
+    } catch (error: any) {
+      console.error("ConversationDialog: Error fetching conversation:", error); // Debug log
+      toast.error(error.response?.data?.detail || 'Failed to fetch conversation');
+      onClose();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadConversationMessages = async (matchId: string) => {
+    try {
+      setLoadingMessages(true);
+      const response = await getConversationMessages(matchId);
+      if (response.status === 'success') {
+        setMessages(response.messages);
+        // Update the conversation data with expiry status if it's not already set
+        if (response.is_expired !== undefined && conversationData) {
+          setConversationData(prev => prev ? {
+            ...prev,
+            match: {
+              ...prev.match,
+              is_expired: response.is_expired
+            }
+          } : null);
+        }
+      } else {
+        setMessages([]);
+        console.error('Failed to load messages:', response.message);
+      }
+    } catch (error: any) {
+      console.error('Failed to load messages:', error);
+      setMessages([]);
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  // Refresh messages without affecting user input
+  const refreshMessagesOnly = async () => {
+    if (!conversationData?.match.id) return;
+    
+    try {
+      const response = await getConversationMessages(conversationData.match.id);
+      if (response.status === 'success') {
+        setMessages(response.messages);
+      }
+    } catch (error: any) {
+      console.error('Failed to refresh messages:', error);
+    }
+  };
+
+  const updateTimeLeft = () => {
+    if (!conversationData) return;
+    
+    console.log("ConversationDialog: updateTimeLeft called, is_expired:", conversationData.match.is_expired); // Debug log
+    
+    // Check if already expired from backend
+    if (conversationData.match.is_expired) {
+      setTimeLeft('Expired');
+      return;
+    }
+    
+    try {
+      // The backend sends UTC timestamps, so we should treat them as UTC
+      const now = new Date();
+      
+      // Parse the UTC timestamp directly without timezone conversion
+      // expires_at is already in UTC format from backend
+      const expiresUTC = new Date(conversationData.match.expires_at + 'Z').getTime(); // Add 'Z' to ensure UTC interpretation
+      const nowUTC = now.getTime();
+      
+      const difference = expiresUTC - nowUTC;
+      
+      console.log("ConversationDialog: Time calculation (UTC):", {
+        now: now.toISOString(),
+        nowUTC: nowUTC,
+        expiresAt: conversationData.match.expires_at,
+        expiresAtWithZ: conversationData.match.expires_at + 'Z',
+        expiresUTC: expiresUTC,
+        difference: difference,
+        differenceHours: difference / (1000 * 60 * 60)
+      }); // Debug log
+      
+      if (difference <= 0) {
+        setTimeLeft('Expired');
+        console.log("ConversationDialog: Conversation expired, updating local state"); // Debug log
+        // Update the local state to reflect expiry
+        setConversationData(prev => prev ? {
+          ...prev,
+          match: {
+            ...prev.match,
+            is_expired: true
+          }
+        } : null);
+        // Show expired message
+        toast.error("This conversation has expired!");
+        // Don't close automatically, let user see the expired state
+        return;
+      }
+      
+      const hours = Math.floor(difference / (1000 * 60 * 60));
+      const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((difference % (1000 * 60)) / 1000);
+      
+      const timeString = `${hours}h ${minutes}m ${seconds}s`;
+      console.log("ConversationDialog: Time left calculated:", timeString); // Debug log
+      setTimeLeft(timeString);
+    } catch (error) {
+      console.error('Error calculating time left:', error);
+      setTimeLeft('Error');
+    }
+  };
+
+  const handleAcceptConversation = async () => {
+    if (!conversationData) return;
+    
+    try {
+      setAccepting(true);
+      await acceptConversation(conversationData.match.id);
+      toast.success('Conversation accepted!');
+      
+      // Refresh conversation data and messages
+      await fetchCurrentConversation();
+      if (conversationData?.conversation.status === 'accepted') {
+        await loadConversationMessages(conversationData.match.id);
+      }
+      
+      onRefresh(); // Refresh parent component
+      onConversationAccepted?.(); // Call the new prop callback
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || 'Failed to accept conversation');
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  const handleRejectConversation = async () => {
+    if (!conversationData) return;
+    
+    try {
+      setRejecting(true);
+      await rejectConversation(conversationData.match.id);
+      toast.success('Conversation rejected!');
+      
+      // Refresh conversation data
+      await fetchCurrentConversation();
+      
+      onRefresh(); // Refresh parent component
+      onClose(); // Close the dialog
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || 'Failed to reject conversation');
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!conversationData || !messageText.trim()) return;
+    
+    console.log("ConversationDialog: handleSendMessage called, is_expired:", conversationData.match.is_expired); // Debug log
+    
+    // Check if conversation is expired
+    if (conversationData.match.is_expired) {
+      console.log("ConversationDialog: Message blocked - conversation expired"); // Debug log
+      toast.error("Cannot send message: This conversation has expired!");
+      return;
+    }
+    
+    try {
+      setSending(true);
+      await sendMessage(conversationData.match.id, messageText);
+      setMessageText('');
+      toast.success('Message sent!');
+      
+      // Refresh messages immediately after sending to show the new message
+      await loadConversationMessages(conversationData.match.id);
+      
+      // Also refresh the conversation data to get updated expiry status
+      await fetchCurrentConversation();
+      
+      // Force a scroll to bottom to show the new message
+      setTimeout(() => {
+        scrollToBottom();
+      }, 100);
+    } catch (error: any) {
+      console.error("ConversationDialog: Error sending message:", error); // Debug log
+      toast.error(error.response?.data?.detail || 'Failed to send message');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleClose = () => {
+    // If there are unsent messages, ask for confirmation
+    if (messageText.trim()) {
+      if (window.confirm('You have unsent text. Are you sure you want to close?')) {
+        onClose();
+      }
+    } else {
+      onClose();
+    }
+  };
+
+  const getProfilePictureUrl = (profilePictureId: string) => {
+    if (profilePictureId.startsWith('http')) {
+      return profilePictureId;
+    }
+    return `http://localhost:8001/profile_pictures/${profilePictureId}`;
+  };
+
+  const getStatusBadge = (status: string, isExpired: boolean) => {
+    if (isExpired) {
+      return <Badge variant="destructive">Expired</Badge>;
+    }
+    switch (status) {
+      case 'pending':
+        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Pending</Badge>;
+      case 'accepted':
+        return <Badge variant="default" className="bg-green-100 text-green-800">Active</Badge>;
+      case 'rejected':
+        return <Badge variant="destructive">Rejected</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <Card className="w-full max-w-2xl mx-4">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              <span className="ml-2">Loading conversation...</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!conversationData) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
+                <Clock className="h-5 w-5 text-muted-foreground" />
+                <span className={`text-sm font-medium ${
+                  conversationData.match.is_expired ? 'text-red-600' : 'text-muted-foreground'
+                }`}>
+                  {conversationData.match.is_expired ? 'Expired' : `Expires in: ${timeLeft}`}
+                </span>
+              </div>
+              {getStatusBadge(conversationData.conversation.status, conversationData.match.is_expired)}
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-6">
+          {/* Other User Profile */}
+          <div className="flex items-center space-x-4 p-4 bg-muted/50 rounded-lg">
+            <img
+              src={getProfilePictureUrl(conversationData.other_user.profile_picture_id)}
+              alt={conversationData.other_user.name}
+              className="w-16 h-16 rounded-full object-cover border-2 border-primary"
+            />
+            <div className="flex-1">
+              <h3 className="text-xl font-semibold">{conversationData.other_user.name}</h3>
+              <p className="text-sm text-muted-foreground">{conversationData.other_user.which_class}</p>
+              {conversationData.other_user.bio && (
+                <p className="text-sm mt-1">"{conversationData.other_user.bio}"</p>
+              )}
+              {conversationData.other_user.interests && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {conversationData.other_user.interests.map((interest, index) => (
+                    <Badge key={index} variant="secondary" className="text-xs">
+                      {interest}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Conversation Status */}
+          {conversationData.conversation.status === 'pending' && (
+            <div className="text-center p-6 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <MessageCircle className="h-12 w-12 text-yellow-500 mx-auto mb-3" />
+              <h3 className="text-lg font-semibold text-yellow-800 mb-2">
+                {conversationData.is_initiator ? 'Waiting for Response' : 'Conversation Request'}
+              </h3>
+              {conversationData.is_initiator ? (
+                <p className="text-yellow-700">
+                  You've sent a conversation request to {conversationData.other_user.name}. 
+                  They'll need to accept it before you can start chatting.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-yellow-700">
+                    {conversationData.other_user.name} wants to start a conversation with you!
+                  </p>
+                  <div className="flex space-x-3 justify-center">
+                    <Button onClick={handleAcceptConversation} className="bg-green-600 hover:bg-green-700" disabled={accepting}>
+                      {accepting ? 'Accepting...' : 'Accept Conversation'}
+                    </Button>
+                    <Button onClick={handleRejectConversation} variant="outline" className="border-red-300 text-red-600 hover:bg-red-50" disabled={rejecting}>
+                      {rejecting ? 'Rejecting...' : 'Reject Conversation'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {conversationData.conversation.status === 'rejected' && (
+            <div className="text-center p-6 bg-red-50 border border-red-200 rounded-lg">
+              <X className="h-12 w-12 text-red-500 mx-auto mb-3" />
+              <h3 className="text-lg font-semibold text-red-800 mb-2">Conversation Rejected</h3>
+              <p className="text-red-700">
+                {conversationData.is_initiator 
+                  ? `Your conversation request to ${conversationData.other_user.name} was rejected.`
+                  : `You rejected the conversation request from ${conversationData.other_user.name}.`
+                }
+              </p>
+            </div>
+          )}
+
+                     {/* Chat Interface for Accepted Conversations */}
+           {conversationData.conversation.status === 'accepted' && (
+             <div className="space-y-4">
+                               <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Chat</h3>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => refreshMessagesOnly()}
+                    disabled={loadingMessages}
+                  >
+                    <RefreshCw className={`w-4 h-4 mr-2 ${loadingMessages ? 'animate-spin' : ''}`} />
+                    Refresh Messages
+                  </Button>
+                </div>
+               
+               {/* Show expired warning if conversation is expired */}
+               {conversationData.match.is_expired && (
+                 <div className="text-center p-4 bg-red-50 border border-red-200 rounded-lg">
+                   <Clock className="h-8 w-8 text-red-500 mx-auto mb-2" />
+                   <h4 className="text-lg font-semibold text-red-800 mb-1">Conversation Expired</h4>
+                   <p className="text-red-700 text-sm">
+                     This conversation has expired. You can still view messages but cannot send new ones.
+                   </p>
+                 </div>
+               )}
+               
+               <div className="border rounded-lg p-4 h-64 overflow-y-auto bg-muted/30">
+                 {loadingMessages ? (
+                   <div className="text-center text-muted-foreground py-8">
+                     <MessageCircle className="h-8 w-8 mx-auto mb-2" />
+                     <p>Loading messages...</p>
+                   </div>
+                 ) : messages.length === 0 ? (
+                   <div className="text-center text-muted-foreground py-8">
+                     <MessageCircle className="h-8 w-8 mx-auto mb-2" />
+                     <p>Start the conversation! Send your first message.</p>
+                   </div>
+                 ) : (
+                   <div className="space-y-3">
+                     {messages.map((message, index) => (
+                       <div key={message.id} className={`flex ${message.is_sender ? 'justify-end' : 'justify-start'}`}>
+                         <div className={`max-w-xs px-3 py-2 rounded-lg ${
+                           message.is_sender 
+                             ? 'bg-pink-500 text-white rounded-br-none' 
+                             : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-none'
+                         }`}>
+                           <p className="text-sm">{message.text}</p>
+                           <p className={`text-xs mt-1 ${
+                             message.is_sender ? 'text-pink-100' : 'text-gray-500 dark:text-gray-400'
+                           }`}>
+                             {new Date(message.timestamp).toLocaleTimeString([], { 
+                               hour: '2-digit', 
+                               minute: '2-digit' 
+                             })}
+                           </p>
+                         </div>
+                       </div>
+                     ))}
+                     <div ref={messagesEndRef} />
+                   </div>
+                 )}
+               </div>
+               
+               <div className="flex space-x-2">
+                 <input
+                   type="text"
+                   value={messageText}
+                   onChange={(e) => setMessageText(e.target.value)}
+                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                   placeholder={conversationData.match.is_expired ? "Conversation expired - cannot send messages" : "Type your message..."}
+                   className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 disabled:bg-gray-100 disabled:text-gray-500"
+                   disabled={conversationData.match.is_expired}
+                 />
+                 <Button 
+                   onClick={handleSendMessage} 
+                   disabled={!messageText.trim() || sending || conversationData.match.is_expired}
+                   className={conversationData.match.is_expired ? "bg-gray-400 cursor-not-allowed" : ""}
+                 >
+                   {sending ? 'Sending...' : 'Send'}
+                 </Button>
+               </div>
+             </div>
+           )}
+
+          {/* Match Info */}
+          <div className="text-xs text-muted-foreground text-center border-t pt-4">
+            <p>Match created: {new Date(conversationData.match.created_at + 'Z').toLocaleString()}</p>
+            {conversationData.conversation.accepted_at && (
+              <p>Conversation accepted: {new Date(conversationData.conversation.accepted_at + 'Z').toLocaleString()}</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default ConversationDialog;

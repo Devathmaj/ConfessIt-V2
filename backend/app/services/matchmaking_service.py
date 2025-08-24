@@ -3,7 +3,7 @@
 import logging
 from fastapi import HTTPException, status
 from pymongo.database import Database
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..models import Match, UserDetails
 
@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 # Used to define the cooldown period in hours.
 MATCHMAKING_COOLDOWN_HOURS = 4
+
+# Used to define the match expiry period in hours.
+MATCH_EXPIRY_HOURS = 4
 
 def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     """
@@ -38,13 +41,21 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
         return {
             "status": "matched",
             "matched_with": UserDetails(**other_user_details),
-            "expires_at": match_data.expires_at
+            "match_id": str(match_data.id),  # Include the match ID
+            "expires_at": match_data.expires_at.isoformat()
         }
 
     # If no active match, check for cooldown
     if current_user.last_matchmaking_time:
         cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
-        time_since_last_match = datetime.utcnow() - current_user.last_matchmaking_time
+        current_time = datetime.now(timezone.utc)
+        last_matchmaking_time = current_user.last_matchmaking_time
+        
+        # If the stored datetime is timezone-naive, assume it's UTC
+        if last_matchmaking_time.tzinfo is None:
+            last_matchmaking_time = last_matchmaking_time.replace(tzinfo=timezone.utc)
+        
+        time_since_last_match = current_time - last_matchmaking_time
 
         if time_since_last_match < cooldown_period:
             remaining_time = cooldown_period - time_since_last_match
@@ -62,7 +73,7 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
 def find_match_service(
     current_user: UserDetails,
     db: Database
-) -> UserDetails:
+) -> dict:
     """
     Used to find a random user, create a persistent match, and update the matchmaking timestamp.
     This should be called after the cooldown check is passed and the user confirms.
@@ -70,7 +81,14 @@ def find_match_service(
     # Re-check the cooldown as a safeguard
     if current_user.last_matchmaking_time:
         cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
-        time_since_last_match = datetime.utcnow() - current_user.last_matchmaking_time
+        current_time = datetime.now(timezone.utc)
+        last_matchmaking_time = current_user.last_matchmaking_time
+        
+        # If the stored datetime is timezone-naive, assume it's UTC
+        if last_matchmaking_time.tzinfo is None:
+            last_matchmaking_time = last_matchmaking_time.replace(tzinfo=timezone.utc)
+        
+        time_since_last_match = current_time - last_matchmaking_time
         if time_since_last_match < cooldown_period:
              raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -89,7 +107,7 @@ def find_match_service(
         # Still consume the attempt by setting the timestamp
         db["UserDetails"].update_one(
             {"Regno": current_user.Regno},
-            {"$set": {"last_matchmaking_time": datetime.utcnow()}}
+            {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,7 +124,7 @@ def find_match_service(
     if not matched_user_doc:
         db["UserDetails"].update_one(
             {"Regno": current_user.Regno},
-            {"$set": {"last_matchmaking_time": datetime.utcnow()}}
+            {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -116,8 +134,8 @@ def find_match_service(
     matched_user = UserDetails(**matched_user_doc)
     
     # Create and store the match
-    now = datetime.utcnow()
-    expires_at = now + timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=MATCH_EXPIRY_HOURS)
     
     new_match = Match(
         user_1_regno=current_user.Regno,
@@ -125,7 +143,10 @@ def find_match_service(
         created_at=now,
         expires_at=expires_at
     )
-    db.matches.insert_one(new_match.dict(by_alias=True))
+    match_result = db.matches.insert_one(new_match.dict(by_alias=True))
+    
+    # Get the inserted match ID
+    match_id = str(match_result.inserted_id)
 
     # Update timestamps for both users
     db["UserDetails"].update_one(
@@ -137,4 +158,9 @@ def find_match_service(
         {"$set": {"last_matchmaking_time": now}}
     )
 
-    return matched_user
+    # Return both the matched user and the match ID
+    return {
+        "matched_with": matched_user,
+        "match_id": match_id,
+        "expires_at": expires_at.isoformat()
+    }

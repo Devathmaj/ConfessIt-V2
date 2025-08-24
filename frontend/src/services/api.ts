@@ -139,6 +139,59 @@ export const findMatch = async () => {
     return response.data;
 };
 
+// --- Conversation Endpoints ---
+export const requestConversation = async (matchId: string) => {
+    console.log("API: requestConversation called with matchId:", matchId); // Debug log
+    const response = await axios.post(`${API_URL}/conversations/request`, { matchId }, {
+        headers: getAuthHeaders(),
+    });
+    console.log("API: requestConversation response:", response.data); // Debug log
+    return response.data;
+};
+
+export const getConversationStatus = async (matchId: string) => {
+    const response = await axios.get(`${API_URL}/conversations/${matchId}/status`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const acceptConversation = async (matchId: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${matchId}/accept`, {}, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const rejectConversation = async (matchId: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${matchId}/reject`, {}, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const sendMessage = async (matchId: string, text: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${matchId}/messages`, { text }, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const getCurrentConversation = async () => {
+    const response = await axios.get(`${API_URL}/conversations/current`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const getConversationMessages = async (matchId: string) => {
+    const response = await axios.get(`${API_URL}/conversations/${matchId}/messages`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+
 // --- Love Notes Endpoints ---
 
 // Used to get all users for recipient selection

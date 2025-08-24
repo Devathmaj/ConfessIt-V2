@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from .routers import auth, profile, matchmaking, confessions, love_notes
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations
 from .dependencies import get_db
 from pymongo.database import Database
 import uvicorn
@@ -113,7 +113,7 @@ def on_startup():
 # ----------------------
 origins = [
     "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    "[http://127.0.0.1:5173](http://127.0.0.1:5173)",
 ]
 
 app.add_middleware(
@@ -132,6 +132,7 @@ app.include_router(profile.router)
 app.include_router(matchmaking.router)
 app.include_router(confessions.router)
 app.include_router(love_notes.router)
+app.include_router(conversations.router)
 
 
 # ----------------------

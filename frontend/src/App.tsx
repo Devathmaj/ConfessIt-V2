@@ -9,6 +9,7 @@ import { UserDashboard } from "./pages/UserDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { ConfessionsPage } from "./pages/ConfessionsPage";
 import { MatchmakingPage } from "./pages/MatchmakingPage";
+import { InboxPage } from "./pages/InboxPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LoveNotesPage } from "./pages/LoveNotesPage";
 import { MiniGamesPage } from "./pages/MiniGamesPage";
@@ -158,6 +159,14 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <MatchmakingPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/inbox"
+        element={
+          <ProtectedRoute>
+            <InboxPage />
           </ProtectedRoute>
         }
       />

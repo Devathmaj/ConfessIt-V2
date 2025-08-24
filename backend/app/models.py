@@ -3,7 +3,7 @@
 import logging
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 
 class Token(BaseModel):
@@ -57,7 +57,7 @@ class ConfessionComment(BaseModel):
     confession_id: str
     user_info: UserInfo
     message: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     likes: List[str] = Field(default_factory=list)
     dislikes: List[str] = Field(default_factory=list)
@@ -116,7 +116,7 @@ class Report(BaseModel):
     reported_by_id: str
     reported_by_name: str
     reason: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         arbitrary_types_allowed = True
@@ -178,56 +178,6 @@ class LoginToken(BaseModel):
         json_encoders = {ObjectId: str}
         populate_by_name = True
 
-class MatchRequest(BaseModel):
-    """
-    Models a matchmaking request, capturing the initial interaction between two users.
-    """
-    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
-    from_user: ObjectId
-    to_user: ObjectId
-    message: str
-    status: str = "pending"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    decision_at: Optional[datetime] = None
-    conversation_id: Optional[ObjectId] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
-
-class Conversation(BaseModel):
-    """
-    Represents a private conversation between two matched users.
-    """
-    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
-    participants: List[ObjectId]
-    status: str = "active"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    last_message: Optional[dict] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
-
-class Message(BaseModel):
-    """
-    Defines the structure for a single message within a conversation.
-    """
-    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
-    conversation_id: ObjectId
-    sender: ObjectId
-    text: str
-    sent_at: datetime = Field(default_factory=datetime.utcnow)
-    read_by: List[ObjectId] = []
-
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
-
 class LoveNoteTemplate(BaseModel):
     """
     Stores predefined templates for Love Notes.
@@ -236,7 +186,7 @@ class LoveNoteTemplate(BaseModel):
     name: str
     preview_image: str
     description: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         arbitrary_types_allowed = True
@@ -254,7 +204,7 @@ class LoveNote(BaseModel):
     message_text: str
     is_anonymous: bool = False
     status: str = "pending_review"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     read_at: Optional[datetime] = None
 
     class Config:
@@ -270,13 +220,52 @@ class Match(BaseModel):
     id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     user_1_regno: str
     user_2_regno: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime
 
     class Config:
         arbitrary_types_allowed = True
         json_encoders = {ObjectId: str}
         populate_by_name = True
+
+class Conversation(BaseModel):
+    """
+    Represents a conversation request and its state between two matched users.
+    """
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    matchId: ObjectId
+    initiatorId: str
+    receiverId: str
+    status: str = "pending"  # Can be 'pending', 'accepted', 'rejected'
+    acceptedAt: Optional[datetime] = None
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
+class Message(BaseModel):
+    """
+    Defines the structure for a single message within a conversation.
+    """
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    matchId: ObjectId
+    senderId: str
+    receiverId: str
+    text: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
+class ConversationCreate(BaseModel):
+    """
+    Model for creating a conversation request.
+    """
+    matchId: str
 
 
 # Update forward references to allow nested Pydantic models
