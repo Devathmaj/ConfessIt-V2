@@ -125,8 +125,15 @@ export const uploadProfilePicture = async (file: File) => {
 
 // --- Matchmaking Endpoints ---
 
+export const checkMatchmakingStatus = async () => {
+    const response = await axios.get(`${API_URL}/matchmaking/check`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 export const findMatch = async () => {
-    const response = await axios.get(`${API_URL}/matchmaking/find`, {
+    const response = await axios.post(`${API_URL}/matchmaking/find`, {}, {
         headers: getAuthHeaders(),
     });
     return response.data;

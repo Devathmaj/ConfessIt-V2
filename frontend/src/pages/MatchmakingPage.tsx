@@ -1,27 +1,39 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
-import { findMatch } from '@/services/api';
-import { 
-  Heart, 
-  MessageCircle, 
-  Sparkles, 
+import { findMatch, checkMatchmakingStatus } from '@/services/api';
+import {
+  Heart,
+  MessageCircle,
+  Sparkles,
   ArrowLeft,
   Send
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
+// Pre-written messages for quick chat options
 const prewrittenMessages = [
   "Hey! I love your profile, would you like to chat? 💕",
-  "Your interests caught my eye! What's your favorite book? 📚",
+  "Your interests caught my eye! What's your favorite book? �",
   "Coffee lover here too! Know any good spots? ☕",
   "Your bio made me smile! Tell me more about yourself ✨"
 ];
 
+// Icebreaker questions to start conversations
 const icebreakerCards = [
   "If you could have dinner with anyone, who would it be?",
   "What's your idea of a perfect day?",
@@ -30,22 +42,21 @@ const icebreakerCards = [
   "Describe yourself in three emojis!"
 ];
 
-// --- MOCK DATA FOR ANIMATION ---
-// Used to provide a pool of fake user profiles for the slot machine animation.
-// The profile_picture_id now uses a placeholder service to avoid 404 errors.
+// Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
-    { Name: 'Alex', Regno: '123', emoji: '😊', username: 'alex', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
-    { Name: 'Jordan', Regno: '456', emoji: '😎', username: 'jordan', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
-    { Name: 'Taylor', Regno: '789', emoji: '🤩', username: 'taylor', which_class: 'MECH', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
-    { Name: 'Casey', Regno: '101', emoji: '🥳', username: 'casey', which_class: 'CIVIL', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=C', interests: ['Art', 'Cooking'], bio: 'You get the idea.' },
-    { Name: 'Morgan', Regno: '112', emoji: '😇', username: 'morgan', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=M', interests: ['Photography', 'Travel'], bio: 'Almost done.' },
-    { Name: 'Riley', Regno: '131', emoji: '🤓', username: 'riley', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=R', interests: ['Coding', 'Sci-Fi'], bio: 'Last one!' },
+    { id: 'mock1', Name: 'Alex', Regno: '123', emoji: '😊', username: 'alex', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
+    { id: 'mock2', Name: 'Jordan', Regno: '456', emoji: '😎', username: 'jordan', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
+    { id: 'mock3', Name: 'Taylor', Regno: '789', emoji: '🤩', username: 'taylor', which_class: 'MECH', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
+    { id: 'mock4', Name: 'Casey', Regno: '101', emoji: '🥳', username: 'casey', which_class: 'CIVIL', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=C', interests: ['Art', 'Cooking'], bio: 'You get the idea.' },
+    { id: 'mock5', Name: 'Morgan', Regno: '112', emoji: '😇', username: 'morgan', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=M', interests: ['Photography', 'Travel'], bio: 'Almost done.' },
+    { id: 'mock6', Name: 'Riley', Regno: '131', emoji: '🤓', username: 'riley', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=R', interests: ['Coding', 'Sci-Fi'], bio: 'Last one!' },
 ];
 
 /**
- * Renders a 3D glass-like heart that visually fills with a red liquid
- * based on the provided fill percentage. This component uses SVG filters,
- * gradients, and clipping paths to achieve its effect.
+ * Renders a glass-like heart SVG that fills with a liquid animation.
+ * @param {object} props - The component props.
+ * @param {number} props.fillPercentage - The percentage to fill the heart (0-100).
+ * @returns {JSX.Element} The GlassHeart component.
  */
 const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
     const heartPathData = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z";
@@ -108,7 +119,11 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
     );
 };
 
-
+/**
+ * The main component for the matchmaking page.
+ * Handles matchmaking logic, UI state, and chat functionality.
+ * @returns {JSX.Element} The MatchmakingPage component.
+ */
 export const MatchmakingPage = () => {
   const { user } = useAuth();
   const [isMatching, setIsMatching] = useState(false);
@@ -117,22 +132,77 @@ export const MatchmakingPage = () => {
   const [heartFill, setHeartFill] = useState(0);
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState<string[]>([]);
+  
+  const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
+  const [showCooldownDialog, setShowCooldownDialog] = useState(false);
+  const [cooldownMessage, setCooldownMessage] = useState("");
 
-  // Used to determine the correct image source for a user profile.
-  // It checks if the picture ID is a full URL (for mock data) or a backend ID.
+  /**
+   * Constructs the full URL for a user's profile picture.
+   * @param {string} [pictureId] - The ID or URL of the picture.
+   * @returns {string} The full URL to the profile picture.
+   */
   const getProfilePictureUrl = (pictureId?: string) => {
     if (!pictureId) {
       return 'https://placehold.co/96x96/fecdd3/be123c?text=💕';
     }
-    // If the pictureId is a full URL (from our mock data), use it directly.
     if (pictureId.startsWith('http')) {
       return pictureId;
     }
-    // Otherwise, construct the URL to the backend service.
     return `http://localhost:8001/profile_pictures/${pictureId}`;
   };
 
+  /**
+   * Fetches the user's current matchmaking status from the server.
+   * Used to check if the user already has a match upon loading the page.
+   */
+  const fetchMatchmakingStatus = useCallback(async () => {
+    try {
+      const response = await checkMatchmakingStatus();
+      if (response.status === 'matched') {
+        setMatchedProfile(response.matched_with);
+      }
+    } catch (error: any) {
+      console.error("Failed to check matchmaking status on load:", error.response?.data?.detail || error.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMatchmakingStatus();
+  }, [fetchMatchmakingStatus]);
+
+  /**
+   * Handles the click event on the main heart icon.
+   * Checks the user's eligibility and either shows a confirmation dialog
+   * or a cooldown message if they've matched recently.
+   */
+  const handleHeartClick = async () => {
+    if (isMatching || matchedProfile) return;
+
+    try {
+      const response = await checkMatchmakingStatus();
+      if (response.status === 'eligible') {
+        setShowConfirmationDialog(true);
+      } else if (response.status === 'matched') {
+        setMatchedProfile(response.matched_with);
+        toast.info("You already have a match!");
+      }
+    } catch (error: any) {
+      if (error.response?.status === 429) {
+        setCooldownMessage(error.response.data.detail);
+        setShowCooldownDialog(true);
+      } else {
+        toast.error("An error occurred. Please try again later.");
+      }
+    }
+  };
+
+  /**
+   * Initiates the matchmaking process after user confirmation.
+   * Triggers animations and calls the API to find a match.
+   */
   const startMatching = async () => {
+    setShowConfirmationDialog(false);
     setIsMatching(true);
     setMatchedProfile(null);
     setHeartFill(0);
@@ -174,6 +244,10 @@ export const MatchmakingPage = () => {
     }, intervalDuration);
   };
 
+  /**
+   * Sends a message in the chat and simulates a reply.
+   * @param {string} message - The message to send.
+   */
   const sendMessage = (message: string) => {
     setChatMessages(prev => [...prev, `You: ${message}`]);
     
@@ -189,11 +263,21 @@ export const MatchmakingPage = () => {
     }, 1000);
   };
 
+  /**
+   * Sends a pre-defined icebreaker question to the chat.
+   * @param {string} card - The icebreaker question text.
+   */
   const sendIcebreaker = (card: string) => {
     setChatMessages(prev => [...prev, `You: ${card}`]);
     toast.success('Icebreaker sent! 🧊💕');
   };
 
+  /**
+   * A component to display a user's profile card.
+   * @param {object} props - The component props.
+   * @param {User} props.profile - The user profile data to display.
+   * @returns {JSX.Element} The UserCard component.
+   */
   const UserCard = ({ profile }: { profile: User }) => (
     <Card className="confession-card">
       <CardHeader className="items-center text-center">
@@ -256,12 +340,14 @@ export const MatchmakingPage = () => {
             </div>
 
             <div className="flex flex-col items-center justify-center space-y-6 h-full">
-              <div
-                className="relative w-48 h-48 cursor-pointer group"
-                onClick={isMatching ? undefined : startMatching}
-              >
-                <GlassHeart fillPercentage={heartFill} />
-              </div>
+              {!matchedProfile ? (
+                <div
+                  className="relative w-48 h-48 cursor-pointer group"
+                  onClick={handleHeartClick}
+                >
+                  <GlassHeart fillPercentage={heartFill} />
+                </div>
+              ) : null}
 
               {!isMatching && !matchedProfile && (
                 <p className="text-muted-foreground text-center font-dancing text-lg">
@@ -275,7 +361,7 @@ export const MatchmakingPage = () => {
                 </p>
               )}
 
-              {matchedProfile && (
+              {matchedProfile && !isMatching && (
                 <Button
                   onClick={() => setShowChat(true)}
                   className="bg-gradient-romantic hover:opacity-90 text-white px-8 py-3 rounded-full font-dancing text-lg"
@@ -395,6 +481,37 @@ export const MatchmakingPage = () => {
           </div>
         )}
       </div>
+
+      {/* Confirmation Dialog */}
+      <AlertDialog open={showConfirmationDialog} onOpenChange={setShowConfirmationDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Matchmaking</AlertDialogTitle>
+            <AlertDialogDescription>
+              You can only find a new match once every 4 hours. Are you sure you want to use your attempt now?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={startMatching}>Proceed</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cooldown Dialog */}
+      <AlertDialog open={showCooldownDialog} onOpenChange={setShowCooldownDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Matchmaking on Cooldown</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cooldownMessage}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setShowCooldownDialog(false)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

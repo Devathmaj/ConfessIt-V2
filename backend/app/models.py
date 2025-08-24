@@ -146,7 +146,8 @@ class UserDetails(BaseModel):
     reported_count: int = 0
     last_login_time: Optional[datetime] = None
     last_login_ip: Optional[str] = None
-    user_role: str = "user" 
+    user_role: str = "user"
+    last_matchmaking_time: Optional[datetime] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -255,6 +256,22 @@ class LoveNote(BaseModel):
     status: str = "pending_review"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     read_at: Optional[datetime] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
+
+class Match(BaseModel):
+    """
+    Represents a match between two users from matchmaking.
+    """
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    user_1_regno: str
+    user_2_regno: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime
 
     class Config:
         arbitrary_types_allowed = True

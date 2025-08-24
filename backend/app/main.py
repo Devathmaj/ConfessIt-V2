@@ -66,7 +66,8 @@ def on_startup():
                 reported_count=0,
                 last_login_time=None,
                 last_login_ip=None,
-                user_role="user"
+                user_role="user",
+                last_matchmaking_time=None
             ),
             UserDetails(
                 Regno="admin",
@@ -85,7 +86,8 @@ def on_startup():
                 reported_count=0,
                 last_login_time=None,
                 last_login_ip=None,
-                user_role="admin"
+                user_role="admin",
+                last_matchmaking_time=None
             ),
         ]
 
