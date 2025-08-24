@@ -4,7 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Clock, MessageCircle, User, Heart, X, RefreshCw } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, sendMessage, rejectConversation, getConversationMessages } from '@/services/api';
+import { websocketService } from '@/services/websocket';
 import { toast } from 'sonner';
+
+// WebSocket-based real-time messaging system
+// This replaces the client-side event system with server-side WebSocket broadcasting
 
 interface ConversationDialogProps {
   onClose: () => void;
@@ -73,29 +77,101 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
     }
   }, [conversationData?.conversation.status]);
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom only when messages are first loaded or when user sends a message
+  // This prevents auto-scrolling during periodic refresh, allowing users to read older messages
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (shouldAutoScroll) {
+      scrollToBottom();
+    }
+  }, [messages, shouldAutoScroll]);
 
-  // Real-time message updates: Messages are refreshed in multiple ways:
-  // 1. A new message is sent (handleSendMessage) - immediate refresh
-  // 2. Conversation status changes (accept/reject) - full refresh
-  // 3. Dialog is opened (fetchCurrentConversation) - initial load
-  // 4. Periodic refresh every 3 seconds (refreshMessagesOnly) - preserves user input
-  // 5. Manual refresh button (refreshMessagesOnly) - on-demand refresh
-  // This ensures real-time updates while preserving user typing input
+  // WebSocket-based real-time message updates: Messages are refreshed ONLY when:
+  // 1. Dialog is opened (fetchCurrentConversation) - initial load + auto-scroll
+  // 2. A new message is sent (handleSendMessage) - immediate refresh + auto-scroll
+  // 3. Conversation status changes (accept/reject) - full refresh + auto-scroll
+  // 4. Manual refresh button (refreshMessagesOnly) - on-demand refresh + preserves scroll position
+  // 5. Other user sends message (WebSocket broadcast) - instant refresh for receiver
+  // 6. Match expiry warnings and notifications (WebSocket broadcast)
+  // 
+  // BENEFITS:
+  // - True real-time updates via WebSocket - no polling required
+  // - Server-side broadcasting ensures cross-session message delivery
+  // - Conversation-specific updates - only affects the relevant conversation
+  // - Preserves user input and scroll position
+  // - Minimal API calls - maximum efficiency
+  // - Automatic expiry handling and warnings
 
-  // Periodic refresh of messages for real-time updates
+  // Connect to WebSocket when conversation dialog is opened (regardless of status)
   useEffect(() => {
-    if (conversationData?.conversation.status === 'accepted') {
-      const interval = setInterval(async () => {
-        // Use the dedicated function that only refreshes messages
-        // This preserves user input while keeping messages up-to-date
-        await refreshMessagesOnly();
-      }, 3000); // Refresh every 3 seconds
+    if (conversationData?.match.id) {
+      console.log('Connecting to WebSocket for match:', conversationData.match.id);
+      // Connect to WebSocket for this match
+      websocketService.connect(conversationData.match.id).then(() => {
+        console.log('WebSocket connected successfully');
+      }).catch(error => {
+        console.error('Failed to connect to WebSocket:', error);
+      });
       
-      return () => clearInterval(interval);
+      // Cleanup on unmount
+      return () => {
+        console.log('Disconnecting WebSocket');
+        websocketService.disconnect();
+      };
+    }
+  }, [conversationData?.match.id]);
+
+  // Subscribe to WebSocket messages when conversation dialog is opened
+  useEffect(() => {
+    if (conversationData?.match.id) {
+      console.log('Setting up WebSocket subscriptions for match:', conversationData.match.id);
+      
+      // Handle new messages
+      const unsubscribeNewMessage = websocketService.onNewMessage(async (data) => {
+        console.log('WebSocket: Received new message data:', data);
+        if (data.match_id === conversationData.match.id) {
+          console.log('WebSocket: Match ID matches, refreshing messages');
+          // Refresh messages without auto-scroll to preserve reading position
+          await refreshMessagesOnly(false);
+        } else {
+          console.log('WebSocket: Match ID mismatch, ignoring message');
+        }
+      });
+
+      // Handle conversation status updates
+      const unsubscribeStatusUpdate = websocketService.onConversationStatusUpdate(async (data) => {
+        if (data.match_id === conversationData.match.id) {
+          // Refresh conversation data to show updated status
+          await fetchCurrentConversation();
+        }
+      });
+
+      // Handle match expiry warnings
+      const unsubscribeExpiryWarning = websocketService.onMatchExpiryWarning((data) => {
+        if (data.match_id === conversationData.match.id) {
+          const minutes = Math.floor(data.time_left_seconds / 60);
+          const seconds = data.time_left_seconds % 60;
+          toast.warning(`Match expires in ${minutes}m ${seconds}s!`);
+        }
+      });
+
+      // Handle match expired
+      const unsubscribeMatchExpired = websocketService.onMatchExpired((data) => {
+        if (data.match_id === conversationData.match.id) {
+          toast.error('This match has expired!');
+          // Refresh conversation data to show expired status
+          fetchCurrentConversation();
+        }
+      });
+
+      // Cleanup subscriptions
+      return () => {
+        unsubscribeNewMessage();
+        unsubscribeStatusUpdate();
+        unsubscribeExpiryWarning();
+        unsubscribeMatchExpired();
+      };
     }
   }, [conversationData?.conversation.status, conversationData?.match.id]);
 
@@ -153,6 +229,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
             }
           } : null);
         }
+        // Enable auto-scroll for initial message load
+        setShouldAutoScroll(true);
       } else {
         setMessages([]);
         console.error('Failed to load messages:', response.message);
@@ -166,13 +244,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
   };
 
   // Refresh messages without affecting user input
-  const refreshMessagesOnly = async () => {
+  const refreshMessagesOnly = async (enableAutoScroll = false) => {
     if (!conversationData?.match.id) return;
     
     try {
+      console.log('Refreshing messages, enableAutoScroll:', enableAutoScroll);
+      // Set auto-scroll based on parameter (enabled when user sends message)
+      setShouldAutoScroll(enableAutoScroll);
+      
       const response = await getConversationMessages(conversationData.match.id);
       if (response.status === 'success') {
+        console.log('Messages refreshed, count:', response.messages.length);
         setMessages(response.messages);
+      } else {
+        console.error('Failed to refresh messages:', response.message);
       }
     } catch (error: any) {
       console.error('Failed to refresh messages:', error);
@@ -298,20 +383,19 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
     
     try {
       setSending(true);
-      await sendMessage(conversationData.match.id, messageText);
+      const response = await sendMessage(conversationData.match.id, messageText);
       setMessageText('');
       toast.success('Message sent!');
       
-      // Refresh messages immediately after sending to show the new message
-      await loadConversationMessages(conversationData.match.id);
+      // Refresh only messages immediately after sending to show the new message
+      // This is more efficient than refreshing the entire conversation data
+      await refreshMessagesOnly(true); // Enable auto-scroll for sent messages
       
-      // Also refresh the conversation data to get updated expiry status
-      await fetchCurrentConversation();
-      
-      // Force a scroll to bottom to show the new message
-      setTimeout(() => {
-        scrollToBottom();
-      }, 100);
+      // Notify WebSocket that message was sent (for confirmation)
+      if (response.message_id) {
+        console.log('Sending WebSocket notification for message:', response.message_id);
+        websocketService.sendMessageSentNotification(response.message_id);
+      }
     } catch (error: any) {
       console.error("ConversationDialog: Error sending message:", error); // Debug log
       toast.error(error.response?.data?.detail || 'Failed to send message');
@@ -472,7 +556,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
                   <Button 
                     variant="outline" 
                     size="sm" 
-                    onClick={() => refreshMessagesOnly()}
+                    onClick={async () => {
+                      // Manual refresh should preserve scroll position
+                      await refreshMessagesOnly(false); // Disable auto-scroll for manual refresh
+                    }}
                     disabled={loadingMessages}
                   >
                     <RefreshCw className={`w-4 h-4 mr-2 ${loadingMessages ? 'animate-spin' : ''}`} />

@@ -22,9 +22,10 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     or if they have an active match.
     """
     # Check for an active match first
+    current_time = datetime.now(timezone.utc)
     active_match = db.matches.find_one({
         "$or": [{"user_1_regno": current_user.Regno}, {"user_2_regno": current_user.Regno}],
-        "expires_at": {"$gt": datetime.utcnow()}
+        "expires_at": {"$gt": current_time}
     })
 
     if active_match:
@@ -164,3 +165,17 @@ def find_match_service(
         "match_id": match_id,
         "expires_at": expires_at.isoformat()
     }
+
+
+def get_active_matches(db: Database):
+    """
+    Get all active (non-expired) matches for WebSocket expiry checking.
+    """
+    current_time = datetime.now(timezone.utc)
+    
+    # Find all matches that haven't expired yet
+    active_matches = db.matches.find({
+        "expires_at": {"$gt": current_time}
+    })
+    
+    return list(active_matches)

@@ -1,12 +1,14 @@
 # app/services/conversation_service.py
 
 import logging
+import asyncio
 from fastapi import HTTPException, status
 from pymongo.database import Database
 from bson import ObjectId
 from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
+from ..websocket_manager import broadcast_new_message, broadcast_conversation_status_update
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -181,6 +183,17 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         }
     )
     
+    # Broadcast conversation status update via WebSocket
+    try:
+        status_data = {
+            "status": "accepted",
+            "accepted_by": current_user.Regno,
+            "accepted_at": datetime.now(timezone.utc).isoformat()
+        }
+        asyncio.create_task(broadcast_conversation_status_update(str(match_id), status_data))
+    except Exception as e:
+        logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
+    
     logger.info(f"Conversation {conversation.id} accepted by {current_user.Regno}")
 
     return {"status": "success", "message": "Conversation accepted successfully."}
@@ -243,6 +256,17 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         }
     )
     
+    # Broadcast conversation status update via WebSocket
+    try:
+        status_data = {
+            "status": "rejected",
+            "rejected_by": current_user.Regno,
+            "rejected_at": datetime.now(timezone.utc).isoformat()
+        }
+        asyncio.create_task(broadcast_conversation_status_update(str(match_id), status_data))
+    except Exception as e:
+        logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
+    
     logger.info(f"Conversation {conversation.id} rejected by {current_user.Regno}")
 
     return {"status": "success", "message": "Conversation rejected successfully."}
@@ -302,11 +326,28 @@ def send_message_service(current_user: UserDetails, match_id_str: str, message_t
         text=message_text
     )
 
-    db.messages.insert_one(new_message.dict(by_alias=True))
+    # Insert the message into the database
+    result = db.messages.insert_one(new_message.dict(by_alias=True))
+    
+    # Prepare message data for WebSocket broadcast
+    message_data = {
+        "id": str(result.inserted_id),
+        "text": message_text,
+        "sender_id": current_user.Regno,
+        "receiver_id": receiver_regno,
+        "timestamp": new_message.timestamp.isoformat(),
+        "is_sender": False  # Will be set by each client based on their user_id
+    }
+    
+    # Broadcast the new message to all users in the match via WebSocket
+    try:
+        asyncio.create_task(broadcast_new_message(str(match_id), message_data))
+    except Exception as e:
+        logger.error(f"Error broadcasting message via WebSocket: {e}")
     
     logger.info(f"Message sent from {current_user.Regno} to {receiver_regno} in match {match_id}")
 
-    return {"status": "success", "message": "Message sent successfully."}
+    return {"status": "success", "message": "Message sent successfully.", "message_id": str(result.inserted_id)}
 
 
 def get_conversation_messages_service(current_user: UserDetails, match_id_str: str, db: Database):
@@ -463,3 +504,36 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         },
         "is_initiator": conversation.initiatorId == current_user.Regno
     }
+
+
+def get_conversation_by_match_id(match_id_str: str, db: Database):
+    """
+    Get conversation by match ID for WebSocket expiry checking.
+    """
+    try:
+        match_id = ObjectId(match_id_str)
+    except Exception:
+        return None
+    
+    conversation_doc = db.conversations.find_one({"matchId": match_id})
+    if not conversation_doc:
+        return None
+    
+    return conversation_doc
+
+
+def update_conversation_status(match_id_str: str, status: str, db: Database):
+    """
+    Update conversation status for WebSocket expiry handling.
+    """
+    try:
+        match_id = ObjectId(match_id_str)
+    except Exception:
+        return False
+    
+    result = db.conversations.update_one(
+        {"matchId": match_id},
+        {"$set": {"status": status}}
+    )
+    
+    return result.modified_count > 0

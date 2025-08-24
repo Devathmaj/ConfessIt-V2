@@ -220,20 +220,22 @@ export const MatchmakingPage = () => {
     try {
       const response = await getCurrentConversation();
       if (response.status === 'success') {
+        // Always show the matched profile, even if conversation is expired
+        setMatchedProfile({
+          ...response.other_user,
+          matchId: response.match.id
+        });
+        setExpiresAt(response.match.expires_at);
+        
         // Only show conversation if it's not expired
         if (!response.match.is_expired) {
-          setMatchedProfile({
-            ...response.other_user,
-            matchId: response.match.id
-          });
-          setExpiresAt(response.match.expires_at);
           setConversationStatus(response.conversation.status);
           setHasActiveConversation(true);
         } else {
-          // Show expired message with timer for next match
+          // Show expired message but keep the profile visible
           setHasActiveConversation(false);
           setConversationStatus('none');
-          toast.info(`Your previous match has expired. You can find a new match in ${getTimeUntilNextMatch(response.match.expires_at)}`);
+          toast.info(`Your match with ${response.other_user.name} has expired. You can find a new match in ${getTimeUntilNextMatch(response.match.expires_at)}`);
         }
       } else {
         setHasActiveConversation(false);
@@ -296,6 +298,13 @@ export const MatchmakingPage = () => {
       try {
         const response = await getCurrentConversation();
         if (response.status === 'success') {
+          // Always show the matched profile, even if conversation is expired
+          setMatchedProfile({
+            ...response.other_user,
+            matchId: response.match.id
+          });
+          setExpiresAt(response.match.expires_at);
+          
           // Only show conversation if it's not expired
           if (!response.match.is_expired) {
             setHasActiveConversation(true);
@@ -403,12 +412,18 @@ export const MatchmakingPage = () => {
           findMatch()
             .then(finalMatch => {
               // The backend now returns { matched_with, match_id, expires_at }
-              setMatchedProfile({ 
+              const newMatchedProfile = { 
                 ...finalMatch.matched_with, 
                 matchId: finalMatch.match_id 
-              });
+              };
+              setMatchedProfile(newMatchedProfile);
               setExpiresAt(finalMatch.expires_at);
+              setConversationStatus('none'); // Reset conversation status for new match
+              setHasActiveConversation(false);
               toast.success('Match found! 💕');
+              
+              // Immediately show the matched profile
+              console.log('Setting matched profile:', newMatchedProfile);
             })
             .catch(error => {
               toast.error(error.response?.data?.detail || 'Could not find a match.');
@@ -551,24 +566,7 @@ export const MatchmakingPage = () => {
                 </div>
               )}
 
-              {matchedProfile && !hasActiveConversation && conversationStatus === 'none' && (
-                <div className="text-center space-y-4">
-                  <div className="text-4xl">⏰</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Match Expired</h2>
-                  <p className="text-muted-foreground">Your match with {matchedProfile.Name} has expired.</p>
-                  {expiresAt && (
-                    <div className="text-sm text-muted-foreground">
-                      <Clock className="w-4 h-4 inline mr-2" />
-                      You can find a new match in: {getTimeUntilNextMatch(expiresAt)}
-                    </div>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Keep this conversation open to chat until the cooldown period ends.
-                  </p>
-                </div>
-              )}
-
-              {matchedProfile && !hasActiveConversation && conversationStatus !== 'none' && (
+              {matchedProfile && !hasActiveConversation && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">💕</div>
                   <h2 className="text-2xl font-dancing text-romantic">Match Found!</h2>
@@ -580,6 +578,12 @@ export const MatchmakingPage = () => {
                   >
                     Start Conversation
                   </Button>
+                  {expiresAt && (
+                    <div className="text-sm text-muted-foreground">
+                      <Clock className="w-4 h-4 inline mr-2" />
+                      Time until next match: {getTimeUntilNextMatch(expiresAt)}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -630,33 +634,48 @@ export const MatchmakingPage = () => {
                 <CardContent>
                   <div className="h-64 overflow-y-auto border rounded-lg p-4 mb-4 space-y-2">
                     {conversationStatus === 'active' && (
-                <div className="text-center space-y-4">
-                  <div className="text-2xl">💬</div>
-                  <h3 className="text-xl font-semibold text-romantic">Conversation Active!</h3>
-                  <p className="text-muted-foreground">You can now chat with your match!</p>
-                  <Button 
-                    onClick={() => setShowConversationDialog(true)}
-                    className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600"
-                  >
-                    Open Chat
-                  </Button>
-                </div>
-              )}
+                      <div className="text-center space-y-4">
+                        <div className="text-2xl">💬</div>
+                        <h3 className="text-xl font-semibold text-romantic">Conversation Active!</h3>
+                        <p className="text-muted-foreground">You can now chat with your match!</p>
+                        <Button 
+                          onClick={() => setShowConversationDialog(true)}
+                          className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600"
+                        >
+                          Open Chat
+                        </Button>
+                      </div>
+                    )}
 
-              {conversationStatus === 'requested' && (
-                <div className="text-center space-y-4">
-                  <div className="text-2xl">⏳</div>
-                  <h3 className="text-xl font-semibold text-romantic">Request Sent!</h3>
-                  <p className="text-muted-foreground">Waiting for your match to accept the conversation request.</p>
-                  <Button 
-                    onClick={() => setShowConversationDialog(true)}
-                    variant="outline"
-                    className="border-romantic text-romantic hover:bg-romantic hover:text-white"
-                  >
-                    View Status
-                  </Button>
-                </div>
-              )}
+                    {conversationStatus === 'requested' && (
+                      <div className="text-center space-y-4">
+                        <div className="text-2xl">⏳</div>
+                        <h3 className="text-xl font-semibold text-romantic">Request Sent!</h3>
+                        <p className="text-muted-foreground">Waiting for your match to accept the conversation request.</p>
+                        <Button 
+                          onClick={() => setShowConversationDialog(true)}
+                          variant="outline"
+                          className="border-romantic text-romantic hover:bg-romantic hover:text-white"
+                        >
+                          View Status
+                        </Button>
+                      </div>
+                    )}
+
+                    {conversationStatus === 'none' && !hasActiveConversation && (
+                      <div className="text-center space-y-4">
+                        <div className="text-2xl">💕</div>
+                        <h3 className="text-xl font-semibold text-romantic">Start a Conversation!</h3>
+                        <p className="text-muted-foreground">Send a conversation request to {matchedProfile?.Name} to start chatting.</p>
+                        <Button 
+                          onClick={handleStartConversation}
+                          className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600"
+                        >
+                          Send Conversation Request
+                        </Button>
+                      </div>
+                    )}
+
                     {conversationStatus === 'active' && chatMessages.length === 0 && (
                         <p className="text-center text-muted-foreground font-dancing">Start the conversation! 💕</p>
                     )}
