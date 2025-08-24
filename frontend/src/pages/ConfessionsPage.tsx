@@ -20,10 +20,11 @@ import {
   Plus,
   ThumbsUp,
   ThumbsDown,
-  Flag
+  Flag,
+  Edit,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getConfessions, createConfession, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession } from '../services/api';
+import { getConfessions, createConfession, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 
@@ -52,7 +53,9 @@ interface Confession {
   id: string;
   confession: string;
   is_anonymous: boolean;
+  is_comment: boolean;
   user_id: string;
+  user_info: UserInfo;
   timestamp: string;
   comments: ConfessionComment[];
   heart_count: number;
@@ -74,22 +77,23 @@ export const ConfessionsPage = () => {
   const [isPostDialogOpen, setIsPostDialogOpen] = useState(false);
   const { user, isAuthenticated } = useAuth();
 
-  // State to manage the confession selected for viewing in the modal
   const [selectedConfession, setSelectedConfession] = useState<Confession | null>(null);
   const [newComment, setNewComment] = useState('');
   
-  // State for report functionality
   const [isReportConfirmOpen, setIsReportConfirmOpen] = useState(false);
   const [isReportReasonOpen, setIsReportReasonOpen] = useState(false);
   const [commentToReport, setCommentToReport] = useState<ConfessionComment | null>(null);
   const [reportReason, setReportReason] = useState("");
 
-  // State for confession report functionality
   const [confessionToReport, setConfessionToReport] = useState<Confession | null>(null);
   const [isConfessionReportConfirmOpen, setIsConfessionReportConfirmOpen] = useState(false);
   const [isConfessionReportReasonOpen, setIsConfessionReportReasonOpen] = useState(false);
 
-  // Effect to fetch confessions when the component mounts or sorting preference changes
+  // State for the edit dialog
+  const [confessionToEdit, setConfessionToEdit] = useState<Confession | null>(null);
+  const [editIsAnonymous, setEditIsAnonymous] = useState(false);
+  const [editAllowComments, setEditAllowComments] = useState(false);
+
   useEffect(() => {
     const fetchConfessions = async () => {
       try {
@@ -103,18 +107,10 @@ export const ConfessionsPage = () => {
     fetchConfessions();
   }, [sortBy, isAuthenticated]);
 
-  /**
-   * Opens the comment modal for a specific confession.
-   * @param {Confession} confession - The confession object to display in the modal.
-   */
   const handleCommentClick = (confession: Confession) => {
     setSelectedConfession(confession);
   };
 
-  /**
-   * Handles the submission of a new comment for a confession.
-   * @param {string} confessionId - The ID of the confession being commented on.
-   */
   const handlePostComment = async (confessionId: string) => {
     if (!newComment.trim()) {
       toast.info("Please write a comment first.");
@@ -138,7 +134,6 @@ export const ConfessionsPage = () => {
         return updatedConfessionsList;
       });
       
-      // Used to find the updated confession from the list and set it for the modal to ensure UI consistency.
       const updatedSelectedConfession = updatedConfessionsList.find(c => c.id === confessionId);
       if (updatedSelectedConfession) {
         setSelectedConfession(updatedSelectedConfession);
@@ -147,7 +142,9 @@ export const ConfessionsPage = () => {
       setNewComment('');
       toast.success("Your comment has been posted!");
     } catch (error: any) {
-      if (error.response && error.response.status === 400) {
+      if (error.response && error.response.status === 403) {
+        toast.error("Comments are disabled for this confession.");
+      } else if (error.response && error.response.status === 400) {
         toast.error("You have reached your comment limit for this post (3 comments).");
       } else {
         toast.error("Failed to post comment. Please try again.");
@@ -155,11 +152,6 @@ export const ConfessionsPage = () => {
     }
   };
 
-  /**
-   * Handles user reactions to a confession.
-   * @param {string} confessionId - The ID of the confession.
-   * @param {string} reactionType - The type of reaction (e.g., 'heart', 'haha').
-   */
   const handleReaction = async (confessionId: string, reactionType: string) => {
     if (!isAuthenticated) {
       toast.error("You must be logged in to react.");
@@ -168,7 +160,6 @@ export const ConfessionsPage = () => {
     
     const originalConfessions = [...confessions];
 
-    // Optimistically update the UI
     setConfessions(prevConfessions => 
       prevConfessions.map(conf => {
         if (conf.id === confessionId) {
@@ -193,24 +184,16 @@ export const ConfessionsPage = () => {
     );
 
     try {
-      // API call to update the backend
       const updatedConfession = await reactToConfession(confessionId, reactionType);
       setConfessions(prevConfessions => 
         prevConfessions.map(c => c.id === confessionId ? { ...c, ...updatedConfession } : c)
       );
     } catch (error) {
       toast.error("Failed to save reaction.");
-      setConfessions(originalConfessions); // Revert on error
+      setConfessions(originalConfessions);
     }
   };
 
-  /**
-   * Handles user reactions (like/dislike) to a comment.
-   * This function now correctly merges server state with the optimistic UI state.
-   * @param {string} confessionId - The ID of the parent confession.
-   * @param {string} commentId - The ID of the comment.
-   * @param {'like' | 'dislike'} reaction - The reaction type.
-   */
   const handleCommentReaction = async (confessionId: string, commentId: string, reaction: 'like' | 'dislike') => {
     if (!isAuthenticated) {
       toast.error("You must be logged in to react to comments.");
@@ -219,7 +202,6 @@ export const ConfessionsPage = () => {
 
     const originalConfessions = JSON.parse(JSON.stringify(confessions));
 
-    // Logic to perform the optimistic state update.
     const updateReactionState = (conf: Confession) => {
       if (conf.id !== confessionId) return conf;
 
@@ -234,11 +216,9 @@ export const ConfessionsPage = () => {
           let newLikeCount = c.like_count;
           let newDislikeCount = c.dislike_count;
 
-          // Decrement the count for the previous reaction, if any.
           if (currentReaction === 'like') newLikeCount--;
           if (currentReaction === 'dislike') newDislikeCount--;
 
-          // If not simply toggling off, increment the count for the new reaction.
           if (!isTogglingOff) {
             if (reaction === 'like') newLikeCount++;
             if (reaction === 'dislike') newDislikeCount++;
@@ -254,7 +234,6 @@ export const ConfessionsPage = () => {
       };
     };
     
-    // Apply the optimistic update to both the main list and the selected confession.
     let optimisticallyUpdatedConfessions: Confession[] = [];
     setConfessions(prev => {
         optimisticallyUpdatedConfessions = prev.map(updateReactionState);
@@ -270,7 +249,6 @@ export const ConfessionsPage = () => {
       const apiCall = reaction === 'like' ? likeComment : dislikeComment;
       const updatedCommentFromServer = await apiCall(commentId);
       
-      // Logic to synchronize the state with the server's response.
       const syncWithServer = (conf: Confession) => {
         if (conf.id !== confessionId) return conf;
         
@@ -282,7 +260,6 @@ export const ConfessionsPage = () => {
         };
       };
 
-      // Apply the server sync.
       let serverSyncedConfessions: Confession[] = [];
       setConfessions(prev => {
           serverSyncedConfessions = prev.map(syncWithServer);
@@ -295,7 +272,6 @@ export const ConfessionsPage = () => {
 
     } catch (error) {
       toast.error(`Failed to ${reaction} comment.`);
-      // Revert to the original state on error.
       setConfessions(originalConfessions); 
       const originalSelected = originalConfessions.find((c: Confession) => c.id === confessionId);
       setSelectedConfession(originalSelected || null);
@@ -303,9 +279,6 @@ export const ConfessionsPage = () => {
   };
 
 
-  /**
-   * Handles the submission of a new confession.
-   */
   const handleSubmitConfession = async () => {
     if (!newConfession.trim()) {
       toast.error('Please write your confession first! 💌');
@@ -426,6 +399,49 @@ export const ConfessionsPage = () => {
       }
   };
 
+  const handleEditClick = (confession: Confession) => {
+    setConfessionToEdit(confession);
+    setEditIsAnonymous(confession.is_anonymous);
+    setEditAllowComments(confession.is_comment);
+  };
+
+  const handleSaveChanges = async () => {
+    if (!confessionToEdit) return;
+
+    const payload: { is_anonymous?: boolean; is_comment?: boolean } = {};
+
+    if (editAllowComments !== confessionToEdit.is_comment) {
+      payload.is_comment = editAllowComments;
+    }
+    if (editIsAnonymous !== confessionToEdit.is_anonymous) {
+      payload.is_anonymous = editIsAnonymous;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      toast.info("No changes were made.");
+      setConfessionToEdit(null);
+      return;
+    }
+
+    try {
+      const updatedConfession = await updateConfession(confessionToEdit.id, payload);
+      
+      setConfessions(prev => 
+        prev.map(conf => conf.id === confessionToEdit.id ? updatedConfession : conf)
+      );
+
+      if (selectedConfession?.id === confessionToEdit.id) {
+        setSelectedConfession(updatedConfession);
+      }
+
+      toast.success("Your confession has been updated!");
+      setConfessionToEdit(null);
+    } catch (error) {
+      toast.error("Failed to update confession. Please try again.");
+      console.error(error);
+    }
+  };
+
   const reactionTypes = [
     { type: 'heart', icon: Heart, countKey: 'heart_count' },
     { type: 'haha', icon: Laugh, countKey: 'haha_count' },
@@ -518,11 +534,21 @@ export const ConfessionsPage = () => {
                 <div className="flex justify-between items-start">
                   <div>
                     <CardTitle className="text-lg font-dancing text-romantic">
-                      {confession.is_anonymous ? "🤫 Anonymous" : (user?.Name || "User")}
+                      {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.username || "User")}
                     </CardTitle>
                     <CardDescription>{new Date(confession.timestamp).toLocaleString('en-GB')}</CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
+                    {isAuthenticated && user?.id === confession.user_id && (
+                        <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 rounded-full"
+                        onClick={() => handleEditClick(confession)}
+                        >
+                        <Edit className="h-4 w-4" />
+                        </Button>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
@@ -563,7 +589,6 @@ export const ConfessionsPage = () => {
                       );
                     })}
                   </div>
-                  {/* This button now opens the modal */}
                   <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => handleCommentClick(confession)}>
                     <MessageSquare className="w-4 h-4 mr-1" />
                     {confession.comment_count}
@@ -575,14 +600,13 @@ export const ConfessionsPage = () => {
         })}
       </div>
       
-      {/* Comment Modal */}
       <Dialog open={!!selectedConfession} onOpenChange={(isOpen) => !isOpen && setSelectedConfession(null)}>
         <DialogContent className="sm:max-w-2xl md:max-w-3xl lg:max-w-4xl w-[95vw] h-[90vh] flex flex-col p-0">
           {selectedConfession && (
             <>
               <DialogHeader className="p-6 pb-4">
                 <DialogTitle className="font-dancing text-2xl text-romantic">
-                  {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (user?.Name || "User") + "'s Confession"}
+                  {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.username || "User") + "'s Confession"}
                 </DialogTitle>
                 <DialogDescription>{new Date(selectedConfession.timestamp).toLocaleString('en-GB')}</DialogDescription>
               </DialogHeader>
@@ -655,25 +679,30 @@ export const ConfessionsPage = () => {
               </div>
 
               <DialogFooter className="p-4 border-t bg-background/95">
-                <div className="flex gap-2 items-start w-full">
-                    <Textarea
-                      placeholder="Write a thoughtful comment..."
-                      value={newComment}
-                      onChange={(e) => setNewComment(e.target.value)}
-                      className="flex-grow bg-background border-romantic/30 focus:border-romantic"
-                      rows={2}
-                    />
-                    <Button onClick={() => handlePostComment(selectedConfession.id)} className="btn-romantic" size="icon">
-                      <Send className="w-4 h-4" />
-                    </Button>
-                </div>
+                {selectedConfession.is_comment ? (
+                    <div className="flex gap-2 items-start w-full">
+                        <Textarea
+                        placeholder="Write a thoughtful comment..."
+                        value={newComment}
+                        onChange={(e) => setNewComment(e.target.value)}
+                        className="flex-grow bg-background border-romantic/30 focus:border-romantic"
+                        rows={2}
+                        />
+                        <Button onClick={() => handlePostComment(selectedConfession.id)} className="btn-romantic" size="icon">
+                        <Send className="w-4 h-4" />
+                        </Button>
+                    </div>
+                ) : (
+                    <div className="w-full text-center text-sm text-muted-foreground">
+                        Comments are disabled for this post.
+                    </div>
+                )}
               </DialogFooter>
             </>
           )}
         </DialogContent>
       </Dialog>
       
-      {/* Comment Report Confirmation Dialog */}
       <Dialog open={isReportConfirmOpen} onOpenChange={setIsReportConfirmOpen}>
         <DialogContent>
           <DialogHeader>
@@ -689,7 +718,6 @@ export const ConfessionsPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Comment Report Reason Dialog */}
       <Dialog open={isReportReasonOpen} onOpenChange={setIsReportReasonOpen}>
         <DialogContent>
           <DialogHeader>
@@ -711,7 +739,6 @@ export const ConfessionsPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Confession Report Confirmation Dialog */}
       <Dialog open={isConfessionReportConfirmOpen} onOpenChange={setIsConfessionReportConfirmOpen}>
         <DialogContent>
           <DialogHeader>
@@ -727,7 +754,6 @@ export const ConfessionsPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Confession Report Reason Dialog */}
       <Dialog open={isConfessionReportReasonOpen} onOpenChange={setIsConfessionReportReasonOpen}>
         <DialogContent>
           <DialogHeader>
@@ -748,6 +774,42 @@ export const ConfessionsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Confession Dialog */}
+        <Dialog open={!!confessionToEdit} onOpenChange={(isOpen) => !isOpen && setConfessionToEdit(null)}>
+        <DialogContent>
+            <DialogHeader>
+            <DialogTitle>Edit Your Confession</DialogTitle>
+            <DialogDescription>
+                Manage settings for your confession.
+            </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+            <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Allow comments</span>
+                <Switch
+                checked={editAllowComments}
+                onCheckedChange={setEditAllowComments}
+                />
+            </div>
+            <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Post anonymously</span>
+                <Switch
+                checked={editIsAnonymous}
+                onCheckedChange={setEditIsAnonymous}
+                disabled={!confessionToEdit?.is_anonymous}
+                />
+            </div>
+            {!confessionToEdit?.is_anonymous && (
+                <p className="text-xs text-muted-foreground">You cannot make a public confession anonymous after posting.</p>
+            )}
+            </div>
+            <DialogFooter>
+            <Button variant="outline" onClick={() => setConfessionToEdit(null)}>Cancel</Button>
+            <Button className="btn-romantic" onClick={handleSaveChanges}>Save Changes</Button>
+            </DialogFooter>
+        </DialogContent>
+        </Dialog>
     </div>
   );
 };

@@ -27,6 +27,15 @@ export const createConfession = async (confession: any) => {
   return response.data;
 };
 
+export const updateConfession = async (confessionId: string, updateData: { is_anonymous?: boolean; is_comment?: boolean }) => {
+    const response = await axios.put(
+      `${API_URL}/confessions/${confessionId}`,
+      updateData,
+      { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export const reactToConfession = async (confessionId: string, reaction: string) => {
   const response = await axios.post(
     `${API_URL}/confessions/${confessionId}/react`,

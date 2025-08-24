@@ -7,6 +7,7 @@ import { getCurrentUser } from '../services/api';
 // Used to define the structure of the User object
 export interface User {
   id: string;
+  _id?: string; // Used to capture the raw _id from the backend if present
   Name: string;
   Regno: string;
   email?: string;
@@ -59,13 +60,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
     try {
       const userData = await getCurrentUser(currentToken);
-      const decoded: any = jwtDecode(currentToken);
-      setUser({
-        ...userData,
-        id: decoded.sub,
-        username: decoded.sub,
-        user_role: userData.user_role || 'user',
-      });
+      
+      // Used to robustly get the user ID, whether the backend sends 'id' or '_id'
+      const userId = userData.id || userData._id;
+
+      if (userId) {
+        setUser({
+          ...userData,
+          id: userId, // Used to ensure the user object always has a consistent 'id' property
+          username: userData.username || userData.Name,
+        });
+      } else {
+        console.error("User ID is missing from the authentication response.");
+        logout();
+      }
     } catch (error) {
       console.error("Failed to fetch user data, token might be expired:", error);
       logout();

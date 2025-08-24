@@ -21,6 +21,13 @@ class ConfessionCreate(BaseModel):
     is_anonymous: bool
     is_comment: bool
 
+class ConfessionUpdate(BaseModel):
+    """
+    Model for updating a confession's settings.
+    """
+    is_anonymous: Optional[bool] = None
+    is_comment: Optional[bool] = None
+
 class ReactionCreate(BaseModel):
     reaction: str
 
@@ -79,6 +86,7 @@ class Confession(BaseModel):
     is_comment: bool
     timestamp: Optional[datetime] = None
     user_id: str
+    user_info: Optional[UserInfo] = None
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
     reactions: Dict[str, List[str]] = Field(default_factory=dict)

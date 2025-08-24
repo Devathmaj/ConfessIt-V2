@@ -1,6 +1,6 @@
 from ..logger import get_logger
 from pymongo import MongoClient, DESCENDING
-from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, Report
+from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, Report, ConfessionUpdate
 from bson.objectid import ObjectId
 import datetime
 from ..config import settings
@@ -21,7 +21,6 @@ class ConfessionService:
     def _get_user_info(self, user_id: str) -> Optional[UserInfo]:
         user_doc = self.users_collection.find_one({"_id": ObjectId(user_id)})
         if user_doc:
-            # FIXED: Use the 'Name' field for the comment author's display name.
             display_name = user_doc.get("Name", "Anonymous User")
             return UserInfo(
                 id=str(user_doc["_id"]),
@@ -75,35 +74,48 @@ class ConfessionService:
                 }
             },
             {
+                "$addFields": {
+                    "user_id_as_obj": { "$toObjectId": "$user_id" }
+                }
+            },
+            {
                 "$lookup": {
                     "from": "UserDetails",
-                    "localField": "user_id",
+                    "localField": "user_id_as_obj",
                     "foreignField": "_id",
-                    "as": "user_info_docs"
+                    "as": "author_details"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$author_details",
+                    "preserveNullAndEmptyArrays": True
                 }
             },
             {
                 "$addFields": {
-                    "user_info": { "$arrayElemAt": ["$user_info_docs", 0] }
+                    "user_info": {
+                        "id": "$user_id",
+                        "username": "$author_details.Name",
+                        "avatar": "$author_details.emoji"
+                    }
                 }
             }
         ]
 
-        # Sorting logic
         if sort_by == 'popularity':
             pipeline.append({"$sort": {"total_reactions": -1, "timestamp": 1}})
         elif sort_by == 'time':
-            pipeline.append({"$sort": {"timestamp": -1, "user_info.Name": 1}})
+            pipeline.append({"$sort": {"timestamp": -1, "user_info.username": 1}})
         elif sort_by == 'comments':
             pipeline.append({"$sort": {"comment_count": -1, "timestamp": 1}})
-        else: # Default sorting
+        else:
             pipeline.append({"$sort": {"timestamp": -1}})
 
         confessions_cursor = self.confessions_collection.aggregate(pipeline)
         
         confessions = []
         for confession_doc in confessions_cursor:
-            # Process comments
             comments_list = []
             for comment_doc in sorted(confession_doc.get('comments', []), key=lambda c: c['timestamp'], reverse=True):
                 user_comment_reaction = None
@@ -116,7 +128,6 @@ class ConfessionService:
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
-            # Determine user reaction for the confession
             user_reaction = None
             if user_id and 'reactions' in confession_doc:
                 for reaction_type, user_ids in confession_doc['reactions'].items():
@@ -142,7 +153,6 @@ class ConfessionService:
             
             confession_doc['user_reaction'] = user_reaction
             
-            # Used to retrieve and attach comments to the confession
             comments_cursor = self.comments_collection.find({"confession_id": confession_id}).sort("timestamp", DESCENDING)
             comments_list = []
             for comment_doc in comments_cursor:
@@ -156,8 +166,56 @@ class ConfessionService:
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
+            # Add user_info to single confession fetch
+            author_info = self._get_user_info(confession_doc['user_id'])
+            if author_info:
+                confession_doc['user_info'] = author_info.dict()
+
             return Confession(**confession_doc)
         return None
+
+    def update_confession(self, confession_id: str, update_data: ConfessionUpdate, user_id: str) -> Optional[Confession]:
+        """
+        Used to update a confession's settings, such as toggling comments or anonymity.
+        """
+        confession = self.confessions_collection.find_one({"_id": ObjectId(confession_id)})
+
+        if not confession:
+            logger.error(f"Confession {confession_id} not found for update.")
+            return None
+
+        if confession.get("user_id") != user_id:
+            logger.warning(f"User {user_id} attempted to edit confession {confession_id} owned by {confession.get('user_id')}")
+            return None
+
+        update_fields = {}
+        update_data_dict = update_data.dict(exclude_unset=True)
+
+        # Handle 'is_comment' update - this is straightforward
+        if "is_comment" in update_data_dict:
+            update_fields["is_comment"] = update_data_dict["is_comment"]
+
+        # Handle 'is_anonymous' update with explicit logic
+        if "is_anonymous" in update_data_dict:
+            is_currently_anonymous = confession.get("is_anonymous", False)
+            wants_to_be_anonymous = update_data_dict["is_anonymous"]
+
+            # The only permitted change is from anonymous (True) to public (False).
+            if is_currently_anonymous and not wants_to_be_anonymous:
+                update_fields["is_anonymous"] = False
+            # All other cases (e.g., trying to make a public post anonymous) are ignored for security.
+
+        if not update_fields:
+            # No valid changes were made, so we can return early.
+            return self.get_confession(confession_id, user_id)
+
+        self.confessions_collection.update_one(
+            {"_id": ObjectId(confession_id)},
+            {"$set": update_fields}
+        )
+
+        logger.info(f"User {user_id} updated confession {confession_id} with data: {update_fields}")
+        return self.get_confession(confession_id, user_id)
 
     def get_total_confessions_count(self) -> int:
         """
@@ -200,7 +258,14 @@ class ConfessionService:
         logger.info(f"User {user_id} reacted to confession {confession_id} with {reaction}")
         return self.get_confession(confession_id, user_id)
 
-    def add_comment_to_confession(self, confession_id: str, comment_data: CommentCreate, user: UserDetails) -> Optional[ConfessionComment]:
+    def add_comment_to_confession(self, confession_id: str, comment_data: CommentCreate, user: UserDetails) -> any:
+        confession = self.confessions_collection.find_one({"_id": ObjectId(confession_id)})
+        if not confession:
+            return "CONFESSION_NOT_FOUND"
+        if not confession.get("is_comment", True):
+            logger.warning(f"User {user.id} tried to comment on disabled confession {confession_id}")
+            return "COMMENTS_DISABLED"
+
         user_id = str(user.id)
         existing_comments_count = self.comments_collection.count_documents({
             "confession_id": confession_id,
@@ -208,9 +273,8 @@ class ConfessionService:
         })
         if existing_comments_count >= 3:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
-            return None
+            return "COMMENT_LIMIT_REACHED"
 
-        # FIXED: Use the user's full name for the comment display name.
         user_info = UserInfo(id=user_id, username=user.Name, avatar=user.emoji)
 
         comment_dict = {
@@ -230,7 +294,6 @@ class ConfessionService:
         result = self.comments_collection.insert_one(comment_dict)
         logger.info(f"Added comment {result.inserted_id} to confession {confession_id}")
         
-        # Increment the comment count for the confession
         self.confessions_collection.update_one(
             {"_id": ObjectId(confession_id)},
             {"$inc": {"comment_count": 1}}
@@ -249,28 +312,25 @@ class ConfessionService:
         likes = comment.get('likes', [])
         dislikes = comment.get('dislikes', [])
 
-        # Determine the user's new reaction state
         user_new_reaction = None
         
-        # If user is reacting, remove potential opposite reaction
         if reaction_type == 'likes':
             if user_id in dislikes:
                 dislikes.remove(user_id)
             if user_id in likes:
-                likes.remove(user_id) # Toggle off
+                likes.remove(user_id)
             else:
-                likes.append(user_id) # Toggle on
+                likes.append(user_id)
                 user_new_reaction = 'like'
         elif reaction_type == 'dislikes':
             if user_id in likes:
                 likes.remove(user_id)
             if user_id in dislikes:
-                dislikes.remove(user_id) # Toggle off
+                dislikes.remove(user_id)
             else:
-                dislikes.append(user_id) # Toggle on
+                dislikes.append(user_id)
                 user_new_reaction = 'dislike'
 
-        # Update the database
         self.comments_collection.update_one(
             {"_id": ObjectId(comment_id)},
             {"$set": {
@@ -283,10 +343,8 @@ class ConfessionService:
         
         logger.info(f"User {user_id} reacted to comment {comment_id} with {reaction_type}")
         
-        # Fetch the updated comment to ensure consistency
         updated_comment = self.comments_collection.find_one({"_id": ObjectId(comment_id)})
         if updated_comment:
-            # **THE FIX**: Explicitly set the user_reaction field for the response.
             updated_comment['user_reaction'] = user_new_reaction
             return ConfessionComment(**updated_comment)
         return None
@@ -304,7 +362,6 @@ class ConfessionService:
             return None
 
         if user_id in comment.get("reported_by", []):
-            # User has already reported this comment
             return None
 
         report = Report(
@@ -337,7 +394,6 @@ class ConfessionService:
             return None
 
         if user_id in confession.get("reported_by", []):
-            # User has already reported this confession
             return None
 
         report = Report(
@@ -359,3 +415,4 @@ class ConfessionService:
 
         logger.info(f"User {user_id} reported confession {confession_id}")
         return self.get_confession(confession_id, user_id)
+

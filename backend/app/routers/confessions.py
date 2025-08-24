@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from ..services.confession_service import ConfessionService
-from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ReactionCreate, CommentCreate, ReportCreate
+from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate
 from ..services.auth_service import get_current_user, get_current_user_optional
 
 router = APIRouter()
@@ -23,6 +23,16 @@ def get_total_confessions_count(service: ConfessionService = Depends()):
     """
     return service.get_total_confessions_count()
 
+@router.put("/confessions/{confession_id}", response_model=Confession, response_model_by_alias=False)
+def update_confession(confession_id: str, update_data: ConfessionUpdate, service: ConfessionService = Depends(), current_user: UserDetails = Depends(get_current_user)):
+    """
+    Used to update a confession's settings.
+    """
+    updated_confession = service.update_confession(confession_id, update_data, str(current_user.id))
+    if not updated_confession:
+        raise HTTPException(status_code=404, detail="Confession not found or you don't have permission to edit it.")
+    return updated_confession
+
 @router.post("/confessions/{confession_id}/react", response_model=Confession, response_model_by_alias=False)
 def react_to_confession(confession_id: str, reaction_data: ReactionCreate, service: ConfessionService = Depends(), current_user: UserDetails = Depends(get_current_user)):
     updated_confession = service.react_to_confession(confession_id, reaction_data.reaction, str(current_user.id))
@@ -32,12 +42,21 @@ def react_to_confession(confession_id: str, reaction_data: ReactionCreate, servi
 
 @router.post("/confessions/{confession_id}/comment", response_model=ConfessionComment, response_model_by_alias=False)
 def add_comment_to_confession(confession_id: str, comment_data: CommentCreate, service: ConfessionService = Depends(), current_user: UserDetails = Depends(get_current_user)):
-    new_comment = service.add_comment_to_confession(confession_id, comment_data, current_user)
-    if not new_comment:
-        raise HTTPException(status_code=400, detail="Failed to add comment. You may have reached your comment limit for this post.")
-    return new_comment
+    result = service.add_comment_to_confession(confession_id, comment_data, current_user)
 
-# New endpoints for liking and disliking comments
+    if isinstance(result, str):
+        if result == "COMMENTS_DISABLED":
+            raise HTTPException(status_code=403, detail="Comments are disabled for this confession.")
+        if result == "COMMENT_LIMIT_REACHED":
+            raise HTTPException(status_code=400, detail="Failed to add comment. You may have reached your comment limit for this post.")
+        if result == "CONFESSION_NOT_FOUND":
+            raise HTTPException(status_code=404, detail="Confession not found.")
+    
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to add comment due to an unknown error.")
+
+    return result
+
 @router.post("/comments/{comment_id}/like", response_model=ConfessionComment, response_model_by_alias=False)
 def like_comment(comment_id: str, service: ConfessionService = Depends(), current_user: UserDetails = Depends(get_current_user)):
     updated_comment = service.like_comment(comment_id, str(current_user.id))
