@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getConfessions } from '../services/api';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // Import the new Navigation component
 import { Navigation } from '@/components/Navigation';
@@ -84,9 +85,7 @@ export const UserDashboard = () => {
 
   useEffect(() => {
     // Set profile picture URL if available
-    if (user?.profile_picture_id) {
-      setProfilePictureUrl(`http://localhost:8001/profile_pictures/${user.profile_picture_id}`);
-    }
+    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_id ?? null));
 
     // Fetch trending confessions
     fetchTrendingConfessions();

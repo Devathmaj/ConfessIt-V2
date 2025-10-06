@@ -136,7 +136,7 @@ class UserDetails(BaseModel):
     emoji: Optional[str] = None
     bio: Optional[str] = None
     which_class: str
-    profile_picture_id: str
+    profile_picture_id: Optional[str] = None
     gender: str
     interests: Optional[List[str]] = []
     isMatchmaking: bool
@@ -196,11 +196,12 @@ class LoveNoteTemplate(BaseModel):
 class LoveNote(BaseModel):
     """
     Represents an individual Love Note sent from one user to another.
+    Note: image_base64 field now stores the Cloudinary URL (not actual base64).
     """
     id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     sender_id: ObjectId
     recipient_id: ObjectId
-    image_base64: str
+    image_base64: str  # Stores Cloudinary URL (legacy field name kept for compatibility)
     message_text: str
     is_anonymous: bool = False
     status: str = "pending_review"

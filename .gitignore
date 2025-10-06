@@ -19,6 +19,8 @@ dist-ssr
 .env
 .env.*
 *.env
+backend/.env
+frontend/.env
 
 # Python cache
 __pycache__/

@@ -2,12 +2,12 @@
 
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
+from fastapi.responses import RedirectResponse
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations
 from .services.auth_service import get_current_user, decode_token
 from .dependencies import get_db 
 from pymongo.database import Database
+from .services.storage_service import storage_service
 import uvicorn
 import pymongo
 from .config import settings
@@ -23,17 +23,6 @@ app = FastAPI(
     title="ConfessIt API",
     description="Backend for the anonymous confession and matchmaking application.",
     version="0.1.0"
-)
-
-# ----------------------
-# Static Files
-# ----------------------
-# The path is relative to this file's location
-BASE_DIR = Path(__file__).resolve().parent
-app.mount(
-    "/profile_pictures",
-    StaticFiles(directory=BASE_DIR / "profile_pictures"),
-    name="profile_pictures"
 )
 
 # ----------------------
@@ -138,6 +127,46 @@ app.include_router(matchmaking.router)
 app.include_router(confessions.router)
 app.include_router(love_notes.router)
 app.include_router(conversations.router)
+
+# ----------------------
+# File Serving Routes
+# ----------------------
+@app.get("/api/profile/files/{path:path}")
+async def get_profile_file(path: str):
+    """Serve profile files with signed URLs."""
+    try:
+        signed_url = storage_service.generate_temporary_view_url("profile", path)
+        return RedirectResponse(url=signed_url)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/events/files/{path:path}")
+async def get_event_file(path: str):
+    """Serve event files with signed URLs."""
+    try:
+        signed_url = storage_service.generate_temporary_view_url("events", path)
+        return RedirectResponse(url=signed_url)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/gallery/files/{path:path}")
+async def get_gallery_file(path: str):
+    """Serve gallery files with signed URLs."""
+    try:
+        signed_url = storage_service.generate_temporary_view_url("gallery", path)
+        return RedirectResponse(url=signed_url)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/api/committee/files/{path:path}")
+async def get_committee_file(path: str):
+    """Serve committee files with signed URLs."""
+    try:
+        signed_url = storage_service.generate_temporary_view_url("committee", path)
+        return RedirectResponse(url=signed_url)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
+
 
 
 # ----------------------

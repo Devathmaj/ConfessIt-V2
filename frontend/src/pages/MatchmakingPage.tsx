@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 import { ConversationDialog } from '@/components/ConversationDialog';
 import {
   Heart,
@@ -189,11 +190,7 @@ export const MatchmakingPage = () => {
    * @param {string} [pictureId] - The ID or URL of the picture.
    * @returns {string} The full URL to the profile picture.
    */
-  const getProfilePictureUrl = (pictureId?: string) => {
-    if (!pictureId) return 'https://placehold.co/96x96/fecdd3/be123c?text=💕';
-    if (pictureId.startsWith('http')) return pictureId;
-    return `http://localhost:8001/profile_pictures/${pictureId}`;
-  };
+  const getProfilePictureUrl = (pictureId?: string | null) => resolveProfilePictureUrl(pictureId ?? null);
 
   /**
    * Fetches the user's current matchmaking status from the server.

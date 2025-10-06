@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -192,12 +193,7 @@ export const InboxPage = () => {
   };
 
   // Constructs the full URL for a user's profile picture.
-  const getProfilePictureUrl = (profilePictureId: string) => {
-    if (profilePictureId.startsWith('http')) {
-      return profilePictureId;
-    }
-    return `http://localhost:8001/profile_pictures/${profilePictureId}`;
-  };
+  const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
 
   // Returns an icon component based on the notification type.
   const getNotificationIcon = (type: string) => {

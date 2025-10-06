@@ -27,6 +27,7 @@ import {
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
 import { getAllUsers, getClasses, sendLoveNote } from '@/services/api';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // Used to define the structure for a template's field
 interface TemplateField {
@@ -613,7 +614,7 @@ export const LoveNotesPage = () => {
                                         className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?._id === u._id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
                                     >
                                         <img
-                                            src={`http://localhost:8001/profile_pictures/${u.profile_picture_id || 'default.png'}`}
+                                            src={resolveProfilePictureUrl(u.profile_picture_id)}
                                             alt={u.Name}
                                             className="w-10 h-10 rounded-full mr-4 object-cover"
                                             onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/40' }}

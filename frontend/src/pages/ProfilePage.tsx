@@ -22,6 +22,7 @@ import { updateUserProfile, uploadProfilePicture } from '../services/api';
 import { ModeToggle } from '@/components/ui/ModeToggle';
 import { Navigation } from '@/components/Navigation';
 import { isEqual } from 'lodash';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // Used for the emoji selector
 const avatarOptions = ['💕', '🌟', '🎨', '🌺', '🦋', '✨', '🌸', '💖', '🌙', '🎵'];
@@ -70,9 +71,9 @@ export const ProfilePage = () => {
       setIsMatchmaking(user.isMatchmaking || false);
       setIsNotifications(user.isNotifications || false);
       setIsLovenotesRecieve(user.isLovenotesRecieve ?? true);
-      if (user.profile_picture_id) {
-        setProfilePictureUrl(`http://localhost:8001/profile_pictures/${user.profile_picture_id}`);
-      }
+      setProfilePictureUrl(resolveProfilePictureUrl(user.profile_picture_id));
+    } else {
+      setProfilePictureUrl(resolveProfilePictureUrl(null));
     }
   }, [user]);
 

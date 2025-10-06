@@ -1,0 +1,1 @@
+Change it so that all the rituals are seen in one section and whenever you click a ritual the entry appears in the section under the rituals section. Also only show 2 rows of rituals and if they exceed then you can click an arrow mark type button and then the rest of the rituals appear. 

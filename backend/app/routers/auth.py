@@ -12,6 +12,7 @@ from ..services.auth_service import (
     verify_magic_link_service,
     get_current_user
 )
+from ..services.storage_service import storage_service
 from pydantic import BaseModel
 
 router = APIRouter(
@@ -43,4 +44,6 @@ async def read_users_me(current_user: Annotated[UserDetails, Depends(get_current
     """
     Used to fetch the details of the currently authenticated user.
     """
-    return current_user
+    user_payload = current_user.model_dump(by_alias=True)
+    enriched = storage_service.with_profile_signed_url(user_payload) or user_payload
+    return UserDetails(**enriched)

@@ -6,6 +6,7 @@ import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2 }
 import { getCurrentConversation, acceptConversation, sendMessage, rejectConversation, getConversationMessages } from '@/services/api';
 import { websocketService } from '@/services/websocket';
 import { toast } from 'sonner';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // WebSocket-based real-time messaging system
 // This replaces the client-side event system with server-side WebSocket broadcasting
@@ -483,12 +484,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
     }
   };
 
-  const getProfilePictureUrl = (profilePictureId: string) => {
-    if (profilePictureId.startsWith('http')) {
-      return profilePictureId;
-    }
-    return `http://localhost:8001/profile_pictures/${profilePictureId}`;
-  };
+  const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
 
   const getStatusBadge = (status: string, isExpired: boolean) => {
     if (isExpired) {

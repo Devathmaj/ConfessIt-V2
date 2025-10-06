@@ -8,6 +8,7 @@ from bson import ObjectId
 from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
+from ..services.storage_service import storage_service
 from ..websocket_manager import broadcast_new_message, broadcast_conversation_status_update
 
 # Logger
@@ -504,6 +505,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         other_user_doc = db.UserDetails.find_one({"Regno": other_user_regno})
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
+        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
+
         return {
             "status": "success",
             "match": {
@@ -526,8 +529,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
                 "name": other_user.Name if other_user else None,
                 "Name": other_user.Name if other_user else None,
                 "username": other_user.username if other_user else None,
-                "profile_picture_id": other_user.profile_picture_id if other_user else None,
-                "profile_picture": other_user.profile_picture_id if other_user else None,
+                "profile_picture_id": profile_picture_url,
+                "profile_picture": profile_picture_url,
                 "which_class": other_user.which_class if other_user else None,
                 "bio": other_user.bio if other_user else None,
                 "interests": other_user.interests if other_user else []
@@ -540,6 +543,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
     other_user_doc = db.UserDetails.find_one({"Regno": other_user_regno})
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
+
+    profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
 
     return {
         "status": "success",
@@ -563,8 +568,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "name": other_user.Name if other_user else None,
             "Name": other_user.Name if other_user else None,
             "username": other_user.username if other_user else None,
-            "profile_picture_id": other_user.profile_picture_id if other_user else None,
-            "profile_picture": other_user.profile_picture_id if other_user else None,
+            "profile_picture_id": profile_picture_url,
+            "profile_picture": profile_picture_url,
             "which_class": other_user.which_class if other_user else None,
             "bio": other_user.bio if other_user else None,
             "interests": other_user.interests if other_user else []

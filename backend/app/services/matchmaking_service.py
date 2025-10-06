@@ -6,6 +6,9 @@ from pymongo.database import Database
 from datetime import datetime, timedelta, timezone
 
 from ..models import Match, UserDetails
+from ..services.storage_service import storage_service
+# Removed top-level import to prevent circular dependency
+# from ..services.conversation_service import request_conversation_service 
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -65,9 +68,11 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     if not other_user_details:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Matched user not found.")
 
+    enriched_other = storage_service.with_profile_signed_url(other_user_details) if other_user_details else None
+
     return {
         "status": "matched",
-        "matched_with": UserDetails(**other_user_details),
+        "matched_with": UserDetails(**(enriched_other or other_user_details)),
         "match_id": str(match_data.id),
         "expires_at": match_data.expires_at.isoformat()
     }
@@ -75,8 +80,12 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
 
 def find_match_service(current_user: UserDetails, db: Database) -> dict:
     """
-    Used to find a random user, create a persistent match, and update the matchmaking timestamp.
+    Used to find a random user, create a persistent match, update the matchmaking timestamp,
+    and automatically create a 'pending' conversation.
     """
+    # Import moved here to break the circular dependency
+    from ..services.conversation_service import request_conversation_service
+
     # Re-check cooldown status
     cooldown_check = check_matchmaking_cooldown_service(current_user, db)
     if cooldown_check["status"] not in ["eligible"]:
@@ -145,15 +154,26 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         {"$set": {"last_matchmaking_time": now}}
     )
 
+    # Automatically create a pending conversation request
+    try:
+        match_id_str = str(match_result.inserted_id)
+        request_conversation_service(current_user=current_user, match_id_str=match_id_str, db=db)
+        logger.info(f"Automatically created a pending conversation for match {match_id_str}")
+    except Exception as e:
+        # Log the error but don't fail the matchmaking process.
+        logger.error(f"Failed to automatically create a pending conversation for match {match_id_str}: {e}")
+
     # Return match details immediately with full user information
+    matched_user_signed_url = storage_service.get_signed_profile_url(getattr(matched_user, "profile_picture_id", None))
+
     matched_user_details = {
         "regno": matched_user.Regno,
         "Regno": matched_user.Regno,
         "name": matched_user.Name,
         "Name": matched_user.Name,
         "username": getattr(matched_user, "username", None) or matched_user.Name,
-        "profile_picture_id": getattr(matched_user, "profile_picture_id", ""),
-        "profile_picture": getattr(matched_user, "profile_picture_id", ""),
+        "profile_picture_id": matched_user_signed_url,
+        "profile_picture": matched_user_signed_url,
         "which_class": getattr(matched_user, "which_class", ""),
         "interests": getattr(matched_user, "interests", []) or []
     }
