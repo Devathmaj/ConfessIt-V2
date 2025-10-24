@@ -1,0 +1,434 @@
+2025-10-06 09:07:31,110 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:07:31,141 - app.main - INFO - Running initial database setup...
+2025-10-06 09:07:31,170 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:07:31,171 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:07:31,171 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:08:55,611 - app.websocket_manager - INFO - 
+New WebSocket Connection:
+    Match ID: 68ab5f9e8f0b18bfe865e848
+    User ID: user
+    Client IP: 172.19.0.1
+    User Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
+    WebSocket ID: 135737881735920
+Active Connections Summary:
+    Total connections for match: 1
+    Total connections for user: 1
+Current Active Sessions for Match 68ab5f9e8f0b18bfe865e848:
+    [{'websocket_id': 135737881735920, 'user_id': 'user', 'client_ip': '172.19.0.1', 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb...'}]
+                
+2025-10-06 09:08:55,612 - app.websocket_manager - ERROR - Error sending personal message: no close frame received or sent
+2025-10-06 09:08:55,612 - app.websocket_manager - INFO - 
+WebSocket Disconnection:
+    Match ID: 68ab5f9e8f0b18bfe865e848
+    User ID: user
+    WebSocket ID: 135737881735920
+    Client IP: 172.19.0.1
+    Remaining connections for match: 0
+    Remaining connections for user: 0
+            
+2025-10-06 09:08:55,612 - app.websocket_manager - INFO - User user disconnected from match 68ab5f9e8f0b18bfe865e848
+2025-10-06 09:08:55,612 - app.websocket_manager - INFO - WebSocket disconnected for user user in match 68ab5f9e8f0b18bfe865e848
+2025-10-06 09:23:42,507 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:23:42,581 - app.main - INFO - Running initial database setup...
+2025-10-06 09:23:42,627 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:23:42,629 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:23:42,629 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:25:28,617 - app.services.auth_service - WARNING - No user found with registration number: use
+2025-10-06 09:25:29,533 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=4h9OLjkIvJgTcytvsk1bEoHh7ZtJP5DsM39avF7UrQI
+2025-10-06 09:25:42,338 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 09:25:42,481 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 09:25:42,524 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 09:25:48,525 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 09:37:23,958 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:37:24,036 - app.main - INFO - Running initial database setup...
+2025-10-06 09:37:24,084 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:37:24,086 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:37:24,087 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:37:51,846 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:37:51,929 - app.main - INFO - Running initial database setup...
+2025-10-06 09:37:51,961 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:37:51,964 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:37:51,964 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:38:00,061 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:38:00,111 - app.main - INFO - Running initial database setup...
+2025-10-06 09:38:00,138 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:38:00,140 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:38:00,140 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:38:05,588 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:38:05,625 - app.main - INFO - Running initial database setup...
+2025-10-06 09:38:05,642 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:38:05,643 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:38:05,643 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:38:38,925 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:38:38,962 - app.main - INFO - Running initial database setup...
+2025-10-06 09:38:38,999 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:38:39,001 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:38:39,001 - app.main - INFO - Initial database setup complete.
+2025-10-06 09:39:16,327 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 09:39:16,405 - app.main - INFO - Running initial database setup...
+2025-10-06 09:39:16,442 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 09:39:16,444 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 09:39:16,444 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:16:46,975 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:16:47,056 - app.main - INFO - Running initial database setup...
+2025-10-06 10:16:47,129 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:16:47,130 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:16:47,131 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:17:00,877 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=n9MRq2ahys-cE3KPLbTjtcxzJbxbxsBHJQTW6ziLmvY
+2025-10-06 10:17:11,947 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 10:17:12,040 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 10:17:12,097 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 10:19:18,680 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:19:18,731 - app.main - INFO - Running initial database setup...
+2025-10-06 10:19:18,757 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:19:18,759 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:19:18,759 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:20:39,816 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:20:39,887 - app.main - INFO - Running initial database setup...
+2025-10-06 10:20:39,920 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:20:39,923 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:20:39,924 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:20:46,612 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=86JmicykbmJ8b94dwNEihImsSZcb2RIJFaeX40m88Fw
+2025-10-06 10:26:59,406 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:26:59,437 - app.main - INFO - Running initial database setup...
+2025-10-06 10:26:59,462 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:26:59,463 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:26:59,463 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:28:03,698 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=8UGLH2TO18iNvsobIcFDtRNgE91uOEOKlZSkNoQHvDA
+2025-10-06 10:28:35,424 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:28:35,474 - app.main - INFO - Running initial database setup...
+2025-10-06 10:28:35,491 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:28:35,493 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:28:35,493 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:28:42,488 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:28:42,558 - app.main - INFO - Running initial database setup...
+2025-10-06 10:28:42,591 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:28:42,593 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:28:42,593 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:30:08,832 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:30:08,867 - app.main - INFO - Running initial database setup...
+2025-10-06 10:30:08,889 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:30:08,890 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:30:08,890 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:30:12,972 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=pVkiTSthlLJ4YUSnSKQ2lva8yb83ImF-z-7WmLcEvos
+2025-10-06 10:30:19,362 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 10:30:19,438 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 10:30:19,463 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 10:37:38,683 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:37:38,759 - app.main - INFO - Running initial database setup...
+2025-10-06 10:37:38,810 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:37:38,812 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:37:38,813 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:38:20,221 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=v0QYK_IwuPQDk4zYrj7kM3KoRDTLmIpKRM9XBJ3nAWQ
+2025-10-06 10:38:30,356 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 10:38:30,426 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 10:38:30,444 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 10:42:18,531 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:42:18,583 - app.main - INFO - Running initial database setup...
+2025-10-06 10:42:18,616 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:42:18,618 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:42:18,618 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:42:27,370 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=SH1y3m3n5Oz3oC1YVa7xZJJzyLoAId5AGUXu1sHE27I
+2025-10-06 10:42:37,700 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 10:42:37,764 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 10:42:37,786 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 10:43:14,517 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:43:14,550 - app.main - INFO - Running initial database setup...
+2025-10-06 10:43:14,576 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:43:14,578 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:43:14,579 - app.main - INFO - Initial database setup complete.
+2025-10-06 10:43:21,030 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=zVT7sOvtjTFpq9LNzqYpgLdfrICzep3qFT3ff3bJ3C0
+2025-10-06 10:43:29,615 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 10:43:29,695 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 10:43:29,718 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 10:44:47,569 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 10:44:47,640 - app.main - INFO - Running initial database setup...
+2025-10-06 10:44:47,684 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 10:44:47,687 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 10:44:47,687 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:02:17,075 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:02:17,157 - app.main - INFO - Running initial database setup...
+2025-10-06 11:02:17,212 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:02:17,215 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:02:17,215 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:02:20,006 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=_vJiJKxQtQLCvxNSa-SeEsOpFfxAFZyEW4SjdUiMz_M
+2025-10-06 11:02:26,817 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:02:26,930 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:02:26,980 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:02:49,439 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:03:53,921 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:03:53,994 - app.main - INFO - Running initial database setup...
+2025-10-06 11:03:54,037 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:03:54,039 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:03:54,040 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:06:46,787 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=wPMd0VwPrENUjHvho-kOxy8Gj17NYM4FG9BV3chRkBA
+2025-10-06 11:06:53,640 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:06:53,733 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:06:53,766 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:21:28,671 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:21:28,709 - app.main - INFO - Running initial database setup...
+2025-10-06 11:21:28,735 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:21:28,738 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:21:28,738 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:22:14,140 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=-w5i0jS6QbpHUK5vyteb_IR3yMznOSPq4SlZa2LxdUs
+2025-10-06 11:22:23,906 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:22:24,022 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:22:24,069 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:23:59,621 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:23:59,653 - app.main - INFO - Running initial database setup...
+2025-10-06 11:23:59,681 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:23:59,682 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:23:59,682 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:24:29,145 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:24:29,181 - app.main - INFO - Running initial database setup...
+2025-10-06 11:24:29,200 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:24:29,201 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:24:29,201 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:24:36,088 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=50UoH2jug7tkatxsEnPg7FhEeMGCalzS0xDCqSDbnG8
+2025-10-06 11:24:43,363 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:24:43,486 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:24:43,530 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:25:27,999 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:25:28,081 - app.main - INFO - Running initial database setup...
+2025-10-06 11:25:28,137 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:25:28,140 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:25:28,140 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:25:35,541 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:25:35,624 - app.main - INFO - Running initial database setup...
+2025-10-06 11:25:35,655 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:25:35,657 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:25:35,658 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:25:48,215 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:25:48,283 - app.main - INFO - Running initial database setup...
+2025-10-06 11:25:48,320 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:25:48,322 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:25:48,322 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:26:21,690 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:26:21,746 - app.main - INFO - Running initial database setup...
+2025-10-06 11:26:21,762 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:26:21,763 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:26:21,763 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:26:26,618 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=eInV4ZfonDjylo5s-CQcfZhCgs6OJsDqphcoO5jswzw
+2025-10-06 11:26:34,721 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:26:34,825 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:26:34,860 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:29:56,128 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:29:56,197 - app.main - INFO - Running initial database setup...
+2025-10-06 11:29:56,229 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:29:56,231 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:29:56,231 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:30:03,809 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:30:03,885 - app.main - INFO - Running initial database setup...
+2025-10-06 11:30:03,919 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:30:03,921 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:30:03,921 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:30:29,662 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:30:29,694 - app.main - INFO - Running initial database setup...
+2025-10-06 11:30:29,710 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:30:29,711 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:30:29,712 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:35:45,112 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:35:45,206 - app.main - INFO - Running initial database setup...
+2025-10-06 11:35:45,258 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:35:45,260 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:35:45,260 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:35:45,304 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=4sbMlD667jpzdTpChlVg3j3FRPZynyX0jZW6vcujIPI
+2025-10-06 11:35:55,764 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:35:55,884 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:35:55,932 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:37:45,563 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:37:45,650 - app.main - INFO - Running initial database setup...
+2025-10-06 11:37:45,700 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:37:45,702 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:37:45,702 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:39:33,292 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:39:33,381 - app.main - INFO - Running initial database setup...
+2025-10-06 11:39:33,430 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:39:33,433 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:39:33,433 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:39:33,477 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=RhWNg6XbWEALY3wxpCcXIx-qOFz5AgXbuY75doVfnyg
+2025-10-06 11:40:10,288 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=5xa8flFxQUzRwt3dpb7mkQJlObx4dc9JjF4iu2-ZmI0
+2025-10-06 11:40:19,103 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:40:19,218 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:40:19,257 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:41:23,768 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:41:23,830 - app.main - INFO - Running initial database setup...
+2025-10-06 11:41:23,870 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:41:23,873 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:41:23,874 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:41:42,054 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:41:42,124 - app.main - INFO - Running initial database setup...
+2025-10-06 11:41:42,167 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:41:42,169 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:41:42,169 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:41:58,686 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:41:58,720 - app.main - INFO - Running initial database setup...
+2025-10-06 11:41:58,736 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:41:58,737 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:41:58,737 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:42:19,191 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:42:19,246 - app.main - INFO - Running initial database setup...
+2025-10-06 11:42:19,280 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:42:19,282 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:42:19,283 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:42:36,791 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:42:36,833 - app.main - INFO - Running initial database setup...
+2025-10-06 11:42:36,854 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:42:36,855 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:42:36,855 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:43:19,751 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:43:19,789 - app.main - INFO - Running initial database setup...
+2025-10-06 11:43:19,806 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:43:19,807 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:43:19,807 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:43:40,936 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:43:41,034 - app.main - INFO - Running initial database setup...
+2025-10-06 11:43:41,065 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:43:41,068 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:43:41,068 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:43:41,169 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=eZGiTHfVZv-8j2WRQzw2xKgQVAzCQYkzWkDXkJKPfr8
+2025-10-06 11:43:45,836 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:43:45,971 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:43:46,025 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:44:11,891 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:44:11,971 - app.main - INFO - Running initial database setup...
+2025-10-06 11:44:12,004 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:44:12,007 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:44:12,007 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:44:13,242 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=hDGENhUicXLgpanfd_QMLRrNeg-kRgqx8KSZNjJrZDo
+2025-10-06 11:44:32,821 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:44:32,943 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:44:32,992 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 11:49:49,609 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:49:49,683 - app.main - INFO - Running initial database setup...
+2025-10-06 11:49:49,717 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:49:49,720 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:49:49,720 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:50:19,425 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:50:19,502 - app.main - INFO - Running initial database setup...
+2025-10-06 11:50:19,532 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:50:19,535 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:50:19,535 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:50:33,240 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:50:33,314 - app.main - INFO - Running initial database setup...
+2025-10-06 11:50:33,350 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:50:33,353 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:50:33,353 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:50:44,318 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:50:44,393 - app.main - INFO - Running initial database setup...
+2025-10-06 11:50:44,430 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:50:44,431 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:50:44,432 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:51:03,750 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:51:03,785 - app.main - INFO - Running initial database setup...
+2025-10-06 11:51:03,805 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:51:03,809 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:51:03,809 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:51:16,220 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:51:16,261 - app.main - INFO - Running initial database setup...
+2025-10-06 11:51:16,277 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:51:16,278 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:51:16,278 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:51:26,378 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:51:26,414 - app.main - INFO - Running initial database setup...
+2025-10-06 11:51:26,435 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:51:26,437 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:51:26,438 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:51:41,108 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:51:41,182 - app.main - INFO - Running initial database setup...
+2025-10-06 11:51:41,216 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:51:41,219 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:51:41,219 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:51:50,872 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:51:50,945 - app.main - INFO - Running initial database setup...
+2025-10-06 11:51:50,979 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:51:50,982 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:51:50,982 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:52:07,080 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:52:07,153 - app.main - INFO - Running initial database setup...
+2025-10-06 11:52:07,185 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:52:07,189 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:52:07,189 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:52:19,827 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:52:19,899 - app.main - INFO - Running initial database setup...
+2025-10-06 11:52:19,932 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:52:19,934 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:52:19,935 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:52:34,793 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:52:34,874 - app.main - INFO - Running initial database setup...
+2025-10-06 11:52:34,908 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:52:34,911 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:52:34,912 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:52:53,094 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:52:53,172 - app.main - INFO - Running initial database setup...
+2025-10-06 11:52:53,204 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:52:53,207 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:52:53,207 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:53:46,509 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:53:46,542 - app.main - INFO - Running initial database setup...
+2025-10-06 11:53:46,556 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:53:46,557 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:53:46,557 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:55:41,125 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:55:41,183 - app.main - INFO - Running initial database setup...
+2025-10-06 11:55:41,213 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:55:41,217 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:55:41,218 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:59:24,410 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 11:59:24,444 - app.main - INFO - Running initial database setup...
+2025-10-06 11:59:24,461 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 11:59:24,463 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 11:59:24,463 - app.main - INFO - Initial database setup complete.
+2025-10-06 11:59:25,961 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=kQfXuw7-xnCBfM0E8mlcNVUuujIYXjUMzkorNnewvDE
+2025-10-06 11:59:35,522 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 11:59:35,634 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 11:59:35,668 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 12:07:53,317 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:07:53,374 - app.main - INFO - Running initial database setup...
+2025-10-06 12:07:53,406 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:07:53,407 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:07:53,407 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:08:10,535 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:08:10,617 - app.main - INFO - Running initial database setup...
+2025-10-06 12:08:10,648 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:08:10,650 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:08:10,651 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:08:22,440 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:08:22,514 - app.main - INFO - Running initial database setup...
+2025-10-06 12:08:22,549 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:08:22,552 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:08:22,552 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:09:22,562 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:09:22,596 - app.main - INFO - Running initial database setup...
+2025-10-06 12:09:22,614 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:09:22,615 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:09:22,616 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:09:40,355 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:09:40,407 - app.main - INFO - Running initial database setup...
+2025-10-06 12:09:40,441 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:09:40,443 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:09:40,443 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:11:17,979 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:11:18,060 - app.main - INFO - Running initial database setup...
+2025-10-06 12:11:18,105 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:11:18,109 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:11:18,109 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:11:59,219 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:11:59,291 - app.main - INFO - Running initial database setup...
+2025-10-06 12:11:59,326 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:11:59,329 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:11:59,329 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:12:02,323 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 12:12:02,397 - app.main - INFO - Running initial database setup...
+2025-10-06 12:12:02,427 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 12:12:02,428 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 12:12:02,429 - app.main - INFO - Initial database setup complete.
+2025-10-06 12:13:13,040 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=cv1JI-W_E9i0cXk_7_KUdI97mO4GRX9gX_Jh1Der5Sc
+2025-10-06 12:13:19,704 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by popularity
+2025-10-06 12:13:19,771 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by time
+2025-10-06 12:13:19,793 - app.services.confession_service - INFO - Retrieved 9 confessions sorted by comments
+2025-10-06 13:16:23,314 - app.websocket_manager - INFO - ConnectionManager initialized
+2025-10-06 13:16:23,348 - app.main - INFO - Running initial database setup...
+2025-10-06 13:16:23,371 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-06 13:16:23,372 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-06 13:16:23,372 - app.main - INFO - Initial database setup complete.

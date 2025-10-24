@@ -1,10 +1,11 @@
 # app/main.py
 
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
+import asyncio
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations
-from .services.auth_service import get_current_user, decode_token
+from .services.auth_service import get_current_user
 from .dependencies import get_db 
 from pymongo.database import Database
 from .services.storage_service import storage_service
@@ -13,8 +14,6 @@ import pymongo
 from .config import settings
 from .models import UserDetails
 from .logger import get_logger
-from .websocket_manager import handle_websocket_connection, check_and_broadcast_expiry_warnings
-import asyncio
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -30,15 +29,33 @@ app = FastAPI(
 # ----------------------
 @app.on_event("startup")
 async def on_startup():
-    # Start the background task for checking match expiry
-    asyncio.create_task(check_and_broadcast_expiry_warnings())
     """
     Used to run the initial database setup on application start.
     """
     logger.info("Running initial database setup...")
     client = None
     try:
-        client = pymongo.MongoClient(settings.MONGO_URI)
+        # Wait / retry for MongoDB to become ready. Docker may start the backend
+        # before Mongo has finished initializing, so poll with a short timeout.
+        max_wait = 60  # seconds total to wait for Mongo
+        waited = 0
+        interval = 2  # seconds between retries
+        while waited < max_wait:
+            try:
+                # Use a short serverSelectionTimeout so the ping fails fast
+                client = pymongo.MongoClient(settings.MONGO_URI, serverSelectionTimeoutMS=2000)
+                # Force a round-trip to ensure the server is available
+                client.admin.command("ping")
+                logger.info("Connected to MongoDB")
+                break
+            except Exception as e:
+                logger.warning(f"MongoDB not ready yet (waited={waited}s): {e}")
+                await asyncio.sleep(interval)
+                waited += interval
+
+        if not client:
+            raise pymongo.errors.ConnectionFailure(f"Could not connect to MongoDB after {max_wait} seconds")
+
         db = client[settings.MONGO_DB_NAME]
         user_details_collection = db["UserDetails"]
 
@@ -171,54 +188,7 @@ async def get_committee_file(path: str):
 
 # ----------------------
 # WebSocket Endpoints
-# ----------------------
-from fastapi import WebSocket, Depends, HTTPException
-from .services.auth_service import decode_token
-from pymongo.database import Database
-from .dependencies import get_db
-from .models import UserDetails
 
-async def get_websocket_user(
-    websocket: WebSocket,
-    db: Database = Depends(get_db)
-) -> UserDetails:
-    token = websocket.query_params.get('token')
-    if not token:
-        raise HTTPException(status_code=403, detail="No token provided")
-    
-    try:
-        payload = decode_token(token)
-        regno = payload.get("sub")
-        if not regno:
-            raise HTTPException(status_code=403, detail="Invalid token payload")
-        
-        user_doc = db["UserDetails"].find_one({"Regno": regno})
-        if not user_doc:
-            raise HTTPException(status_code=403, detail="User not found")
-            
-        return UserDetails(**user_doc)
-    except Exception as e:
-        raise HTTPException(status_code=403, detail=str(e))
-
-@app.websocket("/ws/{match_id}")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    match_id: str,
-    user: UserDetails = Depends(get_websocket_user)
-):
-    """WebSocket endpoint for real-time messaging in a specific match"""
-    try:
-        # Handle the WebSocket connection
-        await handle_websocket_connection(websocket, user.Regno, match_id)
-        
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"Error in WebSocket endpoint: {e}")
-        try:
-            await websocket.close(code=4000, reason="Internal server error")
-        except:
-            pass
 
 # ----------------------
 # Endpoints

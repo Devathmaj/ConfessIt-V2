@@ -1,7 +1,6 @@
 # app/services/conversation_service.py
 
 import logging
-import asyncio
 from fastapi import HTTPException, status
 from pymongo.database import Database
 from bson import ObjectId
@@ -9,40 +8,11 @@ from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
-from ..websocket_manager import broadcast_new_message, broadcast_conversation_status_update
+from ..services.supabase_service import supabase_service
+from ..config import settings
 
 # Logger
 logger = logging.getLogger(__name__)
-
-async def handle_broadcast_async(coro):
-    """Helper function to handle async broadcast operations properly"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    try:
-        return await coro
-    except Exception as e:
-        logger.error(f"Error in broadcast handling: {e}")
-        raise
-    finally:
-        if not asyncio.get_event_loop().is_running():
-            loop.close()
-
-def handle_broadcast(coro):
-    """Synchronous wrapper for async broadcast operations"""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(handle_broadcast_async(coro))
-    except Exception as e:
-        logger.error(f"Error in broadcast handling: {e}")
-        raise
-    finally:
-        if loop and loop.is_running():
-            loop.close()
 
 def request_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
@@ -97,7 +67,20 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
             status="pending"
         )
 
-        db.conversations.insert_one(new_conversation.dict(by_alias=True))
+        result = db.conversations.insert_one(new_conversation.dict(by_alias=True))
+        
+        # Sync to Supabase
+        supabase_conversation_id = supabase_service.sync_conversation_to_supabase(
+            mongo_conversation_id=str(result.inserted_id),
+            match_id=str(match_id),
+            initiator_id=current_user.Regno,
+            receiver_id=receiver_regno,
+            status="pending",
+            created_at=new_conversation.createdAt
+        )
+        
+        if not supabase_conversation_id:
+            logger.warning(f"Failed to sync conversation to Supabase for match {match_id}")
         
         logger.info(f"Conversation request created from {current_user.Regno} to {receiver_regno} for match {match_id}")
 
@@ -204,30 +187,49 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conversation is already accepted.")
 
     # 7. Update the conversation status
+    accepted_at = datetime.now(timezone.utc)
     db.conversations.update_one(
         {"_id": conversation.id},
         {
             "$set": {
                 "status": "accepted",
-                "acceptedAt": datetime.now(timezone.utc)
+                "acceptedAt": accepted_at
             }
         }
     )
     
-    # Broadcast conversation status update via WebSocket - Fixed async handling
-    try:
-        status_data = {
-            "status": "accepted",
-            "accepted_by": current_user.Regno,
-            "accepted_at": datetime.now(timezone.utc).isoformat()
-        }
-        handle_broadcast(broadcast_conversation_status_update(str(match_id), status_data))
-    except Exception as e:
-        logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
+    # Sync status update to Supabase
+    supabase_service.update_conversation_status_in_supabase(
+        match_id=str(match_id),
+        status="accepted",
+        accepted_at=accepted_at
+    )
     
     logger.info(f"Conversation {conversation.id} accepted by {current_user.Regno}")
 
-    return {"status": "success", "message": "Conversation accepted successfully."}
+    # Get Supabase conversation for token generation
+    supabase_conversation = supabase_service.get_conversation_by_match_id(str(match_id))
+    
+    if supabase_conversation:
+        # Generate ephemeral tokens for both users
+        initiator_token = supabase_service.generate_ephemeral_token(
+            user_id=conversation.initiatorId,
+            conversation_id=supabase_conversation["id"]
+        )
+        receiver_token = supabase_service.generate_ephemeral_token(
+            user_id=conversation.receiverId,
+            conversation_id=supabase_conversation["id"]
+        )
+        
+        return {
+            "status": "success",
+            "message": "Conversation accepted successfully.",
+            "supabase_token": receiver_token,  # Token for the current user (receiver)
+            "conversation_id": supabase_conversation["id"]
+        }
+    else:
+        logger.error(f"Failed to get Supabase conversation for match {match_id}")
+        return {"status": "success", "message": "Conversation accepted successfully."}
 
 
 def reject_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
@@ -287,25 +289,22 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         }
     )
     
-    # Broadcast conversation status update via WebSocket - Fixed async handling
-    try:
-        status_data = {
-            "status": "rejected",
-            "rejected_by": current_user.Regno,
-            "rejected_at": datetime.now(timezone.utc).isoformat()
-        }
-        handle_broadcast(broadcast_conversation_status_update(str(match_id), status_data))
-    except Exception as e:
-        logger.error(f"Error broadcasting conversation status update via WebSocket: {e}")
+    # Sync status update to Supabase
+    supabase_service.update_conversation_status_in_supabase(
+        match_id=str(match_id),
+        status="rejected"
+    )
     
     logger.info(f"Conversation {conversation.id} rejected by {current_user.Regno}")
 
     return {"status": "success", "message": "Conversation rejected successfully."}
 
 
-def send_message_service(current_user: UserDetails, match_id_str: str, message_text: str, db: Database):
+def get_supabase_token_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
-    Used to send a message in an accepted conversation.
+    Used to get a Supabase ephemeral token for accessing messages in a conversation.
+    This replaces send_message_service and get_conversation_messages_service.
+    Frontend will use this token to directly interact with Supabase for messaging.
     """
     try:
         match_id = ObjectId(match_id_str)
@@ -320,11 +319,9 @@ def send_message_service(current_user: UserDetails, match_id_str: str, message_t
     match = Match(**match_doc)
 
     # 2. Check if the match has expired
-    # Ensure both datetimes are timezone-aware for comparison
     current_time = datetime.now(timezone.utc)
     match_expires_at = match.expires_at
     
-    # If the stored datetime is timezone-naive, assume it's UTC
     if match_expires_at.tzinfo is None:
         match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
     
@@ -343,123 +340,32 @@ def send_message_service(current_user: UserDetails, match_id_str: str, message_t
     conversation = Conversation(**conversation_doc)
     
     if conversation.status != "accepted":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only send messages in accepted conversations.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only access messages in accepted conversations.")
 
-    # 5. Determine receiver
-    receiver_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
-
-    # 6. Create and store the message
-    from ..models import Message
-    new_message = Message(
-        matchId=match_id,
-        senderId=current_user.Regno,
-        receiverId=receiver_regno,
-        text=message_text
+    # 5. Get Supabase conversation and generate token
+    supabase_conversation = supabase_service.get_conversation_by_match_id(str(match_id))
+    
+    if not supabase_conversation:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Conversation not synced to Supabase.")
+    
+    # Calculate time until match expires for token expiry
+    time_until_expiry = (match_expires_at - current_time).total_seconds() / 3600  # in hours
+    expires_in_hours = max(1, int(time_until_expiry) + 1)  # At least 1 hour, rounded up
+    
+    token = supabase_service.generate_ephemeral_token(
+        user_id=current_user.Regno,
+        conversation_id=supabase_conversation["id"],
+        expires_in_hours=expires_in_hours
     )
-
-    # Insert the message into the database
-    result = db.messages.insert_one(new_message.dict(by_alias=True))
     
-    # Prepare message data for WebSocket broadcast
-    message_data = {
-        "id": str(result.inserted_id),
-        "text": message_text,
-        "sender_id": current_user.Regno,
-        "receiver_id": receiver_regno,
-        "timestamp": new_message.timestamp.isoformat(),
-        "is_sender": False  # Will be set by each client based on their user_id
-    }
-    
-    # Broadcast the new message to all users in the match via WebSocket
-    try:
-        logger.info(f"Attempting to broadcast message for match {match_id}")
-        handle_broadcast(broadcast_new_message(str(match_id), message_data))
-        logger.info(f"Successfully initiated broadcast for match {match_id}")
-    except Exception as e:
-        logger.error(f"Error broadcasting message via WebSocket: {e}")
-        # Don't re-raise the exception - allow the message to be saved even if broadcast fails
-    
-    logger.info(f"Message sent from {current_user.Regno} to {receiver_regno} in match {match_id}")
+    logger.info(f"Generated Supabase token for user {current_user.Regno} in match {match_id}")
 
-    return {"status": "success", "message": "Message sent successfully.", "message_id": str(result.inserted_id)}
-
-
-def get_conversation_messages_service(current_user: UserDetails, match_id_str: str, db: Database):
-    """
-    Used to get all messages for a specific conversation.
-    """
-    try:
-        match_id = ObjectId(match_id_str)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
-
-    # 1. Fetch the match document
-    match_doc = db.matches.find_one({"_id": match_id})
-    if not match_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
-    
-    match = Match(**match_doc)
-
-    # 2. Check if the match has expired (but allow viewing messages even when expired)
-    # Ensure both datetimes are timezone-aware for comparison
-    current_time = datetime.now(timezone.utc)
-    match_expires_at = match.expires_at
-    
-    # If the stored datetime is timezone-naive, assume it's UTC
-    if match_expires_at.tzinfo is None:
-        match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
-    
-    is_expired = current_time > match_expires_at
-    
-    # Debug logging
-    logger.info(f"Messages expiry calculation for match {match_id}:")
-    logger.info(f"  Current time (UTC): {current_time}")
-    logger.info(f"  Match expires at (UTC): {match_expires_at}")
-    logger.info(f"  Is expired: {is_expired}")
-    logger.info(f"  Time difference: {match_expires_at - current_time}")
-
-    # 3. Verify the current user is part of the match
-    if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
-
-    # 4. Get the conversation
-    conversation_doc = db.conversations.find_one({"matchId": match_id})
-    if not conversation_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation found for this match.")
-
-    conversation = Conversation(**conversation_doc)
-
-    # 5. Allow viewing messages when conversation was accepted OR expired
-    if conversation.status not in ("accepted", "expired"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only view messages for accepted or expired conversations.")
-
-    # 6. Get all messages for this conversation, ordered by timestamp
-    from ..models import Message
-    messages_cursor = db.messages.find({"matchId": match_id}).sort("timestamp", 1)  # 1 for ascending order
-    
-    messages = []
-    for message_doc in messages_cursor:
-        try:
-            message = Message(**message_doc)
-            messages.append({
-                "id": str(message.id),
-                "text": message.text,
-                "sender_id": message.senderId,
-                "receiver_id": message.receiverId,
-                "timestamp": message.timestamp.isoformat(),
-                "is_sender": message.senderId == current_user.Regno
-            })
-        except Exception as e:
-            logger.error(f"Error parsing message document: {e}")
-            continue
-    
-    logger.info(f"Retrieved {len(messages)} messages for conversation {conversation.id}")
-    
     return {
         "status": "success",
-        "messages": messages,
-        "conversation_id": str(conversation.id),
-        "is_expired": is_expired
+        "supabase_token": token,
+        "conversation_id": supabase_conversation["id"],
+        "supabase_url": supabase_service.supabase_url,
+        "expires_in_hours": expires_in_hours
     }
 
 
@@ -546,7 +452,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
 
     profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
 
-    return {
+    response_data = {
         "status": "success",
         "match": {
             "id": str(match.id),
@@ -576,11 +482,35 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         },
         "is_initiator": conversation.initiatorId == current_user.Regno
     }
+    
+    # If conversation is accepted and not expired, include Supabase token
+    if conversation.status == "accepted" and not is_expired:
+        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
+        if supabase_conversation:
+            match_expires_at = match.expires_at
+            if match_expires_at.tzinfo is None:
+                match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
+            
+            time_until_expiry = (match_expires_at - current_time).total_seconds() / 3600
+            expires_in_hours = max(1, int(time_until_expiry) + 1)
+            
+            token = supabase_service.generate_ephemeral_token(
+                user_id=current_user.Regno,
+                conversation_id=supabase_conversation["id"],
+                expires_in_hours=expires_in_hours
+            )
+            
+            response_data["supabase_token"] = token
+            response_data["supabase_anon_key"] = settings.SUPABASE_ANON_KEY
+            response_data["conversation_id_supabase"] = supabase_conversation["id"]
+            response_data["supabase_url"] = supabase_service.supabase_url
+    
+    return response_data
 
 
 def get_conversation_by_match_id(match_id_str: str, db: Database):
     """
-    Get conversation by match ID for WebSocket expiry checking.
+    Get conversation by match ID (kept for compatibility).
     """
     try:
         match_id = ObjectId(match_id_str)
@@ -596,7 +526,7 @@ def get_conversation_by_match_id(match_id_str: str, db: Database):
 
 def update_conversation_status(match_id_str: str, status: str, db: Database):
     """
-    Update conversation status for WebSocket expiry handling.
+    Update conversation status (kept for compatibility, also syncs to Supabase).
     """
     try:
         match_id = ObjectId(match_id_str)
@@ -609,3 +539,4 @@ def update_conversation_status(match_id_str: str, status: str, db: Database):
     )
     
     return result.modified_count > 0
+

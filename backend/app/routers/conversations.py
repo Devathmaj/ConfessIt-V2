@@ -11,10 +11,9 @@ from ..services.conversation_service import (
     request_conversation_service,
     get_conversation_status_service,
     accept_conversation_service,
-    send_message_service,
-    get_current_conversation_service,
     reject_conversation_service,
-    get_conversation_messages_service
+    get_current_conversation_service,
+    get_supabase_token_service
 )
 
 router = APIRouter(
@@ -66,17 +65,16 @@ def reject_conversation(
     """
     return reject_conversation_service(current_user, match_id, db)
 
-@router.post("/{match_id}/messages")
-def send_message(
+@router.get("/{match_id}/supabase-token")
+def get_supabase_token(
     match_id: str,
-    message_data: dict,
     current_user: Annotated[UserDetails, Depends(get_current_user)],
     db: Database = Depends(get_db)
 ):
     """
-    Used to send a message in an accepted conversation.
+    Used to get a Supabase ephemeral token for accessing messages in a conversation.
     """
-    return send_message_service(current_user, match_id, message_data.get("text", ""), db)
+    return get_supabase_token_service(current_user, match_id, db)
 
 @router.get("/current")
 def get_current_conversation(
@@ -87,14 +85,3 @@ def get_current_conversation(
     Used to get the current active conversation for the authenticated user.
     """
     return get_current_conversation_service(current_user, db)
-
-@router.get("/{match_id}/messages")
-def get_conversation_messages(
-    match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
-    db: Database = Depends(get_db)
-):
-    """
-    Used to get all messages for a specific conversation.
-    """
-    return get_conversation_messages_service(current_user, match_id, db)
