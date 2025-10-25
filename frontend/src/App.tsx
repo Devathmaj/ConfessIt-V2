@@ -10,6 +10,7 @@ import { AdminDashboard } from "./pages/AdminDashboard";
 import { ConfessionsPage } from "./pages/ConfessionsPage";
 import { MatchmakingPage } from "./pages/MatchmakingPage";
 import { InboxPage } from "./pages/InboxPage";
+import { MessageBoxPage } from "./pages/MessageBoxPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LoveNotesPage } from "./pages/LoveNotesPage";
 import { MiniGamesPage } from "./pages/MiniGamesPage";
@@ -163,10 +164,18 @@ const AppRoutes = () => {
         }
       />
       <Route
-        path="/inbox"
+        path="/notifications"
         element={
           <ProtectedRoute>
             <InboxPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/inbox"
+        element={
+          <ProtectedRoute>
+            <MessageBoxPage />
           </ProtectedRoute>
         }
       />

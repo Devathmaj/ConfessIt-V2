@@ -14,6 +14,7 @@ interface ConversationDialogProps {
   onClose: () => void;
   onRefresh: () => void;
   onConversationAccepted?: () => void;
+  conversationData?: ConversationData; // Optional initial data
 }
 
 interface ConversationData {
@@ -25,7 +26,7 @@ interface ConversationData {
   };
   conversation: {
     id: string;
-    status: 'pending' | 'accepted' | 'rejected';
+    status: 'pending' | 'requested' | 'accepted' | 'rejected';
     initiator_id: string;
     receiver_id: string;
     created_at: string;
@@ -56,9 +57,14 @@ interface Message {
   is_sender?: boolean;
 }
 
-export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose, onRefresh, onConversationAccepted }) => {
-  const [conversationData, setConversationData] = useState<ConversationData | null>(null);
-  const [loading, setLoading] = useState(true);
+export const ConversationDialog: React.FC<ConversationDialogProps> = ({ 
+  onClose, 
+  onRefresh, 
+  onConversationAccepted,
+  conversationData: initialConversationData 
+}) => {
+  const [conversationData, setConversationData] = useState<ConversationData | null>(initialConversationData || null);
+  const [loading, setLoading] = useState(!initialConversationData);
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [timeLeft, setTimeLeft] = useState<string>('');
@@ -73,7 +79,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
   const supabaseChannelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
-    fetchCurrentConversation();
+    // If initial data was provided, use it; otherwise fetch
+    if (initialConversationData) {
+      setupConversationData(initialConversationData);
+      setLoading(false);
+    } else {
+      fetchCurrentConversation();
+    }
     const interval = setInterval(updateTimeLeft, 1000);
     return () => {
       clearInterval(interval);
@@ -197,6 +209,29 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const setupConversationData = (data: ConversationData) => {
+    // Store current user ID for determining is_sender
+    if (data.is_initiator) {
+      currentUserRef.current = data.conversation.initiator_id;
+    } else {
+      currentUserRef.current = data.conversation.receiver_id;
+    }
+    
+    // Debug: Log the conversation data to see what we have
+    console.log('📦 Setup Conversation Data:', {
+      status: data.conversation.status,
+      is_initiator: data.is_initiator,
+      has_supabase_token: !!data.supabase_token,
+      has_anon_key: !!data.supabase_anon_key,
+      has_conversation_id: !!data.conversation_id_supabase,
+      has_supabase_url: !!data.supabase_url,
+      supabase_token_preview: data.supabase_token?.substring(0, 50),
+      conversation_id: data.conversation_id_supabase
+    });
+    
+    setConversationData(data);
+  };
+
   const fetchCurrentConversation = async () => {
     try {
       const response = await getCurrentConversation();
@@ -214,14 +249,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
           conversation_status: data.conversation.status
         });
         
-        // Store current user ID for determining is_sender
-        if (data.is_initiator) {
-          currentUserRef.current = data.conversation.initiator_id;
-        } else {
-          currentUserRef.current = data.conversation.receiver_id;
-        }
-
-        setConversationData(data);
+        setupConversationData(data);
       } else {
         toast.error('No active conversation found');
         onClose();
@@ -375,6 +403,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
 
   const isExpired = conversationData.match.is_expired;
   const isPending = conversationData.conversation.status === 'pending';
+  const isRequested = conversationData.conversation.status === 'requested';
   const isAccepted = conversationData.conversation.status === 'accepted';
   const isRejected = conversationData.conversation.status === 'rejected';
   const isReceiver = !conversationData.is_initiator;
@@ -429,7 +458,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
           <div className="flex-1 flex flex-col">
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {isPending && isReceiver && (
+              {isRequested && isReceiver && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                   <p className="text-sm text-blue-900 mb-3">
                     <strong>{conversationData.other_user.name}</strong> wants to start a conversation with you!
@@ -456,10 +485,18 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({ onClose,
                 </div>
               )}
 
-              {isPending && conversationData.is_initiator && (
+              {isRequested && conversationData.is_initiator && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4 text-center">
                   <p className="text-sm text-yellow-900">
                     Waiting for <strong>{conversationData.other_user.name}</strong> to accept your conversation request...
+                  </p>
+                </div>
+              )}
+
+              {isPending && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4 text-center">
+                  <p className="text-sm text-gray-900">
+                    Conversation not yet requested. Click "Send Message Request" to initiate.
                   </p>
                 </div>
               )}

@@ -6,7 +6,7 @@ import { resolveProfilePictureUrl } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
-import { getCurrentConversation, acceptConversation, rejectConversation } from '@/services/api';
+import { getCurrentConversation, acceptConversation, rejectConversation, getNotifications, getReceivedConversations, getConversationByMatch } from '@/services/api';
 import { ConversationDialog } from '@/components/ConversationDialog';
 import {
   Inbox,
@@ -41,7 +41,7 @@ interface ConversationData {
   };
   conversation: {
     id: string;
-    status: 'pending' | 'accepted' | 'rejected';
+    status: 'pending' | 'requested' | 'accepted' | 'rejected';
     initiator_id: string;
     receiver_id: string;
     created_at: string;
@@ -57,21 +57,25 @@ interface ConversationData {
     interests: string[];
   };
   is_initiator: boolean;
+  supabase_token?: string;
+  supabase_anon_key?: string;
+  conversation_id_supabase?: string;
+  supabase_url?: string;
 }
 
 // Defines the structure for notification items.
 interface NotificationItem {
   id: string;
-  type: 'message_request_sent' | 'message_request_received' | 'message_accepted' | 'message_rejected';
+  type: 'matchmaking' | 'message_request_sent' | 'message_request_received' | 'message_accepted' | 'message_rejected';
   title: string;
   message: string;
   timestamp: string;
-  user_name: string;
-  user_username: string;
-  user_profile_picture: string;
+  user_name?: string;
+  user_username?: string;
+  user_profile_picture?: string;
   match_id?: string;
   conversation_id?: string;
-  status?: 'pending' | 'accepted' | 'rejected';
+  status?: 'pending' | 'requested' | 'accepted' | 'rejected';
 }
 
 export const InboxPage = () => {
@@ -107,85 +111,143 @@ export const InboxPage = () => {
   // Fetches the current user's conversations.
   const fetchConversations = async () => {
     try {
-      const response = await getCurrentConversation();
-      if (response.status === 'success') {
-        setConversations([response]);
-      } else {
-        setConversations([]);
+      const [initiatedResponse, receivedResponse] = await Promise.all([
+        getCurrentConversation(),
+        getReceivedConversations()
+      ]);
+
+      const allConversations: ConversationData[] = [];
+
+      // Add initiated conversation if status is NOT 'pending' and NOT 'rejected'
+      if (initiatedResponse.status === 'success' && 
+          initiatedResponse.conversation.status !== 'pending' && 
+          initiatedResponse.conversation.status !== 'rejected') {
+        allConversations.push(initiatedResponse);
       }
+
+      // Add received conversations if status is NOT 'pending' and NOT 'rejected'
+      if (receivedResponse.status === 'success' && receivedResponse.conversations) {
+        receivedResponse.conversations.forEach((conv: any) => {
+          if (conv.conversation.status !== 'pending' && conv.conversation.status !== 'rejected') {
+            allConversations.push(conv);
+          }
+        });
+      }
+
+      setConversations(allConversations);
     } catch (error: any) {
       console.error('Failed to fetch conversations:', error);
       setConversations([]);
     }
   };
 
-  // Fetches notifications, generating them from conversation data for now.
+  // Fetches notifications from the notifications collection and generates them from conversation data.
   const fetchNotifications = async () => {
     try {
-      const response = await getCurrentConversation();
-      if (response.status === 'success') {
-        const notification: NotificationItem = {
-          id: response.conversation.id,
-          type: response.is_initiator ? 'message_request_sent' : 'message_request_received',
-          title: response.is_initiator 
-            ? `Message request sent to ${response.other_user.name}`
-            : `Message request from ${response.other_user.name}`,
-          message: response.is_initiator
-            ? `You sent a message request to ${response.other_user.name}. Waiting for their response.`
-            : `${response.other_user.name} wants to start a conversation with you!`,
-          timestamp: response.conversation.created_at,
-          user_name: response.other_user.name,
-          user_username: response.other_user.username,
-          user_profile_picture: response.other_user.profile_picture_id,
-          match_id: response.match.id,
-          conversation_id: response.conversation.id,
-          status: response.conversation.status
-        };
+      const [notificationsResponse, conversationResponse, receivedConversationsResponse] = await Promise.all([
+        getNotifications(),
+        getCurrentConversation(),
+        getReceivedConversations()
+      ]);
 
-        const notifications: NotificationItem[] = [notification];
-        
-        if (response.conversation.status === 'accepted' && response.conversation.accepted_at) {
+      const notifications: NotificationItem[] = [];
+
+      // 1. System notifications (Match found only - filter out conversation-related notifications)
+      if (notificationsResponse.notifications) {
+        notificationsResponse.notifications.forEach((notification: any) => {
+          // Skip notifications about message requests being accepted/rejected
+          // as we generate those from conversation data below
+          const isConversationNotification = 
+            notification.content.heading.includes('accepted your message request') ||
+            notification.content.heading.includes('rejected your message request');
+          
+          if (!isConversationNotification) {
+            notifications.push({
+              id: notification._id,
+              type: 'matchmaking',
+              title: notification.content.heading,
+              message: notification.content.body,
+              timestamp: notification.timestamp,
+            });
+          }
+        });
+      }
+
+      // 2. For INITIATOR: Only show accepted/rejected notification
+      if (conversationResponse.status === 'success' && conversationResponse.is_initiator) {
+        if (conversationResponse.conversation.status === 'accepted' && conversationResponse.conversation.accepted_at) {
           notifications.push({
-            id: `${response.conversation.id}_accepted`,
-            type: response.is_initiator ? 'message_accepted' : 'message_accepted',
-            title: response.is_initiator 
-              ? `Message request accepted by ${response.other_user.name}`
-              : `You accepted ${response.other_user.name}'s message request`,
-            message: response.is_initiator
-              ? `${response.other_user.name} accepted your message request! You can now start chatting.`
-              : `You accepted the message request from ${response.other_user.name}. You can now start chatting.`,
-            timestamp: response.conversation.accepted_at,
-            user_name: response.other_user.name,
-            user_username: response.other_user.username,
-            user_profile_picture: response.other_user.profile_picture_id,
-            match_id: response.match.id,
-            conversation_id: response.conversation.id,
+            id: `${conversationResponse.conversation.id}_accepted`,
+            type: 'message_accepted',
+            title: `${conversationResponse.other_user.name} accepted your message request`,
+            message: `${conversationResponse.other_user.name} accepted your message request. You can now start chatting!`,
+            timestamp: conversationResponse.conversation.accepted_at,
+            user_name: conversationResponse.other_user.name,
+            user_username: conversationResponse.other_user.username,
+            user_profile_picture: conversationResponse.other_user.profile_picture_id,
+            match_id: conversationResponse.match.id,
+            conversation_id: conversationResponse.conversation.id,
             status: 'accepted'
           });
-        } else if (response.conversation.status === 'rejected') {
+        } else if (conversationResponse.conversation.status === 'rejected') {
           notifications.push({
-            id: `${response.conversation.id}_rejected`,
-            type: response.is_initiator ? 'message_rejected' : 'message_rejected',
-            title: response.is_initiator 
-              ? `Message request rejected by ${response.other_user.name}`
-              : `You rejected ${response.other_user.name}'s message request`,
-            message: response.is_initiator
-              ? `${response.other_user.name} rejected your message request.`
-              : `You rejected the message request from ${response.other_user.name}.`,
-            timestamp: response.conversation.created_at, // Use created_at as fallback
-            user_name: response.other_user.name,
-            user_username: response.other_user.username,
-            user_profile_picture: response.other_user.profile_picture_id,
-            match_id: response.match.id,
-            conversation_id: response.conversation.id,
+            id: `${conversationResponse.conversation.id}_rejected`,
+            type: 'message_rejected',
+            title: `${conversationResponse.other_user.name} rejected your message request`,
+            message: `${conversationResponse.other_user.name} rejected your message request.`,
+            timestamp: conversationResponse.conversation.created_at,
+            user_name: conversationResponse.other_user.name,
+            user_username: conversationResponse.other_user.username,
+            user_profile_picture: conversationResponse.other_user.profile_picture_id,
+            match_id: conversationResponse.match.id,
+            conversation_id: conversationResponse.conversation.id,
             status: 'rejected'
           });
         }
-
-        setNotifications(notifications);
-      } else {
-        setNotifications([]);
       }
+
+      // 3. For RECEIVER: Show message request notification (if requested) or rejected notification (if rejected)
+      if (receivedConversationsResponse.status === 'success' && receivedConversationsResponse.conversations) {
+        receivedConversationsResponse.conversations.forEach((conv: any) => {
+          if (conv.conversation.status === 'requested') {
+            // Show message request notification with accept/reject actions
+            const notification: NotificationItem = {
+              id: conv.conversation.id,
+              type: 'message_request_received',
+              title: `Message request from ${conv.other_user.name}`,
+              message: `${conv.other_user.name} wants to start a conversation with you!`,
+              timestamp: conv.conversation.created_at,
+              user_name: conv.other_user.name,
+              user_username: conv.other_user.username, // <-- FIXED: Added comma here
+              user_profile_picture: conv.other_user.profile_picture_id,
+              match_id: conv.match.id,
+              conversation_id: conv.conversation.id,
+              status: conv.conversation.status
+            };
+
+            // Only show notification if status is 'requested' or 'rejected'
+            if (conv.conversation.status === 'requested') {
+              notifications.push(notification);
+            } else if (conv.conversation.status === 'rejected') {
+              notifications.push({
+                id: `${conv.conversation.id}_rejected`,
+                type: 'message_rejected',
+                title: `You rejected ${conv.other_user.name}'s message request`,
+                message: `You rejected the message request from ${conv.other_user.name}.`,
+                timestamp: conv.conversation.created_at,
+                user_name: conv.other_user.name,
+                user_username: conv.other_user.username,
+                user_profile_picture: conv.other_user.profile_picture_id,
+                match_id: conv.match.id,
+                conversation_id: conv.conversation.id,
+                status: 'rejected'
+              });
+            }
+          }
+        });
+      }
+
+      setNotifications(notifications);
     } catch (error: any) {
       console.error('Failed to fetch notifications:', error);
       setNotifications([]);
@@ -319,20 +381,52 @@ export const InboxPage = () => {
 
   // Filters notifications based on the current search query.
   const filteredNotifications = notifications.filter(notification => {
-    const matchesSearch = notification.user_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         notification.user_username.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!searchQuery.trim()) return true; // Show all if no search query
+    
+    const matchesSearch = (notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         notification.user_username?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                         notification.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         notification.message?.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesSearch;
   });
 
   // Handles clicking on a notification, opening the corresponding conversation.
-  const handleNotificationClick = (notification: NotificationItem) => {
-    if (notification.match_id && notification.conversation_id) {
-      const conversation = conversations.find(conv => conv.match.id === notification.match_id);
-      if (conversation) {
-        setSelectedConversation(conversation);
-        setShowConversationDialog(true);
+  const handleNotificationClick = async (notification: NotificationItem) => {
+    // Only allow clicking on notifications that have conversation data and are not rejected
+    if (notification.match_id && notification.conversation_id && notification.status !== 'rejected') {
+      console.log('🔔 Notification clicked:', {
+        match_id: notification.match_id,
+        notification_status: notification.status
+      });
+      
+      // ALWAYS fetch fresh data from API to get Supabase credentials
+      // The local array doesn't have Supabase tokens
+      try {
+        console.log('📡 Fetching conversation from API...');
+        const response = await getConversationByMatch(notification.match_id);
+        console.log('📡 API Response:', response);
+        
+        if (response.status === 'success') {
+          const conversation = response as ConversationData;
+          console.log('✅ Conversation fetched:', {
+            has_supabase_token: !!conversation.supabase_token,
+            has_anon_key: !!conversation.supabase_anon_key,
+            has_conversation_id: !!conversation.conversation_id_supabase,
+            has_supabase_url: !!conversation.supabase_url,
+            status: conversation.conversation.status
+          });
+          
+          setSelectedConversation(conversation);
+          setShowConversationDialog(true);
+        } else {
+          toast.error('Failed to load conversation');
+        }
+      } catch (error) {
+        console.error('❌ Failed to fetch conversation:', error);
+        toast.error('Failed to load conversation');
       }
     }
+    // System notifications and rejected conversations are not clickable
   };
 
   // Switches the view to the messages list.
@@ -341,9 +435,30 @@ export const InboxPage = () => {
   };
 
   // Opens the conversation dialog for a selected conversation.
-  const handleOpenConversation = (conversation: ConversationData) => {
-    setSelectedConversation(conversation);
-    setShowConversationDialog(true);
+  const handleOpenConversation = async (conversation: ConversationData) => {
+    // Always fetch fresh data to get Supabase credentials
+    try {
+      console.log('📡 Fetching conversation from API for match:', conversation.match.id);
+      const response = await getConversationByMatch(conversation.match.id);
+      
+      if (response.status === 'success') {
+        const freshConversation = response as ConversationData;
+        console.log('✅ Fresh conversation fetched:', {
+          has_supabase_token: !!freshConversation.supabase_token,
+          has_anon_key: !!freshConversation.supabase_anon_key,
+          has_conversation_id: !!freshConversation.conversation_id_supabase,
+          status: freshConversation.conversation.status
+        });
+        
+        setSelectedConversation(freshConversation);
+        setShowConversationDialog(true);
+      } else {
+        toast.error('Failed to load conversation');
+      }
+    } catch (error) {
+      console.error('❌ Failed to fetch conversation:', error);
+      toast.error('Failed to load conversation');
+    }
   };
 
   // Refreshes all data on the page.
@@ -391,14 +506,11 @@ export const InboxPage = () => {
                 </Button>
               )}
               <h1 className="text-5xl font-dancing text-pink-600 dark:text-pink-400">
-                {currentView === 'notifications' ? 'Inbox 💌' : 'Messages 💬'}
+                Notifications 💌
               </h1>
             </div>
             <p className="text-xl text-muted-foreground">
-              {currentView === 'notifications' 
-                ? 'Manage your notifications and message requests' 
-                : 'Your conversations and messages'
-              }
+              Manage your notifications and message requests
             </p>
           </div>
                      <div className="flex items-center space-x-2">
@@ -484,7 +596,9 @@ export const InboxPage = () => {
                 .map((notification) => (
                 <Card 
                   key={notification.id} 
-                  className="hover:shadow-lg transition-shadow duration-200 cursor-pointer"
+                  className={`hover:shadow-lg transition-shadow duration-200 ${
+                    notification.match_id && notification.conversation_id && notification.status !== 'rejected' ? 'cursor-pointer' : ''
+                  }`}
                   onClick={() => handleNotificationClick(notification)}
                 >
                   <CardContent className="p-6">
@@ -495,17 +609,23 @@ export const InboxPage = () => {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex items-center space-x-3">
-                            <img
-                              src={getProfilePictureUrl(notification.user_profile_picture)}
-                              alt={notification.user_name}
-                              className="w-12 h-12 rounded-full object-cover border-2 border-pink-500"
-                            />
+                            {notification.user_profile_picture ? (
+                              <img
+                                src={getProfilePictureUrl(notification.user_profile_picture)}
+                                alt={notification.user_name || 'System'}
+                                className="w-12 h-12 rounded-full object-cover border-2 border-pink-500"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-full bg-pink-500 flex items-center justify-center border-2 border-pink-300">
+                                <Bell className="w-6 h-6 text-white" />
+                              </div>
+                            )}
                             <div>
                               <h3 className="text-lg font-semibold text-foreground">
                                 {notification.title}
                               </h3>
                               <p className="text-sm text-muted-foreground">
-                                @{notification.user_username}
+                                {notification.user_username ? `@${notification.user_username}` : 'System Notification'}
                               </p>
                             </div>
                           </div>
@@ -518,35 +638,71 @@ export const InboxPage = () => {
                           {notification.message}
                         </p>
                         
-                                                 <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between">
                            <div className="flex items-center space-x-2">
                              {notification.status && (
                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                  notification.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                 notification.status === 'requested' ? 'bg-yellow-100 text-yellow-800' :
                                  notification.status === 'accepted' ? 'bg-green-100 text-green-800' :
                                  'bg-red-100 text-red-800'
                                }`}>
                                  {notification.status === 'pending' ? 'Pending' :
+                                  notification.status === 'requested' ? 'Pending' :
                                   notification.status === 'accepted' ? 'Accepted' : 'Rejected'}
                                </span>
                              )}
                            </div>
                            <div className="flex items-center space-x-2">
-                             <Button 
-                               variant="outline" 
-                               size="sm" 
-                               onClick={(e) => {
-                                 e.stopPropagation();
-                                 handleViewMessages();
-                               }}
-                               className="text-xs"
-                             >
-                               View Messages
-                             </Button>
-                             <div className="flex items-center text-pink-600 dark:text-pink-400">
-                               <span>View details</span>
-                               <ArrowRight className="w-4 h-4 ml-1" />
-                             </div>
+                             {/* Show Accept/Reject buttons for message_request_received with requested status */}
+                             {notification.type === 'message_request_received' && notification.status === 'requested' && notification.match_id ? (
+                               <>
+                                 <Button 
+                                   variant="default" 
+                                   size="sm" 
+                                   onClick={async (e) => {
+                                     e.stopPropagation();
+                                     try {
+                                       await acceptConversation(notification.match_id!);
+                                       toast.success('Conversation accepted!');
+                                       fetchData();
+                                     } catch (error: any) {
+                                       toast.error('Failed to accept conversation');
+                                     }
+                                   }}
+                                   className="text-xs bg-green-600 hover:bg-green-700"
+                                 >
+                                   <UserCheck className="w-3 h-3 mr-1" />
+                                   Accept
+                                 </Button>
+                                 <Button 
+                                   variant="outline" 
+                                   size="sm" 
+                                   onClick={async (e) => {
+                                     e.stopPropagation();
+                                     try {
+                                       await rejectConversation(notification.match_id!);
+                                       toast.success('Conversation rejected');
+                                       fetchData();
+                                     } catch (error: any) {
+                                       toast.error('Failed to reject conversation');
+                                     }
+                                   }}
+                                   className="text-xs"
+                                 >
+                                   <UserX className="w-3 h-3 mr-1" />
+                                   Reject
+                                 </Button>
+                               </>
+                             ) : notification.status === 'rejected' ? (
+                               <div className="text-xs text-red-600">
+                                 Conversation rejected
+                               </div>
+                             ) : (
+                               <div className="text-xs text-muted-foreground">
+                                 System notification
+                               </div>
+                             )}
                            </div>
                          </div>
                       </div>
@@ -674,6 +830,7 @@ export const InboxPage = () => {
       {/* Conversation Dialog */}
       {showConversationDialog && selectedConversation && (
         <ConversationDialog
+          conversationData={selectedConversation}
           onClose={() => setShowConversationDialog(false)}
           onRefresh={handleRefreshData}
           onConversationAccepted={handleConversationAccepted}

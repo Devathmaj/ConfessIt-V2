@@ -24,7 +24,7 @@ let currentConversationId: string | null = null;
  * Initialize or reinitialize the Supabase client with a new token
  */
 export const initSupabaseClient = async (config: SupabaseClientConfig): Promise<SupabaseClient> => {
-  const { supabaseUrl, supabaseAnonKey, conversationId } = config;
+  const { supabaseUrl, supabaseAnonKey, supabaseToken, conversationId } = config;
 
   // If we already have a client for the same conversation, return it
   if (supabaseClient && currentConversationId === conversationId) {
@@ -37,9 +37,7 @@ export const initSupabaseClient = async (config: SupabaseClientConfig): Promise<
   }
 
   // Create new client with the anon key
-  // NOTE: We're using anon key instead of custom JWT because Supabase RLS
-  // doesn't work with custom JWT tokens passed via headers.
-  // Security is enforced by backend validation before issuing tokens.
+  // Security is enforced by backend validation before issuing credentials
   supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
       autoRefreshToken: false,

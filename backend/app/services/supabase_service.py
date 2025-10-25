@@ -15,6 +15,7 @@ class SupabaseService:
     
     def __init__(self):
         self.supabase_url = settings.SUPABASE_URL
+        self.anon_key = settings.SUPABASE_ANON_KEY  # Public anon key
         self.service_role_key = settings.SUPABASE_SERVICE_ROLE_KEY  # For API access
         self.jwt_secret = settings.SUPABASE_JWT_SECRET  # For signing tokens
         self._client: Optional[Client] = None

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Heart, User, Menu, X, MessageSquareText, Shuffle, Mail, Gamepad2, Inbox } from 'lucide-react';
+import { Heart, User, Menu, X, MessageSquareText, Shuffle, Mail, Gamepad2, Bell, MessageCircle } from 'lucide-react';
 // This component is referenced in your ProfilePage.tsx, so we assume it exists here.
 import { ModeToggle } from '@/components/ui/ModeToggle';
 
@@ -17,7 +17,8 @@ export const Navigation = () => {
   const navLinks = [
     { to: "/confessions", text: "Confessions", icon: MessageSquareText },
     { to: "/matchmaking", text: "Matchmaking", icon: Shuffle },
-    { to: "/inbox", text: "Inbox", icon: Inbox },
+    { to: "/notifications", text: "Notifications", icon: Bell },
+    { to: "/inbox", text: "Message Box", icon: MessageCircle },
     { to: "/love-notes", text: "Love Notes", icon: Mail },
     { to: "/mini-games", text: "Mini Games", icon: Gamepad2 },
   ];

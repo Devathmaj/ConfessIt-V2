@@ -13,7 +13,9 @@ from ..services.conversation_service import (
     accept_conversation_service,
     reject_conversation_service,
     get_current_conversation_service,
-    get_supabase_token_service
+    get_supabase_token_service,
+    get_received_conversations_service,
+    get_conversation_by_match_service
 )
 
 router = APIRouter(
@@ -85,3 +87,25 @@ def get_current_conversation(
     Used to get the current active conversation for the authenticated user.
     """
     return get_current_conversation_service(current_user, db)
+
+@router.get("/received")
+def get_received_conversations(
+    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    db: Database = Depends(get_db)
+):
+    """
+    Used to get conversations where the current user is the receiver.
+    """
+    return get_received_conversations_service(current_user, db)
+
+@router.get("/{match_id}")
+def get_conversation_by_match(
+    match_id: str,
+    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    db: Database = Depends(get_db)
+):
+    """
+    Used to get a specific conversation by match_id.
+    Works for both initiators and receivers.
+    """
+    return get_conversation_by_match_service(current_user, match_id, db)
