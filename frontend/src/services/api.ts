@@ -184,6 +184,20 @@ export const getCurrentConversation = async () => {
     return response.data;
 };
 
+export const getReceivedConversations = async () => {
+    const response = await axios.get(`${API_URL}/conversations/received`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const getConversationByMatch = async (matchId: string) => {
+    const response = await axios.get(`${API_URL}/conversations/${matchId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 export const getConversationMessages = async (matchId: string) => {
     const response = await axios.get(`${API_URL}/conversations/${matchId}/messages`, {
         headers: getAuthHeaders(),
@@ -216,3 +230,10 @@ export const sendLoveNote = async (noteData: {
     const response = await axios.post(`${API_URL}/love-notes/send`, noteData, { headers: getAuthHeaders() });
     return response.data;
 }
+
+// --- Profile Endpoints ---
+
+export const getNotifications = async () => {
+    const response = await axios.get(`${API_URL}/notifications`, { headers: getAuthHeaders() });
+    return response.data;
+};;

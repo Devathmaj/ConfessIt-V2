@@ -22,60 +22,38 @@ MATCH_EXPIRY_HOURS = 4
 
 def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     """
-    Used to check if the user is eligible for matchmaking based on the cooldown period,
-    or if they have an active match.
+    Used to check if the user is eligible for matchmaking based on the cooldown period.
+    The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
+    Conversation status is handled by the inbox.
     """
-    # Check for an active match first
     current_time = datetime.now(timezone.utc)
 
-    # First, check for active match with proper expiry check
-    active_match = db.matches.find_one({
-        "$or": [{"user_1_regno": current_user.Regno}, {"user_2_regno": current_user.Regno}],
-        "expires_at": {"$gt": current_time}
-    })
-
-    if not active_match:
-        # If no active match, check cooldown
-        if current_user.last_matchmaking_time:
-            cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
-            
-            # Ensure last_matchmaking_time is timezone-aware
-            last_matchmaking_time = current_user.last_matchmaking_time
-            if last_matchmaking_time.tzinfo is None:
-                last_matchmaking_time = last_matchmaking_time.replace(tzinfo=timezone.utc)
-            
-            time_since_last_match = current_time - last_matchmaking_time
-            
-            if time_since_last_match < cooldown_period:
-                remaining_time = cooldown_period - time_since_last_match
-                hours, remainder = divmod(remaining_time.total_seconds(), 3600)
-                minutes, _ = divmod(remainder, 60)
-                
-                return {
-                    "status": "cooldown",
-                    "message": f"You are on a cooldown. Please try again in {int(hours)} hours and {int(minutes)} minutes.",
-                    "remaining_hours": int(hours),
-                    "remaining_minutes": int(minutes)
-                }
+    # Check if user has matchmaking time within cooldown period
+    if current_user.last_matchmaking_time:
+        cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
         
-        return {"status": "eligible", "message": "You are eligible for matchmaking. Proceed?"}
-
-    # If there is an active match, return its details
-    match_data = Match(**active_match)
-    other_user_regno = match_data.user_1_regno if match_data.user_2_regno == current_user.Regno else match_data.user_2_regno
+        # Ensure last_matchmaking_time is timezone-aware
+        last_matchmaking_time = current_user.last_matchmaking_time
+        if last_matchmaking_time.tzinfo is None:
+            last_matchmaking_time = last_matchmaking_time.replace(tzinfo=timezone.utc)
+        
+        time_since_last_matchmaking = current_time - last_matchmaking_time
+        
+        if time_since_last_matchmaking < cooldown_period:
+            # Within cooldown period - show cooldown
+            remaining_time = cooldown_period - time_since_last_matchmaking
+            hours, remainder = divmod(remaining_time.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            
+            return {
+                "status": "cooldown",
+                "message": f"You are on a cooldown. Please try again in {int(hours)} hours and {int(minutes)} minutes.",
+                "remaining_hours": int(hours),
+                "remaining_minutes": int(minutes)
+            }
     
-    other_user_details = db.UserDetails.find_one({"Regno": other_user_regno})
-    if not other_user_details:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Matched user not found.")
-
-    enriched_other = storage_service.with_profile_signed_url(other_user_details) if other_user_details else None
-
-    return {
-        "status": "matched",
-        "matched_with": UserDetails(**(enriched_other or other_user_details)),
-        "match_id": str(match_data.id),
-        "expires_at": match_data.expires_at.isoformat()
-    }
+    # No last_matchmaking_time or past cooldown period - eligible for matchmaking
+    return {"status": "eligible", "message": "You are eligible for matchmaking. Proceed?"}
 
 
 def find_match_service(current_user: UserDetails, db: Database) -> dict:
@@ -149,18 +127,56 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     match_result = db.matches.insert_one(new_match.dict(by_alias=True))
     
     # Update timestamps for both users
-    db["UserDetails"].update_many(
-        {"Regno": {"$in": [current_user.Regno, matched_user.Regno]}},
+    db["UserDetails"].update_one(
+        {"Regno": current_user.Regno},
         {"$set": {"last_matchmaking_time": now}}
     )
 
-    # Automatically create a pending conversation request
+    # Create notification for the matched user
+    from ..services.notification_service import create_notification_service
+    human_readable_time = now.strftime("%B %d, %Y at %I:%M %p")
+    create_notification_service(
+        user_id=matched_user.Regno,
+        heading="You appeared in matchmaking",
+        body=f"You were matched with {current_user.Name} at {human_readable_time}",
+        db=db
+    )
+
+    # Automatically create a pending conversation (NOT requested yet - no notification)
+    # The conversation will be updated to 'requested' when initiator clicks "Send Message Request"
     try:
         match_id_str = str(match_result.inserted_id)
-        request_conversation_service(current_user=current_user, match_id_str=match_id_str, db=db)
-        logger.info(f"Automatically created a pending conversation for match {match_id_str}")
+        match_id = match_result.inserted_id
+        
+        # Import moved here to avoid circular dependency issues
+        from ..models import Conversation
+        
+        new_conversation = Conversation(
+            matchId=match_id,
+            initiatorId=current_user.Regno,
+            receiverId=matched_user.Regno,
+            status="pending"  # Not yet requested
+        )
+        
+        conversation_result = db.conversations.insert_one(new_conversation.dict(by_alias=True))
+        
+        # Sync to Supabase
+        from ..services.supabase_service import supabase_service
+        supabase_conversation_id = supabase_service.sync_conversation_to_supabase(
+            mongo_conversation_id=str(conversation_result.inserted_id),
+            match_id=match_id_str,
+            initiator_id=current_user.Regno,
+            receiver_id=matched_user.Regno,
+            status="pending",
+            created_at=new_conversation.createdAt
+        )
+        
+        if not supabase_conversation_id:
+            logger.warning(f"Failed to sync conversation to Supabase for match {match_id_str}")
+        
+        logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
     except Exception as e:
-        # Log the error but don't fail the matchmaking process.
+        # Log the error but don't fail the matchmaking process
         logger.error(f"Failed to automatically create a pending conversation for match {match_id_str}: {e}")
 
     # Return match details immediately with full user information

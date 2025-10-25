@@ -237,7 +237,8 @@ class Conversation(BaseModel):
     matchId: ObjectId
     initiatorId: str
     receiverId: str
-    status: str = "pending"  # Can be 'pending', 'accepted', 'rejected'
+    status: str = "pending"  # Can be 'pending' (not requested yet), 'requested' (waiting for response), 'accepted', 'rejected'
+    requestedAt: Optional[datetime] = None  # When initiator clicked "Send Message Request"
     acceptedAt: Optional[datetime] = None
     createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -267,6 +268,29 @@ class ConversationCreate(BaseModel):
     Model for creating a conversation request.
     """
     matchId: str
+
+
+class NotificationContent(BaseModel):
+    """
+    Structure for notification content.
+    """
+    heading: str
+    body: str
+
+class Notification(BaseModel):
+    """
+    Represents a notification for a user.
+    """
+    id: ObjectId = Field(default_factory=ObjectId, alias="_id")
+    user_id: str
+    content: NotificationContent
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    read: bool = False
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
 
 
 # Update forward references to allow nested Pydantic models
