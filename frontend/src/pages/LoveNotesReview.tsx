@@ -5,6 +5,19 @@ import { Badge } from '@/components/ui/badge';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { toast } from 'sonner';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
+import {
   getAdminLoveNotes,
   updateAdminLoveNoteStatus,
   deleteAdminLoveNote,
@@ -57,6 +70,7 @@ export const LoveNotesReview = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | AdminLoveNote['status']>('all');
 
   useEffect(() => {
     const fetchNotes = async () => {
@@ -102,6 +116,13 @@ export const LoveNotesReview = () => {
     () => notes.filter((note) => note.status === 'pending_review').length,
     [notes]
   );
+
+  const filteredNotes = useMemo(() => {
+    if (statusFilter === 'all') {
+      return notes;
+    }
+    return notes.filter((note) => note.status === statusFilter);
+  }, [notes, statusFilter]);
 
   const handleStatusChange = async (noteId: string, status: AdminLoveNote['status']) => {
     try {
@@ -172,36 +193,63 @@ export const LoveNotesReview = () => {
           </p>
         </header>
 
-        <div className="space-y-6">
-          {loading ? (
-            <Card>
-              <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                Loading love notes for review...
-              </CardContent>
-            </Card>
-          ) : notes.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                There are no love notes to review right now.
-              </CardContent>
-            </Card>
-          ) : (
-            notes.map((note) => {
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="uppercase tracking-wide">Filter</span>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="pending_review">Pending</SelectItem>
+                <SelectItem value="approved">Approved</SelectItem>
+                <SelectItem value="rejected">Rejected</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Badge variant="secondary">
+            Showing {filteredNotes.length} of {notes.length}
+          </Badge>
+        </div>
+
+        {loading ? (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              Loading love notes for review...
+            </CardContent>
+          </Card>
+        ) : filteredNotes.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              No love notes in this state.
+            </CardContent>
+          </Card>
+        ) : (
+          <Accordion type="single" collapsible className="space-y-3">
+            {filteredNotes.map((note) => {
               const currentStatus = statusConfig[note.status];
+              const previewText = note.message_text.length > 90
+                ? `${note.message_text.slice(0, 90)}...`
+                : note.message_text;
               return (
-                <Card key={note.id} className="border border-border">
-                  <CardHeader>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <CardTitle className="text-lg">Love note</CardTitle>
-                        <CardDescription>
-                          Created {formatTimestamp(note.created_at)} · {note.is_anonymous ? 'Anonymous to recipient' : 'Sender visible to recipient'}
-                        </CardDescription>
-                      </div>
-                      <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
+                <AccordionItem
+                  key={note.id}
+                  value={note.id}
+                  className="overflow-hidden rounded-2xl border border-border bg-muted/20"
+                >
+                  <AccordionTrigger className="flex w-full flex-wrap items-start justify-between gap-3 px-4 py-3 text-left">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm font-semibold">
+                        To {note.recipient.name ?? note.recipient.regno ?? 'Unknown recipient'}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Created {formatTimestamp(note.created_at)} · {previewText || 'No message body provided.'}
+                      </span>
                     </div>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
+                    <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-5 bg-background/40 px-4 pb-5 pt-2">
                     <div className="grid gap-4 md:grid-cols-2">
                       {renderPerson(note.sender, 'Sender details')}
                       {renderPerson(note.recipient, 'Recipient details')}
@@ -228,8 +276,15 @@ export const LoveNotesReview = () => {
                       <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.message_text}</p>
                     </div>
 
-                    <div className="rounded-2xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
-                      <p>Delivered at: {formatTimestamp(note.read_at)}</p>
+                    <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                      <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                        <p className="font-medium text-foreground/80">Visibility</p>
+                        <p>{note.is_anonymous ? 'Anonymous to recipient' : 'Sender details revealed to recipient'}</p>
+                      </div>
+                      <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                        <p className="font-medium text-foreground/80">Read status</p>
+                        <p>Delivered at: {formatTimestamp(note.read_at)}</p>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -266,12 +321,12 @@ export const LoveNotesReview = () => {
                         <Trash2 className="mr-2 h-4 w-4" /> Delete note
                       </Button>
                     </div>
-                  </CardContent>
-                </Card>
+                  </AccordionContent>
+                </AccordionItem>
               );
-            })
-          )}
-        </div>
+            })}
+          </Accordion>
+        )}
       </div>
 
       <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>

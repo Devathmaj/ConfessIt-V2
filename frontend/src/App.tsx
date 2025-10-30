@@ -22,6 +22,7 @@ import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { MatchmakingReview } from "./pages/MatchmakingReview";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ProfileReview } from "./pages/ProfileReview";
+import ChatMonitor from "./pages/ChatMonitor";
 
 const queryClient = new QueryClient();
 
@@ -136,6 +137,14 @@ const AppRoutes = () => {
         element={
           <AdminRoute>
             <MatchmakingReview />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/conversations"
+        element={
+          <AdminRoute>
+            <ChatMonitor />
           </AdminRoute>
         }
       />

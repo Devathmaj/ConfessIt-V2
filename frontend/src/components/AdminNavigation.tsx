@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X } from "lucide-react";
+import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, MessageSquare } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 
 interface NavItem {
@@ -15,6 +15,7 @@ const navItems: NavItem[] = [
   { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion },
   { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart },
   { to: "/admin/matchmaking", label: "Matchmaking Review", icon: Heart },
+  { to: "/admin/conversations", label: "Chat Monitor", icon: MessageSquare },
   { to: "/admin/profile-review", label: "Profile Review", icon: UsersRound },
 ];
 

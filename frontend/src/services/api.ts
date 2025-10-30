@@ -326,6 +326,28 @@ export const updateAdminUser = async (userId: string, payload: Record<string, un
     return response.data;
 };
 
+export const getAdminConversations = async () => {
+    const response = await axios.get(`${API_URL}/admin/conversations`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const getAdminConversationDetail = async (conversationId: string) => {
+    const response = await axios.get(`${API_URL}/admin/conversations/${conversationId}`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const terminateAdminConversation = async (
+    conversationId: string,
+    payload: { reason?: string } = {}
+) => {
+    const response = await axios.post(
+        `${API_URL}/admin/conversations/${conversationId}/terminate`,
+        payload,
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export const getAdminMatchmaking = async () => {
     const response = await axios.get(`${API_URL}/admin/matchmaking`, { headers: getAuthHeaders() });
     return response.data;

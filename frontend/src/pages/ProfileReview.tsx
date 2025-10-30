@@ -400,7 +400,7 @@ export const ProfileReview = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="max-h-[70vh]">
+            <ScrollArea className="h-[70vh]">
               <div className="divide-y divide-border">
                 {loading ? (
                   <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">

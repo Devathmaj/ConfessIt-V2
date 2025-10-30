@@ -3,7 +3,7 @@
 import logging
 import jwt
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
 from ..config import settings
 
@@ -267,6 +267,74 @@ class SupabaseService:
                 
         except Exception as e:
             logger.error(f"Error unblocking conversation in Supabase: {e}")
+            return False
+
+    def get_messages_for_conversation(
+        self,
+        conversation_id: str,
+        limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """Fetch messages for a conversation using the service role credentials."""
+        try:
+            result = (
+                self.client
+                .table("messages")
+                .select("*")
+                .eq("conversation_id", conversation_id)
+                .order("created_at", desc=False)
+                .limit(limit)
+                .execute()
+            )
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Error fetching messages from Supabase for conversation {conversation_id}: {e}")
+            return []
+
+    def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent message for a conversation if one exists."""
+        try:
+            result = (
+                self.client
+                .table("messages")
+                .select("*")
+                .eq("conversation_id", conversation_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching latest message for conversation {conversation_id}: {e}")
+            return None
+
+    def terminate_conversation(
+        self,
+        match_id: str,
+        reason: Optional[str] = None
+    ) -> bool:
+        """Mark a conversation as terminated and blocked in Supabase."""
+        try:
+            update_data: Dict[str, Any] = {
+                "status": "terminated",
+                "is_blocked": True,
+                "blocked_by": "admin",
+                "blocked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if reason:
+                update_data["termination_reason"] = reason
+
+            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+
+            if result.data:
+                logger.info(f"Terminated conversation for match {match_id}")
+                return True
+
+            logger.warning(f"No Supabase conversation found to terminate for match {match_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Error terminating conversation {match_id} in Supabase: {e}")
             return False
 
 

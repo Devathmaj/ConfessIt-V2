@@ -5,10 +5,12 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pymongo.database import Database
+from pydantic import BaseModel
 
 from ..dependencies import get_db
 from ..models import AdminUserCreate, AdminUserUpdate, UserDetails
 from ..services.auth_service import get_current_user
+from ..services.supabase_service import supabase_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -65,6 +67,20 @@ def _normalize_conversation_status(value: Optional[str]) -> str:
     if value == "rejected":
         return "rejected"
     return "pending"
+
+
+def _serialize_user_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any]:
+    if not regno:
+        return {"Regno": None}
+
+    doc = db["UserDetails"].find_one({"Regno": regno})
+    if doc:
+        return _serialize_user_doc(doc)
+    return {"Regno": regno, "Name": None, "email": None, "user_role": None}
+
+
+class ConversationTerminateRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 @router.get("/confessions", response_model=List[Dict[str, Any]])
@@ -406,6 +422,181 @@ async def update_user_details(
 
     updated_doc = db["UserDetails"].find_one({"_id": ObjectId(user_id)})
     return _serialize_user_doc(updated_doc)
+
+
+@router.get("/conversations", response_model=List[Dict[str, Any]])
+async def list_conversations(
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> List[Dict[str, Any]]:
+    """Return every conversation with participant and latest message metadata."""
+    conversations_collection = db["conversations"]
+    matches_collection = db["matches"]
+
+    conversation_docs = list(conversations_collection.find().sort("createdAt", -1))
+
+    match_ids: List[ObjectId] = []
+    for doc in conversation_docs:
+        match_id = doc.get("matchId")
+        if isinstance(match_id, ObjectId):
+            match_ids.append(match_id)
+
+    match_map: Dict[str, Dict[str, Any]] = {}
+    if match_ids:
+        unique_match_ids = list({match_id for match_id in match_ids})
+        match_docs = matches_collection.find({"_id": {"$in": unique_match_ids}})
+        match_map = {str(item["_id"]): item for item in match_docs}
+
+    results: List[Dict[str, Any]] = []
+    for doc in conversation_docs:
+        conversation_id = str(doc.get("_id"))
+        match_id = doc.get("matchId")
+        match_doc = match_map.get(str(match_id)) if isinstance(match_id, ObjectId) else None
+
+        supabase_info = None
+        supabase_conversation_id: Optional[str] = None
+        if isinstance(match_id, ObjectId):
+            supabase_info = supabase_service.get_conversation_by_match_id(str(match_id))
+            supabase_conversation_id = supabase_info.get("id") if supabase_info else None
+
+        latest_message = None
+        if supabase_conversation_id:
+            message = supabase_service.get_latest_message_for_conversation(supabase_conversation_id)
+            if message:
+                latest_message = {
+                    "id": message.get("id"),
+                    "sender_id": message.get("sender_id") or message.get("senderId"),
+                    "text": message.get("text") or message.get("content") or message.get("message"),
+                    "created_at": message.get("created_at") or message.get("createdAt"),
+                }
+
+        results.append(
+            {
+                "id": conversation_id,
+                "status": doc.get("status"),
+                "created_at": _serialize_datetime(doc.get("createdAt")),
+                "requested_at": _serialize_datetime(doc.get("requestedAt")),
+                "accepted_at": _serialize_datetime(doc.get("acceptedAt")),
+                "terminated_at": _serialize_datetime(doc.get("terminatedAt")),
+                "initiator": _serialize_user_by_regno(db, doc.get("initiatorId")),
+                "receiver": _serialize_user_by_regno(db, doc.get("receiverId")),
+                "match": None
+                if not match_doc
+                else {
+                    "id": str(match_doc.get("_id")),
+                    "user_1_regno": match_doc.get("user_1_regno"),
+                    "user_2_regno": match_doc.get("user_2_regno"),
+                    "created_at": _serialize_datetime(match_doc.get("created_at")),
+                    "expires_at": _serialize_datetime(match_doc.get("expires_at")),
+                },
+                "supabase_conversation_id": supabase_conversation_id,
+                "latest_message": latest_message,
+                "is_blocked": supabase_info.get("is_blocked") if supabase_info else False,
+                "blocked_by": supabase_info.get("blocked_by") if supabase_info else None,
+            }
+        )
+
+    return results
+
+
+@router.get("/conversations/{conversation_id}", response_model=Dict[str, Any])
+async def get_conversation_detail(
+    conversation_id: str,
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """Return a single conversation with full participant info and message transcript."""
+    if not ObjectId.is_valid(conversation_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
+
+    conversation_doc = db["conversations"].find_one({"_id": ObjectId(conversation_id)})
+    if not conversation_doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    match_id = conversation_doc.get("matchId")
+    match_doc = None
+    if isinstance(match_id, ObjectId):
+        match_doc = db["matches"].find_one({"_id": match_id})
+
+    supabase_info = None
+    supabase_conversation_id: Optional[str] = None
+    if isinstance(match_id, ObjectId):
+        supabase_info = supabase_service.get_conversation_by_match_id(str(match_id))
+        supabase_conversation_id = supabase_info.get("id") if supabase_info else None
+
+    messages: List[Dict[str, Any]] = []
+    if supabase_conversation_id:
+        raw_messages = supabase_service.get_messages_for_conversation(supabase_conversation_id)
+        for message in raw_messages:
+            messages.append(
+                {
+                    "id": message.get("id"),
+                    "sender_id": message.get("sender_id") or message.get("senderId"),
+                    "text": message.get("text") or message.get("content") or message.get("message"),
+                    "created_at": message.get("created_at") or message.get("createdAt"),
+                }
+            )
+
+    return {
+        "id": conversation_id,
+        "status": conversation_doc.get("status"),
+        "created_at": _serialize_datetime(conversation_doc.get("createdAt")),
+        "requested_at": _serialize_datetime(conversation_doc.get("requestedAt")),
+        "accepted_at": _serialize_datetime(conversation_doc.get("acceptedAt")),
+        "terminated_at": _serialize_datetime(conversation_doc.get("terminatedAt")),
+        "initiator": _serialize_user_by_regno(db, conversation_doc.get("initiatorId")),
+        "receiver": _serialize_user_by_regno(db, conversation_doc.get("receiverId")),
+        "match": None
+        if not match_doc
+        else {
+            "id": str(match_doc.get("_id")),
+            "user_1_regno": match_doc.get("user_1_regno"),
+            "user_2_regno": match_doc.get("user_2_regno"),
+            "created_at": _serialize_datetime(match_doc.get("created_at")),
+            "expires_at": _serialize_datetime(match_doc.get("expires_at")),
+        },
+        "supabase_conversation_id": supabase_conversation_id,
+        "is_blocked": supabase_info.get("is_blocked") if supabase_info else False,
+        "blocked_by": supabase_info.get("blocked_by") if supabase_info else None,
+        "messages": messages,
+    }
+
+
+@router.post("/conversations/{conversation_id}/terminate", response_model=Dict[str, Any])
+async def terminate_conversation(
+    conversation_id: str,
+    payload: ConversationTerminateRequest,
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """Terminate a conversation and block it in Supabase."""
+    if not ObjectId.is_valid(conversation_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
+
+    conversation_doc = db["conversations"].find_one({"_id": ObjectId(conversation_id)})
+    if not conversation_doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    match_id = conversation_doc.get("matchId")
+    now = datetime.now(timezone.utc)
+
+    db["conversations"].update_one(
+        {"_id": conversation_doc["_id"]},
+        {"$set": {"status": "terminated", "terminatedAt": now}}
+    )
+
+    if isinstance(match_id, ObjectId):
+        db["matches"].update_one(
+            {"_id": match_id},
+            {"$set": {"expires_at": now}}
+        )
+        supabase_service.terminate_conversation(str(match_id), payload.reason)
+
+    return {
+        "id": conversation_id,
+        "status": "terminated",
+        "terminated_at": _serialize_datetime(now),
+    }
 
 
 @router.get("/matchmaking", response_model=List[Dict[str, Any]])
