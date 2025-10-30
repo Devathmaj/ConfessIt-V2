@@ -15,7 +15,9 @@ from ..services.conversation_service import (
     get_current_conversation_service,
     get_supabase_token_service,
     get_received_conversations_service,
-    get_conversation_by_match_service
+    get_conversation_by_match_service,
+    block_conversation_service,
+    unblock_conversation_service
 )
 
 router = APIRouter(
@@ -109,3 +111,26 @@ def get_conversation_by_match(
     Works for both initiators and receivers.
     """
     return get_conversation_by_match_service(current_user, match_id, db)
+
+@router.post("/{match_id}/block", status_code=status.HTTP_200_OK)
+def block_conversation(
+    match_id: str,
+    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    db: Database = Depends(get_db)
+):
+    """
+    Used to block a conversation.
+    """
+    return block_conversation_service(current_user, match_id, db)
+
+@router.post("/{match_id}/unblock", status_code=status.HTTP_200_OK)
+def unblock_conversation(
+    match_id: str,
+    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    db: Database = Depends(get_db)
+):
+    """
+    Used to unblock a conversation.
+    Only the user who blocked can unblock.
+    """
+    return unblock_conversation_service(current_user, match_id, db)
