@@ -4,7 +4,7 @@ import asyncio
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin
 from .services.auth_service import get_current_user
 from .dependencies import get_db 
 from pymongo.database import Database
@@ -145,6 +145,7 @@ app.include_router(confessions.router)
 app.include_router(love_notes.router)
 app.include_router(conversations.router)
 app.include_router(notifications.router)
+app.include_router(admin.router)
 
 # ----------------------
 # File Serving Routes

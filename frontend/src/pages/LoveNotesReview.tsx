@@ -1,120 +1,295 @@
-
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Check, X, ArrowLeft } from 'lucide-react';
-import { toast } from 'sonner';
-import { Navigation } from '@/components/Navigation';
 import { Badge } from '@/components/ui/badge';
+import { AdminNavigation } from '@/components/AdminNavigation';
+import { toast } from 'sonner';
+import {
+  getAdminLoveNotes,
+  updateAdminLoveNoteStatus,
+  deleteAdminLoveNote,
+} from '@/services/api';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { ImageIcon, User, ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
 
-// Mock data for love notes
-const mockLoveNotes = [
-  {
-    id: '1',
-    recipient_id: 'user10',
-    message_text: 'Your smile brightens my day. Would love to get to know you better.',
-    is_anonymous: true,
-    sender_id: 'user1',
-    timestamp: new Date().toISOString(),
-    status: 'pending',
-    image_url: 'https://placehold.co/300x200/fecdd3/be123c?text=Love+Note',
-  },
-  {
-    id: '2',
-    recipient_id: 'user12',
-    message_text: 'I have admired you from afar for a long time. You seem like a wonderful person.',
-    is_anonymous: false,
-    sender_id: 'user2',
-    timestamp: new Date().toISOString(),
-    status: 'pending',
-    image_url: 'https://placehold.co/300x200/fecdd3/be123c?text=For+You',
-  },
-  {
-    id: '3',
-    recipient_id: 'user15',
-    message_text: 'Happy Valentine\'s Day!',
-    is_anonymous: true,
-    sender_id: 'user3',
-    timestamp: new Date().toISOString(),
-    status: 'approved',
-    image_url: 'https://placehold.co/300x200/fecdd3/be123c?text=Approved',
-  },
-];
+interface PersonDetails {
+  id: string | null;
+  name: string | null;
+  regno: string | null;
+  email: string | null;
+}
+
+interface AdminLoveNote {
+  id: string;
+  sender: PersonDetails;
+  recipient: PersonDetails;
+  image_url: string | null;
+  message_text: string;
+  is_anonymous: boolean;
+  status: 'approved' | 'rejected' | 'pending_review';
+  created_at: string | null;
+  read_at: string | null;
+}
+
+const formatTimestamp = (value: string | null) => {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  return date.toLocaleString();
+};
+
+const statusConfig: Record<AdminLoveNote['status'], { label: string; variant: 'default' | 'secondary' | 'destructive' }> = {
+  approved: { label: 'Approved', variant: 'default' },
+  rejected: { label: 'Rejected', variant: 'destructive' },
+  pending_review: { label: 'Pending review', variant: 'secondary' },
+};
 
 export const LoveNotesReview = () => {
-  const [loveNotes, setLoveNotes] = useState(mockLoveNotes);
+  const [notes, setNotes] = useState<AdminLoveNote[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
-  const handleApprove = (id: string) => {
-    setLoveNotes(loveNotes.map(ln => ln.id === id ? { ...ln, status: 'approved' } : ln));
-    toast.success('Love Note approved!');
+  useEffect(() => {
+    const fetchNotes = async () => {
+      try {
+        setLoading(true);
+        const response = await getAdminLoveNotes();
+        const normalized = Array.isArray(response)
+          ? response.map((item: Partial<AdminLoveNote>, index) => ({
+              id: item.id ?? `love-note-${index}`,
+              sender: {
+                id: item.sender?.id ?? null,
+                name: item.sender?.name ?? null,
+                regno: item.sender?.regno ?? null,
+                email: item.sender?.email ?? null,
+              },
+              recipient: {
+                id: item.recipient?.id ?? null,
+                name: item.recipient?.name ?? null,
+                regno: item.recipient?.regno ?? null,
+                email: item.recipient?.email ?? null,
+              },
+              image_url: item.image_url ?? null,
+              message_text: item.message_text ?? '',
+              is_anonymous: item.is_anonymous ?? false,
+              status: (item.status as AdminLoveNote['status']) ?? 'pending_review',
+              created_at: item.created_at ?? null,
+              read_at: item.read_at ?? null,
+            }))
+          : [];
+        setNotes(normalized);
+      } catch (error) {
+        console.error('Failed to load love notes', error);
+        toast.error('Unable to load love notes for review.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchNotes();
+  }, []);
+
+  const pendingCount = useMemo(
+    () => notes.filter((note) => note.status === 'pending_review').length,
+    [notes]
+  );
+
+  const handleStatusChange = async (noteId: string, status: AdminLoveNote['status']) => {
+    try {
+      await updateAdminLoveNoteStatus(noteId, status);
+      setNotes((prev) => prev.map((item) => (item.id === noteId ? { ...item, status } : item)));
+      toast.success(`Love note ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'moved to pending'}.`);
+    } catch (error) {
+      console.error('Failed to update love note', error);
+      toast.error('Unable to update this love note.');
+    }
   };
 
-  const handleReject = (id: string) => {
-    setLoveNotes(loveNotes.map(ln => ln.id === id ? { ...ln, status: 'rejected' } : ln));
-    toast.error('Love Note rejected!');
+  const askDelete = (noteId: string) => {
+    setSelectedNoteId(noteId);
+    setDialogOpen(true);
   };
+
+  const confirmDelete = async () => {
+    if (!selectedNoteId) return;
+    try {
+      await deleteAdminLoveNote(selectedNoteId);
+      setNotes((prev) => prev.filter((item) => item.id !== selectedNoteId));
+      toast.success('Love note deleted.');
+    } catch (error) {
+      console.error('Failed to delete love note', error);
+      toast.error('Unable to delete this love note.');
+    } finally {
+      setDialogOpen(false);
+      setSelectedNoteId(null);
+    }
+  };
+
+  const renderPerson = (person: PersonDetails, label: string) => (
+    <div className="rounded-2xl border border-border bg-muted/30 p-4">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <User className="h-4 w-4 text-muted-foreground" />
+        {label}
+      </div>
+      <div className="grid gap-1 text-xs sm:text-sm">
+        <p>
+          <span className="text-muted-foreground">Name:</span> {person.name ?? 'Unknown'}
+        </p>
+        <p>
+          <span className="text-muted-foreground">Reg No:</span> {person.regno ?? 'Unknown'}
+        </p>
+        <p>
+          <span className="text-muted-foreground">Email:</span> {person.email ?? 'Unknown'}
+        </p>
+        <p>
+          <span className="text-muted-foreground">User ID:</span> {person.id ?? 'Unknown'}
+        </p>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen p-4 pt-24">
-      <Navigation />
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-center gap-4 mb-6">
-          <Button variant="outline" size="sm" onClick={() => window.history.back()}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-        </div>
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-dancing text-romantic mb-4">
-            Love Notes Review
-          </h1>
-          <p className="text-xl text-muted-foreground">
-            Review and approve love notes sent between users.
+    <div className="relative min-h-screen bg-background">
+      <AdminNavigation />
+
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 pb-16 pt-28">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold">Love Notes Review</h1>
+          <p className="text-sm text-muted-foreground">
+            Moderate every love note with full sender and recipient visibility.
           </p>
-        </div>
+          <p className="text-xs text-muted-foreground/80">
+            Total notes: {notes.length} · Pending decisions: {pendingCount}
+          </p>
+        </header>
 
         <div className="space-y-6">
-          {loveNotes.map((note) => (
-            <Card key={note.id} className="confession-card">
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle className="text-lg font-dancing text-romantic">
-                      To: {note.recipient_id}
-                    </CardTitle>
-                    <CardDescription>
-                      From: {note.is_anonymous ? "🤫 Anonymous" : note.sender_id}
-                    </CardDescription>
-                  </div>
-                  <Badge variant={
-                    note.status === 'pending' ? 'secondary' :
-                    note.status === 'approved' ? 'default' :
-                    'destructive'
-                  }>
-                    {note.status}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <img src={note.image_url} alt="Love note" className="rounded-lg" />
-                <p className="text-foreground leading-relaxed">{note.message_text}</p>
-                {note.status === 'pending' && (
-                  <div className="flex items-center justify-end gap-2 pt-4 border-t border-border">
-                    <Button variant="outline" size="sm" onClick={() => handleApprove(note.id)} className="text-green-500 border-green-500 hover:bg-green-500 hover:text-white">
-                      <Check className="w-4 h-4 mr-2" />
-                      Approve
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => handleReject(note.id)} className="text-red-500 border-red-500 hover:bg-red-500 hover:text-white">
-                      <X className="w-4 h-4 mr-2" />
-                      Reject
-                    </Button>
-                  </div>
-                )}
+          {loading ? (
+            <Card>
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                Loading love notes for review...
               </CardContent>
             </Card>
-          ))}
+          ) : notes.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                There are no love notes to review right now.
+              </CardContent>
+            </Card>
+          ) : (
+            notes.map((note) => {
+              const currentStatus = statusConfig[note.status];
+              return (
+                <Card key={note.id} className="border border-border">
+                  <CardHeader>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <CardTitle className="text-lg">Love note</CardTitle>
+                        <CardDescription>
+                          Created {formatTimestamp(note.created_at)} · {note.is_anonymous ? 'Anonymous to recipient' : 'Sender visible to recipient'}
+                        </CardDescription>
+                      </div>
+                      <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {renderPerson(note.sender, 'Sender details')}
+                      {renderPerson(note.recipient, 'Recipient details')}
+                    </div>
+
+                    <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                      <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                        <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                        Attachments
+                      </div>
+                      {note.image_url ? (
+                        <img
+                          src={note.image_url}
+                          alt="Love note illustration"
+                          className="max-h-64 w-full rounded-xl object-cover"
+                        />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No image uploaded with this note.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-border bg-background/60 p-4">
+                      <p className="text-sm uppercase tracking-wide text-muted-foreground">Message</p>
+                      <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.message_text}</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+                      <p>Delivered at: {formatTimestamp(note.read_at)}</p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-muted-foreground text-muted-foreground hover:bg-muted"
+                        onClick={() => handleStatusChange(note.id, 'pending_review')}
+                      >
+                        <ShieldAlert className="mr-2 h-4 w-4" /> Mark pending
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-500 text-green-500 hover:bg-green-500 hover:text-white"
+                        onClick={() => handleStatusChange(note.id, 'approved')}
+                      >
+                        <ShieldCheck className="mr-2 h-4 w-4" /> Approve
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                        onClick={() => handleStatusChange(note.id, 'rejected')}
+                      >
+                        <ShieldAlert className="mr-2 h-4 w-4" /> Reject
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                        onClick={() => askDelete(note.id)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" /> Delete note
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
         </div>
       </div>
+
+      <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this love note?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the note permanently for both sender and recipient.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

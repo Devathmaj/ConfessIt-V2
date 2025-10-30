@@ -26,6 +26,12 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
     Conversation status is handled by the inbox.
     """
+    if current_user.user_role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot participate in matchmaking."
+        )
+
     current_time = datetime.now(timezone.utc)
 
     # Check if user has matchmaking time within cooldown period
@@ -64,6 +70,12 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     # Import moved here to break the circular dependency
     from ..services.conversation_service import request_conversation_service
 
+    if current_user.user_role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot participate in matchmaking."
+        )
+
     # Re-check cooldown status
     cooldown_check = check_matchmaking_cooldown_service(current_user, db)
     if cooldown_check["status"] not in ["eligible"]:
@@ -78,7 +90,9 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     query = {
         "Regno": {"$ne": current_user.Regno},
         "gender": {"$ne": current_user.gender},
-        "isMatchmaking": True
+        "isMatchmaking": True,
+        "user_role": {"$ne": "admin"},
+        "is_blocked": {"$ne": True}
     }
 
     # Get count of potential matches

@@ -23,10 +23,15 @@ class LoveNoteCreate(BaseModel):
 
 async def get_all_users_service(db: Database, current_user_regno: str) -> List[UserDetails]:
     """
-    Service to fetch all users, excluding the current user.
+    Service to fetch all users available as love note recipients, excluding the
+    active user and any administrator accounts.
     """
-    # Used to execute a synchronous database query
-    users_cursor = db["UserDetails"].find({"Regno": {"$ne": current_user_regno}})
+    users_cursor = db["UserDetails"].find(
+        {
+            "Regno": {"$ne": current_user_regno},
+            "user_role": {"$ne": "admin"},
+        }
+    )
     # Used to synchronously iterate over the cursor and build the list
     users: List[UserDetails] = []
     for user_doc in users_cursor:
@@ -47,6 +52,25 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     Service to create and save a new love note with 'pending_review' status.
     The base64 image is uploaded to Cloudinary and the URL is stored instead.
     """
+    recipient_doc = db["UserDetails"].find_one({"_id": ObjectId(note_data.recipient_id)})
+    if not recipient_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recipient not found."
+        )
+
+    if recipient_doc.get("user_role") == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot receive love notes."
+        )
+
+    if sender.user_role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators are not permitted to send love notes."
+        )
+
     try:
         # Upload the love note image to Cloudinary
         upload_result = storage_service.upload_love_note_image(

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -20,6 +21,7 @@ import { MagicLinkVerification } from "./services/MagicLinkVerification";
 import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { MatchmakingReview } from "./pages/MatchmakingReview";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
+import { ProfileReview } from "./pages/ProfileReview";
 
 const queryClient = new QueryClient();
 
@@ -28,7 +30,7 @@ const queryClient = new QueryClient();
  * It checks if the user is authenticated and redirects to the login page if not.
  * It also shows a loading indicator while the authentication status is being checked.
  */
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+const ProtectedRoute = ({ children }: { children: ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuth();
 
   // Used to wait for the authentication check to complete.
@@ -49,7 +51,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
  * It checks for authentication and verifies the user role is 'admin'.
  * Non-admin users are redirected to the user dashboard.
  */
-const AdminRoute = ({ children }: { children: React.ReactNode }) => {
+const AdminRoute = ({ children }: { children: ReactNode }) => {
     const { user, isAuthenticated, isLoading } = useAuth();
   
     // Used to wait for the authentication check to complete.
@@ -121,8 +123,8 @@ const AppRoutes = () => {
           </AdminRoute>
         }
       />
-       <Route
-        path="/admin/confessions-review"
+      <Route
+        path="/admin/confessions"
         element={
           <AdminRoute>
             <ConfessionsAdmin />
@@ -130,7 +132,7 @@ const AppRoutes = () => {
         }
       />
        <Route
-        path="/admin/matchmaking-review"
+        path="/admin/matchmaking"
         element={
           <AdminRoute>
             <MatchmakingReview />
@@ -138,10 +140,18 @@ const AppRoutes = () => {
         }
       />
        <Route
-        path="/admin/love-notes-review"
+        path="/admin/love-notes"
         element={
           <AdminRoute>
             <LoveNotesReview />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/profile-review"
+        element={
+          <AdminRoute>
+            <ProfileReview />
           </AdminRoute>
         }
       />
