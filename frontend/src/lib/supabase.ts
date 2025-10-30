@@ -51,6 +51,12 @@ export const initSupabaseClient = async (config: SupabaseClientConfig): Promise<
     }
   });
 
+  // Authenticate with the ephemeral token
+  await supabaseClient.auth.setSession({
+    access_token: supabaseToken,
+    refresh_token: supabaseToken  // Use same token as refresh for ephemeral
+  });
+
   currentConversationId = conversationId;
 
   return supabaseClient;

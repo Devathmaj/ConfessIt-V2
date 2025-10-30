@@ -55,13 +55,14 @@ class SupabaseService:
         
         # JWT payload with Supabase-required claims
         # The JWT must include 'iss' (issuer) matching Supabase project URL
+        project_ref = self.supabase_url.split("://")[1].split(".")[0]  # Extract project ref from URL
         payload = {
-            "iss": f"https://{self.supabase_url.split('://')[1]}",  # Issuer must match Supabase URL
-            "sub": conversation_id,  # Subject (conversation UUID)
-            "aud": "authenticated",  # Audience
-            "role": "authenticated",  # Role for RLS
+            "iss": "supabase",  # Issuer for custom JWT
+            "sub": user_id,  # Subject (user's Regno for authentication)
+            "aud": project_ref,  # Audience (project reference)
+            "role": "anon",  # Role for anonymous access with JWT
             "conversation_id": conversation_id,  # Custom claim for RLS
-            "user_regno": user_id,  # Custom claim for RLS
+            "user_regno": user_id,  # Custom claim for RLS (redundant with sub, but explicit)
             "iat": int(now.timestamp()),
             "exp": int(exp.timestamp())
         }

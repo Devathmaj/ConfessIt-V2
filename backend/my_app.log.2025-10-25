@@ -1,0 +1,697 @@
+2025-10-25 05:33:33,490 - app.main - INFO - Running initial database setup...
+2025-10-25 05:33:35,520 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc612d9435ffde2d469941, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:33:39,537 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc61319435ffde2d469942, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:33:46,270 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc61389435ffde2d469943, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:33:50,285 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc613c9435ffde2d469944, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:33:52,381 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:33:52,429 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:33:52,430 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:33:52,431 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:44:42,168 - app.main - INFO - Running initial database setup...
+2025-10-25 05:44:44,191 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc63ca27bf88d27cf55c21, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:44:48,209 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc63ce27bf88d27cf55c22, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:44:52,224 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc63d227bf88d27cf55c23, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:44:56,237 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc63d627bf88d27cf55c24, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:45:00,255 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc63da27bf88d27cf55c25, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:45:02,301 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:45:02,323 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:45:02,326 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:45:02,327 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:45:04,417 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=dmGNdzsLsviOcyFkv2xBqoO4iqR3k-l7fV4IszrgHpg
+2025-10-25 05:45:06,752 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 05:45:06,852 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 05:45:06,892 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 05:47:34,483 - app.main - INFO - Running initial database setup...
+2025-10-25 05:47:36,500 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6476446eff624a3fd24d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:47:40,514 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc647a446eff624a3fd24e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:47:44,527 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc647e446eff624a3fd24f, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:47:48,542 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6482446eff624a3fd250, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 05:47:50,582 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:47:50,601 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:47:50,603 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:47:50,603 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:48:08,633 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=rMkHSncY0UDF9hE8ajr4vCtoArwxSjhmnvvwNqapt68
+2025-10-25 05:48:10,427 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 05:48:10,485 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 05:48:10,509 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 05:48:42,686 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=wgQDx1ejLRNO3L7zG0rDU_Jg1WW9iY18lJDMJSCE1oU
+2025-10-25 05:48:52,867 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 05:48:52,985 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 05:48:53,036 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 05:53:41,861 - app.main - INFO - Running initial database setup...
+2025-10-25 05:53:41,873 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:53:41,879 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:53:41,880 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:53:41,880 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:53:44,986 - app.main - INFO - Running initial database setup...
+2025-10-25 05:53:45,001 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:53:45,008 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:53:45,010 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:53:45,011 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:53:53,897 - app.main - INFO - Running initial database setup...
+2025-10-25 05:53:53,927 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:53:53,939 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:53:53,942 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:53:53,943 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:54:42,441 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 05:54:42,471 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 05:54:42,492 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 05:54:46,492 - app.services.auth_service - INFO - Magic Link for Test User 4: http://localhost:5173/verify-login?token=-qJPF0j4GVRrM_BV0Oio1MpY_dc4Vkj4Bn789-tk_NM
+2025-10-25 05:54:51,773 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 05:54:51,896 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 05:54:51,925 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 05:59:07,948 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:07,981 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:07,994 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:07,996 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:07,997 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:14,417 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:14,442 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:14,454 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:14,456 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:14,457 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:21,931 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:21,951 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:21,965 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:21,968 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:21,969 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:26,769 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:26,791 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:26,804 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:26,806 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:26,807 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:32,791 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:32,869 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:32,880 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:32,882 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:32,883 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:36,943 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:36,966 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:36,976 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:36,979 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:36,979 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:40,767 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:40,793 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:40,805 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:40,807 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:40,808 - app.main - INFO - Initial database setup complete.
+2025-10-25 05:59:44,623 - app.main - INFO - Running initial database setup...
+2025-10-25 05:59:44,647 - app.main - INFO - Connected to MongoDB
+2025-10-25 05:59:44,658 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 05:59:44,660 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 05:59:44,661 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:03:13,323 - app.main - INFO - Running initial database setup...
+2025-10-25 06:03:15,349 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6821f6b08ef5f1f3dcfc, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:03:19,365 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6825f6b08ef5f1f3dcfd, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:03:23,381 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6829f6b08ef5f1f3dcfe, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:03:27,398 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc682df6b08ef5f1f3dcff, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:03:31,416 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6831f6b08ef5f1f3dd00, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:03:33,450 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:03:33,468 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:03:33,470 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:03:33,471 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:03:38,936 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=FSHqzzkde4ZC1iGw1dCkC6oM3EVjB4b69GVJaT_2Bz0
+2025-10-25 06:03:43,724 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:03:43,804 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:03:43,837 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:04:32,062 - app.main - INFO - Running initial database setup...
+2025-10-25 06:04:32,087 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:04:32,101 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:04:32,105 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:04:32,107 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:04:48,314 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=I8kIID2yW4TZ7ChrmCcxRrIDHg6_KTGN2Vb0hfpxrgY
+2025-10-25 06:04:53,281 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:04:53,433 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:04:53,475 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:06:13,014 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=X6or-x75yLRw-qo9ycfMnnhbs2V6RdpxPEFN5NfRLBw
+2025-10-25 06:06:21,287 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:06:21,400 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:06:21,443 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:11:14,266 - app.main - INFO - Running initial database setup...
+2025-10-25 06:11:16,280 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6a02ed7b0f06da40a104, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:11:23,165 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6a07ed7b0f06da40a105, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:11:27,177 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6a0ded7b0f06da40a106, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:11:31,191 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6a11ed7b0f06da40a107, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:11:33,226 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:11:33,243 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:11:33,245 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:11:33,245 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:11:38,860 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=k50uzhMnjlfPuCdJGZJ4o6WS3Ylw0K8vl-XcSlOtn7E
+2025-10-25 06:11:42,506 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:11:42,714 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:11:42,754 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:11:47,240 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=2cj_HQrioiQrnegR9sn3fGZ5br-Bb9n07Td-oRB3if8
+2025-10-25 06:11:59,551 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:11:59,669 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:11:59,709 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:12:52,148 - app.main - INFO - Running initial database setup...
+2025-10-25 06:12:52,178 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:12:52,186 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:12:52,188 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:12:52,189 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:13:12,432 - app.main - INFO - Running initial database setup...
+2025-10-25 06:13:12,463 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:13:12,479 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:13:12,482 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:13:12,483 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:13:42,999 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=hOaAas90iGjC7FaRQX6yg6PV-kdpbK03IdvOM7pRhSI
+2025-10-25 06:13:45,546 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:13:45,669 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:13:45,702 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:13:52,581 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=Rhtk1Xq2CrH1CC5aCsNcZabaCTJaaRwoApbBNrrvuzs
+2025-10-25 06:14:00,863 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:14:00,941 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:14:00,970 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:15:59,519 - app.main - INFO - Running initial database setup...
+2025-10-25 06:16:01,534 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b1f6a586f6288423503, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:05,551 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b236a586f6288423504, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:09,567 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b276a586f6288423505, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:16,385 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b2b6a586f6288423506, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:20,404 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b326a586f6288423507, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:24,420 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6b366a586f6288423508, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:16:27,964 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:16:27,984 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:16:27,986 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:16:27,987 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:16:41,412 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=yQ6hkW-Qk7Exmo0K5dlqNQRipUGM90P2gWIl5299Vr0
+2025-10-25 06:16:44,693 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:16:44,759 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:16:44,812 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:16:53,995 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=QaWzKaLfj8U7zg_joddS_lBG7cW8P2OtR40M4FbcLto
+2025-10-25 06:17:01,084 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:17:01,214 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:17:01,259 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:19:04,502 - app.main - INFO - Running initial database setup...
+2025-10-25 06:19:04,514 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:19:04,523 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:19:04,524 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:19:04,525 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:21:58,326 - app.main - INFO - Running initial database setup...
+2025-10-25 06:22:00,348 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6c86b1aad6a4d49509f5, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:22:04,379 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6c8ab1aad6a4d49509f6, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:22:08,393 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6c8eb1aad6a4d49509f7, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:22:12,405 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6c92b1aad6a4d49509f8, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:22:19,189 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc6c99b1aad6a4d49509f9, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:22:22,727 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:22:22,744 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:22:22,745 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:22:22,746 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:22:30,367 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=FTCLMG0GDJ6kDUnk0YkdARxjKZtEiTxXJphwVK9Trbo
+2025-10-25 06:22:36,236 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:22:36,312 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:22:36,337 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:25:47,837 - app.main - INFO - Running initial database setup...
+2025-10-25 06:25:47,857 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:25:47,865 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:25:47,866 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:25:47,866 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:28:13,660 - app.main - INFO - Running initial database setup...
+2025-10-25 06:28:13,678 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:28:13,686 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:28:13,690 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:28:13,691 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:29:26,259 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=weA7jbRmUz-cVr9hnIIUW38wuHfeZkOn9TwtbfpoQ88
+2025-10-25 06:29:33,909 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:29:34,023 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:29:34,065 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:33:18,489 - app.main - INFO - Running initial database setup...
+2025-10-25 06:33:18,516 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:33:18,528 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:33:18,530 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:33:18,531 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:34:34,752 - app.main - INFO - Running initial database setup...
+2025-10-25 06:34:34,796 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:34:34,809 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:34:34,812 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:34:34,813 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:34:46,419 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=NGs676v_Eu7mvfZtlnLdpp7EotmHEF7FFkuaa8n4q_w
+2025-10-25 06:34:54,775 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:34:54,850 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:34:54,882 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:45:15,435 - app.main - INFO - Running initial database setup...
+2025-10-25 06:45:15,469 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:45:15,483 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:45:15,487 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:45:15,488 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:47:05,204 - app.main - INFO - Running initial database setup...
+2025-10-25 06:47:05,249 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:47:05,262 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:47:05,264 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:47:05,265 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:47:18,469 - app.main - INFO - Running initial database setup...
+2025-10-25 06:47:18,492 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:47:18,504 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:47:18,507 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:47:18,507 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:47:31,332 - app.main - INFO - Running initial database setup...
+2025-10-25 06:47:31,351 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:47:31,363 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:47:31,373 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:47:31,376 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:47:38,805 - app.main - INFO - Running initial database setup...
+2025-10-25 06:47:38,823 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:47:38,831 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:47:38,834 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:47:38,835 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:52:27,474 - app.main - INFO - Running initial database setup...
+2025-10-25 06:52:27,490 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:52:27,497 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:52:27,498 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:52:27,499 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:52:39,807 - app.main - INFO - Running initial database setup...
+2025-10-25 06:52:39,819 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:52:39,827 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:52:39,828 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:52:39,829 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:55:47,677 - app.main - INFO - Running initial database setup...
+2025-10-25 06:55:49,694 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc74735f20768ab8afb744, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:55:53,711 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc74775f20768ab8afb745, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:55:57,727 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc747b5f20768ab8afb746, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:56:01,741 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc747f5f20768ab8afb747, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:56:08,461 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc74835f20768ab8afb748, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:56:12,479 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc748a5f20768ab8afb749, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 06:56:14,529 - app.main - INFO - Connected to MongoDB
+2025-10-25 06:56:14,550 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 06:56:14,553 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 06:56:14,555 - app.main - INFO - Initial database setup complete.
+2025-10-25 06:56:19,281 - app.services.auth_service - INFO - Magic Link for Test User 39: http://localhost:5173/verify-login?token=tkxVJW2t4zH0W25QRU73j5csCfg9fk46vicIo7IA-eA
+2025-10-25 06:56:27,595 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:56:27,715 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:56:27,755 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:56:44,695 - app.services.auth_service - INFO - Magic Link for Test User 9: http://localhost:5173/verify-login?token=M3hE3Dxy-mdjIOokhNgkcMJnzkSyHMjDO45ZkG4Pi6Q
+2025-10-25 06:56:47,670 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:56:47,775 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:56:47,815 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:57:06,924 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:57:06,961 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:57:06,994 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 06:57:13,926 - app.services.auth_service - INFO - Magic Link for Test User 42: http://localhost:5173/verify-login?token=JhZsb0TQMGOPwCF0qrwsQmFJTDtWbBKKiXhSs3qqD_c
+2025-10-25 06:57:21,171 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 06:57:21,297 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 06:57:21,334 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:03:39,825 - app.main - INFO - Running initial database setup...
+2025-10-25 07:03:39,842 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:03:39,851 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:03:39,852 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:03:39,852 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:13:43,969 - app.main - INFO - Running initial database setup...
+2025-10-25 07:13:44,015 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:13:44,033 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:13:44,035 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:13:44,036 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:13:55,645 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=T0N0aLupoj1euW71e1RUbpJcrMA29z67WZ9YQQQm8I4
+2025-10-25 07:13:58,495 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:13:58,676 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:13:58,722 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:14:21,625 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=Ufa-6a6g8ysHZN0nm4Te3AVh_ovwZfzBgJWZrdhaN5I
+2025-10-25 07:14:27,938 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:14:28,067 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:14:28,116 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:18:58,138 - app.main - INFO - Running initial database setup...
+2025-10-25 07:18:58,169 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:18:58,182 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:18:58,185 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:18:58,185 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:26:36,667 - app.main - INFO - Running initial database setup...
+2025-10-25 07:26:38,688 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bac5c04591e0c70c591, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:26:45,511 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bb15c04591e0c70c592, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:26:49,527 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bb75c04591e0c70c593, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:26:53,550 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bbb5c04591e0c70c594, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:26:57,569 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bbf5c04591e0c70c595, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:27:01,589 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7bc35c04591e0c70c596, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:27:04,642 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:27:04,662 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:27:04,664 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:27:04,665 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:27:06,694 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=VRv_c96DNbtOg8lYm5MqzeI69a94Y9kOpcNbrqzLEnE
+2025-10-25 07:27:19,553 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:27:19,659 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:27:19,711 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:27:32,723 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=ahuN7BMyhYkoekCy_BHXqOZR1D56Y0giIChjPjXK8t4
+2025-10-25 07:27:44,143 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:27:44,272 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:27:44,317 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:34:26,085 - app.main - INFO - Running initial database setup...
+2025-10-25 07:34:28,102 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7d82597f757a0d823774, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:34:32,119 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7d86597f757a0d823775, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:34:36,134 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7d8a597f757a0d823776, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:34:40,150 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7d8e597f757a0d823777, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:34:44,166 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7d92597f757a0d823778, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:34:46,708 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:34:46,732 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:34:46,735 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:34:46,735 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:34:48,038 - app.services.auth_service - INFO - Magic Link for Test User 6: http://localhost:5173/verify-login?token=b2K6SSJK1av6avYBzmFz7n2y-mgYNRhd1GZy0zTpUbM
+2025-10-25 07:34:56,269 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:34:56,342 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:34:56,374 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:35:32,998 - app.services.auth_service - INFO - Magic Link for Test User 42: http://localhost:5173/verify-login?token=SZ6vPBvs-pQy2zvlFaxKkbpmgKKbfqiUeIzXAalZuKI
+2025-10-25 07:35:36,289 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:35:36,465 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:35:36,507 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:36:38,641 - app.main - INFO - Running initial database setup...
+2025-10-25 07:36:38,655 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:36:38,661 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:36:38,662 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:36:38,663 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:37:01,891 - app.main - INFO - Running initial database setup...
+2025-10-25 07:37:01,914 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:37:01,933 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:37:01,937 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:37:01,938 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:40:48,280 - app.main - INFO - Running initial database setup...
+2025-10-25 07:40:50,300 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7f0009f4cd7848db0355, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:40:57,181 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7f0409f4cd7848db0356, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:41:01,198 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7f0b09f4cd7848db0357, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:41:05,215 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7f0f09f4cd7848db0358, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:41:09,227 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc7f1309f4cd7848db0359, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:41:12,269 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:41:12,287 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:41:12,290 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:41:12,290 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:41:29,225 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=LrLgylEETXrOMUsGy4kp4xleCQG5eI9M0VPTD17EKcA
+2025-10-25 07:41:32,648 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:41:32,786 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:41:32,830 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:41:51,537 - app.services.auth_service - INFO - Magic Link for Test User 42: http://localhost:5173/verify-login?token=2NlcwX1cqbt7zENVsb9BBXW8QdxxEitbIVyd4Bp05-U
+2025-10-25 07:41:57,309 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:41:57,434 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:41:57,476 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:43:44,490 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:43:44,546 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:43:44,585 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:43:49,039 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=iBzfIh3fgNNyvsBfyoCciKF5yUr1CtE8bbQ5IA2nqh8
+2025-10-25 07:43:55,897 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:43:56,063 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:43:56,106 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:44:07,209 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:44:07,242 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:44:07,276 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:44:13,338 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=yTq9p7gVkAniNhsDJgZuE43A_CFc9hQyh76rjV0wWQA
+2025-10-25 07:44:17,735 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:44:17,839 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:44:17,875 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:49:16,303 - app.main - INFO - Running initial database setup...
+2025-10-25 07:49:18,324 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc80fc405eb1e7add3e113, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:49:22,342 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8100405eb1e7add3e114, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:49:26,356 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8104405eb1e7add3e115, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:49:30,368 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8108405eb1e7add3e116, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:49:34,380 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc810c405eb1e7add3e117, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:49:39,165 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:49:39,183 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:49:39,185 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:49:39,185 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:49:57,348 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=qDV-0BDehzRBXsz2VbEpuvnDbXYll-AlfdNt5tLPaAI
+2025-10-25 07:50:00,630 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:50:00,688 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:50:00,741 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:50:17,257 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=jFi2fHueXcIDbF7cbz44Dxv17vdzpFUEk2JqpatzUBI
+2025-10-25 07:50:22,798 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:50:22,940 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:50:22,982 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:54:32,011 - app.main - INFO - Running initial database setup...
+2025-10-25 07:54:32,048 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:54:32,063 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:54:32,066 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:54:32,067 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:54:41,828 - app.main - INFO - Running initial database setup...
+2025-10-25 07:54:41,859 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:54:41,872 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:54:41,875 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:54:41,875 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:54:50,745 - app.main - INFO - Running initial database setup...
+2025-10-25 07:54:50,774 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:54:50,787 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:54:50,790 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:54:50,791 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:57:07,283 - app.main - INFO - Running initial database setup...
+2025-10-25 07:57:09,307 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82d3e2e727a5ab46ec45, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:13,320 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82d7e2e727a5ab46ec46, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:18,649 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82dbe2e727a5ab46ec47, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:24,221 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82e2e2e727a5ab46ec48, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:28,241 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82e6e2e727a5ab46ec49, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:32,259 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc82eae2e727a5ab46ec4a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 07:57:34,311 - app.main - INFO - Connected to MongoDB
+2025-10-25 07:57:34,335 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 07:57:34,337 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 07:57:34,339 - app.main - INFO - Initial database setup complete.
+2025-10-25 07:57:36,205 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=tEHpul4ISe-Ytst20XjcGcTgXwzAQd8sGsxSQaFruJQ
+2025-10-25 07:57:59,932 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:57:59,991 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:58:00,017 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 07:58:01,729 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=TYU5tjBvXOUF8NqFUc9KsELFa0sHrAD6c_GyjZMYPug
+2025-10-25 07:58:06,435 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 07:58:06,551 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 07:58:06,599 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:01:59,548 - app.main - INFO - Running initial database setup...
+2025-10-25 08:01:59,575 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:01:59,587 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:01:59,589 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:01:59,590 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:02:05,937 - app.main - INFO - Running initial database setup...
+2025-10-25 08:02:05,968 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:02:05,982 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:02:05,985 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:02:05,986 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:05:26,936 - app.main - INFO - Running initial database setup...
+2025-10-25 08:05:26,959 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:05:26,972 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:05:26,975 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:05:26,977 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:11:23,144 - app.main - INFO - Running initial database setup...
+2025-10-25 08:11:25,173 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc862b01556916b29e16a8, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:29,187 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc862f01556916b29e16a9, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:33,204 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc863301556916b29e16aa, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:37,218 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc863701556916b29e16ab, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:41,235 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc863b01556916b29e16ac, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:47,188 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc863f01556916b29e16ad, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:11:49,244 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:11:49,266 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:11:49,269 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:11:49,270 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:38:36,010 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=cO_JOGlgMKRZYtFfAcaI0SND3xYDCEZdb6bEe54wARM
+2025-10-25 08:38:41,641 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:38:41,730 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:38:41,774 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:39:01,803 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=suBGEXa6-nZ-WWH71vrDE-Bx0YD1Ej_fw6OCTpA32ZM
+2025-10-25 08:39:04,445 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:39:04,636 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:39:04,689 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:44:12,279 - app.main - INFO - Running initial database setup...
+2025-10-25 08:44:14,307 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8ddc0594a30159c55d98, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:18,326 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8de00594a30159c55d99, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:22,339 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8de40594a30159c55d9a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:29,157 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8deb0594a30159c55d9b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:33,172 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8def0594a30159c55d9c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:37,189 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8df30594a30159c55d9d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:41,204 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc8df70594a30159c55d9e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:44:43,230 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:44:43,245 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:44:43,247 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:44:43,248 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:47:17,842 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=cwBCsby-oufPea1AEhMuBjmN0Zf28sSe0hZoOYL3PkY
+2025-10-25 08:47:23,423 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:47:23,476 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:47:23,520 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:47:58,167 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=yjzfMxMFQ_KyeYsGWIm5IKC-3sHHJ_mdLoO0OhayBaA
+2025-10-25 08:48:09,816 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:48:09,901 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:48:09,936 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:57:49,826 - app.main - INFO - Running initial database setup...
+2025-10-25 08:57:51,855 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc910d3e95291d5f055de8, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:57:55,871 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc91113e95291d5f055de9, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:57:59,891 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc91153e95291d5f055dea, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:58:06,730 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc91193e95291d5f055deb, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:58:10,753 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc91203e95291d5f055dec, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:58:14,772 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc91243e95291d5f055ded, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 08:58:17,844 - app.main - INFO - Connected to MongoDB
+2025-10-25 08:58:17,877 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 08:58:17,880 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 08:58:17,881 - app.main - INFO - Initial database setup complete.
+2025-10-25 08:58:55,103 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=SPltCQHriVQYc7cbGVkmRj3RcY3GV39wYN4ul7Exfys
+2025-10-25 08:59:00,570 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:59:00,644 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:59:00,680 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 08:59:04,845 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=AtLH9tLWrESiaiDFbBSwKKV7QoqgqEFhhg-iXED_YK0
+2025-10-25 08:59:12,094 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 08:59:12,187 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 08:59:12,223 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:02:42,920 - app.main - INFO - Running initial database setup...
+2025-10-25 09:02:44,938 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc923253cf5cbece9d2d68, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:02:48,952 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc923653cf5cbece9d2d69, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:02:52,968 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc923a53cf5cbece9d2d6a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:02:56,985 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc923e53cf5cbece9d2d6b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:03:03,910 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc924553cf5cbece9d2d6c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:03:07,925 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc924953cf5cbece9d2d6d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:03:11,946 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc924d53cf5cbece9d2d6e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:03:15,972 - app.main - WARNING - MongoDB not ready yet (waited=14s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc925153cf5cbece9d2d6f, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:03:19,038 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:03:19,067 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:03:19,069 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:03:19,070 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:03:20,707 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=cW42R5ra9l7BifiaXOBRUCVUpWNSKiY_j0X06KY43ic
+2025-10-25 09:03:32,731 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:03:32,777 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:03:32,820 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:03:37,448 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=iW0cHj-EiNz7m-1o4RY2DLDPnQc06GoD7S4ApqF1eK8
+2025-10-25 09:03:40,720 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:03:40,837 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:03:40,882 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:04:20,862 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:04:20,897 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:04:20,931 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:04:23,962 - app.services.auth_service - INFO - Magic Link for Test User 40: http://localhost:5173/verify-login?token=XGhtSD4VzOIhL8Bk_Ax0eHRpaz70yoYvUdcNQ8nXYKk
+2025-10-25 09:04:26,693 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:04:26,783 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:04:26,817 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:05:46,695 - app.main - INFO - Running initial database setup...
+2025-10-25 09:05:46,716 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:05:46,728 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:05:46,730 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:05:46,731 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:17:08,213 - app.main - INFO - Running initial database setup...
+2025-10-25 09:17:10,239 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95942a8ec1f7a67b0254, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:14,256 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95982a8ec1f7a67b0255, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:18,273 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc959c2a8ec1f7a67b0256, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:23,245 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95a12a8ec1f7a67b0257, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:27,262 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95a52a8ec1f7a67b0258, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:31,288 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95a92a8ec1f7a67b0259, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:35,305 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc95ad2a8ec1f7a67b025a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:17:37,864 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:17:37,889 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:17:37,891 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:17:37,891 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:26:16,000 - app.main - INFO - Running initial database setup...
+2025-10-25 09:26:18,024 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97b80db2abb57b281f09, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:22,045 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97bc0db2abb57b281f0a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:26,080 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97c00db2abb57b281f0b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:30,213 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97c40db2abb57b281f0c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:34,237 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97c80db2abb57b281f0d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:38,262 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97cc0db2abb57b281f0e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:42,279 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97d00db2abb57b281f0f, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:46,300 - app.main - WARNING - MongoDB not ready yet (waited=14s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc97d40db2abb57b281f10, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:26:48,347 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:26:48,376 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:26:48,378 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:26:48,383 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:28:02,499 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=6Jl5RfECriV3ouJcUljphD8xxbIH4jm4KXg2CWz7T8k
+2025-10-25 09:28:08,244 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:28:08,293 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:28:08,343 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:28:51,224 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=3p1PrpTYjpZNZcz3mbqgoz7gdr6-ZfGtdeMC7vbtGhE
+2025-10-25 09:28:54,180 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:28:54,263 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:28:54,316 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:31:02,224 - app.main - INFO - Running initial database setup...
+2025-10-25 09:31:04,242 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98d638add8798702dc52, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:08,257 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98da38add8798702dc53, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:12,279 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98de38add8798702dc54, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:16,304 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98e238add8798702dc55, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:20,319 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98e638add8798702dc56, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:24,338 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98ea38add8798702dc57, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:28,360 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98ee38add8798702dc58, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:32,425 - app.main - WARNING - MongoDB not ready yet (waited=14s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc98f238add8798702dc59, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:31:34,475 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:31:34,497 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:31:34,500 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:31:34,501 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:31:54,770 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=nJ13zl3BlyX8-hElcr8mlBFrJokEjlgRJhGsgsZJKt4
+2025-10-25 09:31:57,591 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:31:57,692 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:31:57,729 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:32:16,651 - app.services.auth_service - INFO - Magic Link for Test User 15: http://localhost:5173/verify-login?token=ymThFrKKPGxR7k8IZUVwyDOd69CZEngc0cW_tsPaRas
+2025-10-25 09:32:28,641 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:32:28,777 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:32:28,836 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:40:31,530 - app.main - INFO - Running initial database setup...
+2025-10-25 09:40:33,560 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b0f32c0d3d2c1104c35, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:37,577 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b1332c0d3d2c1104c36, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:41,595 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b1732c0d3d2c1104c37, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:45,610 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b1b32c0d3d2c1104c38, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:49,629 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b1f32c0d3d2c1104c39, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:53,652 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b2332c0d3d2c1104c3a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:57,671 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9b2732c0d3d2c1104c3b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:40:59,700 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:40:59,718 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:40:59,720 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:40:59,721 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:41:08,893 - app.services.auth_service - WARNING - No user found with registration number: STm15
+2025-10-25 09:41:12,945 - app.services.auth_service - INFO - Magic Link for Test User 15: http://localhost:5173/verify-login?token=c8vFGasm1pV0cwYd7W6ekWkUmPcvF3-zueXsCjhED6o
+2025-10-25 09:41:20,829 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:41:20,957 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:41:21,012 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:41:31,854 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=4UGhpQiaJfvT68EU7EjAmttEBSoRdXkzsMfd_LYurYc
+2025-10-25 09:41:35,931 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:41:36,161 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:41:36,220 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:45:02,375 - app.main - INFO - Running initial database setup...
+2025-10-25 09:45:04,402 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c1e4b3b786eb6a8b517, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:08,425 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c224b3b786eb6a8b518, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:12,457 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c264b3b786eb6a8b519, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:16,479 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c2a4b3b786eb6a8b51a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:20,497 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c2e4b3b786eb6a8b51b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:24,518 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c324b3b786eb6a8b51c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:28,534 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c364b3b786eb6a8b51d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:32,561 - app.main - WARNING - MongoDB not ready yet (waited=14s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c3a4b3b786eb6a8b51e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:36,578 - app.main - WARNING - MongoDB not ready yet (waited=16s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fc9c3e4b3b786eb6a8b51f, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 09:45:38,633 - app.main - INFO - Connected to MongoDB
+2025-10-25 09:45:38,663 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 09:45:38,666 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 09:45:38,666 - app.main - INFO - Initial database setup complete.
+2025-10-25 09:46:36,100 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=_TJGLkULiDGlGM2cuducdsrL7zzOJaOyEHDM9fghCHM
+2025-10-25 09:46:40,336 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:46:40,553 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:46:40,602 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:54:09,491 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 09:54:09,548 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 09:54:09,603 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 09:54:11,704 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:09:58,508 - app.main - INFO - Running initial database setup...
+2025-10-25 10:10:00,532 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca1f6ad6cc9608c064a08, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:04,558 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca1faad6cc9608c064a09, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:08,576 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca1fead6cc9608c064a0a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:12,593 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca202ad6cc9608c064a0b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:16,607 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca206ad6cc9608c064a0c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:20,624 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca20aad6cc9608c064a0d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:24,646 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 68fca20ead6cc9608c064a0e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-25 10:10:26,699 - app.main - INFO - Connected to MongoDB
+2025-10-25 10:10:26,726 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-25 10:10:26,729 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-25 10:10:26,729 - app.main - INFO - Initial database setup complete.
+2025-10-25 10:23:37,641 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=ndZZfOQBzZ26tqfYEWkVRLzBd57g4b-jErvENX9dXdU
+2025-10-25 10:23:41,152 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:23:41,208 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:23:41,258 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 10:24:41,541 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:25:31,161 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:25:31,221 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:25:31,310 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 10:26:03,293 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:26:03,363 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:26:03,404 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 10:26:34,014 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:26:34,065 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:26:34,108 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 10:28:24,669 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:28:24,701 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:28:24,726 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-25 10:28:33,559 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-25 10:28:33,602 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-25 10:28:33,637 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-30 05:17:52,526 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=2o5LWdo1ywHs6YcJw-95qHjHyEzh1RhIdCMdJv4agd8
+2025-10-30 05:17:55,776 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:17:55,847 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-30 05:17:55,897 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-30 05:18:03,881 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:18:03,930 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-30 05:18:03,973 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-30 05:18:11,046 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:18:11,089 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-30 05:18:11,136 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-30 05:18:18,879 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:23:58,130 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:23:58,163 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-30 05:23:58,197 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-30 05:24:14,163 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-30 05:24:14,195 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-30 05:24:14,227 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
