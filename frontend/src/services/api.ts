@@ -236,4 +236,98 @@ export const sendLoveNote = async (noteData: {
 export const getNotifications = async () => {
     const response = await axios.get(`${API_URL}/notifications`, { headers: getAuthHeaders() });
     return response.data;
-};;
+};
+
+// --- Admin Endpoints ---
+
+export const getAdminStats = async () => {
+    const response = await axios.get(`${API_URL}/admin/stats`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const getAdminConfessions = async () => {
+    const response = await axios.get(`${API_URL}/admin/confessions`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const deleteAdminConfession = async (confessionId: string) => {
+    const response = await axios.delete(`${API_URL}/admin/confessions/${confessionId}`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const getAdminLoveNotes = async () => {
+    const response = await axios.get(`${API_URL}/admin/love-notes`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const updateAdminLoveNoteStatus = async (noteId: string, status: "approved" | "rejected" | "pending_review") => {
+    const response = await axios.put(
+        `${API_URL}/admin/love-notes/${noteId}/status`,
+        {},
+        {
+            headers: getAuthHeaders(),
+            params: { status },
+        }
+    );
+    return response.data;
+};
+
+export const deleteAdminLoveNote = async (noteId: string) => {
+    const response = await axios.delete(`${API_URL}/admin/love-notes/${noteId}`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const getAdminUsers = async () => {
+    const response = await axios.get(`${API_URL}/admin/users`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const createAdminUser = async (payload: Record<string, unknown>) => {
+    const response = await axios.post(
+        `${API_URL}/admin/users`,
+        payload,
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+export const setAdminUserBlocked = async (userId: string, blocked: boolean) => {
+    const response = await axios.put(
+        `${API_URL}/admin/users/${userId}/block`,
+        {},
+        {
+            headers: getAuthHeaders(),
+            params: { blocked },
+        }
+    );
+    return response.data;
+};
+
+export const updateAdminUser = async (userId: string, payload: Record<string, unknown>) => {
+    const response = await axios.put(
+        `${API_URL}/admin/users/${userId}`,
+        payload,
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+export const getAdminMatchmaking = async () => {
+    const response = await axios.get(`${API_URL}/admin/matchmaking`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const updateAdminMatchmakingStatus = async (
+    matchId: string,
+    status: 'approved' | 'rejected' | 'pending'
+) => {
+    const response = await axios.put(
+        `${API_URL}/admin/matchmaking/${matchId}/status`,
+        {},
+        {
+            headers: getAuthHeaders(),
+            params: { status },
+        }
+    );
+    return response.data;
+};

@@ -2,7 +2,7 @@
 
 import logging
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -147,7 +147,59 @@ class UserDetails(BaseModel):
     last_login_time: Optional[datetime] = None
     last_login_ip: Optional[str] = None
     user_role: str = "user"
+    is_blocked: bool = False
     last_matchmaking_time: Optional[datetime] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
+
+class AdminUserUpdate(BaseModel):
+    """Fields that an administrator is allowed to update for a user profile."""
+
+    Name: Optional[str] = None
+    Regno: Optional[str] = None
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    emoji: Optional[str] = None
+    bio: Optional[str] = None
+    which_class: Optional[str] = None
+    profile_picture_id: Optional[str] = None
+    gender: Optional[str] = None
+    interests: Optional[List[str]] = None
+    isMatchmaking: Optional[bool] = None
+    isNotifications: Optional[bool] = None
+    isLovenotesRecieve: Optional[bool] = None
+    isLovenotesSend: Optional[bool] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        populate_by_name = True
+
+
+class AdminUserCreate(BaseModel):
+    """Payload used by administrators to create a brand new user or admin account."""
+
+    Regno: str
+    Name: str
+    email: EmailStr
+    which_class: str
+    gender: str
+
+    username: Optional[str] = None
+    emoji: Optional[str] = None
+    bio: Optional[str] = None
+    profile_picture_id: Optional[str] = None
+    interests: Optional[List[str]] = None
+
+    isMatchmaking: bool = True
+    isNotifications: bool = True
+    isLovenotesRecieve: bool = True
+    isLovenotesSend: bool = False
+    user_role: Literal["user", "admin"] = "user"
 
     class Config:
         arbitrary_types_allowed = True

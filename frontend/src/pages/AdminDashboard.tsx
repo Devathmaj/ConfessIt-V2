@@ -1,298 +1,337 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
-import { 
-  Users, 
-  Heart, 
-  MessageCircle,
-  LogOut,
-  ChevronRight,
-  Mail,
+import {
+  Users,
   Activity,
-  Eye
+  MessageCircle,
+  Heart,
+  Mail,
+  ShieldAlert,
+  LogOut,
+  UsersRound,
+  ClipboardList
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import { getTotalConfessionsCount } from '../services/api';
 import { resolveProfilePictureUrl } from '@/lib/utils';
+import { AdminNavigation } from '@/components/AdminNavigation';
+import { getAdminStats } from '@/services/api';
 
-// Import the new Navigation component
-import { Navigation } from '@/components/Navigation';
-
-// Import video and image assets
 import DashboardWebm from '@/assets/Dashboard.webm';
 import DashboardMp4 from '@/assets/Dashboard.mp4';
 import DashboardWebp from '@/assets/Dashboard.webp';
 
-// Interface for navigation items
-interface NavigationItem {
+interface AdminStats {
+  total_users: number;
+  active_sessions: number;
+  total_confessions: number;
+  total_love_notes: number;
+  pending_love_notes: number;
+  blocked_users: number;
+}
+
+interface StatCardData {
   id: string;
   title: string;
   description: string;
-  icon: React.ComponentType<any>;
-  value?: string | number;
-  isLoading?: boolean;
+  icon: LucideIcon;
+  value: string | number;
+  isLoading: boolean;
 }
 
-// Mock data for recent activities
+interface QuickAction {
+  id: string;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  to: string;
+}
+
 const recentActivity = [
-  'User "JohnDoe" signed up.',
-  'A new confession was posted anonymously.',
-  'Love note from "JaneDoe" is pending review.',
-  'Match made between two users.',
-  'User "PeterPan" updated their profile.',
+  'Daily review window started.',
+  'Awaiting new confession approvals.',
+  'Monitoring love-note submissions.',
+  'Watching matchmaking requests.',
+  'Keeping an eye on reported content.'
 ];
+
+const GlassCard = ({ children, className = '' }: { children: ReactNode; className?: string }) => (
+  <div className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-lg transition-all duration-300 hover:bg-white/10 hover:border-white/20 ${className}`}>
+    <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+    <div className="relative z-10 h-full">{children}</div>
+  </div>
+);
+
+const StatCard = ({ item }: { item: StatCardData }) => {
+  const Icon = item.icon;
+  return (
+    <GlassCard className="p-6 flex flex-col justify-between">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-sm text-white/70">{item.title}</p>
+          {item.isLoading ? (
+            <div className="mt-2 h-8 w-24 animate-pulse rounded bg-white/20" />
+          ) : (
+            <p className="mt-2 text-3xl font-bold">{item.value}</p>
+          )}
+          <p className="mt-3 text-xs text-white/50">{item.description}</p>
+        </div>
+        <div className="rounded-xl bg-gradient-to-br from-pink-500/20 to-rose-500/20 p-3">
+          <Icon className="h-6 w-6 text-white" />
+        </div>
+      </div>
+    </GlassCard>
+  );
+};
 
 export const AdminDashboard = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
-  const [totalConfessions, setTotalConfessions] = useState<number | null>(null);
-  const [isLoadingConfessions, setIsLoadingConfessions] = useState(true);
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // Set profile picture URL if available
     setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_id ?? null));
 
-    // Fetch total confessions count
-    const fetchConfessionCount = async () => {
+    const fetchStats = async () => {
       try {
-        setIsLoadingConfessions(true);
-        const count = await getTotalConfessionsCount();
-        setTotalConfessions(count);
+        setLoading(true);
+        const data = await getAdminStats();
+        setStats(data);
       } catch (error) {
-        console.error('Failed to fetch total confessions count:', error);
-        toast.error('Could not load total confessions.');
+        console.error('Failed to load admin statistics', error);
+        toast.error('Unable to load dashboard statistics right now.');
       } finally {
-        setIsLoadingConfessions(false);
+        setLoading(false);
       }
     };
 
-    fetchConfessionCount();
+    fetchStats();
   }, [user]);
-  
-  // Data for the main navigation cards
-  const adminNavigationItems: NavigationItem[] = [
+
+  const statCards: StatCardData[] = [
     {
       id: 'total-users',
       title: 'Total Users',
-      description: 'Total registered users',
+      description: 'Registered community members',
       icon: Users,
-      value: '2,847', // Mock data
+      value: stats?.total_users ?? '—',
+      isLoading: loading,
     },
     {
       id: 'active-sessions',
       title: 'Active Sessions',
-      description: 'Users currently online',
+      description: 'Logged in within 24 hours',
       icon: Activity,
-      value: '1,247', // Mock data
+      value: stats?.active_sessions ?? '—',
+      isLoading: loading,
     },
     {
-      id: 'total-confessions',
+      id: 'confessions',
       title: 'Total Confessions',
-      description: 'All confessions ever made',
+      description: 'Posts currently in the system',
       icon: MessageCircle,
-      value: totalConfessions ?? '...',
-      isLoading: isLoadingConfessions,
+      value: stats?.total_confessions ?? '—',
+      isLoading: loading,
     },
     {
-      id: 'matches-made',
-      title: 'Matches Made',
-      description: 'Successful matches',
+      id: 'love-notes',
+      title: 'Love Notes',
+      description: 'Submitted love notes',
       icon: Heart,
-      value: '156', // Mock data
+      value: stats?.total_love_notes ?? '—',
+      isLoading: loading,
+    },
+    {
+      id: 'pending-love-notes',
+      title: 'Pending Love Notes',
+      description: 'Awaiting your review',
+      icon: Mail,
+      value: stats?.pending_love_notes ?? '—',
+      isLoading: loading,
+    },
+    {
+      id: 'blocked-users',
+      title: 'Blocked Users',
+      description: 'Users restricted by admins',
+      icon: ShieldAlert,
+      value: stats?.blocked_users ?? '—',
+      isLoading: loading,
     }
   ];
 
-  /**
-   * Used to handle navigation to different application pages.
-   * @param {string} pageId - The identifier for the page to navigate to.
-   */
-  const handleNavigation = (pageId: string) => {
-    toast.info(`Navigating to ${pageId} section...`);
-    // Add actual navigation logic here if needed
-  };
+  const quickActions: QuickAction[] = [
+    {
+      id: 'confessions',
+      title: 'Review Confessions',
+      description: 'See reports, reactions and remove harmful content.',
+      icon: ShieldAlert,
+      to: '/admin/confessions'
+    },
+    {
+      id: 'love-notes',
+      title: 'Moderate Love Notes',
+      description: 'Approve or reject submitted love notes.',
+      icon: Mail,
+      to: '/admin/love-notes'
+    },
+    {
+      id: 'matchmaking',
+      title: 'Matchmaking Queue',
+      description: 'Review recent matchmaking submissions.',
+      icon: Heart,
+      to: '/admin/matchmaking'
+    },
+    {
+      id: 'profiles',
+      title: 'Profile Review',
+      description: 'Inspect user profiles and manage blocks.',
+      icon: UsersRound,
+      to: '/admin/profile-review'
+    },
+    {
+      id: 'reports',
+      title: 'Reports Inbox',
+      description: 'Stay ahead of flagged activity and feedback.',
+      icon: ClipboardList,
+      to: '/admin/confessions'
+    }
+  ];
 
-  /**
-   * Used to log the user out of the application and display a farewell message.
-   */
   const handleLogout = () => {
     logout();
-    toast.success('Goodbye! Come back soon ❤️');
+    toast.success('Logged out of admin mode.');
   };
 
-  /**
-   * A reusable card component with a refined glassmorphism style.
-   */
-  const GlassCard = ({ children, className, ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
-    <div 
-      className={`group relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg transition-all duration-300 overflow-hidden hover:bg-white/10 hover:border-white/20 ${className}`}
-      {...props}
-    >
-      <div className="absolute -inset-1 bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-      <div className="relative z-10 h-full">
-        {children}
-      </div>
-    </div>
-  );
-  
-  const StatCard = ({ item }: { item: NavigationItem }) => {
-    const IconComponent = item.icon;
-    return (
-      <GlassCard 
-        key={item.id}
-        className="p-6 flex flex-col justify-between"
-      >
-        <div className="flex justify-between items-start">
-          <div>
-            <p className="text-sm text-white/70">{item.title}</p>
-            {item.isLoading ? (
-              <div className="h-8 w-24 bg-white/20 rounded animate-pulse mt-1"></div>
-            ) : (
-              <p className="text-3xl font-bold mt-1">{item.value}</p>
-            )}
-            <p className="text-xs text-white/50 mt-2">{item.description}</p>
-          </div>
-          <div className="bg-gradient-to-br from-pink-500/20 to-rose-500/20 p-3 rounded-lg">
-            <IconComponent className="w-6 h-6 text-white" />
-          </div>
-        </div>
-      </GlassCard>
-    );
+  const handleNavigate = (location: string) => {
+    navigate(location);
   };
 
   return (
-    <div className="min-h-screen w-full text-white font-sans overflow-hidden">
-      <Navigation />
+    <div className="relative min-h-screen w-full overflow-hidden text-white">
+      <AdminNavigation />
 
-      {/* Background Video */}
-      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10">
-        <video 
+      <div className="fixed inset-0 -z-10">
+        <video
           poster={DashboardWebp}
-          autoPlay 
-          loop 
-          muted 
+          autoPlay
+          loop
+          muted
           playsInline
-          className="w-full h-full object-cover"
+          className="h-full w-full object-cover"
         >
           <source src={DashboardWebm} type="video/webm" />
           <source src={DashboardMp4} type="video/mp4" />
-          Your browser does not support the video tag.
         </video>
-        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-black/70 via-black/40 to-black/70"></div>
+        <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/40 to-black/80" />
       </div>
 
-      <div className="min-h-screen p-4 pt-28 flex flex-col items-center justify-center relative z-10">
-        {/* Header */}
-        <header className="w-full max-w-6xl flex justify-between items-center mb-8 mt-4">
-          <div className="text-left">
-            <h1 className="text-2xl lg:text-3xl font-bold bg-gradient-to-r from-pink-300 to-purple-300 bg-clip-text text-transparent">
-              Welcome admin, {user?.Name}!
-            </h1>
-            <p className="text-sm text-white/70 mt-1">
-              Moderate and monitor the application.
-            </p>
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 pb-16 pt-28">
+        <header className="flex flex-col gap-6 rounded-3xl border border-white/10 bg-black/20 p-6 shadow-xl backdrop-blur">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-wider text-white/60">Administrator Dashboard</p>
+              <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">
+                Welcome back, {user?.Name ?? 'Admin'}
+              </h1>
+              <p className="mt-2 max-w-xl text-sm text-white/70">
+                Review community activity, moderate submissions, and keep ConfessIt safe for everyone.
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-white/10">
+                {profilePictureUrl ? (
+                  <img
+                    src={profilePictureUrl}
+                    alt="Admin profile"
+                    className="h-full w-full object-cover"
+                    onError={(event) => {
+                      (event.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <span className="text-2xl font-semibold">{user?.Name?.[0] ?? 'A'}</span>
+                )}
+              </div>
+              <div>
+                <p className="text-sm text-white/60">Signed in as</p>
+                <p className="text-base font-medium">{user?.email}</p>
+                <p className="text-xs text-white/50">Reg. No. {user?.Regno}</p>
+              </div>
+              <Button
+                onClick={handleLogout}
+                variant="ghost"
+                className="ml-auto flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 text-white hover:bg-white/20"
+              >
+                <LogOut className="h-4 w-4" />
+                Logout
+              </Button>
+            </div>
           </div>
-          <Button 
-            onClick={handleLogout} 
-            variant="ghost" 
-            className="bg-white/5 hover:bg-white/10 text-white rounded-full text-sm px-4 py-2 border border-white/10"
-          >
-            <LogOut className="w-4 h-4 mr-2" />
-            Logout
-          </Button>
         </header>
 
-        {/* Main Content */}
-        <main className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
-          
-          {/* Left Column: Admin Info & Recent Activity */}
-          <div className="lg:col-span-4 flex flex-col gap-6">
-            {/* Admin Info Card */}
-            <GlassCard className="p-6 flex flex-col">
-              <div className="flex items-center gap-4 mb-5">
-                <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center overflow-hidden border-2 border-white/30 shadow-lg">
-                  {profilePictureUrl ? (
-                    <img
-                      src={profilePictureUrl}
-                      alt="Profile"
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  ) : null}
-                  {!profilePictureUrl && (
-                    <span className="text-xl font-bold text-white">
-                      {user?.Name?.charAt(0)}
-                    </span>
-                  )}
-                </div>
-                <div>
-                  <p className="font-bold text-lg">{user?.Name}</p>
-                  <p className="text-sm text-white/70 mt-1">Reg: {user?.Regno}</p>
-                </div>
-              </div>
-              
-              <Button 
-                onClick={() => handleNavigation('profile')}
-                className="w-full bg-white/5 hover:bg-white/10 text-white mt-2 justify-between"
-                variant="outline"
-              >
-                <span>View Profile</span>
-                <ChevronRight className="w-4 h-4" />
-              </Button>
-            </GlassCard>
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {statCards.map((card) => (
+            <div key={card.id}>
+              <StatCard item={card} />
+            </div>
+          ))}
+        </section>
 
-            {/* Recent Activity */}
-            <GlassCard className="p-6 flex-grow flex flex-col">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Activity className="w-5 h-5 text-pink-400" />
-                Recent Activity
-              </h3>
-              <div className="space-y-4 overflow-y-auto pr-2 -mr-2">
-                {recentActivity.map((activity, index) => (
-                  <div 
-                    key={index} 
-                    className="p-3 bg-gradient-to-r from-white/5 to-white/0 rounded-lg text-sm text-white/90 border-l-2 border-pink-500/50"
-                  >
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0 mr-3">
-                        <div className="w-2 h-2 rounded-full bg-pink-500"></div>
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+          <div className="lg:col-span-3 space-y-4">
+            <GlassCard className="p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Quick Actions</h2>
+                <p className="text-xs text-white/60">Navigate directly to moderation tools</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {quickActions.map((action) => {
+                  const Icon = action.icon;
+                  return (
+                    <button
+                      key={action.id}
+                      type="button"
+                      onClick={() => handleNavigate(action.to)}
+                      className="group flex flex-col gap-2 rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:bg-white/10"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="rounded-xl bg-gradient-to-br from-pink-500/20 to-purple-500/20 p-2 text-white">
+                          <Icon className="h-5 w-5" />
+                        </span>
+                        <p className="text-sm font-medium">{action.title}</p>
                       </div>
-                      <p>{activity}</p>
-                    </div>
-                  </div>
-                ))}
+                      <p className="text-xs text-white/70">{action.description}</p>
+                    </button>
+                  );
+                })}
               </div>
             </GlassCard>
           </div>
 
-          {/* Center Column: Main Stats */}
-          <div className="lg:col-span-8">
-            <div className="grid grid-cols-2 gap-5">
-              {adminNavigationItems.map((item) => (
-                <StatCard key={item.id} item={item} />
+          <GlassCard className="lg:col-span-2 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Activity className="h-5 w-5 text-pink-300" />
+              <h2 className="text-lg font-semibold">Recent Admin Focus</h2>
+            </div>
+            <div className="space-y-3">
+              {recentActivity.map((entry, index) => (
+                <div
+                  key={index}
+                  className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/80"
+                >
+                  {entry}
+                </div>
               ))}
             </div>
-            
-            {/* Love Notes Pending Review */}
-            <GlassCard className="cursor-pointer p-6 mt-5 flex items-center justify-between" onClick={() => handleNavigation('love-notes-review')}>
-              <div className="flex items-center gap-4">
-                <div className="bg-gradient-to-br from-purple-500/20 to-indigo-500/20 p-3 rounded-xl">
-                  <Mail className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold">Love Notes Pending Review</h3>
-                  <p className="text-sm text-white/70">Moderate user-submitted love notes</p>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-white/50" />
-            </GlassCard>
-          </div>
-        </main>
+          </GlassCard>
+        </section>
 
-        {/* Footer Note */}
-        <footer className="text-center text-xs text-white/50 mt-4 mb-6">
-          Admin Control Panel | ConfessIt
+        <footer className="pb-6 text-center text-xs text-white/50">
+          ConfessIt Administration · Maintaining a safe and supportive community
         </footer>
       </div>
     </div>
