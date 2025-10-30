@@ -173,6 +173,129 @@ export const sendMessage = async (
 };
 
 /**
+ * Report a message
+ */
+export const reportMessage = async (
+  messageId: string,
+  reporterId: string,
+  reportedUserId: string,
+  reason: string,
+  conversationId: string
+): Promise<void> => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client not initialized');
+  }
+
+  const { error } = await supabaseClient
+    .from('message_reports')
+    .insert({
+      message_id: messageId,
+      reporter_id: reporterId,
+      reported_user_id: reportedUserId,
+      reason,
+      conversation_id: conversationId,
+      reported_at: new Date().toISOString()
+    });
+
+  if (error) {
+    console.error('Error reporting message:', error);
+    throw error;
+  }
+};
+
+/**
+ * Block a conversation
+ */
+export const blockConversation = async (
+  conversationId: string,
+  blockedBy: string
+): Promise<void> => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client not initialized');
+  }
+
+  const { error } = await supabaseClient
+    .from('conversations')
+    .update({
+      is_blocked: true,
+      blocked_by: blockedBy,
+      blocked_at: new Date().toISOString()
+    })
+    .eq('id', conversationId);
+
+  if (error) {
+    console.error('Error blocking conversation:', error);
+    throw error;
+  }
+};
+
+/**
+ * Unblock a conversation
+ */
+export const unblockConversation = async (
+  conversationId: string,
+  userId: string
+): Promise<void> => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client not initialized');
+  }
+
+  // First check if the user is the one who blocked
+  const { data: conversation, error: fetchError } = await supabaseClient
+    .from('conversations')
+    .select('blocked_by')
+    .eq('id', conversationId)
+    .single();
+
+  if (fetchError) {
+    console.error('Error fetching conversation:', fetchError);
+    throw fetchError;
+  }
+
+  if (conversation.blocked_by !== userId) {
+    throw new Error('Only the user who blocked can unblock');
+  }
+
+  const { error } = await supabaseClient
+    .from('conversations')
+    .update({
+      is_blocked: false,
+      blocked_by: null,
+      blocked_at: null
+    })
+    .eq('id', conversationId);
+
+  if (error) {
+    console.error('Error unblocking conversation:', error);
+    throw error;
+  }
+};
+
+/**
+ * Check if conversation is blocked
+ */
+export const getConversationBlockStatus = async (
+  conversationId: string
+): Promise<{ is_blocked: boolean; blocked_by: string | null; blocked_at: string | null }> => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client not initialized');
+  }
+
+  const { data, error } = await supabaseClient
+    .from('conversations')
+    .select('is_blocked, blocked_by, blocked_at')
+    .eq('id', conversationId)
+    .single();
+
+  if (error) {
+    console.error('Error getting block status:', error);
+    throw error;
+  }
+
+  return data;
+};
+
+/**
  * Cleanup and disconnect Supabase client
  */
 export const disconnectSupabase = () => {

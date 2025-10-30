@@ -538,12 +538,19 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "bio": other_user.bio if other_user else None,
             "interests": other_user.interests if other_user else []
         },
-        "is_initiator": conversation.initiatorId == current_user.Regno
+        "is_initiator": conversation.initiatorId == current_user.Regno,
+        "is_blocked": False,
+        "blocked_by": None
     }
     
-    # If conversation is accepted and not expired, include Supabase token
-    if conversation.status == "accepted" and not is_expired:
-        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
+    # Get block status from Supabase
+    supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
+    if supabase_conversation:
+        response_data["is_blocked"] = supabase_conversation.get("is_blocked", False)
+        response_data["blocked_by"] = supabase_conversation.get("blocked_by", None)
+    
+    # If conversation is accepted and not expired and not blocked, include Supabase token
+    if conversation.status == "accepted" and not is_expired and not response_data["is_blocked"]:
         if supabase_conversation:
             match_expires_at = match.expires_at
             if match_expires_at.tzinfo is None:
@@ -771,11 +778,19 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
                 "interests": other_user.interests or []
             },
             "is_initiator": is_initiator,
+            "is_blocked": False,
+            "blocked_by": None,
             "supabase_token": supabase_token,
             "supabase_anon_key": supabase_anon_key,
             "conversation_id_supabase": conversation_id_supabase,
             "supabase_url": supabase_url
         }
+        
+        # Get block status from Supabase
+        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
+        if supabase_conversation:
+            conversation_data["is_blocked"] = supabase_conversation.get("is_blocked", False)
+            conversation_data["blocked_by"] = supabase_conversation.get("blocked_by", None)
         
         return conversation_data
         
@@ -784,3 +799,97 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
     except Exception as e:
         logger.error(f"Error in get_conversation_by_match_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error getting conversation.")
+
+
+def block_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
+    """
+    Block a conversation. Updates both MongoDB and Supabase.
+    """
+    try:
+        try:
+            match_id = ObjectId(match_id_str)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match ID.")
+        
+        # Get the match
+        match_doc = db.matches.find_one({"_id": match_id})
+        if not match_doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+        
+        match = Match(**match_doc)
+        
+        # Verify user is part of the match
+        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
+        
+        # Get the conversation
+        conversation_doc = db.conversations.find_one({"matchId": match_id})
+        if not conversation_doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+        
+        # Block in Supabase
+        success = supabase_service.block_conversation(str(match_id), current_user.Regno)
+        
+        if not success:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to block conversation.")
+        
+        logger.info(f"User {current_user.Regno} blocked conversation for match {match_id}")
+        
+        return {
+            "status": "success",
+            "message": "Conversation blocked successfully.",
+            "blocked_by": current_user.Regno
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error blocking conversation: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error blocking conversation.")
+
+
+def unblock_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
+    """
+    Unblock a conversation. Only the user who blocked can unblock.
+    Updates both MongoDB and Supabase.
+    """
+    try:
+        try:
+            match_id = ObjectId(match_id_str)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match ID.")
+        
+        # Get the match
+        match_doc = db.matches.find_one({"_id": match_id})
+        if not match_doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+        
+        match = Match(**match_doc)
+        
+        # Verify user is part of the match
+        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
+        
+        # Get the conversation
+        conversation_doc = db.conversations.find_one({"matchId": match_id})
+        if not conversation_doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+        
+        # Unblock in Supabase (service will check if user is blocker)
+        success = supabase_service.unblock_conversation(str(match_id), current_user.Regno)
+        
+        if not success:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only unblock if you were the one who blocked.")
+        
+        logger.info(f"User {current_user.Regno} unblocked conversation for match {match_id}")
+        
+        return {
+            "status": "success",
+            "message": "Conversation unblocked successfully."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error unblocking conversation: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error unblocking conversation.")

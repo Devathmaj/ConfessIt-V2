@@ -205,6 +205,20 @@ export const getConversationMessages = async (matchId: string) => {
     return response.data;
 };
 
+export const blockConversation = async (matchId: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${matchId}/block`, {}, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const unblockConversation = async (matchId: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${matchId}/unblock`, {}, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 
 // --- Love Notes Endpoints ---
 

@@ -187,6 +187,87 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Error fetching conversation from Supabase: {e}")
             return None
+    
+    def block_conversation(
+        self,
+        match_id: str,
+        blocked_by: str
+    ) -> bool:
+        """
+        Block a conversation in Supabase
+        
+        Args:
+            match_id: MongoDB match ObjectId as string
+            blocked_by: Regno of user who is blocking
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            update_data = {
+                "is_blocked": True,
+                "blocked_by": blocked_by,
+                "blocked_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            
+            if result.data:
+                logger.info(f"Blocked conversation for match {match_id} by {blocked_by}")
+                return True
+            else:
+                logger.warning(f"No conversation found in Supabase for match {match_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error blocking conversation in Supabase: {e}")
+            return False
+    
+    def unblock_conversation(
+        self,
+        match_id: str,
+        user_id: str
+    ) -> bool:
+        """
+        Unblock a conversation in Supabase
+        Only the user who blocked can unblock
+        
+        Args:
+            match_id: MongoDB match ObjectId as string
+            user_id: Regno of user attempting to unblock
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # First check if user is the one who blocked
+            conv = self.get_conversation_by_match_id(match_id)
+            if not conv:
+                logger.warning(f"No conversation found for match {match_id}")
+                return False
+            
+            if conv.get("blocked_by") != user_id:
+                logger.warning(f"User {user_id} cannot unblock - not the blocker")
+                return False
+            
+            update_data = {
+                "is_blocked": False,
+                "blocked_by": None,
+                "blocked_at": None
+            }
+            
+            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            
+            if result.data:
+                logger.info(f"Unblocked conversation for match {match_id} by {user_id}")
+                return True
+            else:
+                logger.warning(f"Failed to unblock conversation for match {match_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error unblocking conversation in Supabase: {e}")
+            return False
 
 
 # Global instance

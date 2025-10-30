@@ -3,12 +3,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2 } from 'lucide-react';
-import { getCurrentConversation, acceptConversation, rejectConversation } from '@/services/api';
+import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye } from 'lucide-react';
+import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI } from '@/services/api';
 import { initSupabaseClient, subscribeToMessages, fetchMessages, sendMessage as sendSupabaseMessage, disconnectSupabase } from '@/lib/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { toast } from 'sonner';
 import { resolveProfilePictureUrl } from '@/lib/utils';
+import { ReportMessageDialog } from './ReportMessageDialog';
+import { BlockUserDialog } from './BlockUserDialog';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 interface ConversationDialogProps {
   onClose: () => void;
@@ -42,6 +50,8 @@ interface ConversationData {
     interests: string[];
   };
   is_initiator: boolean;
+  is_blocked?: boolean;
+  blocked_by?: string;
   supabase_token?: string;
   supabase_anon_key?: string;
   conversation_id_supabase?: string;
@@ -74,6 +84,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [showMobileProfile, setShowMobileProfile] = useState(false);
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [selectedMessageForReport, setSelectedMessageForReport] = useState<Message | null>(null);
+  const [blockDialogOpen, setBlockDialogOpen] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockedBy, setBlockedBy] = useState<string | null>(null);
+  const [messagesHidden, setMessagesHidden] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentUserRef = useRef<string | null>(null);
   const supabaseChannelRef = useRef<RealtimeChannel | null>(null);
@@ -93,6 +109,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     };
   }, []);
 
+  // Check block status when conversation data changes
+  useEffect(() => {
+    if (conversationData?.conversation_id_supabase) {
+      checkBlockStatus();
+    }
+  }, [conversationData?.conversation_id_supabase]);
+
   // Initialize Supabase when conversation is accepted
   useEffect(() => {
     if (
@@ -101,7 +124,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       !conversationData.match.is_expired &&
       conversationData.supabase_token &&
       conversationData.conversation_id_supabase &&
-      conversationData.supabase_url
+      conversationData.supabase_url &&
+      !isBlocked  // Don't initialize if blocked
     ) {
       initializeSupabase();
     }
@@ -109,7 +133,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     return () => {
       cleanup();
     };
-  }, [conversationData?.conversation.status, conversationData?.supabase_token]);
+  }, [conversationData?.conversation.status, conversationData?.supabase_token, isBlocked]);
 
   const cleanup = () => {
     if (supabaseChannelRef.current) {
@@ -217,10 +241,25 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       currentUserRef.current = data.conversation.receiver_id;
     }
     
+    // Set block status from the data
+    if (data.is_blocked !== undefined) {
+      setIsBlocked(data.is_blocked);
+      setBlockedBy(data.blocked_by || null);
+      
+      // If blocked and user is not the blocker, check localStorage for hide preference
+      if (data.is_blocked && data.blocked_by !== currentUserRef.current) {
+        const hideKey = `hide_messages_${data.match.id}`;
+        const shouldHide = localStorage.getItem(hideKey) === 'true';
+        setMessagesHidden(shouldHide);
+      }
+    }
+    
     // Debug: Log the conversation data to see what we have
     console.log('📦 Setup Conversation Data:', {
       status: data.conversation.status,
       is_initiator: data.is_initiator,
+      is_blocked: data.is_blocked,
+      blocked_by: data.blocked_by,
       has_supabase_token: !!data.supabase_token,
       has_anon_key: !!data.supabase_anon_key,
       has_conversation_id: !!data.conversation_id_supabase,
@@ -366,6 +405,106 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     onClose();
   };
 
+  const handleCopyMessage = (messageText: string) => {
+    navigator.clipboard.writeText(messageText)
+      .then(() => {
+        toast.success('Message copied to clipboard');
+      })
+      .catch((error) => {
+        console.error('Failed to copy message:', error);
+        toast.error('Failed to copy message');
+      });
+  };
+
+  const handleReportMessage = (message: Message) => {
+    // Only receivers can report messages (can't report own messages)
+    if (message.is_sender) {
+      toast.error('You cannot report your own messages');
+      return;
+    }
+
+    setSelectedMessageForReport(message);
+    setReportDialogOpen(true);
+  };
+
+  const checkBlockStatus = async () => {
+    if (!conversationData?.match?.id) return;
+
+    try {
+      // Fetch conversation data from backend which includes block status
+      const response = await getCurrentConversation();
+      if (response.status === 'success' && response.is_blocked !== undefined) {
+        setIsBlocked(response.is_blocked || false);
+        setBlockedBy(response.blocked_by || null);
+        
+        // If blocked and user is not the blocker, check if messages should be hidden from localStorage
+        if (response.is_blocked && response.blocked_by !== currentUserRef.current) {
+          const hideKey = `hide_messages_${conversationData.match.id}`;
+          const shouldHide = localStorage.getItem(hideKey) === 'true';
+          setMessagesHidden(shouldHide);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking block status:', error);
+    }
+  };
+
+  const handleBlockUser = () => {
+    setBlockDialogOpen(true);
+  };
+
+  const handleBlockSuccess = async () => {
+    await checkBlockStatus();
+    setMessages([]); // Clear messages
+    cleanup(); // Disconnect Supabase
+    toast.info('User has been notified that you blocked them');
+    onRefresh(); // Refresh parent
+  };
+
+  const handleUnblockUser = async () => {
+    if (!conversationData?.match?.id || !currentUserRef.current) return;
+
+    try {
+      await unblockConversationAPI(conversationData.match.id);
+      toast.success('User has been unblocked');
+      await checkBlockStatus();
+      setMessagesHidden(false);
+      
+      // Clear hide preference from localStorage
+      const hideKey = `hide_messages_${conversationData.match.id}`;
+      localStorage.removeItem(hideKey);
+      
+      // Reinitialize Supabase connection
+      if (conversationData.conversation.status === 'accepted' && !conversationData.match.is_expired) {
+        await initializeSupabase();
+      }
+      
+      onRefresh(); // Refresh parent
+    } catch (error: any) {
+      console.error('Error unblocking user:', error);
+      if (error.response?.data?.detail?.includes('only unblock if you were')) {
+        toast.error('Only the person who blocked can unblock');
+      } else {
+        toast.error('Failed to unblock user');
+      }
+    }
+  };
+
+  const toggleMessagesVisibility = () => {
+    if (!conversationData?.match?.id) return;
+    
+    const newHiddenState = !messagesHidden;
+    setMessagesHidden(newHiddenState);
+    
+    // Store preference in localStorage (per-user, per-conversation)
+    const hideKey = `hide_messages_${conversationData.match.id}`;
+    if (newHiddenState) {
+      localStorage.setItem(hideKey, 'true');
+    } else {
+      localStorage.removeItem(hideKey);
+    }
+  };
+
   const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
 
   const getStatusBadge = (status: string, isExpired: boolean) => {
@@ -444,7 +583,61 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     ● Connected
                   </Badge>
                 )}
+                {isBlocked && (
+                  <Badge variant="destructive" className="flex items-center gap-1">
+                    <ShieldOff className="h-3 w-3" />
+                    Blocked
+                  </Badge>
+                )}
               </div>
+
+              {/* Block/Unblock Actions */}
+              {isAccepted && !isExpired && (
+                <div className="flex gap-2 mt-3">
+                  {!isBlocked ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleBlockUser}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <ShieldOff className="h-4 w-4 mr-2" />
+                      Block User
+                    </Button>
+                  ) : (
+                    <>
+                      {blockedBy === currentUserRef.current && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleUnblockUser}
+                          className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                        >
+                          <ShieldCheck className="h-4 w-4 mr-2" />
+                          Unblock
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={toggleMessagesVisibility}
+                      >
+                        {messagesHidden ? (
+                          <>
+                            <Eye className="h-4 w-4 mr-2" />
+                            Show Messages
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="h-4 w-4 mr-2" />
+                            Hide Messages
+                          </>
+                        )}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button variant="ghost" size="icon" onClick={handleClose}>
@@ -456,6 +649,23 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         <CardContent className="flex-1 overflow-hidden p-0 flex">
           {/* Main Chat Area */}
           <div className="flex-1 flex flex-col">
+            {/* Blocked Warning */}
+            {isBlocked && (
+              <div className="bg-red-50 border-b border-red-200 p-4">
+                <div className="flex items-center gap-2 text-red-900">
+                  <ShieldOff className="h-5 w-5" />
+                  <div>
+                    <p className="font-semibold">This conversation is blocked</p>
+                    <p className="text-sm">
+                      {blockedBy === currentUserRef.current 
+                        ? 'You blocked this user. They have been notified.' 
+                        : `${conversationData.other_user.name} blocked this conversation.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {isRequested && isReceiver && (
@@ -523,30 +733,67 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 </div>
               )}
 
-              {isAccepted && messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.is_sender ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[70%] rounded-lg p-3 ${
-                      message.is_sender
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted'
-                    }`}
-                  >
-                    <p className="text-sm">{message.text}</p>
-                    <p className={`text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                      {new Date(message.timestamp).toLocaleTimeString()}
-                    </p>
+              {isAccepted && !messagesHidden && messages.map((message) => (
+                <ContextMenu key={message.id}>
+                  <ContextMenuTrigger>
+                    <div
+                      className={`flex ${message.is_sender ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-[70%] rounded-lg p-3 cursor-pointer ${
+                          message.is_sender
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted'
+                        }`}
+                      >
+                        <p className="text-sm">{message.text}</p>
+                        <p className={`text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                          {new Date(message.timestamp).toLocaleTimeString()}
+                        </p>
+                      </div>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => handleCopyMessage(message.text)}>
+                      <Copy className="mr-2 h-4 w-4" />
+                      Copy
+                    </ContextMenuItem>
+                    {!message.is_sender && !isBlocked && (
+                      <ContextMenuItem 
+                        onClick={() => handleReportMessage(message)}
+                        className="text-red-600 focus:text-red-600"
+                      >
+                        <Flag className="mr-2 h-4 w-4" />
+                        Report
+                      </ContextMenuItem>
+                    )}
+                  </ContextMenuContent>
+                </ContextMenu>
+              ))}
+
+              {messagesHidden && (
+                <div className="flex items-center justify-center h-full text-muted-foreground">
+                  <div className="text-center">
+                    <EyeOff className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                    <p>Messages are hidden</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={toggleMessagesVisibility}
+                      className="mt-2"
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      Show Messages
+                    </Button>
                   </div>
                 </div>
-              ))}
+              )}
+
               <div ref={messagesEndRef} />
             </div>
 
             {/* Message Input */}
-            {canChat && (
+            {canChat && !isBlocked && (
               <div className="border-t p-4 flex gap-2">
                 <input
                   type="text"
@@ -563,6 +810,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 >
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
                 </Button>
+              </div>
+            )}
+
+            {/* Blocked State Message */}
+            {isBlocked && canChat && (
+              <div className="border-t p-4 bg-red-50">
+                <div className="flex items-center justify-center gap-2 text-red-900">
+                  <ShieldOff className="h-5 w-5" />
+                  <p className="font-medium">This conversation is blocked</p>
+                </div>
               </div>
             )}
           </div>
@@ -590,6 +847,35 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           </div>
         </CardContent>
       </Card>
+
+      {/* Report Message Dialog */}
+      {selectedMessageForReport && conversationData && (
+        <ReportMessageDialog
+          isOpen={reportDialogOpen}
+          onClose={() => {
+            setReportDialogOpen(false);
+            setSelectedMessageForReport(null);
+          }}
+          messageId={selectedMessageForReport.id}
+          messageText={selectedMessageForReport.text}
+          reporterId={currentUserRef.current!}
+          reportedUserId={conversationData.is_initiator 
+            ? conversationData.conversation.receiver_id 
+            : conversationData.conversation.initiator_id}
+          conversationId={conversationData.conversation_id_supabase!}
+        />
+      )}
+
+      {/* Block User Dialog */}
+      {conversationData && (
+        <BlockUserDialog
+          isOpen={blockDialogOpen}
+          onClose={() => setBlockDialogOpen(false)}
+          matchId={conversationData.match.id}
+          otherUserName={conversationData.other_user.name}
+          onBlockSuccess={handleBlockSuccess}
+        />
+      )}
     </div>
   );
 };
