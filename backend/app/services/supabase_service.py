@@ -20,15 +20,27 @@ class SupabaseService:
         self.jwt_secret = settings.SUPABASE_JWT_SECRET  # For signing tokens
         self._client: Optional[Client] = None
     
-    @property
-    def client(self) -> Client:
-        """Get or create Supabase client"""
+    def _is_configured(self) -> bool:
+        """Return True when service credentials are available."""
+        return bool(self.supabase_url and self.service_role_key)
+
+    def _get_client(self) -> Optional[Client]:
+        """Return a Supabase client when configuration is present."""
+        if not self._is_configured():
+            logger.warning("Supabase service is not configured; skipping client creation.")
+            return None
+
         if self._client is None:
-            if not self.supabase_url or not self.service_role_key:
-                raise ValueError("Supabase URL and Service Role Key must be configured")
-            # Use service role key for admin operations (bypasses RLS)
             self._client = create_client(self.supabase_url, self.service_role_key)
         return self._client
+
+    @property
+    def client(self) -> Client:
+        """Get or create Supabase client, raising if unavailable."""
+        client = self._get_client()
+        if client is None:
+            raise ValueError("Supabase URL and Service Role Key must be configured")
+        return client
     
     def generate_ephemeral_token(
         self, 
@@ -47,8 +59,8 @@ class SupabaseService:
         Returns:
             JWT token string
         """
-        if not self.jwt_secret:
-            raise ValueError("Supabase JWT secret not configured")
+        if not (self.jwt_secret and self.supabase_url):
+            raise ValueError("Supabase JWT secret or URL not configured")
         
         now = datetime.now(timezone.utc)
         exp = now + timedelta(hours=expires_in_hours)
@@ -97,9 +109,14 @@ class SupabaseService:
         Returns:
             Supabase conversation UUID or None if failed
         """
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase sync skipped because the service is not configured")
+            return None
+
         try:
             # No conversion needed - store as-is since Supabase uses text fields
-            result = self.client.table("conversations").select("id").eq("match_id", match_id).execute()
+            result = client.table("conversations").select("id").eq("match_id", match_id).execute()
             
             conversation_data = {
                 "match_id": match_id,  # MongoDB ObjectId as text
@@ -113,12 +130,12 @@ class SupabaseService:
             if result.data and len(result.data) > 0:
                 # Update existing conversation
                 supabase_id = result.data[0]["id"]
-                self.client.table("conversations").update(conversation_data).eq("id", supabase_id).execute()
+                client.table("conversations").update(conversation_data).eq("id", supabase_id).execute()
                 logger.info(f"Updated existing conversation in Supabase: {supabase_id}")
                 return supabase_id
             else:
                 # Insert new conversation
-                insert_result = self.client.table("conversations").insert(conversation_data).execute()
+                insert_result = client.table("conversations").insert(conversation_data).execute()
                 if insert_result.data and len(insert_result.data) > 0:
                     supabase_id = insert_result.data[0]["id"]
                     logger.info(f"Created new conversation in Supabase: {supabase_id}")
@@ -148,12 +165,17 @@ class SupabaseService:
         Returns:
             True if successful, False otherwise
         """
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase status update skipped because the service is not configured")
+            return False
+
         try:
             update_data = {"status": status}
             if accepted_at:
                 update_data["accepted_at"] = accepted_at.isoformat()
             
-            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            result = client.table("conversations").update(update_data).eq("match_id", match_id).execute()
             
             if result.data:
                 logger.info(f"Updated conversation status in Supabase for match {match_id}: {status}")
@@ -176,8 +198,13 @@ class SupabaseService:
         Returns:
             Conversation data dict or None if not found
         """
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase conversation lookup skipped because the service is not configured")
+            return None
+
         try:
-            result = self.client.table("conversations").select("*").eq("match_id", match_id).execute()
+            result = client.table("conversations").select("*").eq("match_id", match_id).execute()
             
             if result.data and len(result.data) > 0:
                 return result.data[0]
@@ -203,6 +230,11 @@ class SupabaseService:
         Returns:
             True if successful, False otherwise
         """
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase block conversation skipped because the service is not configured")
+            return False
+
         try:
             update_data = {
                 "is_blocked": True,
@@ -210,7 +242,7 @@ class SupabaseService:
                 "blocked_at": datetime.now(timezone.utc).isoformat()
             }
             
-            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            result = client.table("conversations").update(update_data).eq("match_id", match_id).execute()
             
             if result.data:
                 logger.info(f"Blocked conversation for match {match_id} by {blocked_by}")
@@ -239,6 +271,11 @@ class SupabaseService:
         Returns:
             True if successful, False otherwise
         """
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase unblock conversation skipped because the service is not configured")
+            return False
+
         try:
             # First check if user is the one who blocked
             conv = self.get_conversation_by_match_id(match_id)
@@ -256,7 +293,7 @@ class SupabaseService:
                 "blocked_at": None
             }
             
-            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            result = client.table("conversations").update(update_data).eq("match_id", match_id).execute()
             
             if result.data:
                 logger.info(f"Unblocked conversation for match {match_id} by {user_id}")
@@ -275,13 +312,18 @@ class SupabaseService:
         limit: int = 200
     ) -> List[Dict[str, Any]]:
         """Fetch messages for a conversation using the service role credentials."""
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase message fetch skipped because the service is not configured")
+            return []
+
         try:
             result = (
-                self.client
+                client
                 .table("messages")
                 .select("*")
                 .eq("conversation_id", conversation_id)
-                .order("created_at", desc=False)
+                .order("timestamp", desc=False)
                 .limit(limit)
                 .execute()
             )
@@ -292,13 +334,18 @@ class SupabaseService:
 
     def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Return the most recent message for a conversation if one exists."""
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase latest message fetch skipped because the service is not configured")
+            return None
+
         try:
             result = (
-                self.client
+                client
                 .table("messages")
                 .select("*")
                 .eq("conversation_id", conversation_id)
-                .order("created_at", desc=True)
+                .order("timestamp", desc=True)
                 .limit(1)
                 .execute()
             )
@@ -315,6 +362,11 @@ class SupabaseService:
         reason: Optional[str] = None
     ) -> bool:
         """Mark a conversation as terminated and blocked in Supabase."""
+        client = self._get_client()
+        if client is None:
+            logger.warning("Supabase terminate conversation skipped because the service is not configured")
+            return False
+
         try:
             update_data: Dict[str, Any] = {
                 "status": "terminated",
@@ -325,7 +377,7 @@ class SupabaseService:
             if reason:
                 update_data["termination_reason"] = reason
 
-            result = self.client.table("conversations").update(update_data).eq("match_id", match_id).execute()
+            result = client.table("conversations").update(update_data).eq("match_id", match_id).execute()
 
             if result.data:
                 logger.info(f"Terminated conversation for match {match_id}")

@@ -31,6 +31,9 @@ class ConfessionService:
 
     def create_confession(self, confession_data: ConfessionCreate, user_id: str):
         confession_dict = confession_data.dict()
+        confessing_to_value = confession_dict.get("confessing_to")
+        if isinstance(confessing_to_value, str):
+            confession_dict["confessing_to"] = confessing_to_value.strip()
         confession_dict["_id"] = ObjectId()
         confession_dict["user_id"] = user_id 
         confession_dict["timestamp"] = datetime.datetime.utcnow()
@@ -415,4 +418,3 @@ class ConfessionService:
 
         logger.info(f"User {user_id} reported confession {confession_id}")
         return self.get_confession(confession_id, user_id)
-

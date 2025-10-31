@@ -63,6 +63,7 @@ interface AdminConversationMessage {
   sender_id?: string | null;
   text?: string | null;
   created_at?: string | null;
+  timestamp?: string | null;
 }
 
 interface AdminConversationSummary {
@@ -319,7 +320,7 @@ const ChatMonitor = () => {
                           </div>
                           <p className="text-xs text-muted-foreground">{previewText}</p>
                           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                            Updated {formatTimestamp(conversation.latest_message?.created_at || conversation.accepted_at || conversation.created_at)}
+                            Updated {formatTimestamp(conversation.latest_message?.timestamp || conversation.latest_message?.created_at || conversation.accepted_at || conversation.created_at)}
                           </p>
                         </button>
                       );
@@ -397,7 +398,7 @@ const ChatMonitor = () => {
                                     <MessageSquare className="h-3.5 w-3.5" />
                                     <span>{message.sender_id || 'Unknown sender'}</span>
                                     <span>•</span>
-                                    <span>{formatTimestamp(message.created_at)}</span>
+                                    <span>{formatTimestamp(message.timestamp || message.created_at)}</span>
                                   </div>
                                   <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">
                                     {message.text || 'No content'}

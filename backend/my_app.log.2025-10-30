@@ -1,0 +1,679 @@
+2025-08-24 04:42:26,455 - app.main - INFO - Running initial database setup...
+2025-08-24 04:42:56,832 - app.main - ERROR - Could not connect to MongoDB during startup setup: mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 30s, Topology Description: <TopologyDescription id: 68aa983223c479e4dc8462a7, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-08-24 04:56:41,538 - app.services.auth_service - WARNING - No user found with registration number: STM22CS021
+2025-08-24 04:56:49,217 - app.services.auth_service - WARNING - No user found with registration number: STM22CS001
+2025-08-24 05:37:20,988 - app.services.auth_service - WARNING - No user found with registration number: user
+2025-08-24 05:37:30,909 - app.services.auth_service - WARNING - No user found with registration number: user
+2025-08-24 05:37:35,287 - app.services.auth_service - WARNING - No user found with registration number: user
+2025-08-24 05:41:40,368 - app.main - INFO - Running initial database setup...
+2025-08-24 05:41:41,553 - app.main - INFO - Inserted user: Test User
+2025-08-24 05:41:41,581 - app.main - INFO - Inserted user: Test Admin
+2025-08-24 05:41:41,581 - app.main - INFO - Initial database setup complete.
+2025-08-24 05:47:06,583 - app.main - INFO - Running initial database setup...
+2025-08-24 05:47:07,466 - app.main - INFO - Inserted user: Test User
+2025-08-24 05:47:07,470 - app.main - INFO - Inserted user: Test Admin
+2025-08-24 05:47:07,470 - app.main - INFO - Initial database setup complete.
+2025-08-24 05:47:31,056 - app.main - INFO - Running initial database setup...
+2025-08-24 05:47:31,085 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 05:47:31,086 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 05:47:31,087 - app.main - INFO - Initial database setup complete.
+2025-08-24 05:47:36,852 - app.main - INFO - Running initial database setup...
+2025-08-24 05:47:36,883 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 05:47:36,885 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 05:47:36,885 - app.main - INFO - Initial database setup complete.
+2025-08-24 05:48:38,606 - app.main - INFO - Running initial database setup...
+2025-08-24 05:48:48,907 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 05:48:48,909 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 05:48:48,910 - app.main - INFO - Initial database setup complete.
+2025-08-24 05:49:01,574 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=MO9vKxrWggaglW_MIVop7XwdvPOG9t7t1Sn8ALZq6J0
+2025-08-24 05:50:08,673 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-24 05:50:08,756 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-08-24 05:50:08,798 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-08-24 05:50:47,533 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-24 05:50:48,924 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-24 05:50:48,961 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-08-24 05:50:49,003 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-08-24 05:51:10,249 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-24 05:51:10,289 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-08-24 05:51:10,328 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-08-24 05:51:14,781 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-08-24 05:51:26,014 - app.services.confession_service - INFO - Created confession 68aaa85d935b559bb2a1b3ea
+2025-08-24 05:51:44,748 - app.services.confession_service - INFO - Added comment 68aaa86f935b559bb2a1b3ed to confession 68aaa85d935b559bb2a1b3ea
+2025-08-24 05:51:49,833 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-24 05:51:49,886 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-08-24 05:51:49,939 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-08-24 05:51:55,116 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-24 05:51:55,160 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-08-24 05:51:55,224 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-08-24 05:51:57,102 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-08-24 05:52:21,498 - app.services.confession_service - INFO - Created confession 68aaa895935b559bb2a1b400
+2025-08-24 05:52:33,543 - app.services.confession_service - INFO - Added comment 68aaa8a1935b559bb2a1b403 to confession 68aaa895935b559bb2a1b400
+2025-08-24 05:52:40,710 - app.services.confession_service - INFO - Created confession 68aaa8a8935b559bb2a1b406
+2025-08-24 05:57:49,043 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 05:57:49,137 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 05:57:49,199 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 05:57:55,920 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=S7SXrt3g3TjKHGeCAAmiwebkLjfsAYpFOlRjhzasJo0
+2025-08-24 05:58:22,564 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 05:58:22,622 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 05:58:22,692 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 05:58:42,271 - app.services.confession_service - INFO - Retrieved total confession count: 3
+2025-08-24 05:59:06,607 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:56:16,138 - app.main - INFO - Running initial database setup...
+2025-08-24 08:56:24,406 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 08:56:24,408 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 08:56:24,408 - app.main - INFO - Initial database setup complete.
+2025-08-24 08:56:46,046 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=A3g7pt992SwYMyAttCTU9yQMQLzIhRPJKyDabdsvKoQ
+2025-08-24 08:56:58,296 - app.services.confession_service - INFO - Retrieved total confession count: 3
+2025-08-24 08:58:16,041 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:32,446 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:34,197 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:34,252 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 08:58:34,322 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 08:58:44,072 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:47,044 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:47,096 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 08:58:47,166 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 08:58:51,949 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:53,276 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 08:58:53,341 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 08:58:53,400 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:05:56,939 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:05:57,027 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:05:57,084 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:05:58,873 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:02,661 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:02,708 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:06:02,779 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:06:06,910 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:07,591 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:07,627 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:06:07,680 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:06:08,064 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:09,403 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:09,453 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:06:09,510 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:06:10,191 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:10,886 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:12,308 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:12,361 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:06:12,424 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:06:12,701 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:13,541 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:06:13,781 - app.services.confession_service - INFO - Retrieved total confession count: 3
+2025-08-24 09:09:59,582 - app.main - INFO - Running initial database setup...
+2025-08-24 09:09:59,886 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:09:59,888 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:09:59,888 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:10:18,958 - app.main - INFO - Running initial database setup...
+2025-08-24 09:10:19,011 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:10:19,014 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:10:19,015 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:14:44,744 - app.main - INFO - Running initial database setup...
+2025-08-24 09:14:44,803 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:14:44,804 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:14:44,804 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:15:06,147 - app.main - INFO - Running initial database setup...
+2025-08-24 09:15:06,276 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:15:06,277 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:15:06,278 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:17:48,999 - app.main - INFO - Running initial database setup...
+2025-08-24 09:17:58,865 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:17:58,866 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:17:58,867 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:18:27,983 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=kgImhSBJH8ImVZsOjnPd0nitmQHCc4lQFHiR-tVKQhs
+2025-08-24 09:19:23,155 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=veBbNUuHJkknyEhXnvLpgbs6POaormYcqYiLQ_2yCS8
+2025-08-24 09:19:31,440 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:19:31,503 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:19:31,575 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:19:37,269 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:19:37,320 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:19:37,378 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:20:03,384 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=og87NODN75kZE0OPH6ghOn4tQhBBwpk9SQFGo-sff-Y
+2025-08-24 09:20:29,060 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:27:57,579 - app.main - INFO - Running initial database setup...
+2025-08-24 09:27:57,634 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:27:57,635 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:27:57,635 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:35:36,050 - app.main - INFO - Running initial database setup...
+2025-08-24 09:35:46,241 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:35:46,244 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:35:46,245 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:36:33,475 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=BgNS0FKMf87Q7vPbxWAif-6QECtD9fI5jguMXI2sp1Y
+2025-08-24 09:44:34,102 - app.main - INFO - Running initial database setup...
+2025-08-24 09:44:53,659 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 09:44:53,663 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 09:44:53,663 - app.main - INFO - Initial database setup complete.
+2025-08-24 09:45:08,072 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=wCIIY45U-eTpcEefTGYWx0hAtlzM0fqdZ9osOv3dQnk
+2025-08-24 09:45:55,889 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=MbwC_luFreW33W8P8xsG4_qgfymXt25LhJIVnxdM5Sg
+2025-08-24 09:46:17,731 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:46:17,797 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:46:17,862 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:46:19,565 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:46:19,623 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:46:19,768 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:46:41,087 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:46:41,192 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 09:46:41,246 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 09:46:45,834 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 09:47:02,679 - app.services.confession_service - INFO - Created confession 68aadf96af19a8ea66004e14
+2025-08-24 09:47:12,023 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:47:12,075 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:47:12,122 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:47:19,536 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=L0wnwYWL1WFlB18s9VwKwJZ5LgaDL53ABWg5oN5sYig
+2025-08-24 09:53:48,490 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:53:48,540 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:53:48,609 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:55:03,152 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:55:03,197 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:55:03,252 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:55:54,681 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:55:57,101 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:55:57,149 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:55:57,219 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:56:09,884 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:56:12,060 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:56:12,106 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:56:12,163 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:56:34,526 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:56:35,380 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:56:35,435 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:56:35,486 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:56:37,207 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:56:37,291 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:56:37,342 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 09:57:06,772 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:57:08,371 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 09:57:08,427 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 09:57:08,481 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:02:39,691 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:02:39,738 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:02:39,805 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:04:18,210 - app.main - INFO - Running initial database setup...
+2025-08-24 10:04:18,296 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:04:18,298 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:04:18,298 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:05:25,404 - app.main - INFO - Running initial database setup...
+2025-08-24 10:05:36,820 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:05:36,822 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:05:36,822 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:05:39,530 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=yu3pJNmZyqhqk34-1Wm_OcdXoOkA0QE5Z87RXNmLWOA
+2025-08-24 10:06:42,633 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:06:47,980 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:06:48,023 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:06:48,084 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:08:00,226 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:11:17,056 - app.main - INFO - Running initial database setup...
+2025-08-24 10:11:17,214 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:11:17,216 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:11:17,216 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:12:59,640 - app.main - INFO - Running initial database setup...
+2025-08-24 10:13:10,525 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:13:10,527 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:13:10,528 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:13:10,779 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=SleK64uLw7W6CbSpwSP_fcvmYkySnW3U_Qc_3kogtew
+2025-08-24 10:17:31,494 - app.main - INFO - Running initial database setup...
+2025-08-24 10:17:31,602 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:17:31,604 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:17:31,604 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:18:05,698 - app.main - INFO - Running initial database setup...
+2025-08-24 10:18:15,099 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:18:15,101 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:18:15,101 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:18:59,883 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=F5GoiC2T8oAO_daFN21LSQWEltFNQJCC8c24qH6dLww
+2025-08-24 10:31:04,982 - app.main - INFO - Running initial database setup...
+2025-08-24 10:31:05,029 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:31:05,031 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:31:05,032 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:34:06,520 - app.main - INFO - Running initial database setup...
+2025-08-24 10:34:16,830 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:34:16,832 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:34:16,832 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:34:47,914 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=YS5lbTjYx8khgK9WxnJWxlUCC4f48nXP011SFIYiXSg
+2025-08-24 10:34:57,711 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:34:57,792 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:34:57,844 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:35:02,069 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:35:19,014 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:35:25,313 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:35:25,354 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:35:25,416 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:35:36,686 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:35:36,737 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:35:36,789 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:35:44,067 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=pBfZCNlGQI_qgKgvf1oCm9mwaAjebVaCCFSk3UvyOiU
+2025-08-24 10:36:01,686 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:36:06,969 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:36:12,910 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:38:21,901 - app.main - INFO - Running initial database setup...
+2025-08-24 10:38:31,662 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:38:31,665 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:38:31,665 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:38:48,012 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=FQPaHsYQwsoKzFzc-SdO0n6s467Hkf1g7jKy4wegT7s
+2025-08-24 10:38:55,681 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:38:55,748 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 10:38:55,797 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:38:57,612 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:39:04,230 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:39:04,271 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 10:39:04,320 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:39:22,654 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:39:25,603 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:39:25,653 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 10:39:25,706 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:40:01,821 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=nfkrpZeE1jJgKwjVzRMatLJkjiqCZuvKVj42WFPrDX8
+2025-08-24 10:42:42,346 - app.main - INFO - Running initial database setup...
+2025-08-24 10:42:42,374 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:42:42,377 - app.main - INFO - Inserted user: Test User 2
+2025-08-24 10:42:42,378 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:42:42,378 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:43:17,200 - app.main - INFO - Running initial database setup...
+2025-08-24 10:43:26,352 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:43:26,354 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 10:43:26,356 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:43:26,357 - app.main - INFO - Initial database setup complete.
+2025-08-24 10:44:00,314 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=vhnB1blq0xtSXtrpQmNbv2T0h6Q5507JwJBvly5U7ZQ
+2025-08-24 10:44:20,335 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:44:20,390 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 10:44:20,435 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:44:26,599 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:44:31,685 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:44:33,223 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:44:45,905 - app.services.confession_service - INFO - User 68aaeca2649bb719a5ae7a83 reported confession 68aaa8a8935b559bb2a1b406
+2025-08-24 10:45:02,535 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-08-24 10:45:03,742 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-08-24 10:45:04,786 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-08-24 10:45:15,692 - app.services.confession_service - INFO - Created confession 68aaed3b4ee9dec45c7362e0
+2025-08-24 10:46:18,201 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:47:37,125 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:47:50,572 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:47:54,513 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:47:54,566 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:47:54,619 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:47:59,352 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:47:59,404 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:47:59,471 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:48:06,081 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 10:48:06,136 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 10:48:06,184 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 10:48:16,393 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=5R-lGqsadpa03WGtcQGTPzSqez1RUYVKC85BC67dmTQ
+2025-08-24 10:57:16,206 - app.main - INFO - Running initial database setup...
+2025-08-24 10:57:16,323 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 10:57:16,325 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 10:57:16,326 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 10:57:16,327 - app.main - INFO - Initial database setup complete.
+2025-08-24 11:21:26,378 - app.main - INFO - Running initial database setup...
+2025-08-24 11:21:36,672 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 11:21:36,673 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 11:21:36,675 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 11:21:36,675 - app.main - INFO - Initial database setup complete.
+2025-08-24 11:25:36,228 - app.main - INFO - Running initial database setup...
+2025-08-24 11:25:45,502 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 11:25:45,504 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 11:25:45,506 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 11:25:45,506 - app.main - INFO - Initial database setup complete.
+2025-08-24 11:26:01,256 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=BN5qrv2QG2iROUhXR1Fx_pDQDLS_RGRQWkXQEt-gOc4
+2025-08-24 11:26:11,132 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 11:26:11,184 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 11:26:11,249 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 11:26:36,313 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 11:26:45,083 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 11:26:47,148 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 11:26:51,491 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 11:26:51,535 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 11:26:51,592 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 11:27:02,642 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 11:27:02,686 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 11:27:02,738 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 11:27:07,462 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=O8Qa6yRtQuFL2GiB8mBzlgxXs-DLGduszu7Jgwuc-7E
+2025-08-24 12:07:44,354 - app.main - INFO - Running initial database setup...
+2025-08-24 12:07:53,063 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 12:07:53,066 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 12:07:53,070 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 12:07:53,071 - app.main - INFO - Initial database setup complete.
+2025-08-24 12:08:11,586 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=jMyy_WgdotT1L2XWViD_YnPDCFHyrNI_5ghGrqZsF0Y
+2025-08-24 12:10:15,873 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 12:42:51,732 - app.main - INFO - Running initial database setup...
+2025-08-24 12:43:01,678 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 12:43:01,679 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 12:43:01,682 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 12:43:01,683 - app.main - INFO - Initial database setup complete.
+2025-08-24 12:43:07,462 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=jIAHhhlrl9xBw784LdwoVpmaRvFPtj_ARxI9fx9C6cE
+2025-08-24 12:55:17,808 - app.main - INFO - Running initial database setup...
+2025-08-24 12:55:18,000 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 12:55:18,002 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 12:55:18,003 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 12:55:18,004 - app.main - INFO - Initial database setup complete.
+2025-08-24 12:56:55,713 - app.main - INFO - Running initial database setup...
+2025-08-24 12:57:08,528 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-08-24 12:57:08,532 - app.main - INFO - User with Regno 'user123' already exists. Skipping.
+2025-08-24 12:57:08,533 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-08-24 12:57:08,534 - app.main - INFO - Initial database setup complete.
+2025-08-24 12:57:15,754 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=MfGbG579nT1YXv7eCL6bgOXU5MwOkc9VnHPGPHSmaGU
+2025-08-24 13:00:11,563 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:28,515 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:34,770 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:35,792 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:35,899 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 13:00:35,969 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-08-24 13:00:42,408 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:43,955 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-08-24 13:00:44,028 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-08-24 13:00:44,109 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 06:41:56,635 - app.main - INFO - Running initial database setup...
+2025-10-30 06:41:58,700 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 690308b4f806885b027fee97, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 06:42:03,393 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 690308b8f806885b027fee98, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 06:42:07,151 - app.main - INFO - Connected to MongoDB
+2025-10-30 06:42:07,189 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 06:42:07,193 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 06:42:07,196 - app.main - INFO - Initial database setup complete.
+2025-10-30 06:42:39,790 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=RzdywviVWiRkClKReCwUJwGRZbHvRSyHurcx2Fu0ZNc
+2025-10-30 06:43:08,146 - app.services.confession_service - INFO - Retrieved total confession count: 4
+2025-10-30 06:43:19,308 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:43:23,271 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa8a8935b559bb2a1b406 with heart
+2025-10-30 06:43:25,242 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa8a8935b559bb2a1b406 with heart
+2025-10-30 06:43:32,219 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:43:35,911 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaed3b4ee9dec45c7362e0 with heart
+2025-10-30 06:43:36,515 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaed3b4ee9dec45c7362e0 with heart
+2025-10-30 06:43:37,268 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aadf96af19a8ea66004e14 with heart
+2025-10-30 06:43:37,659 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aadf96af19a8ea66004e14 with heart
+2025-10-30 06:43:38,503 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa8a8935b559bb2a1b406 with heart
+2025-10-30 06:43:39,963 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa895935b559bb2a1b400 with heart
+2025-10-30 06:43:40,955 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa895935b559bb2a1b400 with heart
+2025-10-30 06:43:42,725 - app.services.confession_service - INFO - User 68aaa75a99aef34498f4f0a8 reacted to confession 68aaa8a8935b559bb2a1b406 with heart
+2025-10-30 06:44:00,095 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:08,024 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:11,364 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:11,419 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 06:44:11,467 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 06:44:19,727 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:34,547 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:34,586 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 06:44:34,622 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 06:44:49,902 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:44:49,938 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 06:44:49,971 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 06:45:21,127 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:46:26,316 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:49:25,300 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 06:49:25,369 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 06:49:25,432 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 06:49:45,939 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 12:41:30,435 - app.main - INFO - Running initial database setup...
+2025-10-30 12:41:32,451 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69035cfab7a85b38267e4493, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 12:41:36,463 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69035cfeb7a85b38267e4494, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 12:41:38,552 - app.main - INFO - Connected to MongoDB
+2025-10-30 12:41:38,564 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 12:41:38,566 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 12:41:38,566 - app.main - INFO - Initial database setup complete.
+2025-10-30 12:42:16,324 - app.main - INFO - Running initial database setup...
+2025-10-30 12:42:18,335 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69035d2825616eca5d6e8f02, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 12:42:22,347 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69035d2c25616eca5d6e8f03, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 12:42:24,372 - app.main - INFO - Connected to MongoDB
+2025-10-30 12:42:24,413 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 12:42:24,422 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 12:42:24,422 - app.main - INFO - Initial database setup complete.
+2025-10-30 12:56:17,451 - app.main - INFO - Running initial database setup...
+2025-10-30 12:56:17,475 - app.main - INFO - Connected to MongoDB
+2025-10-30 12:56:17,486 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 12:56:17,488 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 12:56:17,489 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:20:19,432 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=vYmnSVrA-vyAp1oaHuwShL1g7oM930jjQwfv3OqKv9Y
+2025-10-30 13:20:29,131 - app.services.confession_service - INFO - Retrieved total confession count: 4
+2025-10-30 13:20:35,087 - app.services.confession_service - INFO - Retrieved total confession count: 4
+2025-10-30 13:20:36,172 - app.services.confession_service - INFO - Retrieved total confession count: 4
+2025-10-30 13:20:37,850 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:20:42,382 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:20:43,258 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:20:43,302 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:20:43,366 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:21:07,144 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:12,855 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:20,607 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:30,258 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:30,292 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:21:30,343 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:21:34,932 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:34,964 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:21:34,997 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:21:59,870 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:21:59,906 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:21:59,943 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:22:01,239 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:22:01,277 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:22:01,315 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:22:15,778 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=tBalKg9TuOpUxPB_ceQk1XRA9MnnTHMSw8cj73gg8i8
+2025-10-30 13:22:26,711 - app.services.confession_service - INFO - Retrieved total confession count: 4
+2025-10-30 13:22:29,754 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:22:53,106 - app.main - INFO - Running initial database setup...
+2025-10-30 13:22:53,150 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:22:53,184 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:22:53,187 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:22:53,187 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:30:22,855 - app.main - INFO - Running initial database setup...
+2025-10-30 13:30:22,879 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:30:22,891 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:30:22,892 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:30:22,893 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:30:28,123 - app.main - INFO - Running initial database setup...
+2025-10-30 13:30:28,142 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:30:28,149 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:30:28,151 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:30:28,152 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:30:42,357 - app.main - INFO - Running initial database setup...
+2025-10-30 13:30:42,373 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:30:42,381 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:30:42,382 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:30:42,383 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:43:27,444 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:43:27,508 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:43:27,554 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:43:38,051 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=KX32IN0AvsBz1qWiJV67wpuv3GXXlFLI32KvdhkOnds
+2025-10-30 13:50:34,682 - app.main - INFO - Running initial database setup...
+2025-10-30 13:50:36,708 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69036d2a931e0a364e4ccb3b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 13:50:42,546 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69036d30931e0a364e4ccb3c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 13:50:46,182 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:50:46,226 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:50:46,228 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:50:46,229 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:50:55,344 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=wBSwlHt2ecVMtoUXP6_aetamh5nXDBj0Dv-Xzq-KuaE
+2025-10-30 13:53:16,312 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=uFrOBlS1kSPZ7P6UpPIjQmEmfBnXYPluJ4jULNHJbcM
+2025-10-30 13:53:24,982 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:53:25,077 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:53:25,132 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:53:26,362 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:53:39,297 - app.services.confession_service - INFO - Added comment 69036de3931e0a364e4ccb47 to confession 68aaed3b4ee9dec45c7362e0
+2025-10-30 13:53:47,356 - app.services.confession_service - INFO - Added comment 69036deb931e0a364e4ccb49 to confession 68aadf96af19a8ea66004e14
+2025-10-30 13:54:11,691 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:54:18,836 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:54:30,586 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by popularity
+2025-10-30 13:54:30,618 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by time
+2025-10-30 13:54:30,653 - app.services.confession_service - INFO - Retrieved 4 confessions sorted by comments
+2025-10-30 13:54:46,581 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=buuo6AX2bLDJItUC-wd7biyz5UX7Up1HnlMnS9kd0p4
+2025-10-30 13:55:29,528 - app.main - INFO - Running initial database setup...
+2025-10-30 13:55:29,546 - app.main - INFO - Connected to MongoDB
+2025-10-30 13:55:29,556 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 13:55:29,557 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 13:55:29,558 - app.main - INFO - Initial database setup complete.
+2025-10-30 13:55:36,705 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=wRhQ4RiLkQXEsDJQ5pTyUfy2ECKuhx_H2S1ymGxUFhY
+2025-10-30 13:59:50,176 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 14:00:16,988 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 14:00:27,567 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 14:08:55,897 - app.main - INFO - Running initial database setup...
+2025-10-30 14:08:55,930 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:08:55,944 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:08:55,948 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:08:55,950 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:09:02,777 - app.main - INFO - Running initial database setup...
+2025-10-30 14:09:02,800 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:09:02,815 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:09:02,818 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:09:02,819 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:09:18,117 - app.main - INFO - Running initial database setup...
+2025-10-30 14:09:18,136 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:09:18,147 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:09:18,149 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:09:18,150 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:09:54,901 - app.main - INFO - Running initial database setup...
+2025-10-30 14:09:54,917 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:09:54,928 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:09:54,930 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:09:54,930 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:10:08,907 - app.main - INFO - Running initial database setup...
+2025-10-30 14:10:08,924 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:10:08,936 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:10:08,937 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:10:08,938 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:10:26,214 - app.main - INFO - Running initial database setup...
+2025-10-30 14:10:26,230 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:10:26,239 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:10:26,241 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:10:26,241 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:24:53,671 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=cs7PH7OzFT-q1UUAwXi4MZy5-VxnpedboZCufZHrphk
+2025-10-30 14:28:35,686 - app.main - INFO - Running initial database setup...
+2025-10-30 14:28:35,753 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:28:35,764 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:28:35,766 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:28:35,766 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:36:02,941 - app.main - INFO - Running initial database setup...
+2025-10-30 14:36:02,964 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:36:02,975 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:36:02,977 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:36:02,977 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:36:29,219 - app.main - INFO - Running initial database setup...
+2025-10-30 14:36:29,236 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:36:29,245 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:36:29,247 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:36:29,247 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:36:48,517 - app.main - INFO - Running initial database setup...
+2025-10-30 14:36:48,535 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:36:48,544 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:36:48,549 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:36:48,550 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:36:58,218 - app.main - INFO - Running initial database setup...
+2025-10-30 14:36:58,232 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:36:58,241 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:36:58,242 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:36:58,242 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:37:38,141 - app.main - INFO - Running initial database setup...
+2025-10-30 14:37:38,158 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:37:38,165 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:37:38,166 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:37:38,167 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:38:03,681 - app.main - INFO - Running initial database setup...
+2025-10-30 14:38:03,702 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:38:03,717 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:38:03,719 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:38:03,720 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:38:42,690 - app.main - INFO - Running initial database setup...
+2025-10-30 14:38:42,708 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:38:42,716 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:38:42,717 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:38:42,718 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:46:38,979 - app.main - INFO - Running initial database setup...
+2025-10-30 14:46:39,012 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:46:39,026 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:46:39,028 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:46:39,029 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:52:20,350 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=nCqlIbQXGZwMl6mfSpzOmmNgJC8S8Rd9aFkXwn-8cAI
+2025-10-30 14:55:03,161 - app.main - INFO - Running initial database setup...
+2025-10-30 14:55:03,180 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:55:03,196 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:55:03,199 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:55:03,199 - app.main - INFO - Initial database setup complete.
+2025-10-30 14:56:35,958 - app.main - INFO - Running initial database setup...
+2025-10-30 14:56:36,020 - app.main - INFO - Connected to MongoDB
+2025-10-30 14:56:36,055 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 14:56:36,057 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 14:56:36,058 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:07:29,144 - app.main - INFO - Running initial database setup...
+2025-10-30 15:07:29,186 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:07:29,215 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:07:29,217 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:07:29,217 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:08:13,053 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=RIbcIhjglm4ubEVsooRNWPf-s4QbnpAPZ7MIKj0NnxA
+2025-10-30 15:09:05,797 - app.services.auth_service - INFO - Magic Link for Test User1: http://localhost:5173/verify-login?token=AwqLogzu6T-hHA2BMtSel8G6bORM7TxcA4QjxgLsZIs
+2025-10-30 15:09:14,458 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:09:14,511 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 15:09:14,570 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 15:11:53,990 - app.main - INFO - Running initial database setup...
+2025-10-30 15:11:56,051 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6903803a56962626b611c824, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 15:12:00,065 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6903803e56962626b611c825, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-30 15:12:05,770 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:12:05,802 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:12:05,803 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:12:05,803 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:13:11,638 - app.services.auth_service - INFO - Magic Link for Test User1: http://localhost:5173/verify-login?token=bgX6VP0ZRoqfLmh1EOjNgoCudQocEwiEVU5bqJN6SjM
+2025-10-30 15:13:21,687 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:13:21,780 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 15:13:21,845 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 15:14:16,941 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:14:20,548 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:14:56,523 - app.services.auth_service - INFO - Magic Link for Test User3: http://localhost:5173/verify-login?token=azEr_4G5nFr_U1Ly7takLmF7QvvWUt_bbwuGiXGQV1s
+2025-10-30 15:15:13,250 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:15:13,307 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 15:15:14,659 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 15:15:25,026 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:16:50,883 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:17:51,203 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:18:05,424 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=ut38HtO0x9-ZKRF1xYCOBUGJwIUOFEVygNc2a4a4ZMY
+2025-10-30 15:18:47,510 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:19:01,327 - app.services.confession_service - INFO - User 69037c13ae2d336ee66363a7 reported confession 68aaa8a8935b559bb2a1b406
+2025-10-30 15:20:06,801 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:21:50,336 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:22:06,764 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:22:10,109 - app.services.auth_service - INFO - Magic Link for Test User1: http://localhost:5173/verify-login?token=M8nfeVteeIV2FBXd1JsCbHwvQ0P4Nx5RyiN4IEXA2CU
+2025-10-30 15:22:21,736 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:22:21,853 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 15:22:21,894 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 15:23:24,493 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:23:28,016 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:23:28,060 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 15:23:28,109 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 15:23:37,371 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=MbmB3ey5GMgXOV-oOmGL2TcsB1nuSqPDcV3vNF28u9Y
+2025-10-30 15:40:27,514 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 15:51:15,430 - app.main - INFO - Running initial database setup...
+2025-10-30 15:51:15,475 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:51:15,507 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:51:15,509 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:51:15,510 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:51:23,435 - app.main - INFO - Running initial database setup...
+2025-10-30 15:51:23,454 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:51:23,461 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:51:23,462 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:51:23,463 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:51:31,876 - app.main - INFO - Running initial database setup...
+2025-10-30 15:51:31,894 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:51:31,902 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:51:31,904 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:51:31,905 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:51:43,166 - app.main - INFO - Running initial database setup...
+2025-10-30 15:51:43,194 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:51:43,202 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:51:43,205 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:51:43,207 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:52:38,465 - app.main - INFO - Running initial database setup...
+2025-10-30 15:52:38,480 - app.main - INFO - Connected to MongoDB
+2025-10-30 15:52:38,487 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 15:52:38,490 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 15:52:38,490 - app.main - INFO - Initial database setup complete.
+2025-10-30 15:59:07,073 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=BDWMhSxc4_BBGIzmkP64pbxfTdyp3SfMEC4K4qzt3bE
+2025-10-30 15:59:57,549 - app.services.auth_service - INFO - Magic Link for Test User3: http://localhost:5173/verify-login?token=vAp1o4iwZ6tmZNLEODRiBK1w9SiMRWs_xzcs9s5r6UA
+2025-10-30 16:00:33,102 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 16:00:33,199 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by time
+2025-10-30 16:00:33,271 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by comments
+2025-10-30 16:06:26,054 - app.services.confession_service - INFO - Retrieved 3 confessions sorted by popularity
+2025-10-30 16:07:02,249 - app.main - INFO - Running initial database setup...
+2025-10-30 16:07:02,268 - app.main - INFO - Connected to MongoDB
+2025-10-30 16:07:02,288 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 16:07:02,290 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 16:07:02,290 - app.main - INFO - Initial database setup complete.
+2025-10-30 16:08:05,083 - app.main - INFO - Running initial database setup...
+2025-10-30 16:08:05,104 - app.main - INFO - Connected to MongoDB
+2025-10-30 16:08:05,118 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 16:08:05,120 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 16:08:05,120 - app.main - INFO - Initial database setup complete.
+2025-10-30 16:08:53,604 - app.main - INFO - Running initial database setup...
+2025-10-30 16:08:53,625 - app.main - INFO - Connected to MongoDB
+2025-10-30 16:08:53,633 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-30 16:08:53,634 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-30 16:08:53,635 - app.main - INFO - Initial database setup complete.
