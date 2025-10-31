@@ -13,7 +13,6 @@ from ..services.conversation_service import (
     accept_conversation_service,
     reject_conversation_service,
     get_current_conversation_service,
-    get_supabase_token_service,
     get_received_conversations_service,
     get_conversation_by_match_service,
     block_conversation_service,
@@ -68,17 +67,6 @@ def reject_conversation(
     Used to reject a pending conversation request.
     """
     return reject_conversation_service(current_user, match_id, db)
-
-@router.get("/{match_id}/supabase-token")
-def get_supabase_token(
-    match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
-    db: Database = Depends(get_db)
-):
-    """
-    Used to get a Supabase ephemeral token for accessing messages in a conversation.
-    """
-    return get_supabase_token_service(current_user, match_id, db)
 
 @router.get("/current")
 def get_current_conversation(

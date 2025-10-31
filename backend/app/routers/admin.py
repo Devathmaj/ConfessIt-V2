@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from ..dependencies import get_db
 from ..models import AdminUserCreate, AdminUserUpdate, UserDetails
 from ..services.auth_service import get_current_user
-from ..services.supabase_service import supabase_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -570,28 +569,19 @@ async def list_conversations(
         match_id = doc.get("matchId")
         match_doc = match_map.get(str(match_id)) if isinstance(match_id, ObjectId) else None
 
-        supabase_info = None
-        supabase_conversation_id: Optional[str] = None
-        if isinstance(match_id, ObjectId):
-            supabase_info = supabase_service.get_conversation_by_match_id(str(match_id))
-            supabase_conversation_id = supabase_info.get("id") if supabase_info else None
-
+        # Get latest message from MongoDB messages collection
         latest_message = None
-        if supabase_conversation_id:
-            message = supabase_service.get_latest_message_for_conversation(supabase_conversation_id)
-            if message:
-                timestamp_value = message.get("timestamp") or message.get("created_at") or message.get("createdAt")
-                if isinstance(timestamp_value, str):
-                    try:
-                        timestamp_value = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
-                    except ValueError:
-                        timestamp_value = None
-                latest_message = {
-                    "id": message.get("id"),
-                    "sender_id": message.get("sender_id") or message.get("senderId"),
-                    "text": message.get("text") or message.get("content") or message.get("message"),
-                    "timestamp": _serialize_datetime(timestamp_value),
-                }
+        latest_message_doc = db["messages"].find_one(
+            {"conversation_id": conversation_id},
+            sort=[("timestamp", -1)]
+        )
+        if latest_message_doc:
+            latest_message = {
+                "id": str(latest_message_doc.get("_id")),
+                "sender_id": latest_message_doc.get("sender_id"),
+                "text": latest_message_doc.get("text"),
+                "timestamp": _serialize_datetime(latest_message_doc.get("timestamp")),
+            }
 
         results.append(
             {
@@ -612,10 +602,9 @@ async def list_conversations(
                     "created_at": _serialize_datetime(match_doc.get("created_at")),
                     "expires_at": _serialize_datetime(match_doc.get("expires_at")),
                 },
-                "supabase_conversation_id": supabase_conversation_id,
                 "latest_message": latest_message,
-                "is_blocked": supabase_info.get("is_blocked") if supabase_info else False,
-                "blocked_by": supabase_info.get("blocked_by") if supabase_info else None,
+                "is_blocked": doc.get("is_blocked", False),
+                "blocked_by": doc.get("blocked_by"),
             }
         )
 
@@ -641,30 +630,22 @@ async def get_conversation_detail(
     if isinstance(match_id, ObjectId):
         match_doc = db["matches"].find_one({"_id": match_id})
 
-    supabase_info = None
-    supabase_conversation_id: Optional[str] = None
-    if isinstance(match_id, ObjectId):
-        supabase_info = supabase_service.get_conversation_by_match_id(str(match_id))
-        supabase_conversation_id = supabase_info.get("id") if supabase_info else None
-
+    # Get messages from MongoDB messages collection
     messages: List[Dict[str, Any]] = []
-    if supabase_conversation_id:
-        raw_messages = supabase_service.get_messages_for_conversation(supabase_conversation_id)
-        for message in raw_messages:
-            timestamp_value = message.get("timestamp") or message.get("created_at") or message.get("createdAt")
-            if isinstance(timestamp_value, str):
-                try:
-                    timestamp_value = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
-                except ValueError:
-                    timestamp_value = None
-            messages.append(
-                {
-                    "id": message.get("id"),
-                    "sender_id": message.get("sender_id") or message.get("senderId"),
-                    "text": message.get("text") or message.get("content") or message.get("message"),
-                    "timestamp": _serialize_datetime(timestamp_value),
-                }
-            )
+    raw_messages = db["messages"].find(
+        {"conversation_id": conversation_id},
+        sort=[("timestamp", 1)]
+    )
+    for message in raw_messages:
+        messages.append(
+            {
+                "id": str(message.get("_id")),
+                "sender_id": message.get("sender_id"),
+                "text": message.get("text"),
+                "timestamp": _serialize_datetime(message.get("timestamp")),
+                "is_read": message.get("is_read", False),
+            }
+        )
 
     return {
         "id": conversation_id,
@@ -684,9 +665,8 @@ async def get_conversation_detail(
             "created_at": _serialize_datetime(match_doc.get("created_at")),
             "expires_at": _serialize_datetime(match_doc.get("expires_at")),
         },
-        "supabase_conversation_id": supabase_conversation_id,
-        "is_blocked": supabase_info.get("is_blocked") if supabase_info else False,
-        "blocked_by": supabase_info.get("blocked_by") if supabase_info else None,
+        "is_blocked": conversation_doc.get("is_blocked", False),
+        "blocked_by": conversation_doc.get("blocked_by"),
         "messages": messages,
     }
 
@@ -698,7 +678,7 @@ async def terminate_conversation(
     db: Database = Depends(get_db),
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
-    """Terminate a conversation and block it in Supabase."""
+    """Terminate a conversation."""
     if not ObjectId.is_valid(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
@@ -719,7 +699,6 @@ async def terminate_conversation(
             {"_id": match_id},
             {"$set": {"expires_at": now}}
         )
-        supabase_service.terminate_conversation(str(match_id), payload.reason)
 
     return {
         "id": conversation_id,
@@ -938,3 +917,162 @@ async def list_active_sessions(
         "sessions": sessions,
         "window_hours": 24,
     }
+
+
+# ----------------------
+# Message Management
+# ----------------------
+
+@router.post("/messages/archive")
+async def archive_old_messages(
+    hours_old: int = Query(4, ge=1, le=168, description="Archive messages older than this many hours"),
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """
+    Archive old messages to compressed JSON files and remove from MongoDB
+    
+    Default: Archives messages older than 4 hours
+    """
+    from ..services.message_archival_service import message_archival_service
+    
+    result = message_archival_service.archive_old_messages(db, hours_old=hours_old)
+    return result
+
+
+@router.get("/messages/archives")
+async def list_message_archives(
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """List all archived message files"""
+    from ..services.message_archival_service import message_archival_service
+    
+    archives = message_archival_service.list_archives()
+    
+    total_size_kb = sum(archive["size_kb"] for archive in archives)
+    
+    return {
+        "archives": archives,
+        "count": len(archives),
+        "total_size_kb": round(total_size_kb, 2),
+        "total_size_mb": round(total_size_kb / 1024, 2)
+    }
+
+
+@router.get("/messages/archives/{date}")
+async def get_archived_messages(
+    date: str,
+    user_regno: Optional[str] = Query(None, description="Filter by user Regno"),
+    conversation_id: Optional[str] = Query(None, description="Filter by conversation ID"),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """
+    Get archived messages for a specific date
+    
+    Date format: YYYY-MM-DD
+    """
+    from ..services.message_archival_service import message_archival_service
+    
+    messages = message_archival_service.get_archived_messages(
+        date=date,
+        user_regno=user_regno,
+        conversation_id=conversation_id
+    )
+    
+    return {
+        "date": date,
+        "count": len(messages),
+        "messages": messages
+    }
+
+
+@router.get("/messages/reports")
+async def get_message_reports(
+    status_filter: Optional[str] = Query(None, description="Filter by status: pending, reviewed, dismissed"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """Get all message reports with optional status filter"""
+    
+    query = {}
+    if status_filter:
+        query["status"] = status_filter
+    
+    reports = list(
+        db["message_reports"]
+        .find(query)
+        .sort("reported_at", -1)
+        .skip(skip)
+        .limit(limit)
+    )
+    
+    total = db["message_reports"].count_documents(query)
+    
+    # Enrich with user and message details
+    enriched_reports = []
+    for report in reports:
+        # Get reporter info
+        reporter = db["UserDetails"].find_one({"Regno": report["reporter_id"]})
+        
+        # Get reported user info
+        reported_user = db["UserDetails"].find_one({"Regno": report["reported_user_id"]})
+        
+        # Get message
+        message = db["messages"].find_one({"_id": report["message_id"]})
+        
+        enriched_reports.append({
+            "id": str(report["_id"]),
+            "message_id": str(report["message_id"]),
+            "message_text": message["text"] if message else "[Message not found]",
+            "conversation_id": str(report["conversation_id"]),
+            "reporter": {
+                "regno": report["reporter_id"],
+                "name": reporter["Name"] if reporter else "Unknown"
+            },
+            "reported_user": {
+                "regno": report["reported_user_id"],
+                "name": reported_user["Name"] if reported_user else "Unknown"
+            },
+            "reason": report["reason"],
+            "reported_at": _serialize_datetime(report["reported_at"]),
+            "status": report.get("status", "pending")
+        })
+    
+    return {
+        "reports": enriched_reports,
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }
+
+
+@router.patch("/messages/reports/{report_id}")
+async def update_message_report_status(
+    report_id: str,
+    new_status: str = Query(..., regex="^(reviewed|dismissed)$"),
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """Update the status of a message report"""
+    
+    try:
+        result = db["message_reports"].update_one(
+            {"_id": ObjectId(report_id)},
+            {"$set": {"status": new_status, "reviewed_at": datetime.utcnow()}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Report not found"
+            )
+        
+        return {"message": f"Report status updated to {new_status}"}
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid report ID: {str(e)}"
+        )

@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
-from ..services.supabase_service import supabase_service
 from ..config import settings
 
 # Logger
@@ -75,12 +74,6 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
                     "requestedAt": requested_at
                 }
             }
-        )
-        
-        # Sync to Supabase
-        supabase_service.update_conversation_status_in_supabase(
-            match_id=str(match_id),
-            status="requested"
         )
         
         # 8. Create notification for the receiver
@@ -220,13 +213,6 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
             }
         )
         
-        # Sync status update to Supabase
-        supabase_service.update_conversation_status_in_supabase(
-            match_id=str(match_id),
-            status="accepted",
-            accepted_at=accepted_at
-        )
-        
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
         initiator_user_doc = db.UserDetails.find_one({"Regno": conversation.initiatorId})
@@ -241,29 +227,11 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         
         logger.info(f"Conversation {conversation.id} accepted by {current_user.Regno}")
 
-        # Get Supabase conversation for token generation
-        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match_id))
-        
-        if supabase_conversation:
-            # Generate ephemeral tokens for both users
-            initiator_token = supabase_service.generate_ephemeral_token(
-                user_id=conversation.initiatorId,
-                conversation_id=supabase_conversation["id"]
-            )
-            receiver_token = supabase_service.generate_ephemeral_token(
-                user_id=conversation.receiverId,
-                conversation_id=supabase_conversation["id"]
-            )
-            
-            return {
-                "status": "success",
-                "message": "Conversation accepted successfully.",
-                "supabase_token": receiver_token,  # Token for the current user (receiver)
-                "conversation_id": supabase_conversation["id"]
-            }
-        else:
-            logger.error(f"Failed to get Supabase conversation for match {match_id}")
-            return {"status": "success", "message": "Conversation accepted successfully."}
+        return {
+            "status": "success",
+            "message": "Conversation accepted successfully.",
+            "conversation_id": str(conversation.id)
+        }
     except Exception as e: # <--- FIX: Added missing except block
         logger.error(f"Error in accept_conversation_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error accepting conversation.")
@@ -327,12 +295,6 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
             }
         )
         
-        # Sync status update to Supabase
-        supabase_service.update_conversation_status_in_supabase(
-            match_id=str(match_id),
-            status="rejected"
-        )
-        
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
         initiator_user_doc = db.UserDetails.find_one({"Regno": conversation.initiatorId})
@@ -350,80 +312,6 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
     except Exception as e: # <--- FIX: Added missing except block
         logger.error(f"Error in reject_conversation_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error rejecting conversation.")
-
-
-def get_supabase_token_service(current_user: UserDetails, match_id_str: str, db: Database):
-    """
-    Used to get a Supabase ephemeral token for accessing messages in a conversation.
-    This replaces send_message_service and get_conversation_messages_service.
-    Frontend will use this token to directly interact with Supabase for messaging.
-    """
-    try:
-        try:
-            match_id = ObjectId(match_id_str)
-        except Exception:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
-
-        # 1. Fetch the match document
-        match_doc = db.matches.find_one({"_id": match_id})
-        if not match_doc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
-        
-        match = Match(**match_doc)
-
-        # 2. Check if the match has expired
-        current_time = datetime.now(timezone.utc)
-        match_expires_at = match.expires_at
-        
-        if match_expires_at.tzinfo is None:
-            match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
-        
-        if current_time > match_expires_at:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail="This match has expired.")
-
-        # 3. Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
-
-        # 4. Get the conversation and check if it's accepted
-        conversation_doc = db.conversations.find_one({"matchId": match_id})
-        if not conversation_doc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation found for this match.")
-
-        conversation = Conversation(**conversation_doc)
-        
-        if conversation.status != "accepted":
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only access messages in accepted conversations.")
-
-        # 5. Get Supabase conversation and generate token
-        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match_id))
-        
-        if not supabase_conversation:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Conversation not synced to Supabase.")
-        
-        # Calculate time until match expires for token expiry
-        time_until_expiry = (match_expires_at - current_time).total_seconds() / 3600  # in hours
-        expires_in_hours = max(1, int(time_until_expiry) + 1)  # At least 1 hour, rounded up
-        
-        token = supabase_service.generate_ephemeral_token(
-            user_id=current_user.Regno,
-            conversation_id=supabase_conversation["id"],
-            expires_in_hours=expires_in_hours
-        )
-        
-        logger.info(f"Generated Supabase token for user {current_user.Regno} in match {match_id}")
-
-        return {
-            "status": "success",
-            "supabase_token": token,
-            "supabase_anon_key": supabase_service.anon_key,
-            "conversation_id": supabase_conversation["id"],
-            "supabase_url": supabase_service.supabase_url,
-            "expires_in_hours": expires_in_hours
-        }
-    except Exception as e: # <--- FIX: Added missing except block
-        logger.error(f"Error in get_supabase_token_service: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error getting Supabase token.")
 
 
 def get_current_conversation_service(current_user: UserDetails, db: Database):
@@ -539,36 +427,9 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "interests": other_user.interests if other_user else []
         },
         "is_initiator": conversation.initiatorId == current_user.Regno,
-        "is_blocked": False,
-        "blocked_by": None
+        "is_blocked": conversation_doc.get("isBlocked", False),
+        "blocked_by": conversation_doc.get("blockedBy", None)
     }
-    
-    # Get block status from Supabase
-    supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
-    if supabase_conversation:
-        response_data["is_blocked"] = supabase_conversation.get("is_blocked", False)
-        response_data["blocked_by"] = supabase_conversation.get("blocked_by", None)
-    
-    # If conversation is accepted and not expired and not blocked, include Supabase token
-    if conversation.status == "accepted" and not is_expired and not response_data["is_blocked"]:
-        if supabase_conversation:
-            match_expires_at = match.expires_at
-            if match_expires_at.tzinfo is None:
-                match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
-            
-            time_until_expiry = (match_expires_at - current_time).total_seconds() / 3600
-            expires_in_hours = max(1, int(time_until_expiry) + 1)
-            
-            token = supabase_service.generate_ephemeral_token(
-                user_id=current_user.Regno,
-                conversation_id=supabase_conversation["id"],
-                expires_in_hours=expires_in_hours
-            )
-            
-            response_data["supabase_token"] = token
-            response_data["supabase_anon_key"] = settings.SUPABASE_ANON_KEY
-            response_data["conversation_id_supabase"] = supabase_conversation["id"]
-            response_data["supabase_url"] = supabase_service.supabase_url
     
     return response_data
 
@@ -678,7 +539,9 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
                 "bio": initiator_user.bio,
                 "interests": initiator_user.interests or []
             },
-            "is_initiator": False
+            "is_initiator": False,
+            "is_blocked": conversation_doc.get("isBlocked", False),
+            "blocked_by": conversation_doc.get("blockedBy", None)
         }
         
         conversations.append(conversation_data)
@@ -734,24 +597,6 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             match_expires_at = match_expires_at.replace(tzinfo=timezone.utc)
         is_expired = current_time > match_expires_at
         
-        # Get Supabase credentials if conversation is accepted
-        supabase_token = None
-        supabase_anon_key = None
-        conversation_id_supabase = None
-        supabase_url = None
-        
-        if conversation.status == 'accepted' and not is_expired:
-            # Generate Supabase token
-            try:
-                supabase_creds = get_supabase_token_service(current_user, match_id_str, db)
-                if supabase_creds.get("status") == "success":
-                    supabase_token = supabase_creds.get("supabase_token")
-                    supabase_anon_key = supabase_creds.get("supabase_anon_key")
-                    conversation_id_supabase = supabase_creds.get("conversation_id")
-                    supabase_url = supabase_creds.get("supabase_url")
-            except Exception as e:
-                logger.error(f"Failed to get Supabase token: {e}")
-        
         conversation_data = {
             "status": "success",
             "match": {
@@ -778,19 +623,9 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
                 "interests": other_user.interests or []
             },
             "is_initiator": is_initiator,
-            "is_blocked": False,
-            "blocked_by": None,
-            "supabase_token": supabase_token,
-            "supabase_anon_key": supabase_anon_key,
-            "conversation_id_supabase": conversation_id_supabase,
-            "supabase_url": supabase_url
+            "is_blocked": conversation_doc.get("isBlocked", False),
+            "blocked_by": conversation_doc.get("blockedBy", None)
         }
-        
-        # Get block status from Supabase
-        supabase_conversation = supabase_service.get_conversation_by_match_id(str(match.id))
-        if supabase_conversation:
-            conversation_data["is_blocked"] = supabase_conversation.get("is_blocked", False)
-            conversation_data["blocked_by"] = supabase_conversation.get("blocked_by", None)
         
         return conversation_data
         
@@ -803,7 +638,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
 
 def block_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
-    Block a conversation. Updates both MongoDB and Supabase.
+    Block a conversation. Updates MongoDB only.
     """
     try:
         try:
@@ -827,11 +662,17 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
-        # Block in Supabase
-        success = supabase_service.block_conversation(str(match_id), current_user.Regno)
-        
-        if not success:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to block conversation.")
+        # Update conversation to blocked status
+        db.conversations.update_one(
+            {"_id": conversation_doc["_id"]},
+            {
+                "$set": {
+                    "isBlocked": True,
+                    "blockedBy": current_user.Regno,
+                    "blockedAt": datetime.now(timezone.utc)
+                }
+            }
+        )
         
         logger.info(f"User {current_user.Regno} blocked conversation for match {match_id}")
         
@@ -851,7 +692,6 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
 def unblock_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
     Unblock a conversation. Only the user who blocked can unblock.
-    Updates both MongoDB and Supabase.
     """
     try:
         try:
@@ -875,11 +715,21 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
-        # Unblock in Supabase (service will check if user is blocker)
-        success = supabase_service.unblock_conversation(str(match_id), current_user.Regno)
-        
-        if not success:
+        # Check if user is the one who blocked
+        if conversation_doc.get("blockedBy") != current_user.Regno:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only unblock if you were the one who blocked.")
+        
+        # Update conversation to unblocked
+        db.conversations.update_one(
+            {"_id": conversation_doc["_id"]},
+            {
+                "$set": {
+                    "isBlocked": False,
+                    "blockedBy": None,
+                    "unblockedAt": datetime.now(timezone.utc)
+                }
+            }
+        )
         
         logger.info(f"User {current_user.Regno} unblocked conversation for match {match_id}")
         

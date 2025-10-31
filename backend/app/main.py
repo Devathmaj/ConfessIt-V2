@@ -4,7 +4,7 @@ import asyncio
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, messages
 from .services.auth_service import get_current_user
 from .dependencies import get_db 
 from pymongo.database import Database
@@ -110,6 +110,84 @@ async def on_startup():
             else:
                 logger.info(f"User with Regno '{user_data.Regno}' already exists. Skipping.")
 
+        # Create database indexes for performance optimization
+        logger.info("Creating database indexes...")
+        try:
+            # Confessions indexes
+            db["Confessions"].create_index([("timestamp", pymongo.DESCENDING)], name="idx_timestamp_desc")
+            db["Confessions"].create_index([("user_id", pymongo.ASCENDING)], name="idx_user_id")
+            db["Confessions"].create_index([("is_approved", pymongo.ASCENDING)], name="idx_is_approved")
+            
+            # UserDetails indexes
+            db["UserDetails"].create_index([("Regno", pymongo.ASCENDING)], unique=True, name="idx_regno_unique")
+            db["UserDetails"].create_index([("email", pymongo.ASCENDING)], name="idx_email")
+            db["UserDetails"].create_index([("user_role", pymongo.ASCENDING)], name="idx_user_role")
+            
+            # LoginTokens indexes
+            db["LoginTokens"].create_index([("expires_at", pymongo.ASCENDING)], name="idx_expires_at")
+            db["LoginTokens"].create_index([("consumed_at", pymongo.ASCENDING)], name="idx_consumed_at")
+            db["LoginTokens"].create_index([("user_regno", pymongo.ASCENDING)], name="idx_user_regno")
+            
+            # Matches indexes
+            db["matches"].create_index([
+                ("user_1_regno", pymongo.ASCENDING),
+                ("user_2_regno", pymongo.ASCENDING)
+            ], name="idx_user_pair")
+            db["matches"].create_index([("expires_at", pymongo.ASCENDING)], name="idx_match_expires")
+            db["matches"].create_index([("created_at", pymongo.DESCENDING)], name="idx_match_created")
+            
+            # Notifications indexes
+            db["notifications"].create_index([
+                ("user_id", pymongo.ASCENDING),
+                ("timestamp", pymongo.DESCENDING)
+            ], name="idx_user_notifications")
+            db["notifications"].create_index([("read", pymongo.ASCENDING)], name="idx_read_status")
+            
+            # Conversations indexes
+            db["conversations"].create_index([("match_id", pymongo.ASCENDING)], name="idx_match_id")
+            db["conversations"].create_index([
+                ("participants", pymongo.ASCENDING),
+                ("last_message_at", pymongo.DESCENDING)
+            ], name="idx_participants_last_message")
+            
+            # LoveNotes indexes
+            db["LoveNotes"].create_index([("recipient_id", pymongo.ASCENDING)], name="idx_recipient")
+            db["LoveNotes"].create_index([("sender_id", pymongo.ASCENDING)], name="idx_sender")
+            db["LoveNotes"].create_index([("status", pymongo.ASCENDING)], name="idx_status")
+            db["LoveNotes"].create_index([("created_at", pymongo.DESCENDING)], name="idx_lovenote_created")
+            
+            # ConfessionComments indexes
+            db["ConfessionComments"].create_index([("confession_id", pymongo.ASCENDING)], name="idx_confession_id")
+            db["ConfessionComments"].create_index([("timestamp", pymongo.DESCENDING)], name="idx_comment_timestamp")
+            
+            # Reports indexes
+            db["Reports"].create_index([("content_id", pymongo.ASCENDING)], name="idx_content_id")
+            db["Reports"].create_index([("reporter_id", pymongo.ASCENDING)], name="idx_reporter_id")
+            db["Reports"].create_index([("status", pymongo.ASCENDING)], name="idx_report_status")
+            
+            # Messages indexes (new)
+            db["messages"].create_index([
+                ("conversation_id", pymongo.ASCENDING),
+                ("timestamp", pymongo.ASCENDING)
+            ], name="idx_conversation_messages")
+            db["messages"].create_index([("timestamp", pymongo.ASCENDING)], name="idx_message_timestamp")
+            db["messages"].create_index([("sender_id", pymongo.ASCENDING)], name="idx_sender_id")
+            db["messages"].create_index([("receiver_id", pymongo.ASCENDING)], name="idx_receiver_id")
+            db["messages"].create_index([("read", pymongo.ASCENDING)], name="idx_read_status")
+            
+            # Message reports indexes (new)
+            db["message_reports"].create_index([("message_id", pymongo.ASCENDING)], name="idx_message_id")
+            db["message_reports"].create_index([
+                ("message_id", pymongo.ASCENDING),
+                ("reporter_id", pymongo.ASCENDING)
+            ], unique=True, name="idx_unique_message_report")
+            db["message_reports"].create_index([("reporter_id", pymongo.ASCENDING)], name="idx_message_reporter")
+            db["message_reports"].create_index([("status", pymongo.ASCENDING)], name="idx_message_report_status")
+            
+            logger.info("Database indexes created successfully.")
+        except Exception as e:
+            logger.warning(f"Error creating indexes (may already exist): {e}")
+        
         logger.info("Initial database setup complete.")
     except pymongo.errors.ConnectionFailure as e:
         logger.error(f"Could not connect to MongoDB during startup setup: {e}")
@@ -124,7 +202,9 @@ async def on_startup():
 # ----------------------
 origins = [
     "http://localhost:5173",
-    "[http://127.0.0.1:5173](http://127.0.0.1:5173)",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
 ]
 
 app.add_middleware(
@@ -144,6 +224,7 @@ app.include_router(matchmaking.router)
 app.include_router(confessions.router)
 app.include_router(love_notes.router)
 app.include_router(conversations.router)
+app.include_router(messages.router)
 app.include_router(notifications.router)
 app.include_router(admin.router)
 

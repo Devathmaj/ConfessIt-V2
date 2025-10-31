@@ -40,6 +40,32 @@ def hash_token(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()
 
+def verify_token_service(token: str, db: Database) -> UserDetails:
+    """
+    Verify JWT token and return user details.
+    Used for WebSocket authentication where Depends() cannot be used.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        regno: str = payload.get("sub")
+        if regno is None:
+            raise credentials_exception
+    except jwt.PyJWTError as e:
+        logger.error(f"JWT decode error: {e}")
+        raise credentials_exception
+
+    user_doc = db["UserDetails"].find_one({"Regno": regno})
+    if user_doc is None:
+        raise credentials_exception
+    
+    return UserDetails(**user_doc)
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends(get_db)) -> UserDetails:
     """
     Used to decode the JWT, validate the user, and return the user's details.

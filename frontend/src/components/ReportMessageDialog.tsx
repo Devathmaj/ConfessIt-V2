@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { AlertTriangle } from 'lucide-react';
-import { reportMessage } from '@/lib/supabase';
+import { reportMessage } from '@/lib/messaging';
+import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 
 interface ReportMessageDialogProps {
@@ -45,6 +46,7 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
   reportedUserId,
   conversationId,
 }) => {
+  const { token } = useAuth(); // Get token from AuthContext
   const [selectedReason, setSelectedReason] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -54,15 +56,14 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
       return;
     }
 
+    if (!token) {
+      toast.error('Authentication token missing');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      await reportMessage(
-        messageId,
-        reporterId,
-        reportedUserId,
-        selectedReason,
-        conversationId
-      );
+      await reportMessage(messageId, selectedReason, token);
 
       toast.success('Message reported successfully. Our team will review it.');
       onClose();
@@ -72,8 +73,7 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
       
       // Check if it's a duplicate report error
       if (error?.message?.includes('duplicate') || 
-          error?.message?.includes('unique') ||
-          error?.code === '23505') {
+          error?.message?.includes('already reported')) {
         toast.error('You have already reported this message.');
       } else {
         toast.error('Failed to report message. Please try again.');

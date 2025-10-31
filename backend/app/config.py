@@ -28,11 +28,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-        # Supabase settings
-    SUPABASE_URL: str = ""
-    SUPABASE_ANON_KEY: str = ""  # Public anon key for frontend
-    SUPABASE_SERVICE_ROLE_KEY: str = ""  # Service role key for admin API access
-    SUPABASE_JWT_SECRET: str = ""  # JWT secret for signing ephemeral tokens
+    # Redis settings
+    REDIS_URL: str = "redis://redis:6379"
 
     CLOUD: bool = False
 

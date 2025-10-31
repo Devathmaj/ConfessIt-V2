@@ -57,10 +57,6 @@ interface ConversationData {
     interests: string[];
   };
   is_initiator: boolean;
-  supabase_token?: string;
-  supabase_anon_key?: string;
-  conversation_id_supabase?: string;
-  supabase_url?: string;
 }
 
 // Defines the structure for notification items.
@@ -399,8 +395,7 @@ export const InboxPage = () => {
         notification_status: notification.status
       });
       
-      // ALWAYS fetch fresh data from API to get Supabase credentials
-      // The local array doesn't have Supabase tokens
+      // ALWAYS fetch fresh data from API
       try {
         console.log('📡 Fetching conversation from API...');
         const response = await getConversationByMatch(notification.match_id);
@@ -409,10 +404,7 @@ export const InboxPage = () => {
         if (response.status === 'success') {
           const conversation = response as ConversationData;
           console.log('✅ Conversation fetched:', {
-            has_supabase_token: !!conversation.supabase_token,
-            has_anon_key: !!conversation.supabase_anon_key,
-            has_conversation_id: !!conversation.conversation_id_supabase,
-            has_supabase_url: !!conversation.supabase_url,
+            conversation_id: conversation.conversation.id,
             status: conversation.conversation.status
           });
           
@@ -436,7 +428,7 @@ export const InboxPage = () => {
 
   // Opens the conversation dialog for a selected conversation.
   const handleOpenConversation = async (conversation: ConversationData) => {
-    // Always fetch fresh data to get Supabase credentials
+    // Always fetch fresh data from API
     try {
       console.log('📡 Fetching conversation from API for match:', conversation.match.id);
       const response = await getConversationByMatch(conversation.match.id);
@@ -444,9 +436,7 @@ export const InboxPage = () => {
       if (response.status === 'success') {
         const freshConversation = response as ConversationData;
         console.log('✅ Fresh conversation fetched:', {
-          has_supabase_token: !!freshConversation.supabase_token,
-          has_anon_key: !!freshConversation.supabase_anon_key,
-          has_conversation_id: !!freshConversation.conversation_id_supabase,
+          conversation_id: freshConversation.conversation.id,
           status: freshConversation.conversation.status
         });
         

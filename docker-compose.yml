@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+
   frontend:
     build:
       context: ./frontend
@@ -32,30 +33,34 @@ services:
       - "8001:8001"
     volumes:
       - ./backend:/app
+      - ./archives:/app/archives
     depends_on:
-      - mongo
+      - redis
     secrets:
       - db_password
     environment:
       WATCHFILES_FORCE_POLLING: "true"
       WATCHFILES_POLL_DELAY: "0.5"
+      REDIS_URL: "redis://redis:6379"
 
-  mongo:
-    image: mongo
+  redis:
+    image: redis:7-alpine
+    container_name: confessit_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
     ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ConfessIt
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/db_password
-      MONGO_INITDB_DATABASE: ConfessDB
+      - "6379:6379"
     volumes:
-      - ./mongo_data:/data/db
-    secrets:
-      - db_password
+      - redis_data:/data
 
 secrets:
   db_password:
     file: ./db_password.txt
 
 volumes:
-  mongodata:
+  redis_data:

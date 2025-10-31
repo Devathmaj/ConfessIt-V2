@@ -12,4 +12,5 @@ python-multipart==0.0.6
 pytest==8.4.1
 cloudinary==1.39.1
 Pillow==10.3.0
-supabase==2.10.0
+redis==5.0.1
+websockets==12.0

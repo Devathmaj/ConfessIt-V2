@@ -36,10 +36,6 @@ interface ConversationData {
     interests: string[];
   };
   is_initiator: boolean;
-  supabase_token?: string;
-  supabase_anon_key?: string;
-  conversation_id_supabase?: string;
-  supabase_url?: string;
 }
 
 export const MessageBoxPage = () => {
