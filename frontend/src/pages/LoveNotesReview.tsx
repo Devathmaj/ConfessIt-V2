@@ -72,6 +72,15 @@ export const LoveNotesReview = () => {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | AdminLoveNote['status']>('all');
 
+  const statusSections: Array<{ key: AdminLoveNote['status']; heading: string; emptyLabel: string }> = useMemo(
+    () => [
+      { key: 'pending_review', heading: 'Pending review', emptyLabel: 'No notes awaiting review.' },
+      { key: 'rejected', heading: 'Rejected notes', emptyLabel: 'No notes have been rejected.' },
+      { key: 'approved', heading: 'Accepted notes', emptyLabel: 'No notes have been approved yet.' },
+    ],
+    []
+  );
+
   useEffect(() => {
     const fetchNotes = async () => {
       try {
@@ -117,12 +126,34 @@ export const LoveNotesReview = () => {
     [notes]
   );
 
-  const filteredNotes = useMemo(() => {
+  const groupedNotes = useMemo(() => {
+    const base: Record<AdminLoveNote['status'], AdminLoveNote[]> = {
+      pending_review: [],
+      rejected: [],
+      approved: [],
+    };
+    const sorted = [...notes].sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bTime - aTime;
+    });
+    sorted.forEach((note) => {
+      base[note.status]?.push(note);
+    });
+    return base;
+  }, [notes]);
+
+  const sectionsToRender = useMemo(() => {
     if (statusFilter === 'all') {
-      return notes;
+      return statusSections;
     }
-    return notes.filter((note) => note.status === statusFilter);
-  }, [notes, statusFilter]);
+    return statusSections.filter((section) => section.key === statusFilter);
+  }, [statusFilter, statusSections]);
+
+  const renderedCount = useMemo(
+    () => sectionsToRender.reduce((total, section) => total + groupedNotes[section.key].length, 0),
+    [groupedNotes, sectionsToRender]
+  );
 
   const handleStatusChange = async (noteId: string, status: AdminLoveNote['status']) => {
     try {
@@ -208,9 +239,18 @@ export const LoveNotesReview = () => {
               </SelectContent>
             </Select>
           </div>
-          <Badge variant="secondary">
-            Showing {filteredNotes.length} of {notes.length}
-          </Badge>
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <Badge variant="secondary">
+              Showing {renderedCount} of {notes.length}
+            </Badge>
+            <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+              {statusSections.map((section) => (
+                <span key={section.key}>
+                  {section.heading}: {groupedNotes[section.key].length}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -219,113 +259,142 @@ export const LoveNotesReview = () => {
               Loading love notes for review...
             </CardContent>
           </Card>
-        ) : filteredNotes.length === 0 ? (
+        ) : renderedCount === 0 ? (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
               No love notes in this state.
             </CardContent>
           </Card>
         ) : (
-          <Accordion type="single" collapsible className="space-y-3">
-            {filteredNotes.map((note) => {
-              const currentStatus = statusConfig[note.status];
-              const previewText = note.message_text.length > 90
-                ? `${note.message_text.slice(0, 90)}...`
-                : note.message_text;
+          <div className="space-y-6">
+            {sectionsToRender.map((section) => {
+              const notesForSection = groupedNotes[section.key];
+              const statusMeta = statusConfig[section.key];
               return (
-                <AccordionItem
-                  key={note.id}
-                  value={note.id}
-                  className="overflow-hidden rounded-2xl border border-border bg-muted/20"
-                >
-                  <AccordionTrigger className="flex w-full flex-wrap items-start justify-between gap-3 px-4 py-3 text-left">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-semibold">
-                        To {note.recipient.name ?? note.recipient.regno ?? 'Unknown recipient'}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        Created {formatTimestamp(note.created_at)} · {previewText || 'No message body provided.'}
-                      </span>
-                    </div>
-                    <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
-                  </AccordionTrigger>
-                  <AccordionContent className="space-y-5 bg-background/40 px-4 pb-5 pt-2">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      {renderPerson(note.sender, 'Sender details')}
-                      {renderPerson(note.recipient, 'Recipient details')}
-                    </div>
+                <section key={section.key} className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">{section.heading}</h2>
+                    <Badge variant={statusMeta.variant}>
+                      {notesForSection.length} {notesForSection.length === 1 ? 'note' : 'notes'}
+                    </Badge>
+                  </div>
+                  {notesForSection.length === 0 ? (
+                    <Card>
+                      <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                        {section.emptyLabel}
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <Accordion type="single" collapsible className="space-y-3">
+                      {notesForSection.map((note) => {
+                        const currentStatus = statusConfig[note.status];
+                        const previewText = note.message_text.length > 90
+                          ? `${note.message_text.slice(0, 90)}...`
+                          : note.message_text;
+                        const senderName = note.sender.name ?? note.sender.regno ?? 'Unknown sender';
+                        const recipientName = note.recipient.name ?? note.recipient.regno ?? 'Unknown recipient';
+                        return (
+                          <AccordionItem
+                            key={note.id}
+                            value={note.id}
+                            className="overflow-hidden rounded-2xl border border-border bg-muted/20"
+                          >
+                            <AccordionTrigger className="flex w-full flex-wrap items-start justify-between gap-3 px-4 py-3 text-left">
+                              <div className="flex flex-col gap-1">
+                                <span className="text-sm font-semibold">
+                                  {currentStatus.label}: {senderName} → {recipientName}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  Created {formatTimestamp(note.created_at)} · {previewText || 'No message body provided.'}
+                                </span>
+                                <span className="text-xs text-muted-foreground/80">
+                                  Sender visible: {note.is_anonymous ? 'No (anonymous)' : 'Yes'}
+                                </span>
+                              </div>
+                              <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
+                            </AccordionTrigger>
+                            <AccordionContent className="space-y-5 bg-background/40 px-4 pb-5 pt-2">
+                              <div className="grid gap-4 md:grid-cols-2">
+                                {renderPerson(note.sender, 'Sender details')}
+                                {renderPerson(note.recipient, 'Recipient details')}
+                              </div>
 
-                    <div className="rounded-2xl border border-border bg-muted/20 p-4">
-                      <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-                        <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                        Attachments
-                      </div>
-                      {note.image_url ? (
-                        <img
-                          src={note.image_url}
-                          alt="Love note illustration"
-                          className="max-h-64 w-full rounded-xl object-cover"
-                        />
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No image uploaded with this note.</p>
-                      )}
-                    </div>
+                              <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                                <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                                  Attachments
+                                </div>
+                                {note.image_url ? (
+                                  <img
+                                    src={note.image_url}
+                                    alt="Love note illustration"
+                                    className="max-h-64 w-full rounded-xl object-cover"
+                                  />
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">No image uploaded with this note.</p>
+                                )}
+                              </div>
 
-                    <div className="rounded-2xl border border-border bg-background/60 p-4">
-                      <p className="text-sm uppercase tracking-wide text-muted-foreground">Message</p>
-                      <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.message_text}</p>
-                    </div>
+                              <div className="rounded-2xl border border-border bg-background/60 p-4">
+                                <p className="text-sm uppercase tracking-wide text-muted-foreground">Message</p>
+                                <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.message_text}</p>
+                              </div>
 
-                    <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
-                      <div className="rounded-2xl border border-border bg-muted/20 p-4">
-                        <p className="font-medium text-foreground/80">Visibility</p>
-                        <p>{note.is_anonymous ? 'Anonymous to recipient' : 'Sender details revealed to recipient'}</p>
-                      </div>
-                      <div className="rounded-2xl border border-border bg-muted/20 p-4">
-                        <p className="font-medium text-foreground/80">Read status</p>
-                        <p>Delivered at: {formatTimestamp(note.read_at)}</p>
-                      </div>
-                    </div>
+                              <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                                <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                                  <p className="font-medium text-foreground/80">Visibility</p>
+                                  <p>{note.is_anonymous ? 'Anonymous to recipient' : 'Sender details revealed to recipient'}</p>
+                                </div>
+                                <div className="rounded-2xl border border-border bg-muted/20 p-4">
+                                  <p className="font-medium text-foreground/80">Read status</p>
+                                  <p>Delivered at: {formatTimestamp(note.read_at)}</p>
+                                </div>
+                              </div>
 
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-muted-foreground text-muted-foreground hover:bg-muted"
-                        onClick={() => handleStatusChange(note.id, 'pending_review')}
-                      >
-                        <ShieldAlert className="mr-2 h-4 w-4" /> Mark pending
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-500 text-green-500 hover:bg-green-500 hover:text-white"
-                        onClick={() => handleStatusChange(note.id, 'approved')}
-                      >
-                        <ShieldCheck className="mr-2 h-4 w-4" /> Approve
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                        onClick={() => handleStatusChange(note.id, 'rejected')}
-                      >
-                        <ShieldAlert className="mr-2 h-4 w-4" /> Reject
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                        onClick={() => askDelete(note.id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" /> Delete note
-                      </Button>
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-muted-foreground text-muted-foreground hover:bg-muted"
+                                  onClick={() => handleStatusChange(note.id, 'pending_review')}
+                                >
+                                  <ShieldAlert className="mr-2 h-4 w-4" /> Mark pending
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-green-500 text-green-500 hover:bg-green-500 hover:text-white"
+                                  onClick={() => handleStatusChange(note.id, 'approved')}
+                                >
+                                  <ShieldCheck className="mr-2 h-4 w-4" /> Approve
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                                  onClick={() => handleStatusChange(note.id, 'rejected')}
+                                >
+                                  <ShieldAlert className="mr-2 h-4 w-4" /> Reject
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                                  onClick={() => askDelete(note.id)}
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" /> Delete note
+                                </Button>
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        );
+                      })}
+                    </Accordion>
+                  )}
+                </section>
               );
             })}
-          </Accordion>
+          </div>
         )}
       </div>
 

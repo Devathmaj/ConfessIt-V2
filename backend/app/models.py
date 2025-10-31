@@ -1,8 +1,7 @@
 # app/models.py
 
-import logging
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, EmailStr, Field, validator
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -20,6 +19,14 @@ class ConfessionCreate(BaseModel):
     confession: str
     is_anonymous: bool
     is_comment: bool
+    confessing_to: str
+
+    @validator("confessing_to")
+    def _validate_confessing_to(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("The name of the person you are confessing to cannot be empty.")
+        return normalized
 
 class ConfessionUpdate(BaseModel):
     """
@@ -82,6 +89,7 @@ class Confession(BaseModel):
     """
     id: ObjectId = Field(default_factory=ObjectId, alias="_id")
     confession: str
+    confessing_to: Optional[str] = None
     is_anonymous: bool
     is_comment: bool
     timestamp: Optional[datetime] = None
@@ -124,6 +132,55 @@ class Report(BaseModel):
         populate_by_name = True
 
 
+class AdminUserBase(BaseModel):
+    """
+    Shared attributes for creating or updating user accounts via the admin APIs.
+    """
+    Regno: str
+    Name: str
+    email: EmailStr
+    username: Optional[str] = None
+    emoji: Optional[str] = None
+    bio: Optional[str] = None
+    which_class: str
+    gender: str
+    profile_picture_id: Optional[str] = None
+    interests: Optional[List[str]] = None
+    isMatchmaking: bool = True
+    isNotifications: bool = True
+    isLovenotesRecieve: bool = True
+    isLovenotesSend: bool = False
+    user_role: str = "user"
+
+
+class AdminUserCreate(AdminUserBase):
+    """
+    Payload for creating a new user or admin account via the admin APIs.
+    """
+
+
+class AdminUserUpdate(BaseModel):
+    """
+    Payload for updating existing user accounts via the admin APIs.
+    """
+    Regno: Optional[str] = None
+    Name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
+    emoji: Optional[str] = None
+    bio: Optional[str] = None
+    which_class: Optional[str] = None
+    gender: Optional[str] = None
+    profile_picture_id: Optional[str] = None
+    interests: Optional[List[str]] = None
+    isMatchmaking: Optional[bool] = None
+    isNotifications: Optional[bool] = None
+    isLovenotesRecieve: Optional[bool] = None
+    isLovenotesSend: Optional[bool] = None
+    user_role: Optional[str] = None
+    is_blocked: Optional[bool] = None
+
+
 class UserDetails(BaseModel):
     """
     Stores detailed information for a user profile.
@@ -138,68 +195,18 @@ class UserDetails(BaseModel):
     which_class: str
     profile_picture_id: Optional[str] = None
     gender: str
-    interests: Optional[List[str]] = []
+    interests: Optional[List[str]] = Field(default_factory=list)
     isMatchmaking: bool
     isNotifications: bool
     isLovenotesRecieve: bool = True
     isLovenotesSend: bool = False
+    is_blocked: bool = False
     reported_count: int = 0
     last_login_time: Optional[datetime] = None
     last_login_ip: Optional[str] = None
+    last_login_user_agent: Optional[str] = None
     user_role: str = "user"
-    is_blocked: bool = False
     last_matchmaking_time: Optional[datetime] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
-
-
-class AdminUserUpdate(BaseModel):
-    """Fields that an administrator is allowed to update for a user profile."""
-
-    Name: Optional[str] = None
-    Regno: Optional[str] = None
-    email: Optional[EmailStr] = None
-    username: Optional[str] = None
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
-    which_class: Optional[str] = None
-    profile_picture_id: Optional[str] = None
-    gender: Optional[str] = None
-    interests: Optional[List[str]] = None
-    isMatchmaking: Optional[bool] = None
-    isNotifications: Optional[bool] = None
-    isLovenotesRecieve: Optional[bool] = None
-    isLovenotesSend: Optional[bool] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
-
-
-class AdminUserCreate(BaseModel):
-    """Payload used by administrators to create a brand new user or admin account."""
-
-    Regno: str
-    Name: str
-    email: EmailStr
-    which_class: str
-    gender: str
-
-    username: Optional[str] = None
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
-    profile_picture_id: Optional[str] = None
-    interests: Optional[List[str]] = None
-
-    isMatchmaking: bool = True
-    isNotifications: bool = True
-    isLovenotesRecieve: bool = True
-    isLovenotesSend: bool = False
-    user_role: Literal["user", "admin"] = "user"
 
     class Config:
         arbitrary_types_allowed = True

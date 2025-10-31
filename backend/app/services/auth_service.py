@@ -10,6 +10,7 @@ from bson import ObjectId
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from pymongo.database import Database
+from pymongo import ReturnDocument
 
 from ..config import settings
 from ..dependencies import get_db
@@ -118,7 +119,7 @@ async def generate_magic_link_service(request: Request, db: Database):
     return {"message": "Magic link generated. Check the backend console."}
 
 
-def verify_magic_link_service(token: str, request: Request, db: Database):
+def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):
     """
     Used to verify a magic link token and return a JWT access token and a redirect URL based on user role.
     """
@@ -127,8 +128,22 @@ def verify_magic_link_service(token: str, request: Request, db: Database):
 
     hashed_token = hash_token(token)
 
-    login_token = db["LoginTokens"].find_one(
-        {"token_hash": hashed_token, "used": False, "revoked": False, "expires_at": {"$gt": datetime.utcnow()}}
+    now = datetime.utcnow()
+
+    login_token = db["LoginTokens"].find_one_and_update(
+        {
+            "token_hash": hashed_token,
+            "used": False,
+            "revoked": False,
+            "expires_at": {"$gt": datetime.utcnow()},
+        },
+        {
+            "$set": {
+                "used": True,
+                "consumed_at": now,
+            }
+        },
+        return_document=ReturnDocument.BEFORE
     )
 
     if not login_token:
@@ -153,6 +168,38 @@ def verify_magic_link_service(token: str, request: Request, db: Database):
     user = db["UserDetails"].find_one({"_id": ObjectId(login_token["user_id"])})
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User associated with token not found")
+
+    consume_ip = request.client.host if request else login_token.get("request_ip")
+    consume_user_agent = request.headers.get("user-agent") if request else login_token.get("request_user_agent")
+
+    metadata = login_token.get("metadata") or {}
+    metadata.update({
+        "status": "active",
+        "last_seen": now,
+        "device": consume_user_agent or login_token.get("request_user_agent") or "unknown",
+    })
+
+    db["LoginTokens"].update_one(
+        {"_id": login_token["_id"]},
+        {
+            "$set": {
+                "consume_ip": consume_ip,
+                "consume_user_agent": consume_user_agent,
+                "metadata": metadata,
+            }
+        }
+    )
+
+    db["UserDetails"].update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "last_login_time": now,
+                "last_login_ip": consume_ip,
+                "last_login_user_agent": consume_user_agent,
+            }
+        }
+    )
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(

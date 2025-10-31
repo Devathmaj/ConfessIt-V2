@@ -259,6 +259,11 @@ export const getAdminStats = async () => {
     return response.data;
 };
 
+export const getAdminActiveSessions = async () => {
+    const response = await axios.get(`${API_URL}/admin/stats/active-sessions`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
 export const getAdminConfessions = async () => {
     const response = await axios.get(`${API_URL}/admin/confessions`, { headers: getAuthHeaders() });
     return response.data;

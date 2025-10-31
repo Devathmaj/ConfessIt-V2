@@ -73,6 +73,7 @@ interface AdminComment {
 interface AdminConfession {
   id: string;
   confession: string;
+  confessing_to?: string | null;
   is_anonymous: boolean;
   is_comment: boolean;
   timestamp: string | null;
@@ -129,6 +130,7 @@ export const ConfessionsAdmin = () => {
           ? data.map((item: Partial<AdminConfession>, index) => ({
               id: item.id ?? `confession-${index}`,
               confession: item.confession ?? '',
+              confessing_to: item.confessing_to ?? null,
               is_anonymous: item.is_anonymous ?? true,
               is_comment: item.is_comment ?? true,
               timestamp: item.timestamp ?? null,
@@ -225,6 +227,7 @@ export const ConfessionsAdmin = () => {
       entries = entries.filter((confession) => {
         const haystack = [
           confession.confession,
+          confession.confessing_to,
           confession.sender.name,
           confession.sender.email,
           confession.sender.regno,
@@ -385,6 +388,11 @@ export const ConfessionsAdmin = () => {
                         <CardDescription>
                           Submitted {formatTimestamp(confession.timestamp)} · Comments {commentTotal}
                         </CardDescription>
+                        {confession.confessing_to && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Confessing to: <span className="font-semibold text-foreground">{confession.confessing_to}</span>
+                          </p>
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={anonymityVariant}>
@@ -392,9 +400,11 @@ export const ConfessionsAdmin = () => {
                         </Badge>
                         {!confession.is_comment && <Badge variant="outline">Comments disabled</Badge>}
                         {confession.report_count > 0 && (
-                          <Badge variant="destructive" className="flex items-center gap-1">
-                            <Flag className="h-3 w-3" />
-                            {confession.report_count} reports
+                          <Badge variant="destructive">
+                            <span className="flex items-center gap-1">
+                              <Flag className="h-3 w-3" />
+                              {confession.report_count} reports
+                            </span>
                           </Badge>
                         )}
                       </div>
@@ -542,8 +552,10 @@ export const ConfessionsAdmin = () => {
                                         <ThumbsDown className="h-3 w-3" /> {comment.dislike_count}
                                       </span>
                                       {comment.report_count > 0 && (
-                                        <Badge variant="destructive" className="text-[10px]">
-                                          {comment.report_count} reports
+                                        <Badge variant="destructive">
+                                          <span className="text-[10px]">
+                                            {comment.report_count} reports
+                                          </span>
                                         </Badge>
                                       )}
                                     </div>

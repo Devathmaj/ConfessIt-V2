@@ -28,6 +28,8 @@ def _require_admin(current_user: UserDetails = Depends(get_current_user)) -> Use
 def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
     if isinstance(value, datetime):
         # Normalise to ISO format for consistent client handling
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat()
     return None
 
@@ -56,9 +58,123 @@ def _serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "reported_count": doc.get("reported_count", 0),
         "last_login_time": _serialize_datetime(doc.get("last_login_time")),
         "last_login_ip": doc.get("last_login_ip"),
+        "last_login_user_agent": doc.get("last_login_user_agent"),
         "last_matchmaking_time": _serialize_datetime(doc.get("last_matchmaking_time")),
         "is_blocked": doc.get("is_blocked", False),
     }
+
+
+def _collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[str, Any]]:
+    now = datetime.utcnow()
+    active_threshold = now - timedelta(hours=window_hours)
+
+    tokens_collection = db["LoginTokens"]
+
+    # Mark previously-active sessions that are past the window as expired.
+    tokens_collection.update_many(
+        {
+            "metadata.status": "active",
+            "consumed_at": {"$lt": active_threshold},
+        },
+        {"$set": {"metadata.status": "expired"}}
+    )
+
+    active_tokens = list(
+        tokens_collection.find(
+            {
+                "used": True,
+                "revoked": False,
+                "consumed_at": {"$gte": active_threshold},
+            }
+        )
+    )
+
+    if not active_tokens:
+        return []
+
+    user_ids: List[ObjectId] = []
+    for token in active_tokens:
+        raw_user_id = token.get("user_id")
+        if isinstance(raw_user_id, str) and ObjectId.is_valid(raw_user_id):
+            user_ids.append(ObjectId(raw_user_id))
+
+    user_map: Dict[str, Dict[str, Any]] = {}
+    if user_ids:
+        user_docs = db["UserDetails"].find({"_id": {"$in": user_ids}})
+        user_map = {str(doc.get("_id")): doc for doc in user_docs}
+
+    session_entries: Dict[str, Dict[str, Any]] = {}
+    for token in active_tokens:
+        metadata = (token.get("metadata") or {}).copy()
+        status = metadata.get("status") or "active"
+        if status != "active":
+            # Skip expired/inactive sessions in the active list
+            continue
+
+        raw_user_id = token.get("user_id")
+        user_doc = user_map.get(raw_user_id) if raw_user_id else None
+
+        if "status" not in metadata:
+            metadata["status"] = "active"
+        if "device" not in metadata:
+            metadata["device"] = token.get("consume_user_agent") or token.get("request_user_agent")
+
+        last_seen_value = metadata.get("last_seen") or token.get("consumed_at") or datetime.utcnow()
+        if isinstance(last_seen_value, str):
+            try:
+                parsed_last_seen = datetime.fromisoformat(last_seen_value.replace("Z", "+00:00"))
+                if parsed_last_seen.tzinfo is not None:
+                    parsed_last_seen = parsed_last_seen.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                parsed_last_seen = datetime.utcnow()
+        elif isinstance(last_seen_value, datetime):
+            parsed_last_seen = last_seen_value
+        else:
+            parsed_last_seen = datetime.utcnow()
+
+        metadata["last_seen"] = parsed_last_seen
+
+        tokens_collection.update_one(
+            {"_id": token["_id"]},
+            {"$set": {"metadata": metadata}}
+        )
+
+        serialized_user = _serialize_user_doc(user_doc) if user_doc else {
+            "id": raw_user_id,
+            "Name": None,
+            "email": None,
+            "Regno": None,
+            "username": None,
+            "user_role": None,
+            "is_blocked": False,
+        }
+        if not serialized_user.get("id"):
+            serialized_user["id"] = raw_user_id or str(token.get("_id"))
+
+        iso_last_seen = _serialize_datetime(parsed_last_seen.replace(tzinfo=timezone.utc))
+
+        entry = {
+            "session_id": str(token.get("_id")),
+            "status": status,
+            "last_seen": iso_last_seen,
+            "ip": token.get("consume_ip") or token.get("request_ip"),
+            "device": metadata.get("device") or token.get("consume_user_agent") or token.get("request_user_agent"),
+            "user": serialized_user,
+            "_last_seen_dt": parsed_last_seen,
+        }
+
+        account_key = serialized_user.get("id") or str(token.get("_id"))
+        existing_entry = session_entries.get(account_key)
+        if not existing_entry or entry["_last_seen_dt"] > existing_entry["_last_seen_dt"]:
+            session_entries[account_key] = entry
+
+    results: List[Dict[str, Any]] = []
+    for value in session_entries.values():
+        value.pop("_last_seen_dt", None)
+        results.append(value)
+
+    results.sort(key=lambda item: item.get("last_seen") or "", reverse=True)
+    return results
 
 
 def _normalize_conversation_status(value: Optional[str]) -> str:
@@ -192,6 +308,7 @@ async def get_all_confessions(
             {
                 "id": confession_id,
                 "confession": doc.get("confession", ""),
+                "confessing_to": doc.get("confessing_to"),
                 "is_anonymous": doc.get("is_anonymous", True),
                 "is_comment": doc.get("is_comment", True),
                 "timestamp": _serialize_datetime(doc.get("timestamp")),
@@ -463,11 +580,17 @@ async def list_conversations(
         if supabase_conversation_id:
             message = supabase_service.get_latest_message_for_conversation(supabase_conversation_id)
             if message:
+                timestamp_value = message.get("timestamp") or message.get("created_at") or message.get("createdAt")
+                if isinstance(timestamp_value, str):
+                    try:
+                        timestamp_value = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
+                    except ValueError:
+                        timestamp_value = None
                 latest_message = {
                     "id": message.get("id"),
                     "sender_id": message.get("sender_id") or message.get("senderId"),
                     "text": message.get("text") or message.get("content") or message.get("message"),
-                    "created_at": message.get("created_at") or message.get("createdAt"),
+                    "timestamp": _serialize_datetime(timestamp_value),
                 }
 
         results.append(
@@ -528,12 +651,18 @@ async def get_conversation_detail(
     if supabase_conversation_id:
         raw_messages = supabase_service.get_messages_for_conversation(supabase_conversation_id)
         for message in raw_messages:
+            timestamp_value = message.get("timestamp") or message.get("created_at") or message.get("createdAt")
+            if isinstance(timestamp_value, str):
+                try:
+                    timestamp_value = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
+                except ValueError:
+                    timestamp_value = None
             messages.append(
                 {
                     "id": message.get("id"),
                     "sender_id": message.get("sender_id") or message.get("senderId"),
                     "text": message.get("text") or message.get("content") or message.get("message"),
-                    "created_at": message.get("created_at") or message.get("createdAt"),
+                    "timestamp": _serialize_datetime(timestamp_value),
                 }
             )
 
@@ -779,11 +908,8 @@ async def get_admin_statistics(
     pending_love_notes = love_notes_collection.count_documents({"status": "pending_review"})
     blocked_users = users_collection.count_documents({"is_blocked": True})
 
-    now = datetime.now(timezone.utc)
-    active_threshold = now - timedelta(hours=24)
-    active_sessions = users_collection.count_documents({
-        "last_login_time": {"$gte": active_threshold}
-    })
+    active_session_entries = _collect_active_sessions(db)
+    active_sessions = len(active_session_entries)
 
     return {
         "total_users": total_users,
@@ -792,4 +918,23 @@ async def get_admin_statistics(
         "total_love_notes": total_love_notes,
         "pending_love_notes": pending_love_notes,
         "blocked_users": blocked_users,
+    }
+
+
+@router.get("/stats/active-sessions", response_model=Dict[str, Any])
+async def list_active_sessions(
+    db: Database = Depends(get_db),
+    _: UserDetails = Depends(_require_admin)
+) -> Dict[str, Any]:
+    """Return details about users with recent activity for the active sessions dialog."""
+    sessions = _collect_active_sessions(db)
+
+    unique_user_ids = {session.get("user", {}).get("id") for session in sessions if session.get("user")}
+    unique_user_ids.discard(None)
+
+    return {
+        "count": len(sessions),
+        "unique_user_count": len(unique_user_ids),
+        "sessions": sessions,
+        "window_hours": 24,
     }

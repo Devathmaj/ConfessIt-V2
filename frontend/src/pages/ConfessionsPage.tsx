@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -32,12 +33,14 @@ import { Navigation } from '@/components/Navigation';
 interface UserInfo {
   id: string;
   username: string;
-  avatar?: string;
+  user_reaction: 'like' | 'dislike' | null;
+  report_count: number;
+  reported_by: string[];
 }
 
-// Interface for a single comment on a confession
 interface ConfessionComment {
   id: string;
+  confession_id?: string;
   user_info: UserInfo;
   message: string;
   timestamp: string;
@@ -52,6 +55,7 @@ interface ConfessionComment {
 interface Confession {
   id: string;
   confession: string;
+  confessing_to?: string | null;
   is_anonymous: boolean;
   is_comment: boolean;
   user_id: string;
@@ -72,6 +76,7 @@ export const ConfessionsPage = () => {
   const [confessions, setConfessions] = useState<Confession[]>([]);
   const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('popularity');
   const [newConfession, setNewConfession] = useState('');
+  const [confessingTo, setConfessingTo] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(true);
   const [allowComments, setAllowComments] = useState(true);
   const [isPostDialogOpen, setIsPostDialogOpen] = useState(false);
@@ -284,6 +289,10 @@ export const ConfessionsPage = () => {
       toast.error('Please write your confession first! 💌');
       return;
     }
+    if (!confessingTo.trim()) {
+      toast.error('Please add the name of the person you are confessing to.');
+      return;
+    }
     if (!isAuthenticated) {
       toast.error('You must be logged in to post a confession.');
       return;
@@ -292,12 +301,14 @@ export const ConfessionsPage = () => {
     try {
       const confessionData = {
         confession: newConfession,
+        confessing_to: confessingTo.trim(),
         is_anonymous: isAnonymous,
         is_comment: allowComments,
       };
       const newConfessionResponse = await createConfession(confessionData);
       setConfessions([newConfessionResponse, ...confessions]);
       setNewConfession('');
+      setConfessingTo('');
       setIsPostDialogOpen(false);
       toast.success('Your confession has been shared! 💖');
     } catch (error) {
@@ -485,7 +496,18 @@ export const ConfessionsPage = () => {
               Recent
             </Button>
           </div>
-          <Dialog open={isPostDialogOpen} onOpenChange={setIsPostDialogOpen}>
+          <Dialog
+            open={isPostDialogOpen}
+            onOpenChange={(open) => {
+              setIsPostDialogOpen(open);
+              if (!open) {
+                setNewConfession('');
+                setConfessingTo('');
+                setIsAnonymous(true);
+                setAllowComments(true);
+              }
+            }}
+          >
             <DialogTrigger asChild>
               <Button className="btn-romantic">
                 <Plus className="w-4 h-4 mr-2" />
@@ -503,6 +525,18 @@ export const ConfessionsPage = () => {
               </DialogHeader>
               <div className="space-y-4">
                 <Textarea placeholder="Share what's in your heart..." value={newConfession} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Who are you confessing to?"
+                    value={confessingTo}
+                    onChange={(e) => setConfessingTo(e.target.value)}
+                    className="bg-background/80 border-romantic/30 focus:border-romantic"
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Moderators will review the name to ensure your confession reaches the right person.
+                  </p>
+                </div>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Post anonymously</span>
@@ -537,6 +571,11 @@ export const ConfessionsPage = () => {
                       {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.username || "User")}
                     </CardTitle>
                     <CardDescription>{new Date(confession.timestamp).toLocaleString('en-GB')}</CardDescription>
+                    {confession.confessing_to && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Confessing to: <span className="font-medium text-foreground">{confession.confessing_to}</span>
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {isAuthenticated && user?.id === confession.user_id && (
@@ -609,6 +648,11 @@ export const ConfessionsPage = () => {
                   {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.username || "User") + "'s Confession"}
                 </DialogTitle>
                 <DialogDescription>{new Date(selectedConfession.timestamp).toLocaleString('en-GB')}</DialogDescription>
+                {selectedConfession.confessing_to && (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Confessing to: <span className="font-semibold text-foreground">{selectedConfession.confessing_to}</span>
+                  </p>
+                )}
               </DialogHeader>
               <div className="px-6 pb-4 border-b">
                 <p className="text-foreground leading-relaxed">{selectedConfession.confession}</p>

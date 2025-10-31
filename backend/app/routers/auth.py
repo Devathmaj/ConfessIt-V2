@@ -37,7 +37,7 @@ async def verify_magic_link(token: str, request: Request, db: Database = Depends
     """
     Used to verify a magic link token and return a JWT access token.
     """
-    return verify_magic_link_service(token, request, db)
+    return verify_magic_link_service(token, db, request)
 
 @router.get("/me", response_model=UserDetails)
 async def read_users_me(current_user: Annotated[UserDetails, Depends(get_current_user)]):
