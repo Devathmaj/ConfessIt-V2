@@ -535,11 +535,11 @@ export const MatchmakingPage = () => {
       <Navigation />
       <FloatingHearts />
       
-      <div className="max-w-7xl mx-auto mb-8">
+      <div className="max-w-7xl mx-auto mb-8 px-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
-            <h1 className="text-5xl font-dancing text-romantic mb-2">Random Matchmaking 💕</h1>
-            <p className="text-xl text-muted-foreground">Find your perfect Valentine match!</p>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">Random Matchmaking 💕</h1>
+            <p className="text-sm sm:text-base md:text-xl text-muted-foreground break-words">Find your perfect Valentine match!</p>
           </div>
           <CountdownTimer />
         </div>

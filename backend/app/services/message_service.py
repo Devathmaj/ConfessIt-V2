@@ -172,11 +172,13 @@ class MessageService:
         Get messages for a conversation
         
         Enforces:
-        - User is participant in conversation
+        - User is participant in conversation (unless admin)
         - Conversation is accepted
         """
-        # Validate user is participant
-        self.validate_conversation_participant(db, conversation_id, user.Regno)
+        # Skip validation for admin users - they can view all conversations
+        if user.user_role != "admin":
+            # Validate user is participant
+            self.validate_conversation_participant(db, conversation_id, user.Regno)
         
         # Fetch messages
         messages = list(
@@ -186,15 +188,16 @@ class MessageService:
             .limit(limit)
         )
         
-        # Mark messages as read for receiver
-        db["messages"].update_many(
-            {
-                "conversation_id": ObjectId(conversation_id),
-                "receiver_id": user.Regno,
-                "read": False
-            },
-            {"$set": {"read": True}}
-        )
+        # Mark messages as read for receiver (but not for admin viewers)
+        if user.user_role != "admin":
+            db["messages"].update_many(
+                {
+                    "conversation_id": ObjectId(conversation_id),
+                    "receiver_id": user.Regno,
+                    "read": False
+                },
+                {"$set": {"read": True}}
+            )
         
         # Format response
         return [

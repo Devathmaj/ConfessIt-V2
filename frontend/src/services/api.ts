@@ -245,6 +245,18 @@ export const sendLoveNote = async (noteData: {
     return response.data;
 }
 
+// Used to get received love notes (accepted)
+export const getReceivedLoveNotes = async () => {
+    const response = await axios.get(`${API_URL}/love-notes/inbox`, { headers: getAuthHeaders() });
+    return response.data;
+}
+
+// Used to mark a love note as read
+export const markLoveNoteRead = async (noteId: string) => {
+    const response = await axios.post(`${API_URL}/love-notes/inbox/${noteId}/mark-read`, {}, { headers: getAuthHeaders() });
+    return response.data;
+}
+
 // --- Profile Endpoints ---
 
 export const getNotifications = async () => {

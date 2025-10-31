@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
-import { getAllUsers, getClasses, sendLoveNote } from '@/services/api';
+import { getAllUsers, getClasses, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
 import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // Used to define the structure for a template's field
@@ -56,10 +56,10 @@ interface LoveNote {
     id: string;
     from: string;
     message: string;
-    template: string;
+    image_url: string;
     anonymous: boolean;
-    timestamp: Date;
-    emojis: string[];
+    created_at: string | null;
+    read_at: string | null;
 }
 
 // Used to define the structure for a user in the recipient list
@@ -70,28 +70,6 @@ interface Recipient extends User {
 const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '💫', '⭐', '🌟', '💎', '👑'];
 const availableFonts = ['sans-serif', 'serif', 'monospace', 'cursive'];
 const availableFontStyles = ['normal', 'bold', 'italic'];
-
-// Mock data for received notes
-const mockReceivedNotes: LoveNote[] = [
-    {
-        id: '1',
-        from: 'Secret Admirer',
-        message: 'Your smile brightens my day more than sunshine ☀️',
-        template: 'template_1.png',
-        anonymous: true,
-        timestamp: new Date('2024-02-14T10:30:00'),
-        emojis: ['☀️', '🌟', '✨']
-    },
-    {
-        id: '2',
-        from: 'Alex Chen',
-        message: 'Thanks for being such an amazing friend! Hope your day is filled with love 💖',
-        template: 'template_2.png',
-        anonymous: false,
-        timestamp: new Date('2024-02-14T14:15:00'),
-        emojis: ['🌸', '💖', '🦋']
-    },
-];
 
 export const LoveNotesPage = () => {
     const { user, fetchAndSetUser, token } = useAuth();
@@ -104,6 +82,9 @@ export const LoveNotesPage = () => {
     const [selectedFont, setSelectedFont] = useState<string>('sans-serif');
     const [selectedFontStyle, setSelectedFontStyle] = useState<string>('normal');
     const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
+    const [receivedNotes, setReceivedNotes] = useState<LoveNote[]>([]);
+    const [loadingNotes, setLoadingNotes] = useState(false);
+    const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     // State for recipient selection modal
@@ -115,7 +96,7 @@ export const LoveNotesPage = () => {
     const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
 
 
-    // Used to fetch templates, users, and classes
+    // Used to fetch templates, users, classes, and inbox count
     useEffect(() => {
         const fetchInitialData = async () => {
             try {
@@ -127,13 +108,15 @@ export const LoveNotesPage = () => {
                 setTemplates(loadedTemplates);
                 setSelectedTemplate(loadedTemplates[0]);
 
-                // Fetch users and classes
-                const [usersData, classesData] = await Promise.all([
+                // Fetch users, classes, and received notes count in parallel
+                const [usersData, classesData, notesData] = await Promise.all([
                     getAllUsers(),
-                    getClasses()
+                    getClasses(),
+                    getReceivedLoveNotes()
                 ]);
                 setAllUsers(usersData);
                 setClasses(['All', ...classesData]);
+                setReceivedNotes(notesData);
 
             } catch (error) {
                 console.error("Failed to load initial data:", error);
@@ -143,6 +126,26 @@ export const LoveNotesPage = () => {
 
         fetchInitialData();
     }, []);
+
+    // Used to refresh received love notes when inbox tab becomes active
+    useEffect(() => {
+        if (activeTab === 'inbox' && receivedNotes.length === 0) {
+            const fetchReceivedNotes = async () => {
+                try {
+                    setLoadingNotes(true);
+                    const notes = await getReceivedLoveNotes();
+                    setReceivedNotes(notes);
+                } catch (error) {
+                    console.error("Failed to load received notes:", error);
+                    toast.error("Could not load your love notes.");
+                } finally {
+                    setLoadingNotes(false);
+                }
+            };
+
+            fetchReceivedNotes();
+        }
+    }, [activeTab, receivedNotes.length]);
 
     // Used to draw the content on the canvas
     useEffect(() => {
@@ -344,18 +347,18 @@ export const LoveNotesPage = () => {
 
     return (
         <>
-            <div className="min-h-screen p-4 pt-24">
+            <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 overflow-x-hidden">
                 <Navigation />
                 <FloatingHearts />
 
                 {/* Header */}
-                <div className="max-w-7xl mx-auto mb-8">
-                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                <div className="max-w-7xl mx-auto mb-6 sm:mb-8 px-2 sm:px-4">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 sm:gap-6">
                         <div className="text-center lg:text-left">
-                            <h1 className="text-5xl font-dancing text-romantic mb-2">
+                            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">
                                 Love Notes & Cards 💌
                             </h1>
-                            <p className="text-xl text-muted-foreground">
+                            <p className="text-sm sm:text-base md:text-xl text-muted-foreground px-2 break-words">
                                 Create and share beautiful digital love notes
                             </p>
                         </div>
@@ -364,41 +367,41 @@ export const LoveNotesPage = () => {
                 </div>
 
                 {/* Tab Navigation */}
-                <div className="max-w-7xl mx-auto mb-8">
-                    <div className="flex gap-4 justify-center">
+                <div className="max-w-7xl mx-auto mb-6 sm:mb-8 px-2 sm:px-4">
+                    <div className="flex gap-2 sm:gap-4 justify-center flex-wrap">
                         <Button
                             onClick={() => setActiveTab('create')}
                             variant={activeTab === 'create' ? 'default' : 'outline'}
-                            className="font-dancing text-lg px-8"
+                            className="font-dancing text-sm sm:text-lg px-4 sm:px-8 h-9 sm:h-10"
                         >
-                            <Palette className="w-5 h-5 mr-2" />
+                            <Palette className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
                             Create Note
                         </Button>
                         <Button
                             onClick={() => setActiveTab('inbox')}
                             variant={activeTab === 'inbox' ? 'default' : 'outline'}
-                            className="font-dancing text-lg px-8"
+                            className="font-dancing text-sm sm:text-lg px-4 sm:px-8 h-9 sm:h-10"
                         >
-                            <Mail className="w-5 h-5 mr-2" />
-                            Inbox ({mockReceivedNotes.length})
+                            <Mail className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
+                            Inbox ({receivedNotes.length})
                         </Button>
                     </div>
                 </div>
 
-                <div className="max-w-7xl mx-auto">
+                <div className="max-w-7xl mx-auto px-2 sm:px-4">
                     {activeTab === 'create' ? (
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
                         {/* Left Column: Editor */}
-                        <div className="lg:col-span-1 space-y-6">
+                        <div className="lg:col-span-1 space-y-4 sm:space-y-6">
                             <Card className="confession-card">
-                                <CardHeader>
-                                    <CardTitle className="text-2xl font-dancing text-romantic">Customize Your Note</CardTitle>
+                                <CardHeader className="p-4 sm:p-6">
+                                    <CardTitle className="text-xl sm:text-2xl font-dancing text-romantic">Customize Your Note</CardTitle>
                                 </CardHeader>
-                                <CardContent className="space-y-6">
+                                <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
                                     {/* Template Selection */}
                                     <div>
-                                        <Label className="text-romantic font-semibold mb-3 block">Choose a Template</Label>
-                                        <div className="grid grid-cols-3 gap-3">
+                                        <Label className="text-romantic font-semibold mb-3 block text-sm sm:text-base">Choose a Template</Label>
+                                        <div className="grid grid-cols-3 gap-2 sm:gap-3">
                                             {templates.map((template) => (
                                                 <button
                                                     key={template.template_name}
@@ -499,7 +502,16 @@ export const LoveNotesPage = () => {
                                     <CardTitle className="text-2xl font-dancing text-romantic">Live Preview</CardTitle>
                                 </CardHeader>
                                 <CardContent>
-                                    <canvas ref={canvasRef} className="w-full h-auto rounded-lg border-2 border-muted shadow-lg" />
+                                    <canvas 
+                                        ref={canvasRef} 
+                                        className="w-full h-auto rounded-lg border-2 border-muted shadow-lg cursor-pointer hover:opacity-90 transition-opacity" 
+                                        onClick={() => {
+                                            if (canvasRef.current) {
+                                                const imageUrl = canvasRef.current.toDataURL('image/png');
+                                                setViewingImageUrl(imageUrl);
+                                            }
+                                        }}
+                                    />
                                     <div className="flex items-center justify-between mt-4">
                                         <div className="flex items-center space-x-2">
                                             <Switch id="anonymous-switch" checked={isAnonymous} onCheckedChange={setIsAnonymous} />
@@ -529,34 +541,82 @@ export const LoveNotesPage = () => {
                     ) : (
                         /* Inbox */
                         <div className="space-y-6">
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {mockReceivedNotes.map((note) => {
-                                    const template = templates.find(t => t.image === note.template);
-                                    return (
+                            {loadingNotes ? (
+                                <div className="flex justify-center items-center py-20">
+                                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-romantic"></div>
+                                </div>
+                            ) : receivedNotes.length === 0 ? (
+                                <Card className="confession-card">
+                                    <CardContent className="py-16 text-center">
+                                        <Mail className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+                                        <p className="text-lg text-muted-foreground">
+                                            No love notes yet. Check back later! 💌
+                                        </p>
+                                    </CardContent>
+                                </Card>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {receivedNotes.map((note) => (
                                         <Card
                                             key={note.id}
-                                            className="confession-card cursor-pointer hover:scale-105 transition-all duration-300"
-                                            onClick={() => setSelectedNote(note)}
+                                            className="confession-card hover:scale-105 transition-all duration-300"
                                         >
                                             <CardContent className="p-0">
-                                                <div className={`p-4 rounded-t-lg relative overflow-hidden`}>
-                                                    {template && <img src={`/templates/${template.image}`} alt="note background" className="absolute inset-0 w-full h-full object-cover" />}
-                                                    <div className="text-center text-white relative z-10 bg-black/30 p-2 rounded">
-                                                        <MessageCircle className="w-8 h-8 mx-auto mb-2" fill="currentColor" />
-                                                        <p className="text-sm font-dancing">From: {note.from}</p>
+                                                <div className="relative overflow-hidden rounded-t-lg">
+                                                    <img 
+                                                        src={note.image_url} 
+                                                        alt="Love note" 
+                                                        className="w-full h-48 object-cover cursor-pointer"
+                                                        onClick={() => setViewingImageUrl(note.image_url)}
+                                                    />
+                                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4">
+                                                        <div className="text-white">
+                                                            <MessageCircle className="w-6 h-6 mb-1" fill="currentColor" />
+                                                            <p className="text-sm font-dancing">From: {note.from}</p>
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                <div className="p-4">
+                                                <div className="p-4 space-y-3">
                                                     <p className="text-sm text-muted-foreground line-clamp-2">{note.message}</p>
-                                                    <p className="text-xs text-muted-foreground mt-2">
-                                                        {note.timestamp.toLocaleDateString()} at {note.timestamp.toLocaleTimeString()}
-                                                    </p>
+                                                    {note.created_at && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {new Date(note.created_at).toLocaleDateString()} at {new Date(note.created_at).toLocaleTimeString()}
+                                                        </p>
+                                                    )}
+                                                    <div className="flex gap-2 pt-2">
+                                                        <Button
+                                                            onClick={() => setViewingImageUrl(note.image_url)}
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="flex-1"
+                                                        >
+                                                            Open
+                                                        </Button>
+                                                        <Button
+                                                            onClick={() => {
+                                                                const link = document.createElement('a');
+                                                                link.href = note.image_url;
+                                                                link.download = `love-note-${note.id}.png`;
+                                                                link.target = '_blank';
+                                                                document.body.appendChild(link);
+                                                                link.click();
+                                                                document.body.removeChild(link);
+                                                                toast.success('Download started! 📥');
+                                                            }}
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="flex-1"
+                                                        >
+                                                            <Download className="w-4 h-4 mr-1" />
+                                                            Download
+                                                        </Button>
+                                                    </div>
                                                 </div>
                                             </CardContent>
                                         </Card>
-                                    );
-                                })}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -648,7 +708,52 @@ export const LoveNotesPage = () => {
                 </DialogContent>
             </Dialog>
 
-            {/* Full Page Note Modal */}
+            {/* Full Screen Image Viewer */}
+            {viewingImageUrl && (
+                <div 
+                    className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4"
+                    onClick={() => setViewingImageUrl(null)}
+                >
+                    <div className="max-w-4xl w-full animate-scale-in relative">
+                        <Button
+                            onClick={() => setViewingImageUrl(null)}
+                            variant="ghost"
+                            size="sm"
+                            className="absolute -top-12 right-0 text-white hover:bg-white/20"
+                        >
+                            <X className="w-6 h-6" />
+                        </Button>
+                        <img 
+                            src={viewingImageUrl} 
+                            alt="Love note" 
+                            className="w-full h-auto rounded-lg shadow-2xl"
+                            onClick={(e) => e.stopPropagation()}
+                        />
+                        <div className="flex justify-center gap-3 mt-4">
+                            <Button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const link = document.createElement('a');
+                                    link.href = viewingImageUrl;
+                                    link.download = `love-note.png`;
+                                    link.target = '_blank';
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    toast.success('Download started! 📥');
+                                }}
+                                variant="outline"
+                                className="bg-white/10 text-white hover:bg-white/20"
+                            >
+                                <Download className="w-4 h-4 mr-2" />
+                                Download
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Old Full Page Note Modal - Keep for live preview functionality */}
             {selectedNote && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="max-w-2xl w-full animate-scale-in">
@@ -664,45 +769,55 @@ export const LoveNotesPage = () => {
 
                             <Card>
                                 <CardContent className="p-0">
-                                    {(() => {
-                                        const template = templates.find(t => t.image === selectedNote.template);
-                                        return (
-                                            <div className={`p-8 rounded-lg relative overflow-hidden min-h-[500px] flex flex-col justify-center`}>
-                                                {template && <img src={`/templates/${template.image}`} alt="note background" className="absolute inset-0 w-full h-full object-cover -z-10" />}
-                                                <div className="absolute inset-0 bg-black/40 -z-10"></div>
-
-
-                                                <div className="relative z-10 text-center text-white">
-                                                    <h2 className="font-dancing text-5xl mb-8">💌 Love Note 💌</h2>
-
-                                                    <div className="bg-white/20 rounded-lg p-6 mb-6 backdrop-blur-sm">
-                                                        <p className="text-xl leading-relaxed">{selectedNote.message}</p>
-                                                    </div>
-
-                                                    <div className="flex justify-center gap-3 mb-6">
-                                                        {selectedNote.emojis.map((emoji, index) => (
-                                                            <span
-                                                                key={index}
-                                                                className="text-4xl animate-bounce"
-                                                                style={{ animationDelay: `${index * 0.2}s` }}
-                                                            >
-                                                                {emoji}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-
-                                                    <div className="space-y-2">
-                                                        <p className="text-lg font-dancing">
-                                                            With love from: {selectedNote.from} 💕
-                                                        </p>
-                                                        <p className="text-sm opacity-80">
-                                                            {selectedNote.timestamp.toLocaleDateString()} at {selectedNote.timestamp.toLocaleTimeString()}
-                                                        </p>
-                                                    </div>
-                                                </div>
+                                    <div className="relative">
+                                        <img 
+                                            src={selectedNote.image_url} 
+                                            alt="Love note" 
+                                            className="w-full h-auto rounded-t-lg"
+                                        />
+                                    </div>
+                                    <div className="p-8 space-y-4">
+                                        <div className="text-center">
+                                            <h2 className="font-dancing text-4xl mb-4 text-romantic">💌 Love Note 💌</h2>
+                                            <div className="bg-muted/30 rounded-lg p-6 mb-4">
+                                                <p className="text-lg leading-relaxed">{selectedNote.message}</p>
                                             </div>
-                                        );
-                                    })()}
+                                            <div className="space-y-2">
+                                                <p className="text-lg font-dancing text-romantic">
+                                                    With love from: {selectedNote.from} 💕
+                                                </p>
+                                                {selectedNote.created_at && (
+                                                    <p className="text-sm text-muted-foreground">
+                                                        {new Date(selectedNote.created_at).toLocaleDateString()} at {new Date(selectedNote.created_at).toLocaleTimeString()}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-3 justify-center pt-4">
+                                            <Button
+                                                onClick={() => setViewingImageUrl(selectedNote.image_url)}
+                                                variant="outline"
+                                            >
+                                                View Full Size
+                                            </Button>
+                                            <Button
+                                                onClick={() => {
+                                                    const link = document.createElement('a');
+                                                    link.href = selectedNote.image_url;
+                                                    link.download = `love-note-${selectedNote.id}.png`;
+                                                    link.target = '_blank';
+                                                    document.body.appendChild(link);
+                                                    link.click();
+                                                    document.body.removeChild(link);
+                                                    toast.success('Download started! 📥');
+                                                }}
+                                                variant="outline"
+                                            >
+                                                <Download className="w-4 h-4 mr-2" />
+                                                Download
+                                            </Button>
+                                        </div>
+                                    </div>
                                 </CardContent>
                             </Card>
                         </div>

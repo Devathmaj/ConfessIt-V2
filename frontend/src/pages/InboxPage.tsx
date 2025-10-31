@@ -495,11 +495,11 @@ export const InboxPage = () => {
                   <ArrowLeft className="w-4 h-4" />
                 </Button>
               )}
-              <h1 className="text-5xl font-dancing text-pink-600 dark:text-pink-400">
+              <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-pink-600 dark:text-pink-400 break-words">
                 Notifications 💌
               </h1>
             </div>
-            <p className="text-xl text-muted-foreground">
+            <p className="text-sm sm:text-base md:text-xl text-muted-foreground break-words">
               Manage your notifications and message requests
             </p>
           </div>

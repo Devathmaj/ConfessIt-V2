@@ -1,8 +1,7 @@
-
 import logging
 from pymongo.database import Database
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any
 from bson import ObjectId
 from fastapi import HTTPException, status
 
@@ -120,3 +119,155 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Could not send the love note."
     )
+
+
+# ============================================================================
+# Admin-only Love Note Functions
+# ============================================================================
+
+async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
+    """
+    Fetch all love notes with full sender and recipient details for admin review.
+    """
+    notes_collection = db["LoveNotes"]
+    users_collection = db["UserDetails"]
+
+    items: List[Dict[str, Any]] = []
+    for doc in notes_collection.find().sort("created_at", -1):
+        sender_doc = users_collection.find_one({"_id": doc.get("sender_id")})
+        recipient_doc = users_collection.find_one({"_id": doc.get("recipient_id")})
+        
+        items.append({
+            "id": str(doc.get("_id")),
+            "sender": {
+                "id": str(doc.get("sender_id")) if doc.get("sender_id") else None,
+                "name": sender_doc.get("Name") if sender_doc else None,
+                "regno": sender_doc.get("Regno") if sender_doc else None,
+                "email": sender_doc.get("email") if sender_doc else None,
+            },
+            "recipient": {
+                "id": str(doc.get("recipient_id")) if doc.get("recipient_id") else None,
+                "name": recipient_doc.get("Name") if recipient_doc else None,
+                "regno": recipient_doc.get("Regno") if recipient_doc else None,
+                "email": recipient_doc.get("email") if recipient_doc else None,
+            },
+            "image_url": doc.get("image_base64"),
+            "message_text": doc.get("message_text", ""),
+            "is_anonymous": doc.get("is_anonymous", False),
+            "status": doc.get("status", "pending_review"),
+            "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+            "read_at": doc.get("read_at").isoformat() if doc.get("read_at") else None,
+        })
+    return items
+
+
+async def update_love_note_status_service(
+    note_id: str, 
+    status_value: str, 
+    db: Database
+) -> Dict[str, Any]:
+    """
+    Update the status of a love note and send appropriate notifications.
+    
+    Args:
+        note_id: The ObjectId of the love note
+        status_value: New status (approved, rejected, pending_review)
+        db: MongoDB database instance
+        
+    Returns:
+        Dict with updated note_id and status
+    """
+    if not ObjectId.is_valid(note_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid love note id"
+        )
+
+    # Get the love note before updating
+    love_note = db["LoveNotes"].find_one({"_id": ObjectId(note_id)})
+    if not love_note:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Love note not found"
+        )
+    
+    # Update the status
+    result = db["LoveNotes"].update_one(
+        {"_id": ObjectId(note_id)}, 
+        {"$set": {"status": status_value}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Love note not found"
+        )
+    
+    # Create notifications based on status change
+    from ..services.notification_service import create_notification_service
+    
+    sender_id_obj = love_note.get("sender_id")
+    recipient_id_obj = love_note.get("recipient_id")
+    
+    # Get sender and recipient details
+    sender = db["UserDetails"].find_one({"_id": sender_id_obj}) if sender_id_obj else None
+    recipient = db["UserDetails"].find_one({"_id": recipient_id_obj}) if recipient_id_obj else None
+    
+    if status_value == "approved":
+        # Notify recipient that they received a love note
+        if recipient:
+            sender_name = "Someone" if love_note.get("is_anonymous") else (
+                sender.get("Name") if sender else "Someone"
+            )
+            create_notification_service(
+                user_id=recipient.get("Regno"),
+                heading="💌 You received a Love Note!",
+                body=f"{sender_name} sent you a love note! Go to Love Notes → Inbox to view it.",
+                db=db
+            )
+        
+        # Notify sender that their love note was accepted
+        if sender:
+            create_notification_service(
+                user_id=sender.get("Regno"),
+                heading="✅ Love Note Delivered!",
+                body="Your love note was reviewed and successfully delivered to the recipient.",
+                db=db
+            )
+    
+    elif status_value == "rejected":
+        # Notify sender that their love note was rejected
+        if sender:
+            create_notification_service(
+                user_id=sender.get("Regno"),
+                heading="❌ Love Note Not Delivered",
+                body="Your love note could not be sent. It may have violated our community guidelines.",
+                db=db
+            )
+    
+    return {"id": note_id, "status": status_value}
+
+
+async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:
+    """
+    Delete a love note from the system.
+    
+    Args:
+        note_id: The ObjectId of the love note
+        db: MongoDB database instance
+        
+    Returns:
+        Dict with deleted note_id
+    """
+    if not ObjectId.is_valid(note_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid love note id"
+        )
+
+    result = db["LoveNotes"].delete_one({"_id": ObjectId(note_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Love note not found"
+        )
+    return {"deleted": note_id}

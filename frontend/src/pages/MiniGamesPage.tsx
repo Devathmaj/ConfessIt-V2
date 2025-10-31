@@ -157,13 +157,13 @@ export const MiniGamesPage = () => {
       <FloatingHearts />
       
       {/* Header */}
-      <div className="max-w-7xl mx-auto mb-8">
+      <div className="max-w-7xl mx-auto mb-8 px-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
-            <h1 className="text-5xl font-dancing text-romantic mb-2">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">
               Mini-Games & Icebreakers 🎮
             </h1>
-            <p className="text-xl text-muted-foreground">
+            <p className="text-sm sm:text-base md:text-xl text-muted-foreground break-words">
               Break the ice and have fun together!
             </p>
           </div>

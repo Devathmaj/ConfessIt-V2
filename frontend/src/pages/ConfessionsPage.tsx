@@ -461,38 +461,34 @@ export const ConfessionsPage = () => {
   ] as const;
 
   return (
-    <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
+    <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
-      <div className="max-w-6xl mx-auto mb-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Button variant="outline" size="sm" onClick={() => window.history.back()}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
+      <div className="max-w-6xl mx-auto mb-8 px-2 sm:px-4">
+        <div className="flex items-center gap-2 sm:gap-4 mb-4 sm:mb-6">
           <CountdownTimer />
         </div>
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-dancing text-romantic mb-4">
+        <div className="text-center mb-6 sm:mb-8 px-2">
+          <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 sm:mb-4 break-words">
             Anonymous Confessions 💌
           </h1>
-          <p className="text-xl text-muted-foreground">
+          <p className="text-sm sm:text-base md:text-xl text-muted-foreground px-2 break-words">
             Share your heart safely and anonymously
           </p>
         </div>
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-muted-foreground">Sort by:</span>
-            <Button variant={sortBy === 'popularity' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('popularity')} className={sortBy === 'popularity' ? 'btn-romantic' : 'btn-love'}>
-              <TrendingUp className="w-4 h-4 mr-2" />
+        <div className="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-center w-full md:w-auto">
+            <span className="text-xs sm:text-sm text-muted-foreground">Sort by:</span>
+            <Button variant={sortBy === 'popularity' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('popularity')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'popularity' ? 'btn-romantic' : 'btn-love'}`}>
+              <TrendingUp className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
               Popularity
             </Button>
-            <Button variant={sortBy === 'comments' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('comments')} className={sortBy === 'comments' ? 'btn-romantic' : 'btn-love'}>
-              <MessageSquare className="w-4 h-4 mr-2" />
-              By comments
+            <Button variant={sortBy === 'comments' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('comments')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'comments' ? 'btn-romantic' : 'btn-love'}`}>
+              <MessageSquare className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+              Comments
             </Button>
-            <Button variant={sortBy === 'time' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('time')} className={sortBy === 'time' ? 'btn-romantic' : 'btn-love'}>
-              <Clock className="w-4 h-4 mr-2" />
+            <Button variant={sortBy === 'time' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('time')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'time' ? 'btn-romantic' : 'btn-love'}`}>
+              <Clock className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
               Recent
             </Button>
           </div>
