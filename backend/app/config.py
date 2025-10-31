@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "ConfessDB"
     MONGO_HOST: str = "mongo"
     MONGO_PORT: int = 27017
+    MONGO_URI_ENV: str = ""
 
     CLOUDINARY_CLOUD_NAME: str | None = None
     CLOUDINARY_API_KEY: str | None = None
@@ -33,23 +34,28 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""  # Service role key for admin API access
     SUPABASE_JWT_SECRET: str = ""  # JWT secret for signing ephemeral tokens
 
+    CLOUD: bool = False
+
     @property
     def MONGO_URI(self):
-        # Add authSource=admin so root user authenticates correctly
-        return (
-            f"mongodb://{self.MONGO_USERNAME}:{self.MONGO_PASSWORD}"
-            f"@{self.MONGO_HOST}:{self.MONGO_PORT}/{self.MONGO_DB_NAME}"
-            f"?authSource=admin"
-        )
+        if self.CLOUD:
+            return self.MONGO_URI_ENV
+        else:
+            # Add authSource=admin so root user authenticates correctly
+            return (
+                f"mongodb://{self.MONGO_USERNAME}:{self.MONGO_PASSWORD}"
+                f"@{self.MONGO_HOST}:{self.MONGO_PORT}/{self.MONGO_DB_NAME}"
+                f"?authSource=admin"
+            )
 
     class Config:
         env_file = ".env"
         secrets_dir = "/run/secrets"
         extra = "allow"
 
-# Read Docker secret manually if present
-secret_path = "/run/secrets/db_password"
-if os.path.exists(secret_path):
-    os.environ["MONGO_PASSWORD"] = open(secret_path).read().strip()
+# Read Docker secret manually if present, only if not cloud
+CLOUD = os.getenv("CLOUD", "false").lower() == "true"
+if not CLOUD and os.path.exists("/run/secrets/db_password"):
+    os.environ["MONGO_PASSWORD"] = open("/run/secrets/db_password").read().strip()
 
 settings = Settings()

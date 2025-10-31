@@ -184,6 +184,7 @@ export const MatchmakingPage = () => {
   const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
   const [showCooldownDialog, setShowCooldownDialog] = useState(false);
   const [cooldownMessage, setCooldownMessage] = useState("");
+  const [showRareMatchDialog, setShowRareMatchDialog] = useState(false);
 
   /**
    * Constructs the full URL for a user's profile picture.
@@ -448,7 +449,7 @@ export const MatchmakingPage = () => {
 
           findMatch()
             .then(finalMatch => {
-              // The backend now returns { matched_with, match_id, expires_at }
+              // The backend now returns { matched_with, match_id, expires_at, is_rare_match }
               // and automatically creates a pending conversation
               const newMatchedProfile = { 
                 ...finalMatch.matched_with, 
@@ -458,7 +459,13 @@ export const MatchmakingPage = () => {
               setExpiresAt(finalMatch.expires_at);
               setConversationStatus('pending'); // Automatically created as pending
               setHasActiveConversation(false); // Not active until receiver accepts
-              toast.success('Match found! 💕');
+              
+              // Check if this is a rare same-gender match
+              if (finalMatch.is_rare_match) {
+                setShowRareMatchDialog(true);
+              } else {
+                toast.success('Match found! 💕');
+              }
               
               // Immediately show the matched profile
               console.log('Setting matched profile:', newMatchedProfile);
@@ -782,6 +789,33 @@ export const MatchmakingPage = () => {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setShowCooldownDialog(false)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Rare Same-Gender Match Dialog */}
+      <AlertDialog open={showRareMatchDialog} onOpenChange={setShowRareMatchDialog}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-2xl font-bold text-center text-romantic">
+              ✨ 🎉 🌟 Matrix Glitch Detected! 🌟 🎉 ✨
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-center space-y-4 py-4">
+              <div className="text-lg font-semibold">
+                🔥 You found the ultra-rare glitch in the Matrix! 🔥
+              </div>
+              <div className="text-base">
+                You had a <span className="font-bold text-romantic">0.1% chance</span> of matching with the same gender — this almost never happens!
+              </div>
+              <div className="text-xl font-bold animate-pulse">
+                🎊 You broke the algorithm! 🎊
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setShowRareMatchDialog(false)}>
+              Continue
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

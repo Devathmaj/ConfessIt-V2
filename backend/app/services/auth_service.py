@@ -118,7 +118,7 @@ async def generate_magic_link_service(request: Request, db: Database):
     return {"message": "Magic link generated. Check the backend console."}
 
 
-def verify_magic_link_service(token: str, db: Database):
+def verify_magic_link_service(token: str, request: Request, db: Database):
     """
     Used to verify a magic link token and return a JWT access token and a redirect URL based on user role.
     """
@@ -127,13 +127,28 @@ def verify_magic_link_service(token: str, db: Database):
 
     hashed_token = hash_token(token)
 
-    login_token = db["LoginTokens"].find_one_and_update(
-        {"token_hash": hashed_token, "used": False, "revoked": False, "expires_at": {"$gt": datetime.utcnow()}},
-        {"$set": {"used": True, "consumed_at": datetime.utcnow()}}
+    login_token = db["LoginTokens"].find_one(
+        {"token_hash": hashed_token, "used": False, "revoked": False, "expires_at": {"$gt": datetime.utcnow()}}
     )
 
     if not login_token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+
+    # Check if the consumer IP matches the request IP from token generation
+    if login_token.get("request_ip") != request.client.host:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same IP address")
+
+    # Update the token as used
+    db["LoginTokens"].update_one(
+        {"_id": login_token["_id"]},
+        {"$set": {
+            "used": True,
+            "consumed_at": datetime.utcnow(),
+            "consume_ip": request.client.host,
+            "consume_user_agent": request.headers.get("user-agent", "unknown"),
+            "attempt_count": 1
+        }}
+    )
 
     user = db["UserDetails"].find_one({"_id": ObjectId(login_token["user_id"])})
     if not user:
