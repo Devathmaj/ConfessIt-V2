@@ -26,7 +26,7 @@ def main():
     try:
         # Establish a connection to the MongoDB server
         client = pymongo.MongoClient(settings.MONGO_URI)
-        db = client[settings.MONGO_DB_NAME]
+        db = client[settings.DATABASE_NAME]
         user_details_collection = db["UserDetails"]
         login_tokens_collection = db["LoginTokens"]
 

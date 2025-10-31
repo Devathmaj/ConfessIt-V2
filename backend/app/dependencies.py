@@ -10,7 +10,7 @@ def get_db():
     FastAPI will automatically manage the connection lifecycle.
     """
     try:
-        db = client[settings.MONGO_DB_NAME]
+        db = client[settings.DATABASE_NAME]
         yield db
     finally:
         # Connection will be returned to the pool

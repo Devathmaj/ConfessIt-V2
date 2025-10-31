@@ -802,13 +802,13 @@ export const MatchmakingPage = () => {
             </AlertDialogTitle>
             <AlertDialogDescription className="text-center space-y-4 py-4">
               <div className="text-lg font-semibold">
-                🔥 You found the ultra-rare glitch in the Matrix! 🔥
+                You found the ultra-rare glitch in the Matrix!
               </div>
               <div className="text-base">
                 You had a <span className="font-bold text-romantic">0.1% chance</span> of matching with the same gender — this almost never happens!
               </div>
               <div className="text-xl font-bold animate-pulse">
-                🎊 You broke the algorithm! 🎊
+                🌈 You broke the algorithm! 🌈
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

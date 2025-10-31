@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 class ConfessionService:
     def __init__(self):
         self.client = MongoClient(settings.MONGO_URI)
-        self.db = self.client[settings.MONGO_DB_NAME]
+        self.db = self.client[settings.DATABASE_NAME]
         self.confessions_collection = self.db["Confessions"]
         self.comments_collection = self.db["ConfessionComments"]
         self.users_collection = self.db["UserDetails"]

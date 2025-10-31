@@ -56,7 +56,7 @@ async def on_startup():
         if not client:
             raise pymongo.errors.ConnectionFailure(f"Could not connect to MongoDB after {max_wait} seconds")
 
-        db = client[settings.MONGO_DB_NAME]
+        db = client[settings.DATABASE_NAME]
         user_details_collection = db["UserDetails"]
 
         users_to_create = [

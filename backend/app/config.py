@@ -6,10 +6,10 @@ import secrets
 class Settings(BaseSettings):
     MONGO_USERNAME: str = "ConfessIt"
     MONGO_PASSWORD: str
-    MONGO_DB_NAME: str = "ConfessDB"
+    DATABASE_NAME: str = "ConfessDB"
     MONGO_HOST: str = "mongo"
     MONGO_PORT: int = 27017
-    MONGO_URI_ENV: str = ""
+    MONGODB_URI: str = ""
 
     CLOUDINARY_CLOUD_NAME: str | None = None
     CLOUDINARY_API_KEY: str | None = None
@@ -39,12 +39,12 @@ class Settings(BaseSettings):
     @property
     def MONGO_URI(self):
         if self.CLOUD:
-            return self.MONGO_URI_ENV
+            return self.MONGODB_URI
         else:
             # Add authSource=admin so root user authenticates correctly
             return (
                 f"mongodb://{self.MONGO_USERNAME}:{self.MONGO_PASSWORD}"
-                f"@{self.MONGO_HOST}:{self.MONGO_PORT}/{self.MONGO_DB_NAME}"
+                f"@{self.MONGO_HOST}:{self.MONGO_PORT}/{self.DATABASE_NAME}"
                 f"?authSource=admin"
             )
 
