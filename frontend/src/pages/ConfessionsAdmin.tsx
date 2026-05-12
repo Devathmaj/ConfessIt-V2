@@ -15,6 +15,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { getAdminConfessions, deleteAdminConfession } from '@/services/api';
 import { toast } from 'sonner';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import {
   Heart,
   Laugh,
@@ -106,9 +107,7 @@ const reactionDisplay = [
 ];
 
 const formatTimestamp = (timestamp: string | null) => {
-  if (!timestamp) return 'Unknown';
-  const date = new Date(timestamp);
-  return date.toLocaleString();
+  return formatDateTimeDDMMYYYY(timestamp);
 };
 
 export const ConfessionsAdmin = () => {

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { getAdminStats, getAdminActiveSessions } from '@/services/api';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -450,7 +450,7 @@ export const AdminDashboard = () => {
                 {activeSessions.map((session) => {
                   const user = session.user || {};
                   const displayName = user.Name || user.username || user.Regno || 'Unknown user';
-                  const lastSeen = session.last_seen ? new Date(session.last_seen).toLocaleString() : 'Unknown';
+                  const lastSeen = session.last_seen ? formatDateTimeDDMMYYYY(session.last_seen) : 'Unknown';
                   return (
                     <li key={session.session_id} className="rounded-2xl border border-border bg-muted/30 p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">

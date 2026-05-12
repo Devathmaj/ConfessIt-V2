@@ -32,7 +32,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ImageIcon, User, ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { ShieldAlert, ShieldCheck, Trash2, ImageIcon, User, X, Download } from 'lucide-react';
 
 interface PersonDetails {
   id: string | null;
@@ -54,9 +55,7 @@ interface AdminLoveNote {
 }
 
 const formatTimestamp = (value: string | null) => {
-  if (!value) return 'Unknown';
-  const date = new Date(value);
-  return date.toLocaleString();
+  return formatDateTimeDDMMYYYY(value);
 };
 
 const statusConfig: Record<AdminLoveNote['status'], { label: string; variant: 'default' | 'secondary' | 'destructive' }> = {
@@ -71,6 +70,7 @@ export const LoveNotesReview = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | AdminLoveNote['status']>('all');
+  const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
 
   const statusSections: Array<{ key: AdminLoveNote['status']; heading: string; emptyLabel: string }> = useMemo(
     () => [
@@ -288,9 +288,6 @@ export const LoveNotesReview = () => {
                     <Accordion type="single" collapsible className="space-y-3">
                       {notesForSection.map((note) => {
                         const currentStatus = statusConfig[note.status];
-                        const previewText = note.message_text.length > 90
-                          ? `${note.message_text.slice(0, 90)}...`
-                          : note.message_text;
                         const senderName = note.sender.name ?? note.sender.regno ?? 'Unknown sender';
                         const recipientName = note.recipient.name ?? note.recipient.regno ?? 'Unknown recipient';
                         return (
@@ -305,7 +302,7 @@ export const LoveNotesReview = () => {
                                   {currentStatus.label}: {senderName} → {recipientName}
                                 </span>
                                 <span className="text-xs text-muted-foreground">
-                                  Created {formatTimestamp(note.created_at)} · {previewText || 'No message body provided.'}
+                                  Created {formatTimestamp(note.created_at)}
                                 </span>
                                 <span className="text-xs text-muted-foreground/80">
                                   Sender visible: {note.is_anonymous ? 'No (anonymous)' : 'Yes'}
@@ -328,7 +325,8 @@ export const LoveNotesReview = () => {
                                   <img
                                     src={note.image_url}
                                     alt="Love note illustration"
-                                    className="max-h-64 w-full rounded-xl object-cover"
+                                    className="max-h-64 w-full rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                    onClick={() => setViewingImageUrl(note.image_url)}
                                   />
                                 ) : (
                                   <p className="text-xs text-muted-foreground">No image uploaded with this note.</p>
@@ -414,6 +412,51 @@ export const LoveNotesReview = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Full Screen Image Viewer */}
+      {viewingImageUrl && (
+        <div 
+          className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4"
+          onClick={() => setViewingImageUrl(null)}
+        >
+          <div className="max-w-4xl w-full animate-scale-in relative">
+            <Button
+              onClick={() => setViewingImageUrl(null)}
+              variant="ghost"
+              size="sm"
+              className="absolute -top-12 right-0 text-white hover:bg-white/20"
+            >
+              <X className="w-6 h-6" />
+            </Button>
+            <img 
+              src={viewingImageUrl} 
+              alt="Love note" 
+              className="w-full h-auto rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <div className="flex justify-center gap-3 mt-4">
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const link = document.createElement('a');
+                  link.href = viewingImageUrl;
+                  link.download = `love-note.png`;
+                  link.target = '_blank';
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  toast.success('Download started! 📥');
+                }}
+                variant="outline"
+                className="bg-white/10 text-white hover:bg-white/20"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -34,6 +34,7 @@ import {
   getAdminConversations,
   terminateAdminConversation,
 } from '@/services/api';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import {
   Loader2,
   MessageSquare,
@@ -96,14 +97,7 @@ const statusLabels: Record<string, { label: string; variant: 'default' | 'second
 };
 
 const formatTimestamp = (value?: string | null) => {
-  if (!value) {
-    return 'Not available';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
+  return formatDateTimeDDMMYYYY(value);
 };
 
 const resolveDisplayName = (participant?: AdminConversationParticipant) => {

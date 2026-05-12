@@ -27,7 +27,7 @@ import {
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
 import { getAllUsers, getClasses, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 // Used to define the structure for a template's field
 interface TemplateField {
@@ -580,7 +580,7 @@ export const LoveNotesPage = () => {
                                                     <p className="text-sm text-muted-foreground line-clamp-2">{note.message}</p>
                                                     {note.created_at && (
                                                         <p className="text-xs text-muted-foreground">
-                                                            {new Date(note.created_at).toLocaleDateString()} at {new Date(note.created_at).toLocaleTimeString()}
+                                                            {formatDateTimeDDMMYYYY(note.created_at)}
                                                         </p>
                                                     )}
                                                     <div className="flex gap-2 pt-2">
@@ -788,7 +788,7 @@ export const LoveNotesPage = () => {
                                                 </p>
                                                 {selectedNote.created_at && (
                                                     <p className="text-sm text-muted-foreground">
-                                                        {new Date(selectedNote.created_at).toLocaleDateString()} at {new Date(selectedNote.created_at).toLocaleTimeString()}
+                                                        {formatDateTimeDDMMYYYY(selectedNote.created_at)}
                                                     </p>
                                                 )}
                                             </div>

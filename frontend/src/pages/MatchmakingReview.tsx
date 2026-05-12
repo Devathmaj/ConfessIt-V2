@@ -15,6 +15,7 @@ import { AdminNavigation } from '@/components/AdminNavigation';
 import { getAdminMatchmaking, updateAdminMatchmakingStatus } from '@/services/api';
 import { Check, X, ArrowLeft, SlidersHorizontal, RefreshCcw, Clock, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 type MatchmakingStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
@@ -167,12 +168,12 @@ export const MatchmakingReview = () => {
                       <CardDescription className="flex flex-wrap items-center gap-3 text-xs">
                         {request.created_at && (
                           <span className="flex items-center gap-1">
-                            <Clock className="h-3.5 w-3.5" /> Created {new Date(request.created_at).toLocaleString()}
+                            <Clock className="h-3.5 w-3.5" /> Created {formatDateTimeDDMMYYYY(request.created_at)}
                           </span>
                         )}
                         {request.expires_at && (
                           <span className="flex items-center gap-1">
-                            <Clock className="h-3.5 w-3.5" /> Expires {new Date(request.expires_at).toLocaleString()}
+                            <Clock className="h-3.5 w-3.5" /> Expires {formatDateTimeDDMMYYYY(request.expires_at)}
                           </span>
                         )}
                       </CardDescription>
@@ -215,8 +216,8 @@ export const MatchmakingReview = () => {
                       <h4 className="text-sm font-semibold">Conversation</h4>
                       <div className="mt-2 rounded-lg border border-border p-3 text-xs text-muted-foreground">
                         <p>Status: {request.conversation.status}</p>
-                        {request.conversation.requested_at && <p>Requested: {new Date(request.conversation.requested_at).toLocaleString()}</p>}
-                        {request.conversation.accepted_at && <p>Accepted: {new Date(request.conversation.accepted_at).toLocaleString()}</p>}
+                        {request.conversation.requested_at && <p>Requested: {formatDateTimeDDMMYYYY(request.conversation.requested_at)}</p>}
+                        {request.conversation.accepted_at && <p>Accepted: {formatDateTimeDDMMYYYY(request.conversation.accepted_at)}</p>}
                         <p>Initiator: {request.conversation.initiator ?? 'Unknown'}</p>
                         <p>Receiver: {request.conversation.receiver ?? 'Unknown'}</p>
                       </div>

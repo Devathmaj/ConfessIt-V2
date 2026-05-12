@@ -27,6 +27,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
 import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, UserCircle2, Plus } from 'lucide-react';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 interface AdminUserProfile {
   id: string;
@@ -71,8 +72,7 @@ type CreateUserForm = {
 
 const formatDate = (value?: string | null) => {
   if (!value) return 'Never';
-  const date = new Date(value);
-  return date.toLocaleString();
+  return formatDateTimeDDMMYYYY(value);
 };
 
 const makeInitials = (name?: string | null) => {

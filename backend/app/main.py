@@ -1,6 +1,7 @@
 # app/main.py
 
 import asyncio
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -14,9 +15,31 @@ import pymongo
 from .config import settings
 from .models import UserDetails
 from .logger import get_logger
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 # Initialize logger
 logger = get_logger(__name__)
+
+def _init_tracing():
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint:
+        return
+
+    service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
+    resource = Resource.create({"service.name": service_name})
+
+    provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(provider)
+
+    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+
+_init_tracing()
 
 app = FastAPI(
     title="ConfessIt API",
@@ -228,6 +251,8 @@ app.include_router(messages.router)
 app.include_router(notifications.router)
 app.include_router(admin.router)
 app.include_router(admin_love_notes.router)
+
+FastAPIInstrumentor.instrument_app(app)
 
 # ----------------------
 # File Serving Routes

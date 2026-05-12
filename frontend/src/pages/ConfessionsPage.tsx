@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import { getConfessions, createConfession, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 // Interface for user information
 interface UserInfo {
@@ -566,7 +567,7 @@ export const ConfessionsPage = () => {
                     <CardTitle className="text-lg font-dancing text-romantic">
                       {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.username || "User")}
                     </CardTitle>
-                    <CardDescription>{new Date(confession.timestamp).toLocaleString('en-GB')}</CardDescription>
+                    <CardDescription>{formatDateTimeDDMMYYYY(confession.timestamp)}</CardDescription>
                     {confession.confessing_to && (
                       <p className="mt-1 text-xs text-muted-foreground">
                         Confessing to: <span className="font-medium text-foreground">{confession.confessing_to}</span>
@@ -643,7 +644,7 @@ export const ConfessionsPage = () => {
                 <DialogTitle className="font-dancing text-2xl text-romantic">
                   {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.username || "User") + "'s Confession"}
                 </DialogTitle>
-                <DialogDescription>{new Date(selectedConfession.timestamp).toLocaleString('en-GB')}</DialogDescription>
+                <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.timestamp)}</DialogDescription>
                 {selectedConfession.confessing_to && (
                   <p className="mt-2 text-sm text-muted-foreground">
                     Confessing to: <span className="font-semibold text-foreground">{selectedConfession.confessing_to}</span>
@@ -667,7 +668,7 @@ export const ConfessionsPage = () => {
                       </div>
                       <p className="my-2">{comment.message}</p>
                       <div className="flex items-center justify-between">
-                          <p className="text-xs text-muted-foreground">{new Date(comment.timestamp).toLocaleString('en-GB')}</p>
+                          <p className="text-xs text-muted-foreground">{formatDateTimeDDMMYYYY(comment.timestamp)}</p>
                           <div className="flex items-center gap-2">
                               <Button 
                                 size="icon" 
