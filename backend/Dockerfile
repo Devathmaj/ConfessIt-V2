@@ -7,7 +7,8 @@ WORKDIR /app
 # Copy the requirements file into the container
 COPY requirements.txt .
 
-# Install dependencies
+# Ensure pip and wheel are up-to-date, then install a setuptools version that still provides pkg_resources
+RUN pip install --no-cache-dir --upgrade pip wheel "setuptools<81"
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose the port the app runs on

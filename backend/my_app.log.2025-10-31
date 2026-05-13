@@ -1,0 +1,1068 @@
+2025-10-31 05:15:36,829 - app.main - INFO - Running initial database setup...
+2025-10-31 05:15:38,882 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 690445f862001b9456c25bbf, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:15:42,959 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 690445fc62001b9456c25bc0, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:15:46,977 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6904460062001b9456c25bc1, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:15:50,992 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6904460462001b9456c25bc2, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:15:55,009 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6904460862001b9456c25bc3, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:15:59,022 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 6904460d62001b9456c25bc4, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:16:02,139 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:16:02,177 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:16:02,179 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:16:02,180 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:24:36,031 - app.main - INFO - Running initial database setup...
+2025-10-31 05:24:36,054 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:24:36,064 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:24:36,066 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:24:36,066 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:24:45,443 - app.main - INFO - Running initial database setup...
+2025-10-31 05:24:45,463 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:24:45,471 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:24:45,474 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:24:45,474 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:25:36,386 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=FcZWJSvO5Rz1OqqLqx8jc9fXjLcKHPpzIUrxyLn4nYs
+2025-10-31 05:25:40,554 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:25:40,760 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:25:40,821 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:26:18,254 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=QSq4C1nHtSkTmrSA5y4HIPCK-83e-9jVnsmZSSigdS4
+2025-10-31 05:26:21,813 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:26:22,021 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:26:22,081 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:27:34,700 - app.main - INFO - Running initial database setup...
+2025-10-31 05:27:34,740 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:27:34,757 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:27:34,759 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:27:34,761 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:28:29,782 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=WlzKnDjb0hr6jrR6NEdsV5RjWkO7mWDprZVVVmt_D40
+2025-10-31 05:28:34,186 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:28:34,302 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:28:34,352 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:30:49,501 - app.main - INFO - Running initial database setup...
+2025-10-31 05:30:49,529 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:30:49,543 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:30:49,546 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:30:49,547 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:44:04,610 - app.main - INFO - Running initial database setup...
+2025-10-31 05:44:04,641 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:44:04,655 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:44:04,657 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:44:04,658 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:44:20,458 - app.main - INFO - Running initial database setup...
+2025-10-31 05:44:20,483 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:44:20,497 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:44:20,499 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:44:20,500 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:44:27,707 - app.main - INFO - Running initial database setup...
+2025-10-31 05:44:27,729 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:44:27,742 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:44:27,744 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:44:27,745 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:46:24,934 - app.main - INFO - Running initial database setup...
+2025-10-31 05:46:26,968 - app.main - WARNING - MongoDB not ready yet (waited=0s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d304a6f799a3db9c107, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:30,986 - app.main - WARNING - MongoDB not ready yet (waited=2s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d344a6f799a3db9c108, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:35,005 - app.main - WARNING - MongoDB not ready yet (waited=4s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d384a6f799a3db9c109, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:39,018 - app.main - WARNING - MongoDB not ready yet (waited=6s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d3d4a6f799a3db9c10a, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:43,033 - app.main - WARNING - MongoDB not ready yet (waited=8s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d414a6f799a3db9c10b, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:47,158 - app.main - WARNING - MongoDB not ready yet (waited=10s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d454a6f799a3db9c10c, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:51,179 - app.main - WARNING - MongoDB not ready yet (waited=12s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d494a6f799a3db9c10d, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:55,200 - app.main - WARNING - MongoDB not ready yet (waited=14s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d4d4a6f799a3db9c10e, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:46:59,217 - app.main - WARNING - MongoDB not ready yet (waited=16s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d514a6f799a3db9c10f, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:47:03,237 - app.main - WARNING - MongoDB not ready yet (waited=18s): mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 2.0s, Topology Description: <TopologyDescription id: 69044d554a6f799a3db9c110, topology_type: Unknown, servers: [<ServerDescription ('mongo', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('mongo:27017: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+2025-10-31 05:47:05,304 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:47:05,339 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:47:05,342 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:47:05,343 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:47:16,855 - app.main - INFO - Running initial database setup...
+2025-10-31 05:47:16,876 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:47:16,888 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:47:16,892 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:47:16,893 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:47:29,229 - app.main - INFO - Running initial database setup...
+2025-10-31 05:47:29,247 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:47:29,256 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:47:29,258 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:47:29,258 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:47:44,988 - app.services.auth_service - INFO - Magic Link for Test User 10: http://localhost:5173/verify-login?token=HAoJxm-WxIc2WHl9LwTQJWyLTv9Aa2S2BJLFl49PNns
+2025-10-31 05:47:49,591 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:47:49,684 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:47:49,735 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:49:28,626 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:49:30,097 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:49:30,143 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:49:30,186 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:49:34,434 - app.services.auth_service - INFO - Magic Link for Test User 11: http://localhost:5173/verify-login?token=5xkq2wKjmZUFskPc0tx3veMZQoqpm77FKgGQrtk8dz8
+2025-10-31 05:49:41,204 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:49:41,286 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:49:41,317 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:50:09,171 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 05:50:09,222 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 05:50:09,267 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 05:50:23,073 - app.main - INFO - Running initial database setup...
+2025-10-31 05:50:23,100 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:50:23,117 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:50:23,119 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:50:23,120 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:55:22,861 - app.main - INFO - Running initial database setup...
+2025-10-31 05:55:22,877 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:55:22,885 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:55:22,890 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:55:22,893 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:55:40,560 - app.main - INFO - Running initial database setup...
+2025-10-31 05:55:40,581 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:55:40,590 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:55:40,592 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:55:40,593 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:55:58,925 - app.main - INFO - Running initial database setup...
+2025-10-31 05:55:58,948 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:55:58,960 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:55:58,962 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:55:58,963 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:58:14,722 - app.main - INFO - Running initial database setup...
+2025-10-31 05:58:14,753 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:58:14,768 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:58:14,771 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:58:14,772 - app.main - INFO - Initial database setup complete.
+2025-10-31 05:58:34,221 - app.main - INFO - Running initial database setup...
+2025-10-31 05:58:34,244 - app.main - INFO - Connected to MongoDB
+2025-10-31 05:58:34,259 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 05:58:34,261 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 05:58:34,263 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:00:18,888 - app.main - INFO - Running initial database setup...
+2025-10-31 06:00:18,929 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:00:18,944 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:00:18,946 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:00:18,947 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:01:22,072 - app.main - INFO - Running initial database setup...
+2025-10-31 06:01:22,107 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:01:22,123 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:01:22,126 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:01:22,127 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:01:35,542 - app.main - INFO - Running initial database setup...
+2025-10-31 06:01:35,571 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:01:35,583 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:01:35,585 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:01:35,586 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:11:29,395 - app.main - INFO - Running initial database setup...
+2025-10-31 06:11:29,425 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:11:29,441 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:11:29,443 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:11:29,445 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:12:49,333 - app.main - INFO - Running initial database setup...
+2025-10-31 06:12:49,365 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:12:49,380 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:12:49,383 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:12:49,384 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:17:31,949 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=GE48K1rwgM_QfdXs7mxnhLRGAwDbOSSbwUAmLrTmyb0
+2025-10-31 06:17:38,284 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 06:17:38,328 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 06:17:38,374 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 06:17:44,456 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 06:17:44,537 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 06:17:44,581 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 06:21:10,428 - app.main - INFO - Running initial database setup...
+2025-10-31 06:21:10,468 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:21:10,484 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:21:10,487 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:21:10,490 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:21:31,147 - app.services.auth_service - INFO - Magic Link for Test User: http://localhost:5173/verify-login?token=O3lzUrdNfFzMeNXlU3Y1WxT8TXVunELbmsrBVcTeqhM
+2025-10-31 06:21:37,573 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by popularity
+2025-10-31 06:21:37,660 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by time
+2025-10-31 06:21:37,693 - app.services.confession_service - INFO - Retrieved 1 confessions sorted by comments
+2025-10-31 06:22:22,438 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=3xwC7wfAFrSu20bIScoepM1_zwdlq4k9IrqP2GnTWqI
+2025-10-31 06:23:57,695 - app.main - INFO - Running initial database setup...
+2025-10-31 06:23:57,729 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:23:57,747 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:23:57,749 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:23:57,751 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:24:38,721 - app.main - INFO - Running initial database setup...
+2025-10-31 06:24:38,752 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:24:38,771 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:24:38,773 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:24:38,774 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:24:46,303 - app.main - INFO - Running initial database setup...
+2025-10-31 06:24:46,327 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:24:46,339 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:24:46,341 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:24:46,342 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:24:56,038 - app.main - INFO - Running initial database setup...
+2025-10-31 06:24:56,057 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:24:56,067 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:24:56,069 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:24:56,069 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:25:28,381 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=F35ItJEiBpnwOuMgn4sOUpbMz6S3K94SFVjJu-NZLr8
+2025-10-31 06:38:40,691 - app.main - INFO - Running initial database setup...
+2025-10-31 06:38:41,354 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:38:41,502 - app.main - INFO - Inserted user: Test User
+2025-10-31 06:38:41,621 - app.main - INFO - Inserted user: Test Admin
+2025-10-31 06:38:41,623 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:39:42,002 - app.main - INFO - Running initial database setup...
+2025-10-31 06:39:43,165 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:39:43,217 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:39:43,261 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:39:43,263 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:40:09,013 - app.main - INFO - Running initial database setup...
+2025-10-31 06:40:09,605 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:40:09,662 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:40:09,712 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:40:09,713 - app.main - INFO - Initial database setup complete.
+2025-10-31 06:41:29,435 - app.services.auth_service - WARNING - No user found with registration number: STM02
+2025-10-31 06:41:32,877 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=27zulqq2sNb5CqviKhJPlZ13hTDML-4bs84XLJYImRA
+2025-10-31 06:51:05,679 - app.main - INFO - Running initial database setup...
+2025-10-31 06:51:06,235 - app.main - INFO - Connected to MongoDB
+2025-10-31 06:51:06,288 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 06:51:06,329 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 06:51:06,330 - app.main - INFO - Creating database indexes...
+2025-10-31 06:51:08,395 - app.main - INFO - Database indexes created successfully.
+2025-10-31 06:51:08,396 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:23:24,669 - app.main - INFO - Running initial database setup...
+2025-10-31 10:23:25,259 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:23:25,380 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:23:25,418 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:23:25,423 - app.main - INFO - Creating database indexes...
+2025-10-31 10:23:27,509 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:23:27,511 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:24:00,951 - app.services.auth_service - WARNING - No user found with registration number: STM01
+2025-10-31 10:36:47,097 - app.main - INFO - Running initial database setup...
+2025-10-31 10:36:47,598 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:36:47,701 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:36:47,740 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:36:47,741 - app.main - INFO - Creating database indexes...
+2025-10-31 10:36:49,813 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:36:49,814 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:37:12,357 - app.main - INFO - Running initial database setup...
+2025-10-31 10:37:12,860 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:37:12,910 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:37:12,951 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:37:12,953 - app.main - INFO - Creating database indexes...
+2025-10-31 10:37:15,053 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:37:15,054 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:37:19,656 - app.main - INFO - Running initial database setup...
+2025-10-31 10:37:20,134 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:37:20,185 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:37:20,221 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:37:20,223 - app.main - INFO - Creating database indexes...
+2025-10-31 10:37:22,204 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:37:22,206 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:37:35,229 - app.main - INFO - Running initial database setup...
+2025-10-31 10:37:35,706 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:37:35,754 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:37:35,794 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:37:35,795 - app.main - INFO - Creating database indexes...
+2025-10-31 10:37:37,837 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:37:37,839 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:39:38,789 - app.main - INFO - Running initial database setup...
+2025-10-31 10:39:39,259 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:39:39,350 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:39:39,389 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:39:39,390 - app.main - INFO - Creating database indexes...
+2025-10-31 10:39:41,461 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:39:41,462 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:41:36,609 - app.main - INFO - Running initial database setup...
+2025-10-31 10:41:37,094 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:41:37,192 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:41:37,232 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:41:37,234 - app.main - INFO - Creating database indexes...
+2025-10-31 10:41:39,370 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:41:39,372 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:41:43,726 - app.main - INFO - Running initial database setup...
+2025-10-31 10:41:44,195 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:41:44,289 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:41:44,325 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:41:44,326 - app.main - INFO - Creating database indexes...
+2025-10-31 10:41:46,288 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:41:46,290 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:41:53,596 - app.main - INFO - Running initial database setup...
+2025-10-31 10:41:54,210 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:41:54,258 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:41:54,294 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:41:54,296 - app.main - INFO - Creating database indexes...
+2025-10-31 10:41:56,362 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:41:56,363 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:42:18,870 - app.main - INFO - Running initial database setup...
+2025-10-31 10:42:19,353 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:42:19,444 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:42:19,479 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:42:19,481 - app.main - INFO - Creating database indexes...
+2025-10-31 10:42:21,519 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:42:21,528 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:42:26,384 - app.main - INFO - Running initial database setup...
+2025-10-31 10:42:26,863 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:42:26,957 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:42:26,997 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:42:26,998 - app.main - INFO - Creating database indexes...
+2025-10-31 10:42:29,041 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:42:29,045 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:43:39,629 - app.main - INFO - Running initial database setup...
+2025-10-31 10:43:40,119 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:43:40,217 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:43:40,256 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:43:40,257 - app.main - INFO - Creating database indexes...
+2025-10-31 10:43:42,384 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:43:42,385 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:46:49,374 - app.main - INFO - Running initial database setup...
+2025-10-31 10:46:49,854 - app.main - INFO - Connected to MongoDB
+2025-10-31 10:46:49,907 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 10:46:49,946 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 10:46:49,948 - app.main - INFO - Creating database indexes...
+2025-10-31 10:46:52,015 - app.main - INFO - Database indexes created successfully.
+2025-10-31 10:46:52,016 - app.main - INFO - Initial database setup complete.
+2025-10-31 10:47:24,364 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=nvWa4qrXHSu1spVMphoRxOUt-kUDmo6QTnpdtjKl63k
+2025-10-31 10:47:29,464 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 10:47:29,994 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 10:47:30,514 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 10:47:31,496 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 10:47:34,334 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 10:48:06,796 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=eIqq-qASmRrlN3eJdVuSYgc-caGiu5Of9okn8_JTOk0
+2025-10-31 10:48:14,019 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 10:48:14,558 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 10:48:15,127 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:02:27,318 - app.main - INFO - Running initial database setup...
+2025-10-31 11:02:27,834 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:02:27,946 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:02:27,986 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:02:27,987 - app.main - INFO - Creating database indexes...
+2025-10-31 11:02:30,093 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:02:30,096 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:02:30,165 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:30,168 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:31,775 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:31,791 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:33,822 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:33,826 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:35,866 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:36,105 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:37,857 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:37,864 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:39,862 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:39,868 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:41,867 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:41,872 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:43,846 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:43,849 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:45,832 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:45,839 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:47,796 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:47,817 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:49,777 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:49,785 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:51,755 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:51,762 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:53,726 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:53,734 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:55,700 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:55,706 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:57,673 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:57,676 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:59,626 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:02:59,634 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:01,788 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:01,796 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:03,819 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:03,822 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:05,849 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:05,858 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:07,857 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:07,859 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:09,863 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:11,842 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:13,826 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:15,803 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:17,788 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:19,758 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:21,726 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:23,701 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:25,668 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:27,640 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:29,606 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:31,747 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:33,782 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:35,870 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:37,838 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:39,858 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:41,850 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:43,832 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:45,820 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:47,800 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:49,766 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:51,752 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:53,720 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:55,691 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:57,666 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:03:59,630 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:01,755 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:03,799 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:05,818 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:07,847 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:09,845 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:11,841 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:13,843 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:15,820 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:17,802 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:19,767 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:21,749 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:23,721 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:25,689 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:27,669 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:29,631 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:31,752 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:33,790 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:35,845 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:37,844 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:39,853 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:41,850 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:43,837 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:45,807 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:47,809 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:49,769 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:51,755 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:53,716 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:55,683 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:57,657 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:04:59,627 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:01,754 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:03,793 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:05,829 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:07,845 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:09,860 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:11,845 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:13,846 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:15,827 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:17,816 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:19,767 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:21,735 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:23,716 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:25,679 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:27,644 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:29,623 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:31,758 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:33,791 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:35,848 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:37,855 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:39,862 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:41,850 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:43,837 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:45,832 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:47,809 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:49,784 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:51,748 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:53,728 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:55,735 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:57,676 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:05:59,637 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:01,756 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:02,605 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=PGHw-9toH0y8LEzPEmy1BHh9W-7lkgq7Cr59W7hujC0
+2025-10-31 11:06:03,832 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:05,837 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:07,852 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:09,858 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:11,862 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:13,204 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:06:16,996 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=wiHwpEnT7txrG3A5baX0wkRCWJ93isyfUGd-RE271zQ
+2025-10-31 11:06:22,452 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:06:22,955 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:06:23,517 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:07:54,195 - app.main - INFO - Running initial database setup...
+2025-10-31 11:07:54,686 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:07:54,786 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:07:54,823 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:07:54,825 - app.main - INFO - Creating database indexes...
+2025-10-31 11:07:56,871 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:07:56,873 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:08:09,968 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=1iOb6jxC-8z2ZSU6BVSkyFluK4C9i5TQgFMbgaCk0E4
+2025-10-31 11:08:15,676 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:08:16,222 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:08:17,006 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:19:06,847 - app.main - INFO - Running initial database setup...
+2025-10-31 11:19:07,336 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:19:07,436 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:19:07,474 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:19:07,475 - app.main - INFO - Creating database indexes...
+2025-10-31 11:19:09,601 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:19:09,603 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:19:28,709 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=cLDovTca16zCfeG2-YCQNlRhCKQWiZL-EuGOGGmzYAU
+2025-10-31 11:19:34,673 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:19:35,205 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:19:35,702 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:23:57,347 - app.main - INFO - Running initial database setup...
+2025-10-31 11:23:57,860 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:23:57,913 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:23:57,953 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:23:57,954 - app.main - INFO - Creating database indexes...
+2025-10-31 11:24:00,097 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:24:00,098 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:24:16,498 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=l0QMeoHDnWZNTtRBG8RHEBht2ujFV78g3DSSJakqHX4
+2025-10-31 11:24:19,915 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=hb8aaiX21AytxDq8tSgCQFNjwPlr7LK7e1AwP2lNOCo
+2025-10-31 11:24:24,230 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:24:24,756 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:24:25,261 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:28:17,616 - app.main - INFO - Running initial database setup...
+2025-10-31 11:28:18,129 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:28:18,230 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:28:18,269 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:28:18,270 - app.main - INFO - Creating database indexes...
+2025-10-31 11:28:20,684 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:28:20,686 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:28:42,431 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=_4dBTsQTy7sZ664d-rtcly0GcRpHkrKqzePVNnFR4mQ
+2025-10-31 11:28:57,715 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:28:58,191 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:28:58,645 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:33:51,680 - app.main - INFO - Running initial database setup...
+2025-10-31 11:33:52,128 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:33:52,219 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:33:52,254 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:33:52,255 - app.main - INFO - Creating database indexes...
+2025-10-31 11:33:54,243 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:33:54,244 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:34:24,071 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=T3hTe0v7WhaZPnM_QywFJQ2duxJ5wi7OxoKcSWzNrpM
+2025-10-31 11:34:38,630 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:34:39,117 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:34:39,567 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:34:43,076 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:34:43,630 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:34:44,138 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:37:59,769 - app.main - INFO - Running initial database setup...
+2025-10-31 11:38:00,211 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:38:00,297 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:38:00,337 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:38:00,338 - app.main - INFO - Creating database indexes...
+2025-10-31 11:38:02,323 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:38:02,325 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:38:03,744 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:05,706 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:07,660 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:09,634 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:11,610 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:13,776 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:15,815 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:17,854 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:19,860 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:21,859 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:23,863 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:25,836 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:27,818 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:29,792 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:31,761 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:33,520 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:34,544 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:35,550 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:38:40,859 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=OX9WNmtriU6m3StdYRmBXibR0gGDY12aVRStLDI3YTY
+2025-10-31 11:38:48,531 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:38:49,045 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:38:49,548 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:38:59,606 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=9_5m-B7up7zdmsXnyFs9fTSUqImxzqaA2TKJVoXTQ58
+2025-10-31 11:39:08,815 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:39:09,294 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:39:09,780 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:42:10,010 - app.main - INFO - Running initial database setup...
+2025-10-31 11:42:10,464 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:42:10,566 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:42:10,603 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:42:10,604 - app.main - INFO - Creating database indexes...
+2025-10-31 11:42:12,725 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:42:12,726 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:42:12,779 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:12,783 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:14,764 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:14,772 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:16,795 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:16,804 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:18,956 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:18,969 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:20,854 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:20,857 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:22,872 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:22,877 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:24,870 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:24,878 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:26,840 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:26,857 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:28,838 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:28,844 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:30,813 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:30,816 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:32,783 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:32,790 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:34,751 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:34,757 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:36,728 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:36,733 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:38,686 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:38,693 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:40,665 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:40,667 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:42,617 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:42,623 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:44,750 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:44,752 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:46,797 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:46,804 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:48,827 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:48,828 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:50,858 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:50,860 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:52,851 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:52,856 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:54,855 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:54,861 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:56,840 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:56,846 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:58,819 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:42:58,823 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:00,808 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:00,813 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:02,772 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:02,776 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:04,748 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:04,754 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:06,720 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:06,726 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:08,692 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:08,697 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:10,659 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:10,665 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:12,628 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:12,632 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:14,760 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:14,763 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:19,330 - app.main - INFO - Running initial database setup...
+2025-10-31 11:43:19,794 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:43:19,839 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:43:19,875 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:43:19,876 - app.main - INFO - Creating database indexes...
+2025-10-31 11:43:21,832 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:43:21,833 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:43:21,934 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:21,936 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:23,860 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:23,864 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:25,842 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:25,849 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:27,831 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:27,835 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:29,810 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:29,815 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:35,186 - app.main - INFO - Running initial database setup...
+2025-10-31 11:43:35,621 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:43:35,713 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:43:35,746 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:43:35,748 - app.main - INFO - Creating database indexes...
+2025-10-31 11:43:37,653 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:43:37,655 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:43:37,703 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:37,707 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:39,674 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:39,678 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:41,649 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:41,652 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:43,603 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:43,605 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:45,780 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:45,782 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:47,830 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:47,836 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:49,851 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:49,856 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:51,868 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:51,875 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:43:58,872 - app.main - INFO - Running initial database setup...
+2025-10-31 11:43:59,338 - app.main - INFO - Connected to MongoDB
+2025-10-31 11:43:59,446 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 11:43:59,483 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 11:43:59,484 - app.main - INFO - Creating database indexes...
+2025-10-31 11:44:01,520 - app.main - INFO - Database indexes created successfully.
+2025-10-31 11:44:01,521 - app.main - INFO - Initial database setup complete.
+2025-10-31 11:44:05,750 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:05,752 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:07,709 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:07,713 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:09,679 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:09,684 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:11,644 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:11,646 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:13,612 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:13,614 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:15,783 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:15,789 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:17,828 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:17,830 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:19,853 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:19,859 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:21,864 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:21,869 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:23,884 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:23,896 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:25,864 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:27,845 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:28,768 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=kn3-WVyEu7UlDrPlyJMk0xH12zPCY26XkGaVHnoy5IA
+2025-10-31 11:44:29,831 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:31,799 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:33,774 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:35,754 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:37,697 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:39,675 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:41,627 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:43,596 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:45,739 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:47,466 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:44:47,789 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:47,943 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:44:48,509 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:44:49,827 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:51,841 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:53,852 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:55,836 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:57,824 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:44:59,954 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:45:01,784 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:45:03,772 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:45:05,726 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 11:45:10,341 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=ZZndqp_w0V_gYoM0R4xWq2a0lt5vmEICk8hN_UAf520
+2025-10-31 11:45:16,524 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:45:17,039 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:45:17,542 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 11:56:49,668 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=UtwwmaUVAANIaTPGGrVU6XnQ16dCvNR2gB5FYYUxbLY
+2025-10-31 11:57:02,064 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 11:57:02,512 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 11:57:02,979 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:10:16,656 - app.main - INFO - Running initial database setup...
+2025-10-31 12:10:17,175 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:10:17,305 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:10:17,344 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:10:17,351 - app.main - INFO - Creating database indexes...
+2025-10-31 12:10:19,297 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:10:19,301 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:11:18,675 - app.main - INFO - Running initial database setup...
+2025-10-31 12:11:19,202 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:11:19,293 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:11:19,332 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:11:19,333 - app.main - INFO - Creating database indexes...
+2025-10-31 12:11:21,237 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:11:21,239 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:12:03,349 - app.services.auth_service - INFO - Magic Link for Test User 47: http://localhost:5173/verify-login?token=nhOtgDdG__bci6jkDv6MmepiaWUO7K-zSHWyUGUVRIw
+2025-10-31 12:12:11,592 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:12:12,248 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:12:12,784 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:12:34,241 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=0kjlIqDEOYfQ9hMDX2w8gRdCZbd72RGR6lLXITZ0miE
+2025-10-31 12:12:38,381 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:12:38,894 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:12:39,425 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:12:56,363 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:12:57,005 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:12:57,529 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:13:01,268 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=9vqDF1WO_zz7XnrMwdz3kDfyl_G19tTQW9DuHNze5mk
+2025-10-31 12:13:06,843 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:13:07,336 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:13:07,867 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:13:23,183 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:13:24,557 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:13:25,055 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:13:25,523 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:13:27,962 - app.services.auth_service - INFO - Magic Link for Test User 43: http://localhost:5173/verify-login?token=k6w-5zd-Z7IHsmeMU-K5dz1iwWl5phvk2Yqz3T2g2vU
+2025-10-31 12:13:37,236 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:13:37,725 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:13:38,307 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:17:03,135 - app.main - INFO - Running initial database setup...
+2025-10-31 12:17:03,789 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:17:03,884 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:17:03,920 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:17:03,921 - app.main - INFO - Creating database indexes...
+2025-10-31 12:17:06,051 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:17:06,053 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:17:06,105 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:07,840 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:09,848 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:11,856 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:13,846 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:15,837 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:17,847 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:19,793 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:21,764 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:23,739 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:17:25,743 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:22:54,530 - app.main - INFO - Running initial database setup...
+2025-10-31 12:22:55,126 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:22:55,294 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:22:55,360 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:22:55,368 - app.main - INFO - Creating database indexes...
+2025-10-31 12:22:57,305 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:22:57,307 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:23:23,417 - app.services.auth_service - INFO - Magic Link for Test User 43: http://localhost:5173/verify-login?token=NiMI4fnwrJQUuNwBEtF8pkwozO6nosbcE8w_RgXMWKs
+2025-10-31 12:23:49,461 - app.main - INFO - Running initial database setup...
+2025-10-31 12:23:49,984 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:23:50,070 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:23:50,108 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:23:50,109 - app.main - INFO - Creating database indexes...
+2025-10-31 12:23:52,176 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:23:52,177 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:23:57,387 - app.services.auth_service - INFO - Magic Link for Test User 43: http://localhost:5173/verify-login?token=TSr_-IJtkwB6KFZBIUoyApSaz6BvvrlLzyZCM1D9V4A
+2025-10-31 12:24:04,451 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:24:04,978 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:24:05,555 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:24:25,037 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:24:25,547 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:24:26,055 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:24:28,536 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=9-Aquljfbhoh5FX4xvRTwifktwXAUCwD7KAMocdPNnw
+2025-10-31 12:24:34,971 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:24:35,453 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:24:36,028 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:33:51,256 - app.main - INFO - Running initial database setup...
+2025-10-31 12:33:51,691 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:33:51,797 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:33:51,829 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:33:51,830 - app.main - INFO - Creating database indexes...
+2025-10-31 12:33:54,382 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:33:54,383 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:33:54,442 - app.services.auth_service - ERROR - JWT decode error: Signature verification failed
+2025-10-31 12:33:57,445 - app.services.auth_service - INFO - Magic Link for Test User 43: http://localhost:5173/verify-login?token=B9ff55gYXjm0YvIUQKBWchdwbjm6E7NC9blLLbQx-Qk
+2025-10-31 12:34:05,748 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:34:06,267 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 12:34:06,826 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 12:42:30,982 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:42:47,270 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:54:19,507 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 12:56:02,565 - app.main - INFO - Running initial database setup...
+2025-10-31 12:56:03,084 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:56:03,185 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:56:03,221 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:56:03,222 - app.main - INFO - Creating database indexes...
+2025-10-31 12:56:05,253 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:56:05,254 - app.main - INFO - Initial database setup complete.
+2025-10-31 12:57:03,942 - app.main - INFO - Running initial database setup...
+2025-10-31 12:57:04,371 - app.main - INFO - Connected to MongoDB
+2025-10-31 12:57:04,415 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 12:57:04,446 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 12:57:04,447 - app.main - INFO - Creating database indexes...
+2025-10-31 12:57:06,238 - app.main - INFO - Database indexes created successfully.
+2025-10-31 12:57:06,239 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:08:17,437 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=iBvjRllDBnkGvOlcGgCtnkfVUBtBSQMW82DmOu2CIZM
+2025-10-31 13:19:09,920 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=mdV8bNzLgBaRC5EeNuzAfD8zK6L30ywHoiOnF9wfBBI
+2025-10-31 13:19:13,512 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:19:14,002 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:19:14,536 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:19:14,810 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:20:08,837 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:20:12,040 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:23:12,997 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:23:13,429 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:23:13,864 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:25:56,443 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:25:56,896 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:25:57,337 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:26:28,166 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:26:28,641 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:26:29,285 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:29:14,807 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:29:15,334 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:29:15,832 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:29:31,901 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:30:11,093 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:30:28,486 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:37:16,724 - app.main - INFO - Running initial database setup...
+2025-10-31 13:37:17,235 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:37:17,332 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:37:17,366 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:37:17,367 - app.main - INFO - Creating database indexes...
+2025-10-31 13:37:19,325 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:37:19,327 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:37:26,545 - app.main - INFO - Running initial database setup...
+2025-10-31 13:37:27,006 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:37:27,128 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:37:27,160 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:37:27,162 - app.main - INFO - Creating database indexes...
+2025-10-31 13:37:29,005 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:37:29,007 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:37:50,771 - app.main - INFO - Running initial database setup...
+2025-10-31 13:37:51,208 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:37:51,305 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:37:51,337 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:37:51,339 - app.main - INFO - Creating database indexes...
+2025-10-31 13:37:53,322 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:37:53,323 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:38:05,065 - app.main - INFO - Running initial database setup...
+2025-10-31 13:38:05,475 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:38:05,562 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:38:05,597 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:38:05,598 - app.main - INFO - Creating database indexes...
+2025-10-31 13:38:07,550 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:38:07,550 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:38:24,202 - app.main - INFO - Running initial database setup...
+2025-10-31 13:38:24,712 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:38:24,756 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:38:24,791 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:38:24,792 - app.main - INFO - Creating database indexes...
+2025-10-31 13:38:27,086 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:38:27,089 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:42:20,993 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=FQ10GRAr9wp8pehCCOBJRVcUc_0se5x-N3MflC5Wpds
+2025-10-31 13:42:47,457 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=YnKiXo--YH2NBXxSRc7QffJY5fNF4AxfYyP7r3PLq6c
+2025-10-31 13:42:50,875 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:42:51,425 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:42:51,949 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:43:27,063 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:43:27,645 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:43:28,176 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:43:30,790 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=a9e22N_mDJ2HHU6hAUBf-6mPYyW7HHfCV48X2yqLyEI
+2025-10-31 13:44:00,043 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=hxgx647djKWkR-WuoLe5fRAaFN5xRW5wTT7ZXCyJAIY
+2025-10-31 13:44:07,880 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:44:08,547 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:44:09,091 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:44:24,854 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:44:25,376 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:44:25,891 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:44:34,454 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:44:35,722 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:44:36,203 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:44:37,699 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=KT0uADtKJ345a3U5ZXWPSBEz46UwspVPSyOqp_EsueQ
+2025-10-31 13:44:44,758 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:44:45,302 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:44:45,765 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:47:53,575 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:47:55,533 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:49:53,930 - app.main - INFO - Running initial database setup...
+2025-10-31 13:49:54,386 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:49:54,481 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:49:54,518 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:49:54,519 - app.main - INFO - Creating database indexes...
+2025-10-31 13:49:56,467 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:49:56,469 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:50:23,136 - app.main - INFO - Running initial database setup...
+2025-10-31 13:50:23,582 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:50:23,683 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:50:23,720 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:50:23,722 - app.main - INFO - Creating database indexes...
+2025-10-31 13:50:25,688 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:50:25,690 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:50:30,657 - app.main - INFO - Running initial database setup...
+2025-10-31 13:50:31,074 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:50:31,118 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:50:31,149 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:50:31,150 - app.main - INFO - Creating database indexes...
+2025-10-31 13:50:32,940 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:50:32,941 - app.main - INFO - Initial database setup complete.
+2025-10-31 13:53:38,323 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=VnMVOjPXpNtrv34gqgp9HBh5yM71a0QhQHWQZGySA5s
+2025-10-31 13:53:50,078 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:53:50,554 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:53:51,051 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:53:51,156 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:54:22,403 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=FsLqxl7oBDsbePyexM5tflqbXf9X4-gQUqVNuxJwENM
+2025-10-31 13:55:16,375 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=FzloLPPQgqcDfuH4c6ZhgcbeQ8BIlIKSbnb8ObMR5xs
+2025-10-31 13:55:49,538 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:55:50,091 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:55:50,690 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:55:53,161 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=LmTtSk_pXlOlHtqMI2tqgc7SvWsq9SpM_dp_d40VuqY
+2025-10-31 13:56:01,383 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:56:01,889 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:56:02,431 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:56:09,362 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:56:09,997 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:56:10,512 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:56:20,339 - app.services.auth_service - INFO - Magic Link for Test User 2: http://localhost:5173/verify-login?token=HYirX_MsNmZ3uZtD9E0PXOf2x13feuo2Ew4lkON2Xlg
+2025-10-31 13:56:28,103 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:56:28,632 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:56:29,167 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:56:42,770 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:56:43,361 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:56:43,909 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:56:45,652 - app.services.auth_service - INFO - Magic Link for Test User 3: http://localhost:5173/verify-login?token=ly7eBdszyKBBP4EgovxMLlq6hDjfvAbhdMbz6NHdIno
+2025-10-31 13:56:57,391 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:56:57,986 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:56:58,547 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:57:33,340 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:57:33,957 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:57:34,470 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:57:35,867 - app.services.auth_service - INFO - Magic Link for Test User 5: http://localhost:5173/verify-login?token=NMf-sXyrDPAUYkB6J_hFCXugoVgm_KfwJ7GmdUAfVe0
+2025-10-31 13:57:43,560 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 13:57:44,125 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 13:57:44,948 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 13:58:09,196 - app.main - INFO - Running initial database setup...
+2025-10-31 13:58:09,762 - app.main - INFO - Connected to MongoDB
+2025-10-31 13:58:09,934 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 13:58:09,978 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 13:58:09,979 - app.main - INFO - Creating database indexes...
+2025-10-31 13:58:12,218 - app.main - INFO - Database indexes created successfully.
+2025-10-31 13:58:12,219 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:02:20,624 - app.main - INFO - Running initial database setup...
+2025-10-31 14:02:21,142 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:02:21,197 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:02:21,552 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:02:21,554 - app.main - INFO - Creating database indexes...
+2025-10-31 14:02:23,722 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:02:23,723 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:03:08,767 - app.main - INFO - Running initial database setup...
+2025-10-31 14:03:10,527 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:03:10,848 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:03:10,890 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:03:10,892 - app.main - INFO - Creating database indexes...
+2025-10-31 14:03:13,150 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:03:13,151 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:03:33,304 - app.main - INFO - Running initial database setup...
+2025-10-31 14:03:34,203 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:03:34,307 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:03:34,800 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:03:34,802 - app.main - INFO - Creating database indexes...
+2025-10-31 14:03:36,870 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:03:36,872 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:03:46,152 - app.main - INFO - Running initial database setup...
+2025-10-31 14:03:46,616 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:03:46,806 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:03:47,116 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:03:47,117 - app.main - INFO - Creating database indexes...
+2025-10-31 14:03:49,450 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:03:49,451 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:04:09,992 - app.main - INFO - Running initial database setup...
+2025-10-31 14:04:10,819 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:04:10,925 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:04:11,027 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:04:11,029 - app.main - INFO - Creating database indexes...
+2025-10-31 14:04:13,401 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:04:13,402 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:04:17,827 - app.main - INFO - Running initial database setup...
+2025-10-31 14:04:18,331 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:04:18,374 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:04:18,410 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:04:18,411 - app.main - INFO - Creating database indexes...
+2025-10-31 14:04:20,511 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:04:20,513 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:04:26,745 - app.main - INFO - Running initial database setup...
+2025-10-31 14:04:27,515 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:04:27,631 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:04:27,681 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:04:27,682 - app.main - INFO - Creating database indexes...
+2025-10-31 14:04:29,862 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:04:29,864 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:13:51,733 - app.main - INFO - Running initial database setup...
+2025-10-31 14:13:52,194 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:13:52,284 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:13:52,320 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:13:52,322 - app.main - INFO - Creating database indexes...
+2025-10-31 14:13:55,527 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:13:55,529 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:14:03,522 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=pjXzSZSOGl08C4p-is3lCM4OG_t7QRPYy7Zsl9DFJ1U
+2025-10-31 14:14:48,441 - app.services.auth_service - INFO - Magic Link for Test User 7: http://localhost:5173/verify-login?token=IkVclyOzGYUTnzW0RHcWnng1zmdNmaCQlMBDDYhTGas
+2025-10-31 14:14:56,424 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:14:56,988 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:14:57,608 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 14:15:36,184 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:15:36,750 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:15:37,288 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 14:15:39,089 - app.services.auth_service - INFO - Magic Link for Test User 12: http://localhost:5173/verify-login?token=l5ipyeT2OUxh8M8HMHKN33iEffzKZKJPwbJKRfL8X1g
+2025-10-31 14:15:47,448 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:15:48,103 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:15:48,714 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 14:16:01,217 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:16:01,758 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:16:02,242 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 14:16:44,411 - app.main - INFO - Running initial database setup...
+2025-10-31 14:16:44,955 - app.main - INFO - Connected to MongoDB
+2025-10-31 14:16:45,038 - app.main - INFO - User with Regno 'user' already exists. Skipping.
+2025-10-31 14:16:45,090 - app.main - INFO - User with Regno 'admin' already exists. Skipping.
+2025-10-31 14:16:45,091 - app.main - INFO - Creating database indexes...
+2025-10-31 14:16:47,400 - app.main - INFO - Database indexes created successfully.
+2025-10-31 14:16:47,402 - app.main - INFO - Initial database setup complete.
+2025-10-31 14:25:46,265 - app.services.auth_service - INFO - Magic Link for Test Admin: http://localhost:5173/verify-login?token=YEMZFW_YzM9wmb78q1YnVw_YsFE7fF18EHFjzgw2k6E
+2025-10-31 14:39:20,962 - app.services.auth_service - INFO - Magic Link for Test User 1: http://localhost:5173/verify-login?token=n_hFIIDvCuCUGvt26vt9_W03CeTEBYkstGEMAkbAfZ8
+2025-10-31 14:39:24,473 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:39:24,973 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:39:25,494 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments
+2025-10-31 14:39:28,583 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:39:51,274 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by popularity
+2025-10-31 14:39:51,721 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by time
+2025-10-31 14:39:52,193 - app.services.confession_service - INFO - Retrieved 0 confessions sorted by comments

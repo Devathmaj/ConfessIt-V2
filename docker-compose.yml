@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   frontend:
@@ -45,7 +43,18 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "confessit-backend"
-
+  mongo:
+    image: mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ConfessIt
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/db_password
+      MONGO_INITDB_DATABASE: ConfessDB
+    volumes:
+      - ./mongo_data:/data/db
+    secrets:
+      - db_password
   redis:
     image: redis:7-alpine
     container_name: confessit_redis
@@ -88,7 +97,7 @@ services:
   grafana:
     image: grafana/grafana:10.4.3
     ports:
-      - "3000:3000"
+      - "3050:3050"
     environment:
       GF_SECURITY_ADMIN_USER: "admin"
       GF_SECURITY_ADMIN_PASSWORD: "admin"
