@@ -53,6 +53,7 @@ jobs:
         env:
           CI: "true"
           MONGO_URI: "mongodb://localhost:27017/"
+          PYTHONPATH: .
         run: pytest
 
   docker-build:
