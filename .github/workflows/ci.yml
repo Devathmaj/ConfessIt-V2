@@ -53,6 +53,9 @@ jobs:
         env:
           CI: "true"
           MONGO_URI: "mongodb://localhost:27017/"
+          MONGODB_URI: "mongodb://localhost:27017/"
+          DATABASE_NAME: "ConfessDB_Test"
+          CLOUD: "true"
           PYTHONPATH: .
           MONGO_PASSWORD: "testpassword"
         run: pytest
