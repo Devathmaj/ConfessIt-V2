@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
 import { ConversationDialog } from '@/components/ConversationDialog';
 import {
   Heart,
@@ -123,8 +123,8 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
  */
 const MatchExpiryTimer = ({ expiryTimestamp }: { expiryTimestamp: string }) => {
     const calculateTimeLeft = useCallback(() => {
-        const utcTimestamp = expiryTimestamp.endsWith('Z') ? expiryTimestamp : `${expiryTimestamp}Z`;
-        const difference = +new Date(utcTimestamp) - +new Date();
+        const expiry = parseTimestamp(expiryTimestamp);
+        const difference = expiry ? expiry.getTime() - Date.now() : 0;
         let timeLeft = { hours: 0, minutes: 0, seconds: 0 };
 
         if (difference > 0) {
@@ -203,8 +203,8 @@ export const MatchmakingPage = () => {
       console.log("fetchMatchmakingStatus response:", response); // Debug log
       if (response.status === 'matched') {
         const now = new Date();
-        const utcTimestamp = response.expires_at.endsWith('Z') ? response.expires_at : `${response.expires_at}Z`;
-        if (now >= new Date(utcTimestamp)) {
+        const expiry = parseTimestamp(response.expires_at);
+        if (!expiry || now >= expiry) {
           // Match is expired, don't set it
           return;
         }
@@ -354,8 +354,8 @@ export const MatchmakingPage = () => {
       // Check for match expiry first
       if (expiresAt) {
         const now = new Date();
-        const utcTimestamp = expiresAt.endsWith('Z') ? expiresAt : `${expiresAt}Z`;
-        if (now >= new Date(utcTimestamp)) {
+        const expiry = parseTimestamp(expiresAt);
+        if (!expiry || now >= expiry) {
           setMatchedProfile(null);
           setExpiresAt(null);
           setConversationStatus('none');
@@ -398,8 +398,8 @@ export const MatchmakingPage = () => {
         setShowConfirmationDialog(true);
       } else if (response.status === 'matched') {
         const now = new Date();
-        const utcTimestamp = response.expires_at.endsWith('Z') ? response.expires_at : `${response.expires_at}Z`;
-        if (now >= new Date(utcTimestamp)) {
+        const expiry = parseTimestamp(response.expires_at);
+        if (!expiry || now >= expiry) {
           // Match is expired, don't set it
           return;
         }

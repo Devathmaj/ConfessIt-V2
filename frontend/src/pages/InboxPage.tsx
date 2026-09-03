@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -315,9 +315,10 @@ export const InboxPage = () => {
 
   // Converts a timestamp to a human-readable "time ago" format.
   const getTimeAgo = (timestamp: string) => {
-    const now = new Date();
-    const timeUTC = new Date(timestamp + 'Z').getTime();
-    const nowUTC = now.getTime();
+    const parsed = parseTimestamp(timestamp);
+    if (!parsed) return '—';
+    const timeUTC = parsed.getTime();
+    const nowUTC = Date.now();
     
     const diffInMinutes = Math.floor((nowUTC - timeUTC) / (1000 * 60));
     
@@ -329,18 +330,16 @@ export const InboxPage = () => {
 
   // Checks if a given expiration timestamp has passed.
   const isExpired = (expiresAt: string) => {
-    const now = new Date();
-    const expiresUTC = new Date(expiresAt + 'Z').getTime();
-    const nowUTC = now.getTime();
-    
-    return nowUTC > expiresUTC;
+    const parsed = parseTimestamp(expiresAt);
+    return parsed ? Date.now() > parsed.getTime() : false;
   };
 
   // Calculates the time remaining until a given expiration timestamp.
   const getTimeLeft = (expiresAt: string) => {
-    const now = new Date();
-    const expiresUTC = new Date(expiresAt + 'Z').getTime();
-    const nowUTC = now.getTime();
+    const parsed = parseTimestamp(expiresAt);
+    if (!parsed) return '—';
+    const expiresUTC = parsed.getTime();
+    const nowUTC = Date.now();
     
     const diffInMinutes = Math.floor((expiresUTC - nowUTC) / (1000 * 60));
     

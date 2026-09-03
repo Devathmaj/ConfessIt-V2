@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { getCurrentConversation, getReceivedConversations, getConversationByMatch } from '@/services/api';
@@ -110,17 +110,15 @@ export const MessageBoxPage = () => {
   };
 
   const isExpired = (expiresAt: string) => {
-    // Ensure timestamp is treated as UTC by appending 'Z' if not present
-    const now = new Date();
-    const expiresUTC = new Date(expiresAt.endsWith('Z') ? expiresAt : expiresAt + 'Z').getTime();
-    const nowUTC = now.getTime();
-    return nowUTC > expiresUTC;
+    const parsed = parseTimestamp(expiresAt);
+    return parsed ? Date.now() > parsed.getTime() : false;
   };
 
   const getTimeLeft = (expiresAt: string) => {
-    const now = new Date();
-    const expiresUTC = new Date(expiresAt.endsWith('Z') ? expiresAt : expiresAt + 'Z').getTime();
-    const nowUTC = now.getTime();
+    const parsed = parseTimestamp(expiresAt);
+    if (!parsed) return '—';
+    const expiresUTC = parsed.getTime();
+    const nowUTC = Date.now();
     const diff = expiresUTC - nowUTC;
 
     if (diff <= 0) return 'Expired';
@@ -136,10 +134,10 @@ export const MessageBoxPage = () => {
   };
 
   const getTimeAgo = (timestamp: string) => {
-    // Ensure timestamp is treated as UTC by appending 'Z' if not present
-    const now = new Date();
-    const timeUTC = new Date(timestamp.endsWith('Z') ? timestamp : timestamp + 'Z').getTime();
-    const nowUTC = now.getTime();
+    const parsed = parseTimestamp(timestamp);
+    if (!parsed) return '—';
+    const timeUTC = parsed.getTime();
+    const nowUTC = Date.now();
     const diff = nowUTC - timeUTC;
 
     const minutes = Math.floor(diff / (1000 * 60));

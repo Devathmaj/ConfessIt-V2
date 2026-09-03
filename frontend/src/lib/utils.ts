@@ -25,6 +25,13 @@ export function resolveProfilePictureUrl(value?: string | null) {
   return '/placeholder.svg'
 }
 
+export function parseTimestamp(value?: string | null): Date | null {
+  if (!value) return null;
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
+  const milliseconds = Date.parse(normalized);
+  return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
+}
+
 export function formatDateDDMMYYYY(value: string | null | undefined): string {
   if (!value) return 'Unknown';
   const date = new Date(value);

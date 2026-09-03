@@ -1,7 +1,7 @@
 # app/services/message_service.py
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from ..postgres import Database
 from ..postgres import ObjectId
@@ -68,7 +68,7 @@ class MessageService:
         created_at = conversation.get("createdAt")
         if created_at:
             expiry_time = created_at + timedelta(hours=4)
-            if datetime.utcnow() > expiry_time:
+            if datetime.now(timezone.utc) > expiry_time:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Conversation has expired"
