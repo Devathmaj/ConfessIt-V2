@@ -117,6 +117,17 @@ class DeleteResult:
 
 
 class Cursor(list):
+    def __init__(self, values=()):
+        super().__init__(values)
+        self._next_index = 0
+
+    def __next__(self):
+        if self._next_index >= len(self):
+            raise StopIteration
+        value = self[self._next_index]
+        self._next_index += 1
+        return value
+
     def sort(self, key, direction=ASCENDING):
         if isinstance(key, list):
             for field, order in reversed(key):
