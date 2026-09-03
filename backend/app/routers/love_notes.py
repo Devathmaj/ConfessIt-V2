@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..postgres import Database
 from typing import Annotated, List, Dict, Any
 from ..postgres import ObjectId
+from ..utils import isoformat_datetime
 from datetime import datetime
 
 from ..dependencies import get_db
@@ -117,8 +118,8 @@ async def get_received_love_notes(
             "message": note.get("message_text", ""),
             "image_url": note.get("image_base64"),  # This is actually the Cloudinary URL
             "anonymous": note.get("is_anonymous", False),
-            "created_at": note.get("created_at").isoformat() if note.get("created_at") else None,
-            "read_at": note.get("read_at").isoformat() if note.get("read_at") else None,
+            "created_at": isoformat_datetime(note.get("created_at")),
+            "read_at": isoformat_datetime(note.get("read_at")),
         })
     
     return result

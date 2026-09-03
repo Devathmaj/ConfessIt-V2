@@ -5,6 +5,7 @@ from ..postgres import Database
 from ..postgres import ObjectId
 
 from ..models import Notification, NotificationContent
+from ..utils import isoformat_datetime
 
 def create_notification_service(user_id: str, heading: str, body: str, db: Database) -> str:
     """
@@ -33,7 +34,7 @@ def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
         notification_dict["_id"] = str(notification_dict["_id"])
         # Convert timestamp to ISO format string for JSON serialization
         if "timestamp" in notification_dict and notification_dict["timestamp"]:
-            notification_dict["timestamp"] = notification_dict["timestamp"].isoformat()
+            notification_dict["timestamp"] = isoformat_datetime(notification_dict["timestamp"])
         result.append(notification_dict)
     
     return result

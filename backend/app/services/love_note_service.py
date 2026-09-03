@@ -3,6 +3,7 @@ from ..postgres import Database
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from ..postgres import ObjectId
+from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
@@ -155,8 +156,8 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
             "message_text": doc.get("message_text", ""),
             "is_anonymous": doc.get("is_anonymous", False),
             "status": doc.get("status", "pending_review"),
-            "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
-            "read_at": doc.get("read_at").isoformat() if doc.get("read_at") else None,
+            "created_at": isoformat_datetime(doc.get("created_at")),
+            "read_at": isoformat_datetime(doc.get("read_at")),
         })
     return items
 

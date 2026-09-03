@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from ..postgres import Database
 from ..postgres import ObjectId
+from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
@@ -143,7 +144,7 @@ class MessageService:
             "sender_name": sender.Name,
             "receiver_id": receiver_id,
             "text": text,
-            "timestamp": message_doc["timestamp"].isoformat(),
+            "timestamp": isoformat_datetime(message_doc["timestamp"]),
             "read": False
         }
         
@@ -157,7 +158,7 @@ class MessageService:
             "sender_id": sender.Regno,
             "receiver_id": receiver_id,
             "text": text,
-            "timestamp": message_doc["timestamp"].isoformat(),
+            "timestamp": isoformat_datetime(message_doc["timestamp"]),
             "read": False
         }
     
@@ -207,7 +208,7 @@ class MessageService:
                 "sender_id": msg["sender_id"],
                 "receiver_id": msg["receiver_id"],
                 "text": msg["text"],
-                "timestamp": msg["timestamp"].isoformat(),
+                "timestamp": isoformat_datetime(msg["timestamp"]),
                 "read": msg.get("read", False),
                 "is_sender": msg["sender_id"] == user.Regno
             }

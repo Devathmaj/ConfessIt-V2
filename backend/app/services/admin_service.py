@@ -10,11 +10,16 @@ from ..postgres import Database
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
     """Convert datetime to ISO format string."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat()
-    return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:

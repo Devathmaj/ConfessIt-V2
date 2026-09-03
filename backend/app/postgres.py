@@ -1,15 +1,16 @@
 """PostgreSQL JSONB document store used while application services are migrated.
 
-Each legacy collection is a PostgreSQL table with a UUID primary key and JSONB
-payload. The adapter intentionally keeps the old query surface at the API edge;
-PostgreSQL owns persistence, uniqueness, transactions and durability.
+Each legacy collection is a PostgreSQL table with a text primary key, JSONB
+payload for flexible fields, and native TIMESTAMPTZ columns for timestamp fields.
+The adapter keeps the legacy query surface at the API edge.
 """
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
 import psycopg
@@ -17,6 +18,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .config import settings
+
+_NOT_TIMESTAMP = object()
 
 
 class ObjectId(str):
@@ -62,8 +65,17 @@ def _get(doc: dict, path: str):
     return value
 
 
+def _comparable_pair(left, right):
+    if isinstance(left, datetime) and isinstance(right, datetime):
+        if left.tzinfo is None:
+            left = left.replace(tzinfo=timezone.utc)
+        if right.tzinfo is None:
+            right = right.replace(tzinfo=timezone.utc)
+        return left.astimezone(timezone.utc), right.astimezone(timezone.utc)
+    return left, right
+
+
 def _matches(doc: dict, query: dict) -> bool:
-    query = _plain(query)
     for key, expected in (query or {}).items():
         if key == "$or":
             if not any(_matches(doc, q) for q in expected): return False
@@ -81,14 +93,19 @@ def _matches(doc: dict, query: dict) -> bool:
                 elif op == "$nin":
                     if actual in value: return False
                 elif op == "$ne":
+                    actual, value = _comparable_pair(actual, value)
                     if actual == value: return False
                 elif op == "$gt":
+                    actual, value = _comparable_pair(actual, value)
                     if actual is None or not actual > value: return False
                 elif op == "$gte":
+                    actual, value = _comparable_pair(actual, value)
                     if actual is None or not actual >= value: return False
                 elif op == "$lt":
+                    actual, value = _comparable_pair(actual, value)
                     if actual is None or not actual < value: return False
                 elif op == "$lte":
+                    actual, value = _comparable_pair(actual, value)
                     if actual is None or not actual <= value: return False
                 else:
                     if _get(doc, key) != expected: return False
@@ -159,9 +176,82 @@ class Collection:
         result = []
         for row in rows:
             doc = dict(row["data"])
+            timestamps = {}
+            for field, value in list(doc.items()):
+                if self._is_timestamp_field(field):
+                    parsed = self._parse_timestamp(value)
+                    if parsed is not _NOT_TIMESTAMP:
+                        timestamps[field] = parsed
+                        doc.pop(field)
+            if timestamps:
+                self._write(str(row["id"]), doc, timestamps, insert=False)
+            timestamp_columns = self._timestamp_columns()
+            if timestamp_columns:
+                with self.db.connect() as conn:
+                    values = conn.execute(
+                        f'SELECT {", ".join(self._quote(field) for field in timestamp_columns)} '
+                        f'FROM "{self.name}" WHERE id=%s', (str(row["id"]),)
+                    ).fetchone()
+                if values:
+                    doc.update(dict(values))
             doc.setdefault("_id", row["id"])
             result.append(doc)
         return result
+
+    @staticmethod
+    def _quote(identifier):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+            raise ValueError("Invalid PostgreSQL column name")
+        return f'"{identifier}"'
+
+    @staticmethod
+    def _is_timestamp_field(field):
+        return (field == "timestamp" or field.lower().endswith(("_at", "_time", "_timestamp", "date"))
+                or bool(re.search(r"[a-z]At$", field)))
+
+    @staticmethod
+    def _parse_timestamp(value):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, date):
+            parsed = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return _NOT_TIMESTAMP
+        else:
+            return _NOT_TIMESTAMP
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+    def _timestamp_columns(self):
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name=%s AND data_type='timestamp with time zone'",
+                (self.name,),
+            ).fetchall()
+        return [row["column_name"] for row in rows]
+
+    def _write(self, record_id, document, timestamps, insert):
+        for field in timestamps:
+            with self.db.connect() as conn:
+                conn.execute(f'ALTER TABLE "{self.name}" ADD COLUMN IF NOT EXISTS {self._quote(field)} TIMESTAMPTZ')
+        fields = list(timestamps)
+        with self.db.connect() as conn:
+            if insert:
+                columns = ["id", "data", *fields]
+                values = [record_id, Jsonb(_plain(document)), *[timestamps[field] for field in fields]]
+                conn.execute(
+                    f'INSERT INTO "{self.name}" ({", ".join(self._quote(field) for field in columns)}) '
+                    f'VALUES ({", ".join(["%s"] * len(values))})', values
+                )
+            else:
+                assignments = ["data=%s", *[f'{self._quote(field)}=%s' for field in fields]]
+                values = [Jsonb(_plain(document)), *[timestamps[field] for field in fields], record_id]
+                conn.execute(f'UPDATE "{self.name}" SET {", ".join(assignments)} WHERE id=%s', values)
 
     def find(self, query=None, projection=None, sort=None, skip=0, limit=0):
         docs = [d for d in self._all() if _matches(d, query or {})]
@@ -187,8 +277,14 @@ class Collection:
     def insert_one(self, document):
         doc = _plain(dict(document))
         doc["_id"] = str(doc.get("_id") or ObjectId())
-        with self.db.connect() as conn:
-            conn.execute(f'INSERT INTO "{self.name}" (id,data) VALUES (%s,%s)', (doc["_id"], Jsonb(doc)))
+        timestamps = {}
+        for field, value in list(doc.items()):
+            if self._is_timestamp_field(field):
+                parsed = self._parse_timestamp(value)
+                if parsed is not _NOT_TIMESTAMP:
+                    timestamps[field] = parsed
+                    doc.pop(field)
+        self._write(doc["_id"], doc, timestamps, insert=True)
         return InsertOneResult(doc["_id"])
 
     def insert_many(self, documents, ordered=True):
@@ -226,10 +322,19 @@ class Collection:
             doc = {k: v for k, v in (query or {}).items() if not k.startswith("$") and not isinstance(v, dict)}
             self._modify(doc, update); self.insert_one(doc); return UpdateResult(0, 1)
         selected = docs if many else docs[:1]
-        with self.db.connect() as conn:
-            for doc in selected:
-                self._modify(doc, update)
-                conn.execute(f'UPDATE "{self.name}" SET data=%s WHERE id=%s', (Jsonb(_plain(doc)), str(doc["_id"])))
+        for doc in selected:
+            self._modify(doc, update)
+            persisted = _plain(dict(doc))
+            timestamps = {}
+            for field, value in list(persisted.items()):
+                if self._is_timestamp_field(field):
+                    parsed = self._parse_timestamp(value)
+                    if parsed is not _NOT_TIMESTAMP:
+                        timestamps[field] = parsed
+                        persisted.pop(field)
+            for field in set(self._timestamp_columns()) - set(timestamps):
+                timestamps[field] = None
+            self._write(str(doc["_id"]), persisted, timestamps, insert=False)
         return UpdateResult(len(selected), len(selected))
 
     def find_one_and_update(self, query, update, return_document=False):
@@ -255,8 +360,10 @@ class Collection:
         name = kwargs.get("name") or f"idx_{self.name.lower()}_{len(keys)}"
         safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
         expressions = []
+        timestamp_columns = set(self._timestamp_columns())
         for field, direction in keys:
             if field == "_id": expression = "id"
+            elif field in timestamp_columns: expression = self._quote(field)
             else:
                 parts = field.split(".")
                 path = ",".join("'" + part.replace("'", "''") + "'" for part in parts)

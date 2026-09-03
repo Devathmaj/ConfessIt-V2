@@ -2,7 +2,7 @@
 
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
@@ -154,14 +154,14 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
 
     hashed_token = hash_token(token)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     login_token = db["LoginTokens"].find_one_and_update(
         {
             "token_hash": hashed_token,
             "used": False,
             "revoked": False,
-            "expires_at": {"$gt": datetime.utcnow()},
+            "expires_at": {"$gt": datetime.now(timezone.utc)},
         },
         {
             "$set": {
@@ -184,7 +184,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         {"_id": login_token["_id"]},
         {"$set": {
             "used": True,
-            "consumed_at": datetime.utcnow(),
+            "consumed_at": datetime.now(timezone.utc),
             "consume_ip": request.client.host,
             "consume_user_agent": request.headers.get("user-agent", "unknown"),
             "attempt_count": 1

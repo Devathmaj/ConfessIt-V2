@@ -18,7 +18,7 @@ router = APIRouter(
     tags=["Notifications"]
 )
 
-@router.get("/")
+@router.get("")
 def get_notifications(
     current_user: Annotated[UserDetails, Depends(get_current_user)],
     db: Database = Depends(get_db)

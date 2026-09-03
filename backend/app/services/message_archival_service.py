@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from ..postgres import Database
 from ..postgres import ObjectId
+from ..utils import isoformat_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ class MessageArchivalService:
                 msg_copy = msg.copy()
                 msg_copy["_id"] = str(msg_copy["_id"])
                 msg_copy["conversation_id"] = str(msg_copy["conversation_id"])
-                msg_copy["timestamp"] = msg_copy["timestamp"].isoformat()
+                msg_copy["timestamp"] = isoformat_datetime(msg_copy["timestamp"])
                 serializable_messages.append(msg_copy)
             
             # Write to compressed file
