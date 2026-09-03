@@ -15,7 +15,7 @@ ConfessIt is a full-stack web application that provides a safe and anonymous spa
 
 - **Frontend:** React, TypeScript, Tailwind CSS, Shadcn UI
 - **Backend:** FastAPI, Python
-- **Database:** MongoDB
+- **Database:** PostgreSQL 16 (JSONB-backed persistence)
 - **Containerization:** Docker, Docker Compose
 
 ## Prerequisites
@@ -34,15 +34,7 @@ Before you begin, ensure you have the following installed:
    cd confessit
    ```
 
-2. **Create environment files:**
-
-   Create a `db_password.txt` file in the root directory and add your MongoDB password to it:
-
-   ```
-   your_mongodb_password
-   ```
-
-3. **Build and run the application with Docker Compose:**
+2. **Build and run the application with Docker Compose:**
 
    ```bash
    docker-compose up --build
@@ -50,7 +42,7 @@ Before you begin, ensure you have the following installed:
 
    This command will build the Docker images for the frontend and backend services and start the containers.
 
-4. **Access the application:**
+3. **Access the application:**
 
    - **Frontend:** Open your browser and navigate to `http://localhost:5173`
    - **Backend API:** The API will be running at `http://localhost:8001`. You can access the API documentation at `http://localhost:8001/docs`.
@@ -99,4 +91,5 @@ For more details, see the API documentation at `http://localhost:8001/docs`.
 
 ## Environment Variables
 
-- `MONGO_PASSWORD`: The password for the MongoDB database.
+- `POSTGRES_PASSWORD`: Optional PostgreSQL password for the Compose database. The local default is intended for development; set a strong value for deployments.
+- `DATABASE_URL`: PostgreSQL connection string used by the backend. Compose configures it automatically.

@@ -34,27 +34,27 @@ services:
       - ./archives:/app/archives
     depends_on:
       - redis
-    secrets:
-      - db_password
+      - postgres
     environment:
       WATCHFILES_FORCE_POLLING: "true"
       WATCHFILES_POLL_DELAY: "0.5"
       REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgresql://confessit:${POSTGRES_PASSWORD:-ConfessItLocalPassword}@postgres:5432/ConfessIt"
+      TEST_DATABASE_URL: "postgresql://confessit:${POSTGRES_PASSWORD:-ConfessItLocalPassword}@postgres:5432/ConfessIt_Test"
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "confessit-backend"
-  mongo:
-    image: mongo
+  postgres:
+    image: postgres:16-alpine
     ports:
-      - "27017:27017"
+      - "5432:5432"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ConfessIt
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/db_password
-      MONGO_INITDB_DATABASE: ConfessDB
+      POSTGRES_USER: confessit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ConfessItLocalPassword}
+      POSTGRES_DB: ConfessIt
     volumes:
-      - ./mongo_data:/data/db
-    secrets:
-      - db_password
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
   redis:
     image: redis:7-alpine
     container_name: confessit_redis
@@ -134,11 +134,8 @@ services:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
       - tempo_data:/var/tempo
 
-secrets:
-  db_password:
-    file: ./db_password.txt
-
 volumes:
+  postgres_data:
   redis_data:
   prometheus_data:
   grafana_data:

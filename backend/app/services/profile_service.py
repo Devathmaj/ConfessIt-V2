@@ -4,8 +4,8 @@ import logging
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
-from pymongo import ReturnDocument
-from pymongo.database import Database
+from ..postgres import ReturnDocument
+from ..postgres import Database
 from pydantic import BaseModel
 
 from ..models import UserDetails

@@ -1,7 +1,7 @@
 # app/routes/profile.py
 
 from fastapi import APIRouter, Depends, UploadFile, File
-from pymongo.database import Database
+from ..postgres import Database
 from typing import Annotated
 
 from ..dependencies import get_db

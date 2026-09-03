@@ -1,23 +1,19 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 from app.dependencies import get_db
 from app.services.auth_service import get_current_user
-import mongomock
-import pymongo
+from app.postgres import PostgresClient
+from app.config import settings
 
-# If running in CI, use the real MongoDB service, otherwise use mongomock
-if os.environ.get("CI"):
-    mock_client = pymongo.MongoClient(os.environ.get("MONGO_URI", "mongodb://localhost:27017/"))
-    mock_db = mock_client["ConfessDB_Test"]
-else:
-    mock_client = mongomock.MongoClient()
-    mock_db = mock_client.test_database
+test_client = PostgresClient()
+# Ensure test cleanup can never target the application's configured database.
+settings.DATABASE_URL = settings.TEST_DATABASE_URL
+test_db = test_client[settings.DATABASE_NAME]
 
 def override_get_db():
     try:
-        yield mock_db
+        yield test_db
     finally:
         pass
 
@@ -47,11 +43,11 @@ def client():
 
 @pytest.fixture(scope="module")
 def db():
-    return mock_db
+    return test_db
 
 @pytest.fixture(autouse=True)
 def clear_db():
     # Clear all collections before each test
-    for collection_name in mock_db.list_collection_names():
-        mock_db[collection_name].delete_many({})
+    for collection_name in test_db.list_collection_names():
+        test_db[collection_name].delete_many({})
     yield

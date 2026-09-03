@@ -1,7 +1,7 @@
 # app/routers/auth.py
 
 from fastapi import APIRouter, Depends, Request
-from pymongo.database import Database
+from ..postgres import Database
 from typing import Annotated
 
 # Corrected: Use direct imports from the project root

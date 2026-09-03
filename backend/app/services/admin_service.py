@@ -4,8 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from bson import ObjectId
-from pymongo.database import Database
+from ..postgres import ObjectId
+from ..postgres import Database
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:

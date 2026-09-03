@@ -4,7 +4,7 @@ import logging
 import secrets
 import hashlib
 from datetime import datetime, timedelta
-from pymongo.database import Database
+from .postgres import Database
 from fastapi import Request
 
 from .models import LoginToken

@@ -1,7 +1,7 @@
 # app/routes/matchmaking.py
 
 from fastapi import APIRouter, Depends, status
-from pymongo.database import Database
+from ..postgres import Database
 from typing import Annotated
 
 from ..dependencies import get_db

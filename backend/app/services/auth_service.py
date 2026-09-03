@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import jwt
-from bson import ObjectId
+from ..postgres import ObjectId
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from pymongo.database import Database
-from pymongo import ReturnDocument
+from ..postgres import Database
+from ..postgres import ReturnDocument
 
 from ..config import settings
 from ..dependencies import get_db

@@ -2,7 +2,7 @@
 
 import logging
 from fastapi import HTTPException, status
-from pymongo.database import Database
+from ..postgres import Database
 from datetime import datetime, timedelta, timezone
 import base64
 

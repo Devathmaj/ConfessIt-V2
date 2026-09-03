@@ -1,8 +1,8 @@
 import logging
-from pymongo import MongoClient
+from .postgres import PostgresClient
 from .config import settings
 
-client = MongoClient(settings.MONGO_URI)
+client = PostgresClient()
 
 def get_db():
     """
@@ -14,5 +14,5 @@ def get_db():
         yield db
     finally:
         # Connection will be returned to the pool
-        # No explicit close needed as pymongo handles connection pooling
+        # Connections are scoped to each operation and returned to PostgreSQL.
         pass

@@ -3,8 +3,8 @@
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from pymongo.database import Database
-from bson import ObjectId
+from ..postgres import Database
+from ..postgres import ObjectId
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
@@ -120,7 +120,7 @@ class MessageService:
             "read": False
         }
         
-        # Insert into MongoDB
+        # Insert into PostgreSQL
         result = db["messages"].insert_one(message_doc)
         message_doc["_id"] = result.inserted_id
         

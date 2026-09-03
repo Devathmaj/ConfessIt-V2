@@ -1,6 +1,7 @@
 import logging
-import pymongo
+import psycopg
 from .config import settings
+from .postgres import PostgresClient
 from .models import UserDetails, LoginToken
 import secrets
 from datetime import datetime, timedelta
@@ -24,8 +25,7 @@ def main():
     and generate and store magic link tokens.
     """
     try:
-        # Establish a connection to the MongoDB server
-        client = pymongo.MongoClient(settings.MONGO_URI)
+        client = PostgresClient()
         db = client[settings.DATABASE_NAME]
         user_details_collection = db["UserDetails"]
         login_tokens_collection = db["LoginTokens"]
@@ -101,8 +101,8 @@ def main():
                 print(token)
 
 
-    except pymongo.errors.ConnectionFailure as e:
-        print(f"Could not connect to MongoDB: {e}")
+    except psycopg.Error as e:
+        print(f"Could not connect to PostgreSQL: {e}")
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:

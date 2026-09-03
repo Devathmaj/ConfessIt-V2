@@ -1,8 +1,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pymongo.database import Database
+from ..postgres import Database
 from typing import Annotated, List, Dict, Any
-from bson import ObjectId
+from ..postgres import ObjectId
 from datetime import datetime
 
 from ..dependencies import get_db

@@ -1,7 +1,7 @@
 # app/routers/messages.py
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status, Query
-from pymongo.database import Database
+from ..postgres import Database
 from typing import Annotated, Optional
 import logging
 import json

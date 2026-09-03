@@ -8,7 +8,7 @@ def test_read_root(client: TestClient):
 
 def test_db_test(client: TestClient):
     response = client.get("/db-test")
-    # In conftest we mock the db. Our mongomock should support ping or we might get an error if ping is not supported by mongomock, 
+    # The test fixture supplies a PostgreSQL-backed test database.
     # but the endpoint is at least reachable.
     assert response.status_code == 200
     assert "status" in response.json()

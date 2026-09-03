@@ -6,8 +6,8 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
-from pymongo.database import Database
-from bson import ObjectId
+from ..postgres import Database
+from ..postgres import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class MessageArchivalService:
         Archive messages older than specified hours to compressed JSON
         
         Args:
-            db: MongoDB database
+            db: PostgreSQL database
             hours_old: Archive messages older than this many hours (default 4)
         
         Returns:
@@ -70,7 +70,7 @@ class MessageArchivalService:
                     archive_files.append(archive_file)
                     archived_count += len(messages)
             
-            # Delete archived messages from MongoDB
+            # Delete archived messages from PostgreSQL
             if archived_count > 0:
                 result = db["messages"].delete_many({
                     "timestamp": {"$lt": cutoff_time}
@@ -79,7 +79,7 @@ class MessageArchivalService:
                 
                 logger.info(
                     f"Archived {archived_count} messages to {len(archive_files)} files, "
-                    f"deleted {deleted_count} from MongoDB"
+                    f"deleted {deleted_count} from PostgreSQL"
                 )
                 
                 return {

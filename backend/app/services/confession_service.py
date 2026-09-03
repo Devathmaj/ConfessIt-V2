@@ -1,7 +1,7 @@
 from ..logger import get_logger
-from pymongo import MongoClient, DESCENDING
+from ..postgres import PostgresClient, DESCENDING
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, Report, ConfessionUpdate
-from bson.objectid import ObjectId
+from ..postgres import ObjectId
 import datetime
 from ..config import settings
 from typing import Optional, List
@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 
 class ConfessionService:
     def __init__(self):
-        self.client = MongoClient(settings.MONGO_URI)
+        self.client = PostgresClient()
         self.db = self.client[settings.DATABASE_NAME]
         self.confessions_collection = self.db["Confessions"]
         self.comments_collection = self.db["ConfessionComments"]

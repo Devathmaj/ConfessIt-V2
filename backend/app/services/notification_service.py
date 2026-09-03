@@ -1,8 +1,8 @@
 # app/services/notification_service.py
 
 from datetime import datetime, timezone
-from pymongo.database import Database
-from bson import ObjectId
+from ..postgres import Database
+from ..postgres import ObjectId
 
 from ..models import Notification, NotificationContent
 

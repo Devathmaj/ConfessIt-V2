@@ -1,8 +1,8 @@
 import logging
-from pymongo.database import Database
+from ..postgres import Database
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from bson import ObjectId
+from ..postgres import ObjectId
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
@@ -172,7 +172,7 @@ async def update_love_note_status_service(
     Args:
         note_id: The ObjectId of the love note
         status_value: New status (approved, rejected, pending_review)
-        db: MongoDB database instance
+        db: PostgreSQL database instance
         
     Returns:
         Dict with updated note_id and status
@@ -253,7 +253,7 @@ async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]
     
     Args:
         note_id: The ObjectId of the love note
-        db: MongoDB database instance
+        db: PostgreSQL database instance
         
     Returns:
         Dict with deleted note_id

@@ -3,7 +3,7 @@
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, Query
-from pymongo.database import Database
+from ..postgres import Database
 
 from ..dependencies import get_db
 from ..models import UserDetails

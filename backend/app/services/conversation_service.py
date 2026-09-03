@@ -2,8 +2,8 @@
 
 import logging
 from fastapi import HTTPException, status
-from pymongo.database import Database
-from bson import ObjectId
+from ..postgres import Database
+from ..postgres import ObjectId
 from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
@@ -638,7 +638,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
 
 def block_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
-    Block a conversation. Updates MongoDB only.
+    Block a conversation. Updates PostgreSQL only.
     """
     try:
         try:

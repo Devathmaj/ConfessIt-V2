@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from bson import ObjectId
+from ..postgres import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pymongo.database import Database
+from ..postgres import Database
 from pydantic import BaseModel
 
 from ..dependencies import get_db
@@ -214,7 +214,7 @@ async def get_conversation_detail(
     if isinstance(match_id, ObjectId):
         match_doc = db["matches"].find_one({"_id": match_id})
 
-    # Get messages from MongoDB messages collection
+    # Get messages from PostgreSQL messages collection
     messages: List[Dict[str, Any]] = []
     raw_messages = db["messages"].find(
         {"conversation_id": ObjectId(conversation_id)},
@@ -390,7 +390,7 @@ async def archive_old_messages(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """
-    Archive old messages to compressed JSON files and remove from MongoDB
+    Archive old messages to compressed JSON files and remove from PostgreSQL
     
     Default: Archives messages older than 4 hours
     """
