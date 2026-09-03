@@ -332,7 +332,7 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
     match_ids: List[ObjectId] = []
     for doc in conversation_docs:
         match_id = doc.get("matchId")
-        if isinstance(match_id, ObjectId):
+        if match_id is not None:
             match_ids.append(match_id)
 
     match_map: Dict[str, Dict[str, Any]] = {}
@@ -345,7 +345,7 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
     for doc in conversation_docs:
         conversation_id = str(doc.get("_id"))
         match_id = doc.get("matchId")
-        match_doc = match_map.get(str(match_id)) if isinstance(match_id, ObjectId) else None
+        match_doc = match_map.get(str(match_id)) if match_id is not None else None
 
         # Get latest message
         latest_message = None

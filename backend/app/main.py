@@ -65,8 +65,8 @@ async def on_startup():
 
     users = db["UserDetails"]
     seeds = [
-        UserDetails(Regno="user", Name="Test User", email="user@test.com", bio="This is a test user.", which_class="Test_Class", profile_picture_id="random_string_1", gender="male", interests=["coding", "reading"], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"),
-        UserDetails(Regno="admin", Name="Test Admin", email="admin@test.com", bio="This is a test admin.", which_class="Test_Class", profile_picture_id="random_string_2", gender="male", interests=["management", "monitoring"], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="admin"),
+        UserDetails(Regno="user", Name="Test User", email="user@test.com", bio="This is a test user.", which_class="Test_Class", profile_picture_id="random_string_1", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"),
+        UserDetails(Regno="admin", Name="Test Admin", email="admin@test.com", bio="This is a test admin.", which_class="Test_Class", profile_picture_id="random_string_2", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="admin"),
     ]
     for user in seeds:
         if not users.find_one({"Regno": user.Regno}):

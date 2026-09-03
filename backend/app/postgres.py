@@ -152,7 +152,7 @@ class Collection:
             result.append(doc)
         return result
 
-    def find(self, query=None, projection=None):
+    def find(self, query=None, projection=None, sort=None, skip=0, limit=0):
         docs = [d for d in self._all() if _matches(d, query or {})]
         if projection:
             include = [k for k, v in projection.items() if v and k != "_id"]
@@ -160,10 +160,17 @@ class Collection:
                 docs = [{**({"_id": d.get("_id")} if projection.get("_id", 1) else {}), **{k: d[k] for k in include if k in d}} for d in docs]
             else:
                 docs = [{k: v for k, v in d.items() if k not in [x for x, enabled in projection.items() if not enabled]} for d in docs]
-        return Cursor(docs)
+        cursor = Cursor(docs)
+        if sort:
+            cursor.sort(sort)
+        if skip:
+            cursor.skip(skip)
+        if limit:
+            cursor.limit(limit)
+        return cursor
 
-    def find_one(self, query=None, projection=None):
-        rows = self.find(query, projection)
+    def find_one(self, query=None, projection=None, sort=None):
+        rows = self.find(query, projection, sort=sort)
         return rows[0] if rows else None
 
     def insert_one(self, document):

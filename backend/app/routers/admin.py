@@ -211,7 +211,7 @@ async def get_conversation_detail(
 
     match_id = conversation_doc.get("matchId")
     match_doc = None
-    if isinstance(match_id, ObjectId):
+    if match_id is not None:
         match_doc = db["matches"].find_one({"_id": match_id})
 
     # Get messages from PostgreSQL messages collection
@@ -278,7 +278,7 @@ async def terminate_conversation(
         {"$set": {"status": "terminated", "terminatedAt": now}}
     )
 
-    if isinstance(match_id, ObjectId):
+    if match_id is not None:
         db["matches"].update_one(
             {"_id": match_id},
             {"$set": {"expires_at": now}}
