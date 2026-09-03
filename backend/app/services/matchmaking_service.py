@@ -6,7 +6,7 @@ from ..postgres import Database
 from datetime import datetime, timedelta, timezone
 import base64
 
-from ..models import Match, UserDetails
+from ..models import Conversation, Match, UserDetails
 from ..services.storage_service import storage_service
 # Removed top-level import to prevent circular dependency
 # from ..services.conversation_service import request_conversation_service 
@@ -218,42 +218,17 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         db=db
     )
 
-    # Automatically create a pending conversation (NOT requested yet - no notification)
-    # The conversation will be updated to 'requested' when initiator clicks "Send Message Request"
-    try:
-        match_id_str = str(match_result.inserted_id)
-        match_id = match_result.inserted_id
-        
-        # Import moved here to avoid circular dependency issues
-        from ..models import Conversation
-        
-        new_conversation = Conversation(
-            matchId=match_id,
-            initiatorId=current_user.Regno,
-            receiverId=matched_user.Regno,
-            status="pending"  # Not yet requested
-        )
-        
-        conversation_result = db.conversations.insert_one(new_conversation.dict(by_alias=True))
-        
-        # Sync to Supabase
-        from ..services.supabase_service import supabase_service
-        supabase_conversation_id = supabase_service.sync_conversation_to_supabase(
-            mongo_conversation_id=str(conversation_result.inserted_id),
-            match_id=match_id_str,
-            initiator_id=current_user.Regno,
-            receiver_id=matched_user.Regno,
-            status="pending",
-            created_at=new_conversation.createdAt
-        )
-        
-        if not supabase_conversation_id:
-            logger.warning(f"Failed to sync conversation to Supabase for match {match_id_str}")
-        
-        logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
-    except Exception as e:
-        # Log the error but don't fail the matchmaking process
-        logger.error(f"Failed to automatically create a pending conversation for match {match_id_str}: {e}")
+    # Create a pending conversation in PostgreSQL. It becomes a request only
+    # after the initiator explicitly sends one.
+    match_id_str = str(match_result.inserted_id)
+    new_conversation = Conversation(
+        matchId=match_id_str,
+        initiatorId=current_user.Regno,
+        receiverId=matched_user.Regno,
+        status="pending",
+    )
+    db.conversations.insert_one(new_conversation.model_dump(by_alias=True))
+    logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
     # Return match details immediately with full user information
     matched_user_signed_url = storage_service.get_signed_profile_url(getattr(matched_user, "profile_picture_id", None))
