@@ -197,20 +197,15 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     consume_ip = request.client.host if request else login_token.get("request_ip")
     consume_user_agent = request.headers.get("user-agent") if request else login_token.get("request_user_agent")
 
-    metadata = login_token.get("metadata") or {}
-    metadata.update({
-        "status": "active",
-        "last_seen": now,
-        "device": consume_user_agent or login_token.get("request_user_agent") or "unknown",
-    })
-
     db.login_tokens.update(
         {"_id": login_token["_id"]},
         {
             "$set": {
                 "consume_ip": consume_ip,
                 "consume_user_agent": consume_user_agent,
-                "metadata": metadata,
+                "session_status": "active",
+                "last_seen_at": now,
+                "device": consume_user_agent or login_token.get("request_user_agent") or "unknown",
             }
         }
     )

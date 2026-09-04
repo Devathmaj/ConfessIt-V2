@@ -22,13 +22,13 @@ from .db_models import (
 
 
 def new_id() -> str:
-    return uuid.uuid4().hex
+    return str(uuid.uuid4())
 
 
 def is_valid_id(value: Any) -> bool:
     try:
-        uuid.UUID(hex=str(value))
-        return len(str(value)) in (24, 32)
+        uuid.UUID(str(value))
+        return True
     except (ValueError, TypeError, AttributeError):
         return False
 
@@ -71,7 +71,7 @@ _DATABASE_SESSIONS = {}
 
 
 def _field(model, name):
-    aliases = {"_id": "id", "metadata": "metadata_json"}
+    aliases = {"_id": "id"}
     if "." in name:
         root, *path = name.split(".")
         column = _field(model, root)
@@ -84,8 +84,17 @@ def _field(model, name):
 def _dict(row):
     result = {attribute.key: getattr(row, attribute.key) for attribute in sa_inspect(row).mapper.column_attrs}
     result["_id"] = result.pop("id")
-    if "metadata_json" in result:
-        result["metadata"] = result.pop("metadata_json")
+    if isinstance(row, UserRecord) and result.get("last_login_ip") is not None:
+        result["last_login_ip"] = str(result["last_login_ip"])
+    if isinstance(row, LoginTokenRecord):
+        for field in ("request_ip", "consume_ip"):
+            if result.get(field) is not None:
+                result[field] = str(result[field])
+    if isinstance(row, ReportRecord):
+        result["content_type"] = "comment" if row.comment_id else "confession"
+        result["content_id"] = row.comment_id or row.confession_id
+    if isinstance(row, NotificationRecord):
+        result["content"] = {"heading": row.heading, "body": row.body}
     return result
 
 
@@ -98,6 +107,12 @@ def _conditions(model, query):
         if key == "$and":
             clauses.append(and_(*[and_(*_conditions(model, item)) for item in expected]))
             continue
+        if model is ReportRecord and key == "content_id":
+            values = expected.get("$in", []) if isinstance(expected, dict) else [expected]
+            clauses.append(or_(ReportRecord.confession_id.in_(values), ReportRecord.comment_id.in_(values)))
+            continue
+        if model is ConfessionCommentRecord and key == "user_info.id":
+            key = "user_id"
         column = _field(model, key)
         if column is None:
             continue
@@ -156,7 +171,19 @@ class TableRepository:
         if skip: stmt = stmt.offset(skip)
         if limit: stmt = stmt.limit(limit)
         with self.db.sessions() as session:
-            rows = [_dict(row) for row in session.scalars(stmt).all()]
+            records = session.scalars(stmt).all()
+            rows = [_dict(row) for row in records]
+            if self.model is ConfessionCommentRecord and records:
+                user_ids = {record.user_id for record in records}
+                users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()
+                user_map = {user.id: user for user in users}
+                for record, value in zip(records, rows):
+                    user = user_map.get(record.user_id)
+                    value["user_info"] = {
+                        "id": record.user_id,
+                        "name": user.Name if user else "User",
+                        "avatar": user.emoji if user else None,
+                    }
         if projection:
             include = [key for key, enabled in projection.items() if enabled and key != "_id"]
             if include:
@@ -172,7 +199,19 @@ class TableRepository:
     def add(self, document):
         values = dict(document)
         identifier = str(values.pop("_id", values.pop("id", None)) or new_id())
-        if "metadata" in values: values["metadata_json"] = values.pop("metadata")
+        if self.model is ConfessionCommentRecord:
+            info = values.pop("user_info", {}) or {}
+            values["user_id"] = info.get("id") or values.get("user_id")
+            values.pop("user_reaction", None)
+        elif self.model is ReportRecord:
+            target_id = values.pop("content_id", None)
+            target_type = values.get("content_type")
+            values.pop("content_type", None)
+            values["comment_id" if target_type == "comment" else "confession_id"] = target_id
+        elif self.model is NotificationRecord:
+            content = values.pop("content", {}) or {}
+            values["heading"] = content.get("heading", "")
+            values["body"] = content.get("body", "")
         allowed = {attribute.key for attribute in sa_inspect(self.model).mapper.column_attrs} - {"id"}
         row = self.model(id=identifier, **{k: v for k, v in values.items() if k in allowed})
         with self.db.sessions.begin() as session:

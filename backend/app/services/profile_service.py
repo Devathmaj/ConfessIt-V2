@@ -75,12 +75,12 @@ async def upload_profile_picture_service(
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(f"Unexpected error deleting previous profile asset for {current_user.Regno}: {exc}")
 
-    upload_target_name = current_user.username or current_user.Regno or "user"
+    upload_target_name = current_user.Regno or "user"
     try:
         upload_result = storage_service.upload_profile_image(
             file=file,
             content=contents,
-            username=upload_target_name,
+            user_folder=upload_target_name,
         )
         storage_service.verify_uploaded_asset("profile", upload_result["object_path"])
     except HTTPException as exc:

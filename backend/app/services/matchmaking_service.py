@@ -235,7 +235,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         "Regno": matched_user.Regno,
         "name": matched_user.Name,
         "Name": matched_user.Name,
-        "username": getattr(matched_user, "username", None) or matched_user.Name,
+        "name": matched_user.Name,
         "profile_picture_id": matched_user_signed_url,
         "profile_picture": matched_user_signed_url,
         "which_class": getattr(matched_user, "which_class", ""),

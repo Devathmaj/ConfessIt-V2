@@ -33,7 +33,7 @@ import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 // Interface for user information
 interface UserInfo {
   id: string;
-  username: string;
+  name: string;
   user_reaction: 'like' | 'dislike' | null;
   report_count: number;
   reported_by: string[];
@@ -565,7 +565,7 @@ export const ConfessionsPage = () => {
                 <div className="flex justify-between items-start">
                   <div>
                     <CardTitle className="text-lg font-dancing text-romantic">
-                      {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.username || "User")}
+                      {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
                     </CardTitle>
                     <CardDescription>{formatDateTimeDDMMYYYY(confession.timestamp)}</CardDescription>
                     {confession.confessing_to && (
@@ -642,7 +642,7 @@ export const ConfessionsPage = () => {
             <>
               <DialogHeader className="p-6 pb-4">
                 <DialogTitle className="font-dancing text-2xl text-romantic">
-                  {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.username || "User") + "'s Confession"}
+                  {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
                 </DialogTitle>
                 <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.timestamp)}</DialogDescription>
                 {selectedConfession.confessing_to && (
@@ -664,7 +664,7 @@ export const ConfessionsPage = () => {
                     <div key={comment.id} className="text-sm p-3 bg-muted/50 rounded-lg shadow-sm">
                       <div className="flex items-center gap-2">
                          <span className="text-lg">{comment.user_info.avatar || '👤'}</span>
-                         <p className="font-bold text-foreground">{comment.user_info.username}</p>
+                         <p className="font-bold text-foreground">{comment.user_info.name}</p>
                       </div>
                       <p className="my-2">{comment.message}</p>
                       <div className="flex items-center justify-between">

@@ -44,7 +44,9 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
         consume_ip=None,
         consume_user_agent=None,
         attempt_count=0,
-        metadata=None
+        session_status="issued",
+        last_seen_at=None,
+        device=None,
     )
     
     # 5. Insert the new token document into the database

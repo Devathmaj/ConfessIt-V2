@@ -26,7 +26,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
-import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, UserCircle2, Plus } from 'lucide-react';
+import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, Plus } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 interface AdminUserProfile {
@@ -34,7 +34,6 @@ interface AdminUserProfile {
   Regno?: string | null;
   Name?: string | null;
   email?: string | null;
-  username?: string | null;
   which_class?: string | null;
   gender?: string | null;
   user_role?: string | null;
@@ -59,7 +58,6 @@ type CreateUserForm = {
   email: string;
   which_class: string;
   gender: string;
-  username: string;
   emoji: string;
   bio: string;
   profile_picture_id: string;
@@ -92,7 +90,6 @@ export const ProfileReview = () => {
     email: '',
     which_class: '',
     gender: '',
-    username: '',
     emoji: '',
     bio: '',
     profile_picture_id: '',
@@ -142,7 +139,6 @@ export const ProfileReview = () => {
         profile.Name,
         profile.Regno,
         profile.email,
-        profile.username,
         profile.which_class,
       ]
         .filter(Boolean)
@@ -179,7 +175,6 @@ export const ProfileReview = () => {
       Name: profile.Name ?? '',
       Regno: profile.Regno ?? '',
       email: profile.email ?? '',
-      username: profile.username ?? '',
       which_class: profile.which_class ?? '',
       gender: profile.gender ?? '',
       bio: profile.bio ?? '',
@@ -212,7 +207,6 @@ export const ProfileReview = () => {
       'Name',
       'Regno',
       'email',
-      'username',
       'which_class',
       'gender',
       'bio',
@@ -322,9 +316,6 @@ export const ProfileReview = () => {
       isLovenotesSend: createForm.isLovenotesSend,
     };
 
-    if (createForm.username.trim()) {
-      payload.username = createForm.username.trim();
-    }
     if (createForm.emoji.trim()) {
       payload.emoji = createForm.emoji.trim();
     }
@@ -452,12 +443,6 @@ export const ProfileReview = () => {
                                     {profile.Regno}
                                   </span>
                                 )}
-                                {profile.username && (
-                                  <span className="flex items-center gap-1">
-                                    <UserCircle2 className="h-3 w-3" />
-                                    @{profile.username}
-                                  </span>
-                                )}
                                 {profile.which_class && (
                                   <span className="flex items-center gap-1">
                                     <Badge variant="outline">{profile.which_class}</Badge>
@@ -548,17 +533,6 @@ export const ProfileReview = () => {
                         setEditForm((prev) => (prev ? { ...prev, Name: event.target.value } : prev))
                       }
                       placeholder="Enter full name"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="edit-username">Username</Label>
-                    <Input
-                      id="edit-username"
-                      value={editForm.username ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, username: event.target.value } : prev))
-                      }
-                      placeholder="Preferred username"
                     />
                   </div>
                   <div className="grid gap-2">
@@ -811,17 +785,6 @@ export const ProfileReview = () => {
                       setCreateForm((prev) => ({ ...prev, gender: event.target.value }))
                     }
                     placeholder="Enter gender"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="create-username">Username</Label>
-                  <Input
-                    id="create-username"
-                    value={createForm.username}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, username: event.target.value }))
-                    }
-                    placeholder="Preferred username (optional)"
                   />
                 </div>
                 <div className="grid gap-2">

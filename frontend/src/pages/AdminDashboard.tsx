@@ -133,7 +133,6 @@ interface ActiveSessionRecord {
     Name?: string | null;
     Regno?: string | null;
     email?: string | null;
-    username?: string | null;
     user_role?: string | null;
     is_blocked?: boolean;
   };
@@ -449,7 +448,7 @@ export const AdminDashboard = () => {
               <ul className="space-y-3">
                 {activeSessions.map((session) => {
                   const user = session.user || {};
-                  const displayName = user.Name || user.username || user.Regno || 'Unknown user';
+                  const displayName = user.Name || user.Regno || 'Unknown user';
                   const lastSeen = session.last_seen ? formatDateTimeDDMMYYYY(session.last_seen) : 'Unknown';
                   return (
                     <li key={session.session_id} className="rounded-2xl border border-border bg-muted/30 p-4">

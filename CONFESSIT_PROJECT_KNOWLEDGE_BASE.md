@@ -157,7 +157,7 @@ Follows a **Layered/Onion Architecture**:
 3. **Data Access Layer:** SQLAlchemy ORM queries against typed PostgreSQL tables. 
 
 **Data Architecture:**
-Application records use typed relational PostgreSQL tables defined in `backend/app/db_models.py`. Relationships are represented with foreign keys; timestamp values use `TIMESTAMPTZ`. JSONB is limited to structured fields such as lists, reactions, and small metadata payloads.
+Application records use typed relational PostgreSQL tables defined in `backend/app/db_models.py`. Relationships are represented with foreign keys; IDs use native UUIDs and timestamp values use `TIMESTAMPTZ`. PostgreSQL arrays store homogeneous lists, while JSONB is reserved for the variable confession reaction map.
 
 ---
 
@@ -433,6 +433,6 @@ graph TD
 ## 26. Assumptions and Inferred Behavior
 
 - **Email Infrastructure:** It is inferred that an external email provider (like SendGrid or SMTP) is configured via environment variables to handle the Magic Link dispatches, although the specific integration wasn't deeply examined.
-- **Cloudinary:** The `LoveNote` model indicates `image_base64` stores a Cloudinary URL, implying an active integration for asset storage.
+- **Cloudinary:** Love-note and profile image assets are stored as URLs in PostgreSQL.
 - **User Demographics:** Based on the presence of `Regno` (Registration Number) and `which_class`, it is assumed this app is targeted at a specific university or school demographic.
 - **WebSocket Usage:** The `main.py` has a commented section for `WebSocket Endpoints`, inferring that real-time chat might currently rely on polling or is in transition to WebSockets.

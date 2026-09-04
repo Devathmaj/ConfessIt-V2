@@ -29,7 +29,6 @@ interface ConversationData {
   other_user: {
     regno: string;
     name: string;
-    username: string;
     profile_picture_id: string;
     which_class: string;
     bio: string;
@@ -209,7 +208,7 @@ export const MessageBoxPage = () => {
                       />
                       <div>
                         <h3 className="text-lg font-semibold">{conversation.other_user.name}</h3>
-                        <p className="text-sm text-muted-foreground">@{conversation.other_user.username}</p>
+                        <p className="text-sm text-muted-foreground">{conversation.other_user.name}</p>
                       </div>
                     </div>
                     <span className="px-3 py-1 bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-full text-xs font-medium">

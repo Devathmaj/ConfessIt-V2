@@ -32,7 +32,6 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "Regno": doc.get("Regno"),
         "Name": doc.get("Name"),
         "email": doc.get("email"),
-        "username": doc.get("username"),
         "emoji": doc.get("emoji"),
         "bio": doc.get("bio"),
         "which_class": doc.get("which_class"),
@@ -82,10 +81,10 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     # Mark previously-active sessions that are past the window as expired
     tokens_repo.update_all(
         {
-            "metadata.status": "active",
+            "session_status": "active",
             "consumed_at": {"$lt": active_threshold},
         },
-        {"$set": {"metadata.status": "expired"}}
+        {"$set": {"session_status": "expired"}}
     )
 
     active_tokens = list(
@@ -117,8 +116,7 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     # Build session entries
     session_entries: Dict[str, Dict[str, Any]] = {}
     for token in active_tokens:
-        metadata = (token.get("metadata") or {}).copy()
-        status = metadata.get("status") or "active"
+        status = token.get("session_status") or "active"
         
         if status != "active":
             continue
@@ -126,19 +124,14 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         raw_user_id = token.get("user_id")
         user_doc = user_map.get(raw_user_id) if raw_user_id else None
 
-        if "status" not in metadata:
-            metadata["status"] = "active"
-        if "device" not in metadata:
-            metadata["device"] = token.get("consume_user_agent") or token.get("request_user_agent")
-
-        last_seen_value = metadata.get("last_seen") or token.get("consumed_at") or datetime.now(timezone.utc)
+        last_seen_value = token.get("last_seen_at") or token.get("consumed_at") or datetime.now(timezone.utc)
         
         # Parse last_seen
         if isinstance(last_seen_value, str):
             try:
                 parsed_last_seen = datetime.fromisoformat(last_seen_value.replace("Z", "+00:00"))
                 if parsed_last_seen.tzinfo is not None:
-                    parsed_last_seen = parsed_last_seen.astimezone(timezone.utc).replace(tzinfo=None)
+                    parsed_last_seen = parsed_last_seen.astimezone(timezone.utc)
             except ValueError:
                 parsed_last_seen = datetime.now(timezone.utc)
         elif isinstance(last_seen_value, datetime):
@@ -146,12 +139,9 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         else:
             parsed_last_seen = datetime.now(timezone.utc)
 
-        metadata["last_seen"] = parsed_last_seen
-
-        # Update token metadata
         tokens_repo.update(
             {"_id": token["_id"]},
-            {"$set": {"metadata": metadata}}
+            {"$set": {"last_seen_at": parsed_last_seen}}
         )
 
         # Serialize user
@@ -160,7 +150,6 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
             "Name": None,
             "email": None,
             "Regno": None,
-            "username": None,
             "user_role": None,
             "is_blocked": False,
         }
@@ -174,7 +163,7 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
             "status": status,
             "last_seen": iso_last_seen,
             "ip": token.get("consume_ip") or token.get("request_ip"),
-            "device": metadata.get("device") or token.get("consume_user_agent") or token.get("request_user_agent"),
+            "device": token.get("device") or token.get("consume_user_agent") or token.get("request_user_agent"),
             "user": serialized_user,
             "_last_seen_dt": parsed_last_seen,
         }
@@ -294,7 +283,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                     "timestamp": serialize_datetime(comment_doc.get("timestamp")),
                     "user": comment_doc.get("user_info", {}),
                     "report_count": comment_doc.get("report_count", 0),
-                    "reported_by": [str(item) for item in comment_doc.get("reported_by", [])],
+                    "reported_by": [str(report.get("reported_by_id")) for report in reports_by_content.get(comment_id, [])],
                     "like_count": comment_doc.get("like_count", 0),
                     "dislike_count": comment_doc.get("dislike_count", 0),
                     "reports": comment_reports,
@@ -311,7 +300,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                 "timestamp": serialize_datetime(doc.get("timestamp")),
                 "sender": sender_info,
                 "report_count": doc.get("report_count", 0),
-                "reported_by": [str(item) for item in doc.get("reported_by", [])],
+                "reported_by": [str(report.get("reported_by_id")) for report in reports_by_content.get(confession_id, [])],
                 "reports": confession_reports,
                 "reactions": {key: [str(user) for user in value] for key, value in reactions.items()},
                 "heart_count": doc.get("heart_count", 0),

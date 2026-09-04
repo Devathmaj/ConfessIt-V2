@@ -47,7 +47,6 @@ interface AdminConversationParticipant {
   Regno?: string | null;
   Name?: string | null;
   email?: string | null;
-  username?: string | null;
   user_role?: string | null;
 }
 
@@ -103,7 +102,7 @@ const resolveDisplayName = (participant?: AdminConversationParticipant) => {
   if (!participant) {
     return 'Unknown';
   }
-  return participant.Name || participant.username || participant.Regno || 'Unknown';
+  return participant.Name || participant.Regno || 'Unknown';
 };
 
 const truncate = (value?: string | null, length = 80) => {

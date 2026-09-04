@@ -50,7 +50,6 @@ interface ConversationData {
   other_user: {
     regno: string;
     name: string;
-    username: string;
     profile_picture_id: string;
     which_class: string;
     bio: string;
@@ -67,7 +66,6 @@ interface NotificationItem {
   message: string;
   timestamp: string;
   user_name?: string;
-  user_username?: string;
   user_profile_picture?: string;
   match_id?: string;
   conversation_id?: string;
@@ -179,7 +177,6 @@ export const InboxPage = () => {
             message: `${conversationResponse.other_user.name} accepted your message request. You can now start chatting!`,
             timestamp: conversationResponse.conversation.accepted_at,
             user_name: conversationResponse.other_user.name,
-            user_username: conversationResponse.other_user.username,
             user_profile_picture: conversationResponse.other_user.profile_picture_id,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
@@ -193,7 +190,6 @@ export const InboxPage = () => {
             message: `${conversationResponse.other_user.name} rejected your message request.`,
             timestamp: conversationResponse.conversation.created_at,
             user_name: conversationResponse.other_user.name,
-            user_username: conversationResponse.other_user.username,
             user_profile_picture: conversationResponse.other_user.profile_picture_id,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
@@ -214,7 +210,6 @@ export const InboxPage = () => {
               message: `${conv.other_user.name} wants to start a conversation with you!`,
               timestamp: conv.conversation.created_at,
               user_name: conv.other_user.name,
-              user_username: conv.other_user.username, // <-- FIXED: Added comma here
               user_profile_picture: conv.other_user.profile_picture_id,
               match_id: conv.match.id,
               conversation_id: conv.conversation.id,
@@ -232,7 +227,6 @@ export const InboxPage = () => {
                 message: `You rejected the message request from ${conv.other_user.name}.`,
                 timestamp: conv.conversation.created_at,
                 user_name: conv.other_user.name,
-                user_username: conv.other_user.username,
                 user_profile_picture: conv.other_user.profile_picture_id,
                 match_id: conv.match.id,
                 conversation_id: conv.conversation.id,
@@ -368,8 +362,7 @@ export const InboxPage = () => {
       statusMatches = conv.conversation.status === filter;
     }
     
-    const matchesSearch = conv.other_user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         conv.other_user.username.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = conv.other_user.name.toLowerCase().includes(searchQuery.toLowerCase());
     
     return statusMatches && matchesSearch;
   });
@@ -379,7 +372,7 @@ export const InboxPage = () => {
     if (!searchQuery.trim()) return true; // Show all if no search query
     
     const matchesSearch = (notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         notification.user_username?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                         notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase())) ||
                          notification.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          notification.message?.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesSearch;
@@ -524,7 +517,7 @@ export const InboxPage = () => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <input
               type="text"
-              placeholder={currentView === 'notifications' ? "Search notifications..." : "Search by name or username..."}
+              placeholder={currentView === 'notifications' ? "Search notifications..." : "Search by name..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
@@ -613,9 +606,7 @@ export const InboxPage = () => {
                               <h3 className="text-lg font-semibold text-foreground">
                                 {notification.title}
                               </h3>
-                              <p className="text-sm text-muted-foreground">
-                                {notification.user_username ? `@${notification.user_username}` : 'System Notification'}
-                              </p>
+                              <p className="text-sm text-muted-foreground">{notification.user_name || 'System Notification'}</p>
                             </div>
                           </div>
                           <div className="text-sm text-muted-foreground">
@@ -747,7 +738,7 @@ export const InboxPage = () => {
                               {conversation.other_user.name}
                             </h3>
                             <p className="text-sm text-muted-foreground">
-                              @{conversation.other_user.username} • {conversation.other_user.which_class}
+                              {conversation.other_user.name} • {conversation.other_user.which_class}
                             </p>
                           </div>
                           <div className="flex items-center space-x-2">

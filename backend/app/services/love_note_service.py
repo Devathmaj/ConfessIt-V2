@@ -75,7 +75,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         # Upload the love note image to Cloudinary
         upload_result = storage_service.upload_love_note_image(
             image_base64=note_data.image_base64,
-            sender_username=sender.Name or sender.Regno
+            sender_name=sender.Name or sender.Regno
         )
         
         # Use the Cloudinary URL instead of the base64 string
@@ -92,7 +92,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     love_note = LoveNote(
         sender_id=sender.id,
         recipient_id=str(note_data.recipient_id),
-        image_base64=cloudinary_url,  # Store the Cloudinary URL instead of base64
+        image_url=cloudinary_url,
         message_text=note_data.message_text,
         is_anonymous=note_data.is_anonymous,
         status="pending_review"
@@ -152,7 +152,7 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
                 "regno": recipient_doc.get("Regno") if recipient_doc else None,
                 "email": recipient_doc.get("email") if recipient_doc else None,
             },
-            "image_url": doc.get("image_base64"),
+            "image_url": doc.get("image_url"),
             "message_text": doc.get("message_text", ""),
             "is_anonymous": doc.get("is_anonymous", False),
             "status": doc.get("status", "pending_review"),

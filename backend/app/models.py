@@ -52,7 +52,7 @@ class UserInfo(BaseModel):
     Represents denormalized user information to be embedded in comments.
     """
     id: str
-    username: str
+    name: str
     avatar: Optional[str] = None
 
 
@@ -139,7 +139,6 @@ class AdminUserBase(BaseModel):
     Regno: str
     Name: str
     email: EmailStr
-    username: Optional[str] = None
     emoji: Optional[str] = None
     bio: Optional[str] = None
     which_class: str
@@ -166,7 +165,6 @@ class AdminUserUpdate(BaseModel):
     Regno: Optional[str] = None
     Name: Optional[str] = None
     email: Optional[EmailStr] = None
-    username: Optional[str] = None
     emoji: Optional[str] = None
     bio: Optional[str] = None
     which_class: Optional[str] = None
@@ -189,7 +187,6 @@ class UserDetails(BaseModel):
     Regno: str
     Name: str
     email: EmailStr
-    username: Optional[str] = None
     emoji: Optional[str] = None
     bio: Optional[str] = None
     which_class: str
@@ -230,7 +227,9 @@ class LoginToken(BaseModel):
     consume_ip: Optional[str] = None
     consume_user_agent: Optional[str] = None
     attempt_count: int = 0
-    metadata: Optional[Dict[str, Any]] = None
+    session_status: str = "issued"
+    last_seen_at: Optional[datetime] = None
+    device: Optional[str] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -243,7 +242,7 @@ class LoveNoteTemplate(BaseModel):
     """
     id: str = Field(default_factory=new_id, alias="_id")
     name: str
-    preview_image: str
+    image_url: str
     description: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -255,12 +254,12 @@ class LoveNoteTemplate(BaseModel):
 class LoveNote(BaseModel):
     """
     Represents an individual Love Note sent from one user to another.
-    Note: image_base64 field now stores the Cloudinary URL (not actual base64).
+    Persistent image URL for the note.
     """
     id: str = Field(default_factory=new_id, alias="_id")
     sender_id: str
     recipient_id: str
-    image_base64: str  # Stores Cloudinary URL (legacy field name kept for compatibility)
+    image_url: str
     message_text: str
     is_anonymous: bool = False
     status: str = "pending_review"

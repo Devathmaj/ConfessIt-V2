@@ -12,7 +12,6 @@ export interface User {
   Regno: string;
   email?: string;
   emoji: string;
-  username: string;
   bio?: string;
   which_class?: string;
   profile_picture_id?: string;
@@ -68,7 +67,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser({
           ...userData,
           id: userId, // Used to ensure the user object always has a consistent 'id' property
-          username: userData.username || userData.Name,
         });
       } else {
         console.error("User ID is missing from the authentication response.");

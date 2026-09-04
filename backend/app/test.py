@@ -90,7 +90,9 @@ def main():
                     consume_ip=None,
                     consume_user_agent=None,
                     attempt_count=0,
-                    metadata=None
+                    session_status="issued",
+                    last_seen_at=None,
+                    device=None
                 )
                 
                 login_tokens_repo.add(login_token_entry.dict(by_alias=True))

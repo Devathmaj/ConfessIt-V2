@@ -61,7 +61,6 @@ interface AdminComment {
   timestamp: string | null;
   user: {
     id?: string | null;
-    username?: string | null;
     avatar?: string | null;
   };
   report_count: number;
@@ -165,7 +164,7 @@ export const ConfessionsAdmin = () => {
                     timestamp: comment.timestamp ?? null,
                     user: {
                       id: comment.user?.id ?? null,
-                      username: comment.user?.username ?? null,
+                      name: comment.user?.name ?? null,
                       avatar: comment.user?.avatar ?? null,
                     },
                     report_count: comment.report_count ?? 0,
@@ -541,7 +540,7 @@ export const ConfessionsAdmin = () => {
                                 <div className="flex w-full flex-col gap-1 text-left">
                                   <div className="flex flex-wrap items-center justify-between gap-3">
                                     <span className="text-sm font-medium">
-                                      {comment.user.username ?? 'Anonymous commenter'}
+                                      {comment.user.name ?? 'Anonymous commenter'}
                                     </span>
                                     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                                       <span className="flex items-center gap-1">

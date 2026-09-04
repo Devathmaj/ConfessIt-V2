@@ -116,7 +116,7 @@ async def get_received_love_notes(
             "id": str(note.get("_id")),
             "from": sender_name,
             "message": note.get("message_text", ""),
-            "image_url": note.get("image_base64"),  # This is actually the Cloudinary URL
+            "image_url": note.get("image_url"),
             "anonymous": note.get("is_anonymous", False),
             "created_at": isoformat_datetime(note.get("created_at")),
             "read_at": isoformat_datetime(note.get("read_at")),

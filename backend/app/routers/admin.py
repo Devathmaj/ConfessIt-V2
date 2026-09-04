@@ -99,15 +99,6 @@ async def create_user(
             detail="A user with this registration number or email already exists."
         )
 
-    username_value = payload.username.strip() if payload.username else None
-    if username_value:
-        username_conflict = db.users.get_one({"username": username_value})
-        if username_conflict:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="That username is already taken."
-            )
-
     interests_value: Optional[List[str]] = None
     if payload.interests:
         normalized_interests = [item.strip() for item in payload.interests if item and item.strip()]
@@ -118,7 +109,6 @@ async def create_user(
         "Regno": normalized_regno,
         "Name": payload.Name.strip(),
         "email": normalized_email,
-        "username": username_value,
         "emoji": payload.emoji.strip() if payload.emoji else None,
         "bio": payload.bio.strip() if payload.bio else None,
         "which_class": payload.which_class.strip(),

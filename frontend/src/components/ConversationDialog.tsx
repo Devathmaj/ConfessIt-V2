@@ -43,7 +43,6 @@ interface ConversationData {
   other_user: {
     regno: string;
     name: string;
-    username: string;
     profile_picture_id: string;
     which_class: string;
     bio: string;
@@ -706,7 +705,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base sm:text-xl truncate">{conversationData.other_user.name}</CardTitle>
-                  <CardDescription className="text-xs sm:text-sm truncate">@{conversationData.other_user.username} • {conversationData.other_user.which_class}</CardDescription>
+                  <CardDescription className="text-xs sm:text-sm truncate">{conversationData.other_user.name} • {conversationData.other_user.which_class}</CardDescription>
                 </div>
                 <div className="hidden sm:block flex-shrink-0">
                   {getStatusBadge(conversationData.conversation.status, isExpired)}

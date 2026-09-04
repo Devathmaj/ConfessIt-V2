@@ -152,10 +152,10 @@ class CloudinaryStorageService:
 
         return kind or "jpeg"
 
-    def generate_object_path(self, username: str, filename: str, image_type: str) -> str:
+    def generate_object_path(self, user_folder: str, filename: str, image_type: str) -> str:
         """Generate a unique path with a random string for security (prevents URL guessing).
         
-        Format: {username}/{random_string}/{timestamp}_{filename}
+        Format: {user_folder}/{random_string}/{timestamp}_{filename}
         The random string makes URLs unpredictable while keeping them organized by user.
         """
         # Generate a secure random string (16 chars = 96 bits of entropy)
@@ -166,7 +166,7 @@ class CloudinaryStorageService:
             safe_filename = f"{safe_filename}.{image_type}"
         # Sanitize filename to avoid spaces/special chars
         safe_filename = re.sub(r"[^A-Za-z0-9_.-]+", "-", safe_filename)
-        return f"{username}/{random_string}/{timestamp}_{safe_filename}"
+        return f"{user_folder}/{random_string}/{timestamp}_{safe_filename}"
 
     def generate_generic_object_path(self, filename: str, image_type: Optional[str] = None, prefix: Optional[str] = None) -> str:
         """Generate a unique path for non-user specific uploads with random string."""
@@ -207,7 +207,7 @@ class CloudinaryStorageService:
         *,
         route_key: str,
         filename: str,
-        username: Optional[str] = None,
+        user_folder: Optional[str] = None,
         prefix: Optional[str] = None,
         resource_type: str = "image",
         ttl_seconds: int = 900,
@@ -230,9 +230,9 @@ class CloudinaryStorageService:
         extension = self._validate_extension(filename)
 
         if route_key == "profile":
-            if not username:
-                raise HTTPException(status_code=400, detail="Username is required for profile uploads")
-            object_path = self.generate_object_path(username, filename, extension)
+            if not user_folder:
+                raise HTTPException(status_code=400, detail="display name is required for profile uploads")
+            object_path = self.generate_object_path(user_folder, filename, extension)
         else:
             resolved_prefix = prefix
             if route_key == "committee" and not resolved_prefix:
@@ -399,15 +399,15 @@ class CloudinaryStorageService:
             "secure_url": info.get("secure_url"),
         }
 
-    def upload_profile_image(self, *, file: UploadFile, content: bytes, username: str) -> Dict[str, object]:
+    def upload_profile_image(self, *, file: UploadFile, content: bytes, user_folder: str) -> Dict[str, object]:
         """Upload a profile image to Cloudinary as a public asset with random URL."""
         self._ensure_enabled()
         if not self.bucket_name:
             raise HTTPException(status_code=500, detail="Profile storage bucket is not configured")
 
-        resolved_username = (username or "user").strip() or "user"
+        resolved_name = (user_folder or "user").strip() or "user"
         image_format = self.validate_image_file(file, content, max_size_mb=self.max_image_size_mb)
-        object_path = self.generate_object_path(resolved_username, file.filename or "profile", image_format)
+        object_path = self.generate_object_path(resolved_name, file.filename or "profile", image_format)
         public_id = self.build_public_id(self.bucket_name, object_path)
 
         try:
@@ -419,7 +419,7 @@ class CloudinaryStorageService:
                 invalidate=True,
                 access_mode="public",  # Use public access instead of authenticated
                 type="upload",  # Use standard upload type
-                filename=file.filename or f"{resolved_username}-profile.{image_format}",
+                filename=file.filename or f"{resolved_name}-profile.{image_format}",
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to upload profile image: {exc}")
@@ -641,7 +641,7 @@ class CloudinaryStorageService:
         object_path = self.normalize_stored_path(identifier, "committee")
         return self.delete_file_from_bucket(self.gallery_bucket, object_path)
 
-    def upload_love_note_image(self, *, image_base64: str, sender_username: str) -> Dict[str, Any]:
+    def upload_love_note_image(self, *, image_base64: str, sender_name: str) -> Dict[str, Any]:
         """Upload a love note image (base64) to Cloudinary with a secure random URL.
         
         This method:
@@ -653,7 +653,7 @@ class CloudinaryStorageService:
         
         Args:
             image_base64: Base64 encoded image string (with or without data URI prefix)
-            sender_username: Username of the sender (used for organizing files)
+            sender_name: display name of the sender (used for organizing files)
             
         Returns:
             Dictionary containing the Cloudinary URL and metadata
@@ -683,9 +683,9 @@ class CloudinaryStorageService:
             # Generate a secure random path for the love note
             random_string = secrets.token_urlsafe(16)
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-            safe_username = re.sub(r"[^A-Za-z0-9_.-]+", "-", sender_username)
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", sender_name)
             filename = f"love_note_{timestamp}.{image_format}"
-            object_path = f"{safe_username}/{random_string}/{filename}"
+            object_path = f"{safe_name}/{random_string}/{filename}"
             
             # Build the Cloudinary public_id
             public_id = self._build_public_id(love_notes_bucket, object_path)
@@ -752,7 +752,7 @@ class CloudinaryStorageService:
             logger.error(f"Failed to delete love note image: {str(e)}")
             return False
 
-    def list_user_files(self, username: str, limit: int = 10) -> list:
+    def list_user_files(self, user_folder: str, limit: int = 10) -> list:
         """List files for a specific user. Currently a placeholder."""
         # Cloudinary listing not currently required; return empty list for compatibility.
         return []
