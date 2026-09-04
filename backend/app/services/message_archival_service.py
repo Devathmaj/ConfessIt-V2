@@ -4,10 +4,10 @@ import logging
 import gzip
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from ..postgres import Database
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,11 @@ class MessageArchivalService:
             Dict with archive statistics
         """
         try:
-            cutoff_time = datetime.utcnow() - timedelta(hours=hours_old)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_old)
             
             # Find old messages
             old_messages = list(
-                db["messages"].find({
+                db.messages.list({
                     "timestamp": {"$lt": cutoff_time}
                 })
             )
@@ -73,7 +73,7 @@ class MessageArchivalService:
             
             # Delete archived messages from PostgreSQL
             if archived_count > 0:
-                result = db["messages"].delete_many({
+                result = db.messages.delete_all({
                     "timestamp": {"$lt": cutoff_time}
                 })
                 deleted_count = result.deleted_count
@@ -121,7 +121,7 @@ class MessageArchivalService:
             filename = f"messages_{date_key}.json.gz"
             filepath = os.path.join(self.archive_dir, filename)
             
-            # Convert ObjectId to string for JSON serialization
+            # Convert str to string for JSON serialization
             serializable_messages = []
             for msg in messages:
                 msg_copy = msg.copy()

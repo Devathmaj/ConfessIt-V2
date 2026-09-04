@@ -77,7 +77,6 @@ interface AdminConversationSummary {
   initiator: AdminConversationParticipant;
   receiver: AdminConversationParticipant;
   match?: AdminConversationMatch | null;
-  supabase_conversation_id?: string | null;
   latest_message?: AdminConversationMessage | null;
   is_blocked?: boolean;
   blocked_by?: string | null;

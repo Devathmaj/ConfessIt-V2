@@ -118,7 +118,7 @@ Containerized Monolithic Backend (FastAPI) paired with an SPA Frontend (React), 
 
 ### Database
 - **Engine:** PostgreSQL. *Why: Flexible schema, suitable for unstructured confessions and nested comments.*
-- **Driver:** PostgreSQL JSONB adapter. *Why: Native Python integration with PostgreSQL.*
+- **Driver:** SQLAlchemy ORM with psycopg. *Why: Native Python integration with PostgreSQL.*
 - **Caching:** Redis. *Why: Fast access to session data, rate limiting, or transient matchmaking state.*
 
 ### Observability & DevOps
@@ -154,10 +154,10 @@ The system uses a **Containerized Microservices-adjacent Architecture** via Dock
 Follows a **Layered/Onion Architecture**:
 1. **Presentation/Transport Layer (`routers/`):** Defines HTTP endpoints, accepts requests, performs initial Pydantic validation.
 2. **Business Logic Layer (`services/`):** Contains core rules (e.g., `confession_service.py`).
-3. **Data Access Layer:** Direct PostgreSQL queries via PostgreSQL JSONB adapter within services. 
+3. **Data Access Layer:** SQLAlchemy ORM queries against typed PostgreSQL tables. 
 
 **Data Architecture:**
-Data is primarily stored as JSONB rows in PostgreSQL, with one table per legacy collection. The PostgreSQL adapter currently stores JSONB payloads and translates legacy collection queries; this preserves API behavior while the data model is normalized in a later refactor. Relationships (like Confession -> Comments) are handled via document embedding or referencing (`confession_id` in comments).
+Application records use typed relational PostgreSQL tables defined in `backend/app/db_models.py`. Relationships are represented with foreign keys; timestamp values use `TIMESTAMPTZ`. JSONB is limited to structured fields such as lists, reactions, and small metadata payloads.
 
 ---
 
@@ -170,7 +170,7 @@ Data is primarily stored as JSONB rows in PostgreSQL, with one table per legacy 
 4. **Backend Router (`routers/confessions.py`):** Receives request, injects `get_current_user` dependency to ensure authentication.
 5. **Validation:** Pydantic validates `ConfessionCreate` schema.
 6. **Business Logic (`confession_service.py`):** Applies business rules (e.g., checks if user is banned, constructs DB payload).
-7. **Data Access:** PostgreSQL JSONB adapter inserts the document into the `Confessions` collection.
+7. **Data Access:** SQLAlchemy ORM with psycopg inserts the record into the `confessions` table.
 8. **Response:** Created confession object is serialized and returned 200 OK.
 9. **Frontend Update:** TanStack Query invalidates the confession list cache, triggering a re-render.
 
@@ -185,7 +185,7 @@ Data is primarily stored as JSONB rows in PostgreSQL, with one table per legacy 
 4. **Dependency Injection:** Router depends on `get_current_user` from `auth_service.py`.
 5. **Auth Service:** Extracts JWT from the `Authorization` header.
 6. **Decoding:** PyJWT decodes the token, validating expiration and signature.
-7. **Database:** Extracts `user_id` from token payload, queries `UserDetails` collection via PostgreSQL JSONB adapter.
+7. **Database:** Extracts `user_id` from token payload, queries the `users` table through SQLAlchemy.
 8. **Response Generation:** Serializes the user document into a JSON response and returns it to the client.
 9. **Client Context:** AuthContext updates with user info, allowing route access.
 
@@ -236,7 +236,7 @@ Data is primarily stored as JSONB rows in PostgreSQL, with one table per legacy 
 
 **Technology:** PostgreSQL
 
-**Key Collections & Indexes:**
+**Relational Tables & Indexes:**
 1. **`UserDetails`**: Users. Indexed uniquely on `Regno`. Indexed on `email`, `user_role`.
 2. **`Confessions`**: Posts. Indexed on `timestamp`, `user_id`, `is_approved`.
 3. **`LoginTokens`**: Auth tokens. Indexed on `expires_at`, `consumed_at`.

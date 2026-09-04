@@ -1,7 +1,7 @@
 // src/lib/messaging.ts
 /**
  * WebSocket-based messaging client for ConfessIt
- * Replaces Supabase real-time messaging
+ * Provides real-time messaging over the application's WebSocket API.
  */
 
 interface Message {

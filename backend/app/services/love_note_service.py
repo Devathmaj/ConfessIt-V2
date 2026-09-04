@@ -2,7 +2,7 @@ import logging
 from ..postgres import Database
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
@@ -26,7 +26,7 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[U
     Service to fetch all users available as love note recipients, excluding the
     active user and any administrator accounts.
     """
-    users_cursor = db["UserDetails"].find(
+    users_cursor = db.users.list(
         {
             "Regno": {"$ne": current_user_regno},
             "user_role": {"$ne": "admin"},
@@ -44,7 +44,7 @@ async def get_all_classes_service(db: Database) -> List[str]:
     Service to fetch all distinct 'which_class' values.
     """
     # Used to execute a synchronous 'distinct' query
-    classes = db["UserDetails"].distinct("which_class")
+    classes = db.users.distinct("which_class")
     return classes
 
 async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: Database):
@@ -52,7 +52,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     Service to create and save a new love note with 'pending_review' status.
     The base64 image is uploaded to Cloudinary and the URL is stored instead.
     """
-    recipient_doc = db["UserDetails"].find_one({"_id": ObjectId(note_data.recipient_id)})
+    recipient_doc = db.users.get_one({"_id": str(note_data.recipient_id)})
     if not recipient_doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -91,7 +91,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     # Create the love note with the Cloudinary URL
     love_note = LoveNote(
         sender_id=sender.id,
-        recipient_id=ObjectId(note_data.recipient_id),
+        recipient_id=str(note_data.recipient_id),
         image_base64=cloudinary_url,  # Store the Cloudinary URL instead of base64
         message_text=note_data.message_text,
         is_anonymous=note_data.is_anonymous,
@@ -101,11 +101,11 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
     # Convert to a dict and insert into the database
     note_dict = love_note.model_dump(by_alias=True, exclude=["id"])
     
-    result = db["LoveNotes"].insert_one(note_dict)
+    result = db.love_notes.add(note_dict)
     
     if result.inserted_id:
         # Used to update the sender's status to indicate they have sent a love note
-        db["UserDetails"].update_one(
+        db.users.update(
             {"_id": sender.id},
             {"$set": {"isLovenotesSend": True}}
         )
@@ -130,13 +130,13 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
     """
     Fetch all love notes with full sender and recipient details for admin review.
     """
-    notes_collection = db["LoveNotes"]
-    users_collection = db["UserDetails"]
+    notes_repo = db.love_notes
+    users_repo = db.users
 
     items: List[Dict[str, Any]] = []
-    for doc in notes_collection.find().sort("created_at", -1):
-        sender_doc = users_collection.find_one({"_id": doc.get("sender_id")})
-        recipient_doc = users_collection.find_one({"_id": doc.get("recipient_id")})
+    for doc in notes_repo.list().sort("created_at", -1):
+        sender_doc = users_repo.get_one({"_id": doc.get("sender_id")})
+        recipient_doc = users_repo.get_one({"_id": doc.get("recipient_id")})
         
         items.append({
             "id": str(doc.get("_id")),
@@ -171,21 +171,21 @@ async def update_love_note_status_service(
     Update the status of a love note and send appropriate notifications.
     
     Args:
-        note_id: The ObjectId of the love note
+        note_id: The str of the love note
         status_value: New status (approved, rejected, pending_review)
         db: PostgreSQL database instance
         
     Returns:
         Dict with updated note_id and status
     """
-    if not ObjectId.is_valid(note_id):
+    if not is_valid_id(note_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid love note id"
         )
 
     # Get the love note before updating
-    love_note = db["LoveNotes"].find_one({"_id": ObjectId(note_id)})
+    love_note = db.love_notes.get_one({"_id": str(note_id)})
     if not love_note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
@@ -193,8 +193,8 @@ async def update_love_note_status_service(
         )
     
     # Update the status
-    result = db["LoveNotes"].update_one(
-        {"_id": ObjectId(note_id)}, 
+    result = db.love_notes.update(
+        {"_id": str(note_id)}, 
         {"$set": {"status": status_value}}
     )
     if result.matched_count == 0:
@@ -210,8 +210,8 @@ async def update_love_note_status_service(
     recipient_id_obj = love_note.get("recipient_id")
     
     # Get sender and recipient details
-    sender = db["UserDetails"].find_one({"_id": sender_id_obj}) if sender_id_obj else None
-    recipient = db["UserDetails"].find_one({"_id": recipient_id_obj}) if recipient_id_obj else None
+    sender = db.users.get_one({"_id": sender_id_obj}) if sender_id_obj else None
+    recipient = db.users.get_one({"_id": recipient_id_obj}) if recipient_id_obj else None
     
     if status_value == "approved":
         # Notify recipient that they received a love note
@@ -253,19 +253,19 @@ async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]
     Delete a love note from the system.
     
     Args:
-        note_id: The ObjectId of the love note
+        note_id: The str of the love note
         db: PostgreSQL database instance
         
     Returns:
         Dict with deleted note_id
     """
-    if not ObjectId.is_valid(note_id):
+    if not is_valid_id(note_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid love note id"
         )
 
-    result = db["LoveNotes"].delete_one({"_id": ObjectId(note_id)})
+    result = db.love_notes.delete({"_id": str(note_id)})
     if result.deleted_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from ..postgres import Database
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 
 from ..models import Notification, NotificationContent
 from ..utils import isoformat_datetime
@@ -16,18 +16,18 @@ def create_notification_service(user_id: str, heading: str, body: str, db: Datab
         content=NotificationContent(heading=heading, body=body),
         timestamp=datetime.now(timezone.utc)
     )
-    result = db.notifications.insert_one(notification.dict(by_alias=True))
+    result = db.notifications.add(notification.dict(by_alias=True))
     return str(result.inserted_id)
 
 def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
     """
     Get notifications for a user, ordered by timestamp descending.
     """
-    notifications = db.notifications.find(
+    notifications = db.notifications.list(
         {"user_id": user_id}
     ).sort("timestamp", -1).limit(limit)
     
-    # Convert ObjectId to string and handle serialization
+    # Convert str to string and handle serialization
     result = []
     for notification in notifications:
         notification_dict = dict(notification)
@@ -43,8 +43,8 @@ def mark_notification_read_service(notification_id: str, user_id: str, db: Datab
     """
     Mark a notification as read.
     """
-    db.notifications.update_one(
-        {"_id": ObjectId(notification_id), "user_id": user_id},
+    db.notifications.update(
+        {"_id": str(notification_id), "user_id": user_id},
         {"$set": {"read": True}}
     )
 
@@ -52,6 +52,6 @@ def delete_notification_service(notification_id: str, user_id: str, db: Database
     """
     Delete a notification.
     """
-    db.notifications.delete_one(
-        {"_id": ObjectId(notification_id), "user_id": user_id}
+    db.notifications.delete(
+        {"_id": str(notification_id), "user_id": user_id}
     )

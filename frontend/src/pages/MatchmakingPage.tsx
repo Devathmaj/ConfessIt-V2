@@ -251,11 +251,9 @@ export const MatchmakingPage = () => {
   };
 
   const getTimeUntilNextMatch = (expiresAt: string) => {
-    const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/i.test(expiresAt)
-      ? expiresAt
-      : `${expiresAt}Z`;
-    const expiresUTC = Date.parse(timestamp);
-    if (!Number.isFinite(expiresUTC)) return '—';
+    const parsedExpiry = parseTimestamp(expiresAt);
+    if (!parsedExpiry) return '—';
+    const expiresUTC = parsedExpiry.getTime();
     const nowUTC = Date.now();
     
     // If match hasn't expired yet, show time until expiry

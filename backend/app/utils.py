@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-# UUID conversion functions removed - Supabase now uses text fields for Regno and ObjectId
+# Registration numbers and application IDs are stored as text values.
 
 
 def isoformat_datetime(value):

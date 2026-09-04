@@ -15,7 +15,7 @@ ConfessIt is a full-stack web application that provides a safe and anonymous spa
 
 - **Frontend:** React, TypeScript, Tailwind CSS, Shadcn UI
 - **Backend:** FastAPI, Python
-- **Database:** PostgreSQL 16 (JSONB-backed persistence)
+- **Database:** PostgreSQL 16 with SQLAlchemy ORM and psycopg
 - **Containerization:** Docker, Docker Compose
 
 ## Prerequisites
@@ -50,24 +50,21 @@ Before you begin, ensure you have the following installed:
 ## Project Structure
 
 ```
-├── backend
-│   ├── app
-│   │   ├── routers
-│   │   ├── services
-│   │   └── ...
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend
-│   ├── src
-│   │   ├── components
-│   │   ├── pages
-│   │   └── ...
-│   ├── Dockerfile
-│   └── package.json
-├── .env
-├── db_password.txt
-├── docker-compose.yml
-└── README.md
+backend/
+  app/
+    routers/
+    services/
+    db_models.py
+    postgres.py
+  Dockerfile
+  requirements.txt
+frontend/
+  src/
+  Dockerfile
+  package.json
+docker-compose.yml
+postgres-init.sql
+README.md
 ```
 
 ## API Endpoints

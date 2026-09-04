@@ -4,7 +4,6 @@ import logging
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
-from ..postgres import ReturnDocument
 from ..postgres import Database
 from pydantic import BaseModel
 
@@ -38,10 +37,10 @@ async def update_user_profile_service(
             detail="No update data provided"
         )
 
-    updated_user_doc = db["UserDetails"].find_one_and_update(
+    updated_user_doc = db.users.get_and_update(
         {"Regno": current_user.Regno},
         {"$set": update_data},
-        return_document=ReturnDocument.AFTER
+        return_after=True
     )
 
     if not updated_user_doc:
@@ -93,7 +92,7 @@ async def upload_profile_picture_service(
 
     # Store the full Cloudinary URL in the database (not just the object path)
     cloudinary_url = upload_result["cloudinary_url"]
-    db["UserDetails"].update_one(
+    db.users.update(
         {"Regno": current_user.Regno},
         {"$set": {"profile_picture_id": cloudinary_url}}
     )

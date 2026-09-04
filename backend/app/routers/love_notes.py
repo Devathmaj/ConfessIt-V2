@@ -2,9 +2,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from ..postgres import Database
 from typing import Annotated, List, Dict, Any
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..dependencies import get_db
 from ..models import UserDetails
@@ -40,7 +40,7 @@ async def get_all_users(
 @router.get("/classes", response_model=List[str])
 async def get_all_classes(db: Database = Depends(get_db)):
     """
-    Used to fetch all unique classes from the UserDetails collection.
+    Fetch all unique classes from the users table.
     """
     return await get_all_classes_service(db)
 
@@ -66,14 +66,14 @@ async def send_love_note(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message cannot be empty."
         )
-    if not ObjectId.is_valid(note_data.recipient_id):
+    if not is_valid_id(note_data.recipient_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid recipient ID."
         )
 
     # Prevent user from sending a note to themselves
-    if current_user.id == ObjectId(note_data.recipient_id):
+    if current_user.id == str(note_data.recipient_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot send a love note to yourself."
@@ -92,7 +92,7 @@ async def get_received_love_notes(
     """
     # Find all love notes sent to current user with status 'approved'
     love_notes = list(
-        db["LoveNotes"].find({
+        db.love_notes.list({
             "recipient_id": current_user.id,
             "status": "approved"
         }).sort("created_at", -1)
@@ -105,7 +105,7 @@ async def get_received_love_notes(
         sender = None
         
         if sender_id:
-            sender = db["UserDetails"].find_one({"_id": sender_id})
+            sender = db.users.get_one({"_id": sender_id})
         
         # Prepare sender name (handle anonymous)
         sender_name = "Anonymous"
@@ -134,15 +134,15 @@ async def mark_love_note_read(
     """
     Mark a love note as read by the recipient.
     """
-    if not ObjectId.is_valid(note_id):
+    if not is_valid_id(note_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid love note ID."
         )
     
     # Verify the note belongs to the current user
-    note = db["LoveNotes"].find_one({
-        "_id": ObjectId(note_id),
+    note = db.love_notes.get_one({
+        "_id": str(note_id),
         "recipient_id": current_user.id
     })
     
@@ -153,9 +153,9 @@ async def mark_love_note_read(
         )
     
     # Update read_at timestamp
-    db["LoveNotes"].update_one(
-        {"_id": ObjectId(note_id)},
-        {"$set": {"read_at": datetime.utcnow()}}
+    db.love_notes.update(
+        {"_id": str(note_id)},
+        {"$set": {"read_at": datetime.now(timezone.utc)}}
     )
     
     return {"message": "Love note marked as read."}

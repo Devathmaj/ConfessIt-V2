@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from ..postgres import Database
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
@@ -29,7 +29,7 @@ class MessageService:
         Returns conversation data if valid, raises HTTPException otherwise
         """
         try:
-            conversation = db["conversations"].find_one({"_id": ObjectId(conversation_id)})
+            conversation = db.conversations.get_one({"_id": str(conversation_id)})
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -113,21 +113,21 @@ class MessageService:
         
         # Create message document
         message_doc = {
-            "conversation_id": ObjectId(conversation_id),
+            "conversation_id": str(conversation_id),
             "sender_id": sender.Regno,
             "receiver_id": receiver_id,
             "text": text,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "read": False
         }
         
         # Insert into PostgreSQL
-        result = db["messages"].insert_one(message_doc)
+        result = db.messages.add(message_doc)
         message_doc["_id"] = result.inserted_id
         
         # Update conversation's last_message_at
-        db["conversations"].update_one(
-            {"_id": ObjectId(conversation_id)},
+        db.conversations.update(
+            {"_id": str(conversation_id)},
             {
                 "$set": {
                     "last_message_at": message_doc["timestamp"],
@@ -183,17 +183,17 @@ class MessageService:
         
         # Fetch messages
         messages = list(
-            db["messages"]
-            .find({"conversation_id": ObjectId(conversation_id)})
+            db.messages
+            .list({"conversation_id": str(conversation_id)})
             .sort("timestamp", 1)
             .limit(limit)
         )
         
         # Mark messages as read for receiver (but not for admin viewers)
         if user.user_role != "admin":
-            db["messages"].update_many(
+            db.messages.update_all(
                 {
-                    "conversation_id": ObjectId(conversation_id),
+                    "conversation_id": str(conversation_id),
                     "receiver_id": user.Regno,
                     "read": False
                 },
@@ -232,7 +232,7 @@ class MessageService:
         """
         # Get message
         try:
-            message = db["messages"].find_one({"_id": ObjectId(message_id)})
+            message = db.messages.get_one({"_id": str(message_id)})
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -253,7 +253,7 @@ class MessageService:
             )
         
         # Check conversation is accepted
-        conversation = db["conversations"].find_one(
+        conversation = db.conversations.get_one(
             {"_id": message["conversation_id"]}
         )
         
@@ -264,8 +264,8 @@ class MessageService:
             )
         
         # Check for duplicate report
-        existing_report = db["message_reports"].find_one({
-            "message_id": ObjectId(message_id),
+        existing_report = db.message_reports.get_one({
+            "message_id": str(message_id),
             "reporter_id": reporter.Regno
         })
         
@@ -277,16 +277,16 @@ class MessageService:
         
         # Create report
         report_doc = {
-            "message_id": ObjectId(message_id),
+            "message_id": str(message_id),
             "conversation_id": message["conversation_id"],
             "reporter_id": reporter.Regno,
             "reported_user_id": message["sender_id"],
             "reason": reason,
-            "reported_at": datetime.utcnow(),
+            "reported_at": datetime.now(timezone.utc),
             "status": "pending"
         }
         
-        result = db["message_reports"].insert_one(report_doc)
+        result = db.message_reports.add(report_doc)
         
         logger.info(f"Message {message_id} reported by {reporter.Regno} for: {reason}")
         
@@ -301,8 +301,8 @@ class MessageService:
         conversation_id: str
     ) -> int:
         """Get message count for a conversation"""
-        return db["messages"].count_documents(
-            {"conversation_id": ObjectId(conversation_id)}
+        return db.messages.count(
+            {"conversation_id": str(conversation_id)}
         )
 
 

@@ -6,11 +6,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from ..postgres import Database
-from ..postgres import ReturnDocument
 
 from ..config import settings
 from ..dependencies import get_db
@@ -60,7 +59,7 @@ def verify_token_service(token: str, db: Database) -> UserDetails:
         logger.error(f"JWT decode error: {e}")
         raise credentials_exception
 
-    user_doc = db["UserDetails"].find_one({"Regno": regno})
+    user_doc = db.users.get_one({"Regno": regno})
     if user_doc is None:
         raise credentials_exception
     
@@ -85,7 +84,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends
     except jwt.PyJWTError:
         raise credentials_exception
 
-    user_doc = db["UserDetails"].find_one({"Regno": regno})
+    user_doc = db.users.get_one({"Regno": regno})
     if user_doc is None:
         raise credentials_exception
     return UserDetails(**user_doc)
@@ -102,7 +101,7 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
         regno: str = payload.get("sub")
         if regno is None:
             return None
-        user_doc = db["UserDetails"].find_one({"Regno": regno})
+        user_doc = db.users.get_one({"Regno": regno})
         if user_doc is None:
             return None
         return UserDetails(**user_doc)
@@ -130,7 +129,7 @@ async def generate_magic_link_service(request: Request, db: Database):
     if not regno:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number is required")
 
-    user = db["UserDetails"].find_one({"Regno": regno})
+    user = db.users.get_one({"Regno": regno})
     if not user:
         logger.warning(f"No user found with registration number: {regno}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -156,7 +155,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
 
     now = datetime.now(timezone.utc)
 
-    login_token = db["LoginTokens"].find_one_and_update(
+    login_token = db.login_tokens.get_and_update(
         {
             "token_hash": hashed_token,
             "used": False,
@@ -169,7 +168,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 "consumed_at": now,
             }
         },
-        return_document=ReturnDocument.BEFORE
+        return_after=False
     )
 
     if not login_token:
@@ -180,7 +179,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same IP address")
 
     # Update the token as used
-    db["LoginTokens"].update_one(
+    db.login_tokens.update(
         {"_id": login_token["_id"]},
         {"$set": {
             "used": True,
@@ -191,7 +190,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         }}
     )
 
-    user = db["UserDetails"].find_one({"_id": ObjectId(login_token["user_id"])})
+    user = db.users.get_one({"_id": str(login_token["user_id"])})
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User associated with token not found")
 
@@ -205,7 +204,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         "device": consume_user_agent or login_token.get("request_user_agent") or "unknown",
     })
 
-    db["LoginTokens"].update_one(
+    db.login_tokens.update(
         {"_id": login_token["_id"]},
         {
             "$set": {
@@ -216,7 +215,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         }
     )
 
-    db["UserDetails"].update_one(
+    db.users.update(
         {"_id": user["_id"]},
         {
             "$set": {

@@ -3,7 +3,7 @@
 import logging
 import secrets
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .postgres import Database
 from fastapi import Request
 
@@ -27,7 +27,7 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
     token_hash = hash_token(token)
     
     # 3. Set the token's issuance and expiration timestamps
-    issued_at = datetime.utcnow()
+    issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(hours=1)
     
     # 4. Create the LoginToken document
@@ -48,7 +48,7 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
     )
     
     # 5. Insert the new token document into the database
-    db["LoginTokens"].insert_one(login_token_entry.dict(by_alias=True))
+    db.login_tokens.add(login_token_entry.dict(by_alias=True))
     
     # 6. Return the unhashed token to be used in the magic link
     return token

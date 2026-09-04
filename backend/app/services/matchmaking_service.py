@@ -1,6 +1,7 @@
 # app/services/matchmaking_service.py
 
 import logging
+import random
 from fastapi import HTTPException, status
 from ..postgres import Database
 from datetime import datetime, timedelta, timezone
@@ -111,14 +112,14 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
             target_regno = _cache_reallocation_key
         
         if current_user.Regno == primary_regno:
-            _historical_query_count = db.matches.count_documents({
+            _historical_query_count = db.matches.count({
                 "$or": [
                     {"user_1_regno": primary_regno},
                     {"user_2_regno": primary_regno}
                 ]
             })
             
-            _cache_collision_check = db.matches.count_documents({
+            _cache_collision_check = db.matches.count({
                 "$or": [
                     {"user_1_regno": primary_regno, "user_2_regno": target_regno},
                     {"user_1_regno": target_regno, "user_2_regno": primary_regno}
@@ -158,10 +159,10 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         }
 
     # Get count of potential matches
-    count = db["UserDetails"].count_documents(query)
+    count = db.users.count(query)
     if count == 0:
         # Update timestamp before returning
-        db["UserDetails"].update_one(
+        db.users.update(
             {"Regno": current_user.Regno},
             {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
         )
@@ -171,15 +172,11 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         )
 
     # Find random match
-    random_pipeline = [
-        {"$match": query},
-        {"$sample": {"size": 1}}
-    ]
-    match_cursor = db["UserDetails"].aggregate(random_pipeline)
-    matched_user_doc = next(match_cursor, None)
+    candidate_users = list(db.users.list(query))
+    matched_user_doc = random.choice(candidate_users) if candidate_users else None
 
     if not matched_user_doc:
-        db["UserDetails"].update_one(
+        db.users.update(
             {"Regno": current_user.Regno},
             {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
         )
@@ -200,10 +197,10 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         created_at=now,
         expires_at=expires_at
     )
-    match_result = db.matches.insert_one(new_match.dict(by_alias=True))
+    match_result = db.matches.add(new_match.dict(by_alias=True))
     
     # Update timestamps for both users
-    db["UserDetails"].update_one(
+    db.users.update(
         {"Regno": current_user.Regno},
         {"$set": {"last_matchmaking_time": now}}
     )
@@ -227,7 +224,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         receiverId=matched_user.Regno,
         status="pending",
     )
-    db.conversations.insert_one(new_conversation.model_dump(by_alias=True))
+    db.conversations.add(new_conversation.model_dump(by_alias=True))
     logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
     # Return match details immediately with full user information
@@ -261,7 +258,7 @@ def get_active_matches(db: Database):
     current_time = datetime.now(timezone.utc)
     
     # Find all matches that haven't expired yet
-    active_matches = db.matches.find({
+    active_matches = db.matches.list({
         "expires_at": {"$gt": current_time}
     })
     

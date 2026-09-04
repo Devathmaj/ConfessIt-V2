@@ -3,7 +3,7 @@
 from pydantic import BaseModel, EmailStr, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
-from .postgres import ObjectId
+from .postgres import new_id
 
 class Token(BaseModel):
     """
@@ -60,7 +60,7 @@ class ConfessionComment(BaseModel):
     """
     Represents a comment on a confession post.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     confession_id: str
     user_info: UserInfo
     message: str
@@ -79,7 +79,7 @@ class ConfessionComment(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 
@@ -87,7 +87,7 @@ class Confession(BaseModel):
     """
     Represents a single confession post within the application.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     confession: str
     confessing_to: Optional[str] = None
     is_anonymous: bool
@@ -111,14 +111,14 @@ class Confession(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class Report(BaseModel):
     """
     Represents a report made by a user for a comment or a confession.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     content_id: str
     content_type: str # 'comment' or 'confession'
     reported_by_id: str
@@ -128,7 +128,7 @@ class Report(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 
@@ -185,7 +185,7 @@ class UserDetails(BaseModel):
     """
     Stores detailed information for a user profile.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     Regno: str
     Name: str
     email: EmailStr
@@ -210,14 +210,14 @@ class UserDetails(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class LoginToken(BaseModel):
     """
     Represents a securely stored authentication token in the database.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     user_id: str
     token_hash: str
     issued_at: datetime
@@ -234,14 +234,14 @@ class LoginToken(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class LoveNoteTemplate(BaseModel):
     """
     Stores predefined templates for Love Notes.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     name: str
     preview_image: str
     description: str
@@ -249,7 +249,7 @@ class LoveNoteTemplate(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class LoveNote(BaseModel):
@@ -257,7 +257,7 @@ class LoveNote(BaseModel):
     Represents an individual Love Note sent from one user to another.
     Note: image_base64 field now stores the Cloudinary URL (not actual base64).
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     sender_id: str
     recipient_id: str
     image_base64: str  # Stores Cloudinary URL (legacy field name kept for compatibility)
@@ -269,7 +269,7 @@ class LoveNote(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 
@@ -277,7 +277,7 @@ class Match(BaseModel):
     """
     Represents a match between two users from matchmaking.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     user_1_regno: str
     user_2_regno: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -285,14 +285,14 @@ class Match(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class Conversation(BaseModel):
     """
     Represents a conversation request and its state between two matched users.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     matchId: str
     initiatorId: str
     receiverId: str
@@ -303,14 +303,14 @@ class Conversation(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class Message(BaseModel):
     """
     Defines the structure for a single message within a conversation.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     matchId: str
     senderId: str
     receiverId: str
@@ -319,7 +319,7 @@ class Message(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 class ConversationCreate(BaseModel):
@@ -340,7 +340,7 @@ class Notification(BaseModel):
     """
     Represents a notification for a user.
     """
-    id: str = Field(default_factory=ObjectId, alias="_id")
+    id: str = Field(default_factory=new_id, alias="_id")
     user_id: str
     content: NotificationContent
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -348,7 +348,7 @@ class Notification(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        
         populate_by_name = True
 
 

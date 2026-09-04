@@ -6,9 +6,10 @@ from app.services.auth_service import get_current_user
 from app.postgres import PostgresClient
 from app.config import settings
 
-test_client = PostgresClient()
 # Ensure test cleanup can never target the application's configured database.
 settings.DATABASE_URL = settings.TEST_DATABASE_URL
+test_client = PostgresClient()
+test_client.initialize()
 test_db = test_client[settings.DATABASE_NAME]
 
 def override_get_db():
@@ -47,7 +48,5 @@ def db():
 
 @pytest.fixture(autouse=True)
 def clear_db():
-    # Clear all collections before each test
-    for collection_name in test_db.list_collection_names():
-        test_db[collection_name].delete_many({})
+    test_db.clear_all()
     yield

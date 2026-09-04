@@ -41,7 +41,7 @@ class RedisService:
         Publish a message to a conversation channel
         
         Args:
-            conversation_id: PostgreSQL conversation ObjectId as string
+            conversation_id: PostgreSQL conversation str as string
             message_data: Message data dictionary
         
         Returns:
@@ -64,7 +64,7 @@ class RedisService:
         Subscribe to a conversation channel
         
         Args:
-            conversation_id: PostgreSQL conversation ObjectId as string
+            conversation_id: PostgreSQL conversation str as string
         
         Returns:
             PubSub object or None

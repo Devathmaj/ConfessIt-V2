@@ -137,7 +137,7 @@ export const InboxPage = () => {
     }
   };
 
-  // Fetches notifications from the notifications collection and generates them from conversation data.
+  // Fetches notifications from PostgreSQL and derives any conversation alerts.
   const fetchNotifications = async () => {
     try {
       const [notificationsResponse, conversationResponse, receivedConversationsResponse] = await Promise.all([

@@ -4,7 +4,7 @@ from .config import settings
 from .postgres import PostgresClient
 from .models import UserDetails, LoginToken
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 
 def create_magic_link_token() -> str:
@@ -27,8 +27,8 @@ def main():
     try:
         client = PostgresClient()
         db = client[settings.DATABASE_NAME]
-        user_details_collection = db["UserDetails"]
-        login_tokens_collection = db["LoginTokens"]
+        user_details_repo = db.users
+        login_tokens_repo = db.login_tokens
 
         # Define the user and admin documents
         users = [
@@ -57,15 +57,15 @@ def main():
         # Insert the user and admin into the database
         for user in users:
             # Check if a user with the same email already exists
-            if not user_details_collection.find_one({"email": user.email}):
-                user_details_collection.insert_one(user.dict(by_alias=True))
+            if not user_details_repo.get_one({"email": user.email}):
+                user_details_repo.add(user.dict(by_alias=True))
                 print(f"Successfully inserted user: {user.Name}")
             else:
                 print(f"User with email {user.email} already exists.")
 
         # Generate, store, and print magic link tokens for the users
         for user_data in users:
-            user_in_db = user_details_collection.find_one({"email": user_data.email})
+            user_in_db = user_details_repo.get_one({"email": user_data.email})
             if user_in_db:
                 user_id = str(user_in_db["_id"])
                 
@@ -74,7 +74,7 @@ def main():
                 
                 # Create and store the LoginToken document
                 token_hash = hash_token(token)
-                issued_at = datetime.utcnow()
+                issued_at = datetime.now(timezone.utc)
                 expires_at = issued_at + timedelta(hours=1)
                 
                 login_token_entry = LoginToken(
@@ -93,7 +93,7 @@ def main():
                     metadata=None
                 )
                 
-                login_tokens_collection.insert_one(login_token_entry.dict(by_alias=True))
+                login_tokens_repo.add(login_token_entry.dict(by_alias=True))
                 print(f"Successfully stored token for {user_data.Name}.")
 
                 # Print the unhashed token for testing purposes

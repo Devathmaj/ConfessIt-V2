@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..postgres import Database
 from pydantic import BaseModel
@@ -54,10 +54,10 @@ async def delete_confession(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Remove a confession permanently."""
-    if not ObjectId.is_valid(confession_id):
+    if not is_valid_id(confession_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
 
-    result = db["Confessions"].delete_one({"_id": ObjectId(confession_id)})
+    result = db.confessions.delete({"_id": str(confession_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
     return {"deleted": confession_id}
@@ -71,7 +71,7 @@ async def get_all_users(
     """Return every user profile for review."""
     return [
         serialize_user_doc(doc)
-        for doc in db["UserDetails"].find().sort("Name", 1)
+        for doc in db.users.list().sort("Name", 1)
     ]
 
 
@@ -85,7 +85,7 @@ async def create_user(
     normalized_regno = payload.Regno.strip()
     normalized_email = payload.email.strip().lower()
 
-    conflict = db["UserDetails"].find_one(
+    conflict = db.users.get_one(
         {
             "$or": [
                 {"Regno": normalized_regno},
@@ -101,7 +101,7 @@ async def create_user(
 
     username_value = payload.username.strip() if payload.username else None
     if username_value:
-        username_conflict = db["UserDetails"].find_one({"username": username_value})
+        username_conflict = db.users.get_one({"username": username_value})
         if username_conflict:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -137,8 +137,8 @@ async def create_user(
         "last_matchmaking_time": None,
     }
 
-    insert_result = db["UserDetails"].insert_one(new_user_doc)
-    created_doc = db["UserDetails"].find_one({"_id": insert_result.inserted_id})
+    insert_result = db.users.add(new_user_doc)
+    created_doc = db.users.get_one({"_id": insert_result.inserted_id})
     return serialize_user_doc(created_doc)
 
 
@@ -150,13 +150,13 @@ async def set_user_block_state(
     current_admin: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Allow admins to block or unblock a user."""
-    if not ObjectId.is_valid(user_id):
+    if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
     if str(current_admin.id) == user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot change your own block status")
 
-    result = db["UserDetails"].update_one({"_id": ObjectId(user_id)}, {"$set": {"is_blocked": blocked}})
+    result = db.users.update({"_id": str(user_id)}, {"$set": {"is_blocked": blocked}})
     if result.matched_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return {"id": user_id, "is_blocked": blocked}
@@ -170,7 +170,7 @@ async def update_user_details(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Allow admins to edit a user's profile details."""
-    if not ObjectId.is_valid(user_id):
+    if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
     update_payload = {key: value for key, value in update.dict(exclude_unset=True).items()}
@@ -178,11 +178,11 @@ async def update_user_details(
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
 
-    result = db["UserDetails"].update_one({"_id": ObjectId(user_id)}, {"$set": update_payload})
+    result = db.users.update({"_id": str(user_id)}, {"$set": update_payload})
     if result.matched_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    updated_doc = db["UserDetails"].find_one({"_id": ObjectId(user_id)})
+    updated_doc = db.users.get_one({"_id": str(user_id)})
     return serialize_user_doc(updated_doc)
 
 
@@ -202,22 +202,22 @@ async def get_conversation_detail(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Return a single conversation with full participant info and message transcript."""
-    if not ObjectId.is_valid(conversation_id):
+    if not is_valid_id(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
-    conversation_doc = db["conversations"].find_one({"_id": ObjectId(conversation_id)})
+    conversation_doc = db.conversations.get_one({"_id": str(conversation_id)})
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     match_id = conversation_doc.get("matchId")
     match_doc = None
     if match_id is not None:
-        match_doc = db["matches"].find_one({"_id": match_id})
+        match_doc = db.matches.get_one({"_id": match_id})
 
-    # Get messages from PostgreSQL messages collection
+    # Get messages from the PostgreSQL messages table
     messages: List[Dict[str, Any]] = []
-    raw_messages = db["messages"].find(
-        {"conversation_id": ObjectId(conversation_id)},
+    raw_messages = db.messages.list(
+        {"conversation_id": str(conversation_id)},
         sort=[("timestamp", 1)]
     )
     for message in raw_messages:
@@ -263,23 +263,23 @@ async def terminate_conversation(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Terminate a conversation."""
-    if not ObjectId.is_valid(conversation_id):
+    if not is_valid_id(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
-    conversation_doc = db["conversations"].find_one({"_id": ObjectId(conversation_id)})
+    conversation_doc = db.conversations.get_one({"_id": str(conversation_id)})
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     match_id = conversation_doc.get("matchId")
     now = datetime.now(timezone.utc)
 
-    db["conversations"].update_one(
+    db.conversations.update(
         {"_id": conversation_doc["_id"]},
         {"$set": {"status": "terminated", "terminatedAt": now}}
     )
 
     if match_id is not None:
-        db["matches"].update_one(
+        db.matches.update(
             {"_id": match_id},
             {"$set": {"expires_at": now}}
         )
@@ -308,14 +308,14 @@ async def update_matchmaking_status(
     _: UserDetails = Depends(_require_admin)
 ) -> Dict[str, Any]:
     """Moderate a matchmaking outcome by updating the linked conversation state."""
-    if not ObjectId.is_valid(match_id):
+    if not is_valid_id(match_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match id")
 
-    match_obj = db["matches"].find_one({"_id": ObjectId(match_id)})
+    match_obj = db.matches.get_one({"_id": str(match_id)})
     if not match_obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
 
-    conversation_doc = db["conversations"].find_one({"matchId": ObjectId(match_id)})
+    conversation_doc = db.conversations.get_one({"matchId": str(match_id)})
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found for match")
 
@@ -332,8 +332,8 @@ async def update_matchmaking_status(
     else:
         update_payload["acceptedAt"] = None
 
-    db["conversations"].update_one({"_id": conversation_doc["_id"]}, {"$set": update_payload})
-    updated_conversation = db["conversations"].find_one({"_id": conversation_doc["_id"]})
+    db.conversations.update({"_id": conversation_doc["_id"]}, {"$set": update_payload})
+    updated_conversation = db.conversations.get_one({"_id": conversation_doc["_id"]})
 
     response_status = normalize_conversation_status(updated_conversation.get("status"))
 
@@ -461,26 +461,26 @@ async def get_message_reports(
         query["status"] = status_filter
     
     reports = list(
-        db["message_reports"]
-        .find(query)
+        db.message_reports
+        .list(query)
         .sort("reported_at", -1)
         .skip(skip)
         .limit(limit)
     )
     
-    total = db["message_reports"].count_documents(query)
+    total = db.message_reports.count(query)
     
     # Enrich with user and message details
     enriched_reports = []
     for report in reports:
         # Get reporter info
-        reporter = db["UserDetails"].find_one({"Regno": report["reporter_id"]})
+        reporter = db.users.get_one({"Regno": report["reporter_id"]})
         
         # Get reported user info
-        reported_user = db["UserDetails"].find_one({"Regno": report["reported_user_id"]})
+        reported_user = db.users.get_one({"Regno": report["reported_user_id"]})
         
         # Get message
-        message = db["messages"].find_one({"_id": report["message_id"]})
+        message = db.messages.get_one({"_id": report["message_id"]})
         
         enriched_reports.append({
             "id": str(report["_id"]),
@@ -518,9 +518,9 @@ async def update_message_report_status(
     """Update the status of a message report"""
     
     try:
-        result = db["message_reports"].update_one(
-            {"_id": ObjectId(report_id)},
-            {"$set": {"status": new_status, "reviewed_at": datetime.utcnow()}}
+        result = db.message_reports.update(
+            {"_id": str(report_id)},
+            {"$set": {"status": new_status, "reviewed_at": datetime.now(timezone.utc)}}
         )
         
         if result.matched_count == 0:

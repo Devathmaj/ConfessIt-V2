@@ -52,8 +52,8 @@ app = FastAPI(
 @app.on_event("startup")
 async def on_startup():
     logger.info("Initializing PostgreSQL storage...")
-    from .postgres import PostgresClient
-    db = PostgresClient()[settings.DATABASE_NAME]
+    postgres = PostgresClient()
+    db = postgres[settings.DATABASE_NAME]
     for attempt in range(30):
         try:
             db.command("ping")
@@ -63,14 +63,16 @@ async def on_startup():
                 raise
             await asyncio.sleep(2)
 
-    users = db["UserDetails"]
+    postgres.initialize()
+
+    users = db.users
     seeds = [
         UserDetails(Regno="user", Name="Test User", email="user@test.com", bio="This is a test user.", which_class="Test_Class", profile_picture_id="random_string_1", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"),
         UserDetails(Regno="admin", Name="Test Admin", email="admin@test.com", bio="This is a test admin.", which_class="Test_Class", profile_picture_id="random_string_2", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="admin"),
     ]
     for user in seeds:
-        if not users.find_one({"Regno": user.Regno}):
-            users.insert_one(user.model_dump(by_alias=True))
+        if not users.get_one({"Regno": user.Regno}):
+            users.add(user.model_dump(by_alias=True))
     logger.info("PostgreSQL storage initialized.")
 # ----------------------
 # CORS Middleware

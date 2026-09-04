@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from ..postgres import ObjectId
+from ..postgres import new_id, is_valid_id
 from ..postgres import Database
 
 
@@ -58,7 +58,7 @@ def serialize_user_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any
     if not regno:
         return {"Regno": None}
 
-    doc = db["UserDetails"].find_one({"Regno": regno})
+    doc = db.users.get_one({"Regno": regno})
     if doc:
         return serialize_user_doc(doc)
     return {"Regno": regno, "Name": None, "email": None, "user_role": None}
@@ -75,12 +75,12 @@ def normalize_conversation_status(value: Optional[str]) -> str:
 
 def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[str, Any]]:
     """Collect and return active user sessions within the specified time window."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     active_threshold = now - timedelta(hours=window_hours)
-    tokens_collection = db["LoginTokens"]
+    tokens_repo = db.login_tokens
 
     # Mark previously-active sessions that are past the window as expired
-    tokens_collection.update_many(
+    tokens_repo.update_all(
         {
             "metadata.status": "active",
             "consumed_at": {"$lt": active_threshold},
@@ -89,7 +89,7 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     )
 
     active_tokens = list(
-        tokens_collection.find(
+        tokens_repo.list(
             {
                 "used": True,
                 "revoked": False,
@@ -102,16 +102,16 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         return []
 
     # Collect user IDs
-    user_ids: List[ObjectId] = []
+    user_ids: List[str] = []
     for token in active_tokens:
         raw_user_id = token.get("user_id")
-        if isinstance(raw_user_id, str) and ObjectId.is_valid(raw_user_id):
-            user_ids.append(ObjectId(raw_user_id))
+        if isinstance(raw_user_id, str) and is_valid_id(raw_user_id):
+            user_ids.append(str(raw_user_id))
 
     # Fetch user documents
     user_map: Dict[str, Dict[str, Any]] = {}
     if user_ids:
-        user_docs = db["UserDetails"].find({"_id": {"$in": user_ids}})
+        user_docs = db.users.list({"_id": {"$in": user_ids}})
         user_map = {str(doc.get("_id")): doc for doc in user_docs}
 
     # Build session entries
@@ -131,7 +131,7 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         if "device" not in metadata:
             metadata["device"] = token.get("consume_user_agent") or token.get("request_user_agent")
 
-        last_seen_value = metadata.get("last_seen") or token.get("consumed_at") or datetime.utcnow()
+        last_seen_value = metadata.get("last_seen") or token.get("consumed_at") or datetime.now(timezone.utc)
         
         # Parse last_seen
         if isinstance(last_seen_value, str):
@@ -140,16 +140,16 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
                 if parsed_last_seen.tzinfo is not None:
                     parsed_last_seen = parsed_last_seen.astimezone(timezone.utc).replace(tzinfo=None)
             except ValueError:
-                parsed_last_seen = datetime.utcnow()
+                parsed_last_seen = datetime.now(timezone.utc)
         elif isinstance(last_seen_value, datetime):
             parsed_last_seen = last_seen_value
         else:
-            parsed_last_seen = datetime.utcnow()
+            parsed_last_seen = datetime.now(timezone.utc)
 
         metadata["last_seen"] = parsed_last_seen
 
         # Update token metadata
-        tokens_collection.update_one(
+        tokens_repo.update(
             {"_id": token["_id"]},
             {"$set": {"metadata": metadata}}
         )
@@ -196,22 +196,22 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
 
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all confessions with comments and reports."""
-    confessions_collection = db["Confessions"]
-    users_collection = db["UserDetails"]
-    comments_collection = db["ConfessionComments"]
-    reports_collection = db["Reports"]
+    confessions_repo = db.confessions
+    users_repo = db.users
+    comments_repo = db.confession_comments
+    reports_repo = db.reports
 
     reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
     items: List[Dict[str, Any]] = []
 
-    confession_docs = list(confessions_collection.find().sort("timestamp", -1))
+    confession_docs = list(confessions_repo.list().sort("timestamp", -1))
     confession_ids = [str(doc.get("_id")) for doc in confession_docs]
 
     # Fetch comments
     comments_by_confession: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     comment_ids: List[str] = []
     if confession_ids:
-        for comment_doc in comments_collection.find({"confession_id": {"$in": confession_ids}}):
+        for comment_doc in comments_repo.list({"confession_id": {"$in": confession_ids}}):
             confession_id = comment_doc.get("confession_id")
             comments_by_confession[confession_id].append(comment_doc)
             comment_ids.append(str(comment_doc.get("_id")))
@@ -220,7 +220,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     reports_by_content: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     report_ids_to_fetch = confession_ids + comment_ids
     if report_ids_to_fetch:
-        for report_doc in reports_collection.find({"content_id": {"$in": report_ids_to_fetch}}):
+        for report_doc in reports_repo.list({"content_id": {"$in": report_ids_to_fetch}}):
             content_id = report_doc.get("content_id")
             reports_by_content[content_id].append(report_doc)
 
@@ -228,8 +228,8 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     for doc in confession_docs:
         raw_user_id = doc.get("user_id")
         sender_doc = None
-        if isinstance(raw_user_id, str) and ObjectId.is_valid(raw_user_id):
-            sender_doc = users_collection.find_one({"_id": ObjectId(raw_user_id)})
+        if isinstance(raw_user_id, str) and is_valid_id(raw_user_id):
+            sender_doc = users_repo.get_one({"_id": str(raw_user_id)})
 
         sender_info = {
             "id": str(sender_doc.get("_id")) if sender_doc else None,
@@ -328,13 +328,13 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all conversations with participant and message metadata."""
-    conversations_collection = db["conversations"]
-    matches_collection = db["matches"]
+    conversations_repo = db.conversations
+    matches_repo = db.matches
 
-    conversation_docs = list(conversations_collection.find().sort("createdAt", -1))
+    conversation_docs = list(conversations_repo.list().sort("createdAt", -1))
 
     # Fetch match documents
-    match_ids: List[ObjectId] = []
+    match_ids: List[str] = []
     for doc in conversation_docs:
         match_id = doc.get("matchId")
         if match_id is not None:
@@ -343,7 +343,7 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
     match_map: Dict[str, Dict[str, Any]] = {}
     if match_ids:
         unique_match_ids = list({match_id for match_id in match_ids})
-        match_docs = matches_collection.find({"_id": {"$in": unique_match_ids}})
+        match_docs = matches_repo.list({"_id": {"$in": unique_match_ids}})
         match_map = {str(item["_id"]): item for item in match_docs}
 
     results: List[Dict[str, Any]] = []
@@ -354,8 +354,8 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
 
         # Get latest message
         latest_message = None
-        latest_message_doc = db["messages"].find_one(
-            {"conversation_id": ObjectId(conversation_id)},
+        latest_message_doc = db.messages.get_one(
+            {"conversation_id": str(conversation_id)},
             sort=[("timestamp", -1)]
         )
         if latest_message_doc:
@@ -396,14 +396,14 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all matches excluding administrators."""
-    matches_collection = db["matches"]
-    conversations_collection = db["conversations"]
-    users_collection = db["UserDetails"]
+    matches_repo = db.matches
+    conversations_repo = db.conversations
+    users_repo = db.users
 
     # Get admin regnos to exclude
     admin_regnos = {
         doc.get("Regno")
-        for doc in users_collection.find({"user_role": "admin"}, {"Regno": 1})
+        for doc in users_repo.list({"user_role": "admin"}, {"Regno": 1})
         if doc.get("Regno")
     }
 
@@ -416,7 +416,7 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
             ]
         }
 
-    matches = list(matches_collection.find(match_filter).sort("created_at", -1))
+    matches = list(matches_repo.list(match_filter).sort("created_at", -1))
     match_ids = [match.get("_id") for match in matches if match.get("_id")]
 
     # Fetch users
@@ -433,13 +433,13 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
     if regnos:
         users_by_regno = {
             doc.get("Regno"): doc
-            for doc in users_collection.find({"Regno": {"$in": list(regnos)}})
+            for doc in users_repo.list({"Regno": {"$in": list(regnos)}})
         }
 
     # Fetch conversations
     conversations_by_match: Dict[str, Dict[str, Any]] = {}
     if match_ids:
-        for convo in conversations_collection.find({"matchId": {"$in": match_ids}}).sort("createdAt", -1):
+        for convo in conversations_repo.list({"matchId": {"$in": match_ids}}).sort("createdAt", -1):
             match_id_value = convo.get("matchId")
             if not match_id_value:
                 continue
@@ -509,15 +509,15 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
     """Calculate high-level admin statistics."""
-    users_collection = db["UserDetails"]
-    confessions_collection = db["Confessions"]
-    love_notes_collection = db["LoveNotes"]
+    users_repo = db.users
+    confessions_repo = db.confessions
+    love_notes_repo = db.love_notes
 
-    total_users = users_collection.count_documents({})
-    total_confessions = confessions_collection.count_documents({})
-    total_love_notes = love_notes_collection.count_documents({})
-    pending_love_notes = love_notes_collection.count_documents({"status": "pending_review"})
-    blocked_users = users_collection.count_documents({"is_blocked": True})
+    total_users = users_repo.count({})
+    total_confessions = confessions_repo.count({})
+    total_love_notes = love_notes_repo.count({})
+    pending_love_notes = love_notes_repo.count({"status": "pending_review"})
+    blocked_users = users_repo.count({"is_blocked": True})
 
     active_session_entries = collect_active_sessions(db)
     active_sessions = len(active_session_entries)

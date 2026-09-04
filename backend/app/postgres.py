@@ -1,120 +1,39 @@
-"""PostgreSQL JSONB document store used while application services are migrated.
-
-Each legacy collection is a PostgreSQL table with a text primary key, JSONB
-payload for flexible fields, and native TIMESTAMPTZ columns for timestamp fields.
-The adapter keeps the legacy query surface at the API edge.
-"""
+"""SQLAlchemy persistence for ConfessIt's relational PostgreSQL schema."""
 from __future__ import annotations
 
-import json
-import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Any, Iterable
+from datetime import datetime
+from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+from copy import deepcopy
+
+from sqlalchemy import and_, create_engine, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import inspect as sa_inspect
 
 from .config import settings
-
-_NOT_TIMESTAMP = object()
-
-
-class ObjectId(str):
-    """String identifier compatible with legacy 24-hex ids and new UUIDs."""
-    def __new__(cls, value: Any = None):
-        if value is None:
-            value = uuid.uuid4().hex[:24]
-        return str.__new__(cls, str(value))
-
-    @classmethod
-    def is_valid(cls, value: Any) -> bool:
-        text = str(value)
-        return len(text) == 24 and all(char in "0123456789abcdefABCDEF" for char in text)
+from .db_models import (
+    Base, ConfessionCommentRecord, ConfessionRecord, ConversationRecord,
+    LoginTokenRecord, LoveNoteRecord, LoveNoteTemplateRecord, MatchRecord,
+    MessageRecord, MessageReportRecord, NotificationRecord, ReportRecord, UserRecord,
+)
 
 
-class ReturnDocument:
-    BEFORE = False
-    AFTER = True
+def new_id() -> str:
+    return uuid.uuid4().hex
+
+
+def is_valid_id(value: Any) -> bool:
+    try:
+        uuid.UUID(hex=str(value))
+        return len(str(value)) in (24, 32)
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 ASCENDING, DESCENDING = 1, -1
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _plain(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(v) for v in value]
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    return value
-
-
-def _get(doc: dict, path: str):
-    value: Any = doc
-    for part in path.split("."):
-        if isinstance(value, dict):
-            value = value.get(part)
-        else:
-            return None
-    return value
-
-
-def _comparable_pair(left, right):
-    if isinstance(left, datetime) and isinstance(right, datetime):
-        if left.tzinfo is None:
-            left = left.replace(tzinfo=timezone.utc)
-        if right.tzinfo is None:
-            right = right.replace(tzinfo=timezone.utc)
-        return left.astimezone(timezone.utc), right.astimezone(timezone.utc)
-    return left, right
-
-
-def _matches(doc: dict, query: dict) -> bool:
-    for key, expected in (query or {}).items():
-        if key == "$or":
-            if not any(_matches(doc, q) for q in expected): return False
-            continue
-        if key == "$and":
-            if not all(_matches(doc, q) for q in expected): return False
-            continue
-        actual = _get(doc, key)
-        if isinstance(expected, dict):
-            for op, value in expected.items():
-                if op == "$in":
-                    if isinstance(actual, list):
-                        if not any(x in value for x in actual): return False
-                    elif actual not in value: return False
-                elif op == "$nin":
-                    if actual in value: return False
-                elif op == "$ne":
-                    actual, value = _comparable_pair(actual, value)
-                    if actual == value: return False
-                elif op == "$gt":
-                    actual, value = _comparable_pair(actual, value)
-                    if actual is None or not actual > value: return False
-                elif op == "$gte":
-                    actual, value = _comparable_pair(actual, value)
-                    if actual is None or not actual >= value: return False
-                elif op == "$lt":
-                    actual, value = _comparable_pair(actual, value)
-                    if actual is None or not actual < value: return False
-                elif op == "$lte":
-                    actual, value = _comparable_pair(actual, value)
-                    if actual is None or not actual <= value: return False
-                else:
-                    if _get(doc, key) != expected: return False
-                    break
-        elif isinstance(actual, list):
-            if expected not in actual: return False
-        elif actual != expected:
-            return False
-    return True
 
 
 @dataclass
@@ -133,325 +52,237 @@ class DeleteResult:
     deleted_count: int
 
 
+_TABLES = {
+    "users": UserRecord,
+    "confessions": ConfessionRecord,
+    "confession_comments": ConfessionCommentRecord,
+    "reports": ReportRecord,
+    "login_tokens": LoginTokenRecord,
+    "love_notes": LoveNoteRecord,
+    "love_note_templates": LoveNoteTemplateRecord,
+    "matches": MatchRecord,
+    "conversations": ConversationRecord,
+    "messages": MessageRecord,
+    "notifications": NotificationRecord,
+    "message_reports": MessageReportRecord,
+}
+_DATABASE_ENGINES = {}
+_DATABASE_SESSIONS = {}
+
+
+def _field(model, name):
+    aliases = {"_id": "id", "metadata": "metadata_json"}
+    if "." in name:
+        root, *path = name.split(".")
+        column = _field(model, root)
+        if column is None: return None
+        for part in path: column = column[part].astext
+        return column
+    return getattr(model, aliases.get(name, name), None)
+
+
+def _dict(row):
+    result = {attribute.key: getattr(row, attribute.key) for attribute in sa_inspect(row).mapper.column_attrs}
+    result["_id"] = result.pop("id")
+    if "metadata_json" in result:
+        result["metadata"] = result.pop("metadata_json")
+    return result
+
+
+def _conditions(model, query):
+    clauses = []
+    for key, expected in (query or {}).items():
+        if key == "$or":
+            clauses.append(or_(*[and_(*_conditions(model, item)) for item in expected]))
+            continue
+        if key == "$and":
+            clauses.append(and_(*[and_(*_conditions(model, item)) for item in expected]))
+            continue
+        column = _field(model, key)
+        if column is None:
+            continue
+        if isinstance(expected, dict):
+            for operator, value in expected.items():
+                if operator == "$in":
+                    if isinstance(column.type, JSONB):
+                        clauses.append(or_(*[column.contains([item]) for item in value]))
+                    else:
+                        clauses.append(column.in_(value))
+                elif operator == "$nin":
+                    clauses.append(column.not_in(value))
+                elif operator == "$ne": clauses.append(column != value)
+                elif operator == "$gt": clauses.append(column > value)
+                elif operator == "$gte": clauses.append(column >= value)
+                elif operator == "$lt": clauses.append(column < value)
+                elif operator == "$lte": clauses.append(column <= value)
+        elif isinstance(column.type, JSONB) and isinstance(expected, list):
+            clauses.append(column == expected)
+        elif isinstance(column.type, JSONB) and isinstance(expected, str):
+            clauses.append(column.contains([expected]))
+        else:
+            clauses.append(column == expected)
+    return clauses or [True]
+
+
 class Cursor(list):
     def __init__(self, values=()):
         super().__init__(values)
         self._next_index = 0
-
     def __next__(self):
-        if self._next_index >= len(self):
-            raise StopIteration
-        value = self[self._next_index]
-        self._next_index += 1
+        if self._next_index >= len(self): raise StopIteration
+        value = self[self._next_index]; self._next_index += 1
         return value
-
     def sort(self, key, direction=ASCENDING):
-        if isinstance(key, list):
-            for field, order in reversed(key):
-                super().sort(key=lambda d: (_get(d, field) is None, _get(d, field)), reverse=order < 0)
-        else:
-            super().sort(key=lambda d: (_get(d, key) is None, _get(d, key)), reverse=direction < 0)
+        keys = key if isinstance(key, list) else [(key, direction)]
+        for field, order in reversed(keys):
+            self_key = lambda row: (row.get(field) is None, row.get(field))
+            super().sort(key=self_key, reverse=order < 0)
         return self
-
-    def limit(self, count):
-        del self[count:]
-        return self
-
-    def skip(self, count):
-        del self[:count]
-        return self
+    def limit(self, count): del self[count:]; return self
+    def skip(self, count): del self[:count]; return self
 
 
-class Collection:
-    def __init__(self, db: "Database", name: str):
-        self.db, self.name = db, name
-        if not name.replace("_", "").isalnum():
-            raise ValueError("Invalid collection name")
-        with db.connect() as conn:
-            conn.execute(f'CREATE TABLE IF NOT EXISTS "{name}" (id TEXT PRIMARY KEY, data JSONB NOT NULL)')
+class TableRepository:
+    """Small SQLAlchemy repository that keeps service response dictionaries stable."""
+    def __init__(self, db: "Database", model):
+        self.db, self.model = db, model
 
-    def _all(self):
-        with self.db.connect() as conn:
-            rows = conn.execute(f'SELECT id, data FROM "{self.name}"').fetchall()
-        result = []
-        for row in rows:
-            doc = dict(row["data"])
-            timestamps = {}
-            for field, value in list(doc.items()):
-                if self._is_timestamp_field(field):
-                    parsed = self._parse_timestamp(value)
-                    if parsed is not _NOT_TIMESTAMP:
-                        timestamps[field] = parsed
-                        doc.pop(field)
-            if timestamps:
-                self._write(str(row["id"]), doc, timestamps, insert=False)
-            timestamp_columns = self._timestamp_columns()
-            if timestamp_columns:
-                with self.db.connect() as conn:
-                    values = conn.execute(
-                        f'SELECT {", ".join(self._quote(field) for field in timestamp_columns)} '
-                        f'FROM "{self.name}" WHERE id=%s', (str(row["id"]),)
-                    ).fetchone()
-                if values:
-                    doc.update(dict(values))
-            doc.setdefault("_id", row["id"])
-            result.append(doc)
-        return result
-
-    @staticmethod
-    def _quote(identifier):
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
-            raise ValueError("Invalid PostgreSQL column name")
-        return f'"{identifier}"'
-
-    @staticmethod
-    def _is_timestamp_field(field):
-        return (field == "timestamp" or field.lower().endswith(("_at", "_time", "_timestamp", "date"))
-                or bool(re.search(r"[a-z]At$", field)))
-
-    @staticmethod
-    def _parse_timestamp(value):
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            parsed = value
-        elif isinstance(value, date):
-            parsed = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-        elif isinstance(value, str):
-            try:
-                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                return _NOT_TIMESTAMP
-        else:
-            return _NOT_TIMESTAMP
-        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
-
-    def _timestamp_columns(self):
-        with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name=%s AND data_type='timestamp with time zone'",
-                (self.name,),
-            ).fetchall()
-        return [row["column_name"] for row in rows]
-
-    def _write(self, record_id, document, timestamps, insert):
-        for field in timestamps:
-            with self.db.connect() as conn:
-                conn.execute(f'ALTER TABLE "{self.name}" ADD COLUMN IF NOT EXISTS {self._quote(field)} TIMESTAMPTZ')
-        fields = list(timestamps)
-        with self.db.connect() as conn:
-            if insert:
-                columns = ["id", "data", *fields]
-                values = [record_id, Jsonb(_plain(document)), *[timestamps[field] for field in fields]]
-                conn.execute(
-                    f'INSERT INTO "{self.name}" ({", ".join(self._quote(field) for field in columns)}) '
-                    f'VALUES ({", ".join(["%s"] * len(values))})', values
-                )
-            else:
-                assignments = ["data=%s", *[f'{self._quote(field)}=%s' for field in fields]]
-                values = [Jsonb(_plain(document)), *[timestamps[field] for field in fields], record_id]
-                conn.execute(f'UPDATE "{self.name}" SET {", ".join(assignments)} WHERE id=%s', values)
-
-    def find(self, query=None, projection=None, sort=None, skip=0, limit=0):
-        docs = [d for d in self._all() if _matches(d, query or {})]
-        if projection:
-            include = [k for k, v in projection.items() if v and k != "_id"]
-            if include:
-                docs = [{**({"_id": d.get("_id")} if projection.get("_id", 1) else {}), **{k: d[k] for k in include if k in d}} for d in docs]
-            else:
-                docs = [{k: v for k, v in d.items() if k not in [x for x, enabled in projection.items() if not enabled]} for d in docs]
-        cursor = Cursor(docs)
+    def list(self, query=None, projection=None, sort=None, skip=0, limit=0):
+        stmt = select(self.model).where(*_conditions(self.model, query))
         if sort:
-            cursor.sort(sort)
-        if skip:
-            cursor.skip(skip)
-        if limit:
-            cursor.limit(limit)
-        return cursor
+            for key, direction in (sort if isinstance(sort, list) else [(sort, ASCENDING)]):
+                column = _field(self.model, key)
+                if column is not None: stmt = stmt.order_by(column.desc() if direction < 0 else column.asc())
+        if skip: stmt = stmt.offset(skip)
+        if limit: stmt = stmt.limit(limit)
+        with self.db.sessions() as session:
+            rows = [_dict(row) for row in session.scalars(stmt).all()]
+        if projection:
+            include = [key for key, enabled in projection.items() if enabled and key != "_id"]
+            if include:
+                rows = [{**({"_id": row["_id"]} if projection.get("_id", 1) else {}), **{k: row[k] for k in include if k in row}} for row in rows]
+            else:
+                rows = [{k: v for k, v in row.items() if projection.get(k, 1)} for row in rows]
+        return Cursor(rows)
 
-    def find_one(self, query=None, projection=None, sort=None):
-        rows = self.find(query, projection, sort=sort)
+    def get_one(self, query=None, projection=None, sort=None):
+        rows = self.list(query, projection, sort=sort, limit=1)
         return rows[0] if rows else None
 
-    def insert_one(self, document):
-        doc = _plain(dict(document))
-        doc["_id"] = str(doc.get("_id") or ObjectId())
-        timestamps = {}
-        for field, value in list(doc.items()):
-            if self._is_timestamp_field(field):
-                parsed = self._parse_timestamp(value)
-                if parsed is not _NOT_TIMESTAMP:
-                    timestamps[field] = parsed
-                    doc.pop(field)
-        self._write(doc["_id"], doc, timestamps, insert=True)
-        return InsertOneResult(doc["_id"])
+    def add(self, document):
+        values = dict(document)
+        identifier = str(values.pop("_id", values.pop("id", None)) or new_id())
+        if "metadata" in values: values["metadata_json"] = values.pop("metadata")
+        allowed = {attribute.key for attribute in sa_inspect(self.model).mapper.column_attrs} - {"id"}
+        row = self.model(id=identifier, **{k: v for k, v in values.items() if k in allowed})
+        with self.db.sessions.begin() as session:
+            session.add(row)
+        return InsertOneResult(identifier)
 
-    def insert_many(self, documents, ordered=True):
-        return [self.insert_one(d) for d in documents]
+    def _apply(self, row, changes):
+        if not any(key.startswith("$") for key in changes):
+            changes = {"$set": changes}
+        for key, value in changes.get("$set", {}).items():
+            if "." in key:
+                root, *path = key.split(".")
+                column = _field(self.model, root)
+                if column is None: continue
+                current = deepcopy(getattr(row, column.key) or {})
+                target = current
+                for part in path[:-1]: target = target.setdefault(part, {})
+                target[path[-1]] = value
+                setattr(row, column.key, current)
+                continue
+            column = _field(self.model, key)
+            if column is not None: setattr(row, column.key, value)
+        for key, value in changes.get("$inc", {}).items():
+            column = _field(self.model, key)
+            if column is not None: setattr(row, column.key, (getattr(row, column.key) or 0) + value)
+        for operator in ("$push", "$addToSet", "$pull"):
+            for key, value in changes.get(operator, {}).items():
+                column = _field(self.model, key)
+                if column is None: continue
+                current = list(getattr(row, column.key) or [])
+                if operator == "$push": current.append(value)
+                elif operator == "$addToSet" and value not in current: current.append(value)
+                elif operator == "$pull": current = [item for item in current if item != value]
+                setattr(row, column.key, current)
 
-    def _modify(self, doc, update):
-        update = _plain(update)
-        if "$set" in update:
-            for path, value in update["$set"].items():
-                target = doc
-                keys = path.split(".")
-                for key in keys[:-1]: target = target.setdefault(key, {})
-                target[keys[-1]] = value
-        if "$inc" in update:
-            for key, value in update["$inc"].items(): doc[key] = doc.get(key, 0) + value
-        if "$push" in update:
-            for key, value in update["$push"].items(): doc.setdefault(key, []).append(value)
-        if "$addToSet" in update:
-            for key, value in update["$addToSet"].items():
-                target = doc.setdefault(key, [])
-                if value not in target: target.append(value)
-        if "$pull" in update:
-            for key, value in update["$pull"].items(): doc[key] = [v for v in doc.get(key, []) if v != value]
-        if not any(k.startswith("$") for k in update): doc.update(update)
+    def update(self, query, update_values, upsert=False):
+        return self._update(query, update_values, False, upsert)
+    def update_all(self, query, update_values):
+        return self._update(query, update_values, True)
+    def _update(self, query, values, many, upsert=False):
+        with self.db.sessions.begin() as session:
+            rows = session.scalars(select(self.model).where(*_conditions(self.model, query))).all()
+            if not rows and upsert:
+                new = {k: v for k, v in query.items() if not k.startswith("$") and not isinstance(v, dict)}
+                if "$set" in values: new.update(values["$set"])
+                self.add(new)
+                return UpdateResult(0, 1)
+            selected = rows if many else rows[:1]
+            for row in selected: self._apply(row, values)
+            session.flush()
+            return UpdateResult(len(selected), len(selected))
 
-    def update_one(self, query, update, upsert=False):
-        return self._update(query, update, False, upsert)
+    def get_and_update(self, query, changes, return_after=False):
+        with self.db.sessions.begin() as session:
+            row = session.scalars(select(self.model).where(*_conditions(self.model, query)).limit(1).with_for_update()).first()
+            if row is None: return None
+            before = _dict(row)
+            self._apply(row, changes)
+            session.flush()
+            return _dict(row) if return_after else before
 
-    def update_many(self, query, update):
-        return self._update(query, update, True)
-
-    def _update(self, query, update, many, upsert=False):
-        docs = [d for d in self._all() if _matches(d, query or {})]
-        if not docs and upsert:
-            doc = {k: v for k, v in (query or {}).items() if not k.startswith("$") and not isinstance(v, dict)}
-            self._modify(doc, update); self.insert_one(doc); return UpdateResult(0, 1)
-        selected = docs if many else docs[:1]
-        for doc in selected:
-            self._modify(doc, update)
-            persisted = _plain(dict(doc))
-            timestamps = {}
-            for field, value in list(persisted.items()):
-                if self._is_timestamp_field(field):
-                    parsed = self._parse_timestamp(value)
-                    if parsed is not _NOT_TIMESTAMP:
-                        timestamps[field] = parsed
-                        persisted.pop(field)
-            for field in set(self._timestamp_columns()) - set(timestamps):
-                timestamps[field] = None
-            self._write(str(doc["_id"]), persisted, timestamps, insert=False)
-        return UpdateResult(len(selected), len(selected))
-
-    def find_one_and_update(self, query, update, return_document=False):
-        old = self.find_one(query)
-        if old is None: return None
-        self.update_one(query, update)
-        return self.find_one(query) if return_document else old
-
-    def delete_one(self, query): return self._delete(query, False)
-    def delete_many(self, query): return self._delete(query, True)
-
+    def delete(self, query): return self._delete(query, False)
+    def delete_all(self, query): return self._delete(query, True)
     def _delete(self, query, many):
-        docs = [d for d in self._all() if _matches(d, query or {})]
-        selected = docs if many else docs[:1]
-        with self.db.connect() as conn:
-            for doc in selected: conn.execute(f'DELETE FROM "{self.name}" WHERE id=%s', (str(doc["_id"]),))
-        return DeleteResult(len(selected))
+        with self.db.sessions.begin() as session:
+            rows = session.scalars(select(self.model).where(*_conditions(self.model, query))).all()
+            selected = rows if many else rows[:1]
+            for row in selected: session.delete(row)
+            return DeleteResult(len(selected))
 
-    def count_documents(self, query=None): return sum(1 for d in self._all() if _matches(d, query or {}))
-    def distinct(self, key): return list({json.dumps(_get(d, key), sort_keys=True, default=str): _get(d, key) for d in self._all() if _get(d, key) is not None}.values())
-    def create_index(self, keys, **kwargs):
-        """Translate legacy index declarations to JSONB expression indexes."""
-        name = kwargs.get("name") or f"idx_{self.name.lower()}_{len(keys)}"
-        safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
-        expressions = []
-        timestamp_columns = set(self._timestamp_columns())
-        for field, direction in keys:
-            if field == "_id": expression = "id"
-            elif field in timestamp_columns: expression = self._quote(field)
-            else:
-                parts = field.split(".")
-                path = ",".join("'" + part.replace("'", "''") + "'" for part in parts)
-                expression = f"(data #>> '{{{path}}}')"
-            expressions.append(f"{expression} {'DESC' if direction < 0 else 'ASC'}")
-        unique = "UNIQUE " if kwargs.get("unique") else ""
-        with self.db.connect() as conn:
-            conn.execute(f'CREATE {unique}INDEX IF NOT EXISTS "{safe_name}" ON "{self.name}" ({", ".join(expressions)})')
+    def count(self, query=None):
+        with self.db.sessions() as session:
+            return session.scalar(select(func.count()).select_from(self.model).where(*_conditions(self.model, query))) or 0
 
-    def aggregate(self, pipeline):
-        docs = list(self._all())
-        def evaluate(expr, doc):
-            if isinstance(expr, str) and expr.startswith("$"):
-                return _get(doc, expr[1:])
-            if isinstance(expr, list): return [evaluate(item, doc) for item in expr]
-            if isinstance(expr, dict):
-                if "$sum" in expr:
-                    values = evaluate(expr["$sum"], doc)
-                    return sum(v or 0 for v in (values if isinstance(values, list) else [values]))
-                if "$size" in expr: return len(evaluate(expr["$size"], doc) or [])
-                if "$toString" in expr or "$toObjectId" in expr:
-                    operator = "$toString" if "$toString" in expr else "$toObjectId"
-                    value = evaluate(expr[operator], doc)
-                    return str(value) if value is not None else None
-                return {key: evaluate(value, doc) for key, value in expr.items()}
-            return expr
-        for stage in pipeline:
-            if "$addFields" in stage or "$set" in stage:
-                fields = stage.get("$addFields", stage.get("$set"))
-                for doc in docs:
-                    for key, expr in fields.items():
-                        parts = key.split("."); target = doc
-                        for part in parts[:-1]: target = target.setdefault(part, {})
-                        target[parts[-1]] = evaluate(expr, doc)
-            elif "$project" in stage:
-                docs = [{k: evaluate(v, d) for k, v in stage["$project"].items() if v} for d in docs]
-            elif "$match" in stage: docs = [d for d in docs if _matches(d, stage["$match"])]
-            elif "$sample" in stage:
-                import random
-                random.shuffle(docs); docs = docs[:stage["$sample"].get("size", 1)]
-            elif "$sort" in stage:
-                for field, direction in reversed(list(stage["$sort"].items())):
-                    docs.sort(key=lambda d: (_get(d, field) is None, _get(d, field)), reverse=direction < 0)
-            elif "$limit" in stage: docs = docs[:stage["$limit"]]
-            elif "$skip" in stage: docs = docs[stage["$skip"]:]
-            elif "$lookup" in stage:
-                spec = stage["$lookup"]
-                foreign = list(self.db[spec["from"]].find())
-                for doc in docs:
-                    doc[spec["as"]] = [f for f in foreign if _get(f, spec["foreignField"]) == _get(doc, spec["localField"])]
-            elif "$unwind" in stage:
-                path = stage["$unwind"].get("path") if isinstance(stage["$unwind"], dict) else stage["$unwind"]
-                key = path.lstrip("$"); expanded = []
-                for doc in docs:
-                    vals = _get(doc, key) or []
-                    for val in vals:
-                        item = dict(doc); item[key] = val; expanded.append(item)
-                docs = expanded
-            elif "$addFields" in stage:
-                for doc in docs:
-                    for key, expr in stage["$addFields"].items():
-                        if isinstance(expr, str) and expr.startswith("$"): doc[key] = _get(doc, expr[1:])
-                        elif isinstance(expr, dict) and "$size" in expr: doc[key] = len(_get(doc, expr["$size"].lstrip("$")) or [])
-                        else: doc[key] = expr
-            else:
-                raise NotImplementedError(f"Unsupported PostgreSQL adapter pipeline stage: {next(iter(stage))}")
-        return Cursor(docs)
-
+    def distinct(self, key):
+        column = _field(self.model, key)
+        if column is None: return []
+        with self.db.sessions() as session:
+            return list(session.scalars(select(column).distinct().where(column.is_not(None))).all())
 
 class Database:
-    def __init__(self): self._collections = {}
-    def connect(self): return psycopg.connect(settings.DATABASE_URL, row_factory=dict_row)
+    def __init__(self, sessions): self.sessions = sessions
     def __getitem__(self, name):
-        if name not in self._collections: self._collections[name] = Collection(self, name)
-        return self._collections[name]
+        model = _TABLES.get(name)
+        if model is None: raise KeyError(f"Unknown database table: {name}")
+        return TableRepository(self, model)
     def __getattr__(self, name):
         if name.startswith("_"): raise AttributeError(name)
-        return self[name]
+        try: return self[name]
+        except KeyError as error: raise AttributeError(name) from error
     def command(self, command):
-        with self.connect() as conn: conn.execute("SELECT 1")
+        with self.sessions() as session: session.execute(select(1))
         return {"ok": 1}
-    def list_collection_names(self):
-        with self.connect() as conn:
-            rows = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall()
-        return [row["tablename"] for row in rows]
+    def list_table_names(self):
+        return [model.__tablename__ for model in _TABLES.values()]
+    def clear_all(self):
+        with self.sessions.begin() as session:
+            for model in reversed(list(_TABLES.values())):
+                session.execute(delete(model))
     def close(self): pass
 
 
 class PostgresClient:
-    def __getitem__(self, name): return Database()
-    def close(self): pass
+    def __init__(self):
+        url = settings.DATABASE_URL
+        if url not in _DATABASE_ENGINES:
+            _DATABASE_ENGINES[url] = create_engine(url, pool_pre_ping=True)
+            _DATABASE_SESSIONS[url] = sessionmaker(_DATABASE_ENGINES[url], expire_on_commit=False)
+        self.engine = _DATABASE_ENGINES[url]
+        self.sessions = _DATABASE_SESSIONS[url]
+    def __getitem__(self, name): return Database(self.sessions)
+    def initialize(self): Base.metadata.create_all(self.engine)
+    def close(self): self.engine.dispose()
