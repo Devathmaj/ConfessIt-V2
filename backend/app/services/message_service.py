@@ -3,8 +3,10 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
+from sqlalchemy import func, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
+from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
@@ -29,7 +31,9 @@ class MessageService:
         Returns conversation data if valid, raises HTTPException otherwise
         """
         try:
-            conversation = db.conversations.get_one({"_id": str(conversation_id)})
+            with db.sessions() as session:
+                row = session.get(ConversationRecord, str(conversation_id))
+                conversation = self._conversation_payload(row) if row else None
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -75,6 +79,16 @@ class MessageService:
                 )
         
         return conversation
+
+    @staticmethod
+    def _conversation_payload(row):
+        return {
+            "_id": str(row.id), "matchId": str(row.matchId), "initiatorId": row.initiatorId,
+            "receiverId": row.receiverId, "status": row.status, "requestedAt": row.requestedAt,
+            "acceptedAt": row.acceptedAt, "createdAt": row.createdAt,
+            "last_message_at": row.last_message_at, "last_message_text": row.last_message_text,
+            "blocked_by": row.blocked_by or [], "terminatedAt": row.terminatedAt,
+        }
     
     def send_message(
         self,
@@ -122,19 +136,18 @@ class MessageService:
         }
         
         # Insert into PostgreSQL
-        result = db.messages.add(message_doc)
-        message_doc["_id"] = result.inserted_id
-        
-        # Update conversation's last_message_at
-        db.conversations.update(
-            {"_id": str(conversation_id)},
-            {
-                "$set": {
-                    "last_message_at": message_doc["timestamp"],
-                    "last_message_text": text[:100]  # Preview
-                }
-            }
-        )
+        with db.sessions.begin() as session:
+            row = MessageRecord(
+                conversation_id=str(conversation_id), sender_id=sender.Regno,
+                receiver_id=receiver_id, text=text, timestamp=message_doc["timestamp"], read=False,
+            )
+            session.add(row)
+            conversation_row = session.get(ConversationRecord, str(conversation_id))
+            if conversation_row:
+                conversation_row.last_message_at = message_doc["timestamp"]
+                conversation_row.last_message_text = text[:100]
+            session.flush()
+            message_doc["_id"] = str(row.id)
         
         # Publish to Redis for real-time delivery
         redis_message = {
@@ -182,23 +195,24 @@ class MessageService:
             self.validate_conversation_participant(db, conversation_id, user.Regno)
         
         # Fetch messages
-        messages = list(
-            db.messages
-            .list({"conversation_id": str(conversation_id)})
-            .sort("timestamp", 1)
-            .limit(limit)
-        )
+        with db.sessions() as session:
+            rows = session.scalars(select(MessageRecord)
+                .where(MessageRecord.conversation_id == str(conversation_id))
+                .order_by(MessageRecord.timestamp.asc()).limit(limit)).all()
+            messages = [{"_id": str(row.id), "conversation_id": row.conversation_id,
+                "sender_id": row.sender_id, "receiver_id": row.receiver_id, "text": row.text,
+                "timestamp": row.timestamp, "read": row.read} for row in rows]
         
         # Mark messages as read for receiver (but not for admin viewers)
         if user.user_role != "admin":
-            db.messages.update_all(
-                {
-                    "conversation_id": str(conversation_id),
-                    "receiver_id": user.Regno,
-                    "read": False
-                },
-                {"$set": {"read": True}}
-            )
+            with db.sessions.begin() as session:
+                rows = session.scalars(select(MessageRecord).where(
+                    MessageRecord.conversation_id == str(conversation_id),
+                    MessageRecord.receiver_id == user.Regno,
+                    MessageRecord.read.is_(False),
+                )).all()
+                for row in rows:
+                    row.read = True
         
         # Format response
         return [
@@ -232,7 +246,11 @@ class MessageService:
         """
         # Get message
         try:
-            message = db.messages.get_one({"_id": str(message_id)})
+            with db.sessions() as session:
+                row = session.get(MessageRecord, str(message_id))
+                message = {"_id": str(row.id), "conversation_id": row.conversation_id,
+                    "sender_id": row.sender_id, "receiver_id": row.receiver_id,
+                    "text": row.text, "timestamp": row.timestamp, "read": row.read} if row else None
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -253,9 +271,9 @@ class MessageService:
             )
         
         # Check conversation is accepted
-        conversation = db.conversations.get_one(
-            {"_id": message["conversation_id"]}
-        )
+        with db.sessions() as session:
+            row = session.get(ConversationRecord, message["conversation_id"])
+            conversation = self._conversation_payload(row) if row else None
         
         if not conversation or conversation.get("status") != "accepted":
             raise HTTPException(
@@ -264,10 +282,11 @@ class MessageService:
             )
         
         # Check for duplicate report
-        existing_report = db.message_reports.get_one({
-            "message_id": str(message_id),
-            "reporter_id": reporter.Regno
-        })
+        with db.sessions() as session:
+            existing_report = session.scalar(select(MessageReportRecord).where(
+                MessageReportRecord.message_id == str(message_id),
+                MessageReportRecord.reporter_id == reporter.Regno,
+            ))
         
         if existing_report:
             raise HTTPException(
@@ -278,7 +297,6 @@ class MessageService:
         # Create report
         report_doc = {
             "message_id": str(message_id),
-            "conversation_id": message["conversation_id"],
             "reporter_id": reporter.Regno,
             "reported_user_id": message["sender_id"],
             "reason": reason,
@@ -286,12 +304,16 @@ class MessageService:
             "status": "pending"
         }
         
-        result = db.message_reports.add(report_doc)
+        with db.sessions.begin() as session:
+            row = MessageReportRecord(**report_doc)
+            session.add(row)
+            session.flush()
+            report_id = str(row.id)
         
         logger.info(f"Message {message_id} reported by {reporter.Regno} for: {reason}")
         
         return {
-            "id": str(result.inserted_id),
+            "id": report_id,
             "message": "Message reported successfully"
         }
     
@@ -301,9 +323,10 @@ class MessageService:
         conversation_id: str
     ) -> int:
         """Get message count for a conversation"""
-        return db.messages.count(
-            {"conversation_id": str(conversation_id)}
-        )
+        with db.sessions() as session:
+            return session.scalar(select(func.count()).select_from(MessageRecord).where(
+                MessageRecord.conversation_id == str(conversation_id)
+            )) or 0
 
 
 # Global instance

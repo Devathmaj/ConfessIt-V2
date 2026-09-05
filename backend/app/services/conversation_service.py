@@ -2,8 +2,10 @@
 
 import logging
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
+from ..db_models import ConversationRecord, MatchRecord, UserRecord
 from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
@@ -12,6 +14,77 @@ from ..config import settings
 
 # Logger
 logger = logging.getLogger(__name__)
+
+def _user_data(row):
+    if row is None:
+        return None
+    return {
+        "_id": str(row.id), "id": str(row.id), "Regno": row.Regno, "Name": row.Name,
+        "email": row.email, "emoji": row.emoji, "bio": row.bio,
+        "which_class": row.which_class, "profile_picture_id": row.profile_picture_id,
+        "gender": row.gender, "interests": row.interests or [],
+        "isMatchmaking": row.isMatchmaking, "isNotifications": row.isNotifications,
+        "isLovenotesRecieve": row.isLovenotesRecieve, "isLovenotesSend": row.isLovenotesSend,
+        "is_blocked": row.is_blocked, "reported_count": row.reported_count,
+        "last_login_time": row.last_login_time,
+        "last_login_ip": str(row.last_login_ip) if row.last_login_ip else None,
+        "last_login_user_agent": row.last_login_user_agent, "user_role": row.user_role,
+        "last_matchmaking_time": row.last_matchmaking_time,
+    }
+
+def _match_data(row):
+    if row is None:
+        return None
+    return {"_id": str(row.id), "user_1_regno": row.user_1_regno,
+            "user_2_regno": row.user_2_regno, "created_at": row.created_at,
+            "expires_at": row.expires_at}
+
+def _conversation_data(row):
+    if row is None:
+        return None
+    return {"_id": str(row.id), "matchId": str(row.matchId),
+            "initiatorId": row.initiatorId, "receiverId": row.receiverId,
+            "status": row.status, "requestedAt": row.requestedAt,
+            "acceptedAt": row.acceptedAt, "createdAt": row.createdAt,
+            "last_message_at": row.last_message_at,
+            "last_message_text": row.last_message_text,
+            "isBlocked": bool(row.blocked_by),
+            "blockedBy": row.blocked_by[0] if row.blocked_by else None}
+
+def _get_match(db, match_id):
+    with db.sessions() as session:
+        return _match_data(session.get(MatchRecord, str(match_id)))
+
+def _get_conversation(db, match_id):
+    with db.sessions() as session:
+        row = session.scalar(select(ConversationRecord).where(ConversationRecord.matchId == str(match_id)))
+        return _conversation_data(row)
+
+def _get_user_by_regno(db, regno):
+    with db.sessions() as session:
+        row = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        return _user_data(row)
+
+def _save_conversation(db, conversation_id, **changes):
+    with db.sessions.begin() as session:
+        row = session.get(ConversationRecord, str(conversation_id))
+        if not row:
+            return False
+        for name, value in changes.items():
+            if name == "isBlocked":
+                row.blocked_by = list(row.blocked_by or [])
+                if value and changes.get("blockedBy") and changes["blockedBy"] not in row.blocked_by:
+                    row.blocked_by.append(changes["blockedBy"])
+                elif not value:
+                    row.blocked_by = []
+            elif name == "blockedBy":
+                if value and value not in (row.blocked_by or []):
+                    row.blocked_by = list(row.blocked_by or []) + [value]
+                elif value is None:
+                    row.blocked_by = []
+            elif name in {"status", "requestedAt", "acceptedAt", "terminatedAt"}:
+                setattr(row, name, value)
+        return True
 
 def request_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
@@ -25,7 +98,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
 
         # 1. Fetch the match document
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -50,7 +123,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the existing conversation (should exist with status 'pending')
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation found for this match.")
 
@@ -66,19 +139,11 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
 
         # 7. Update conversation status to 'requested'
         requested_at = datetime.now(timezone.utc)
-        db.conversations.update(
-            {"_id": conversation.id},
-            {
-                "$set": {
-                    "status": "requested",
-                    "requestedAt": requested_at
-                }
-            }
-        )
+        _save_conversation(db, conversation.id, status="requested", requestedAt=requested_at)
         
         # 8. Create notification for the receiver
         from ..services.notification_service import create_notification_service
-        receiver_user_doc = db.users.get_one({"Regno": conversation.receiverId})
+        receiver_user_doc = _get_user_by_regno(db, conversation.receiverId)
         if receiver_user_doc:
             receiver_user = UserDetails(**receiver_user_doc)
             create_notification_service(
@@ -107,7 +172,7 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
 
         # 1. Fetch the match document
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -130,7 +195,7 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get conversation status
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             return {"status": "no_conversation", "message": "No conversation exists for this match."}
 
@@ -160,7 +225,7 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
 
         # 1. Fetch the match document
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -183,7 +248,7 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the conversation
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation found for this match.")
 
@@ -203,20 +268,12 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
 
         # 7. Update the conversation status
         accepted_at = datetime.now(timezone.utc)
-        db.conversations.update(
-            {"_id": conversation.id},
-            {
-                "$set": {
-                    "status": "accepted",
-                    "acceptedAt": accepted_at
-                }
-            }
-        )
+        _save_conversation(db, conversation.id, status="accepted", acceptedAt=accepted_at)
         
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
-        initiator_user_doc = db.users.get_one({"Regno": conversation.initiatorId})
-        receiver_user_doc = db.users.get_one({"Regno": current_user.Regno})
+        initiator_user_doc = _get_user_by_regno(db, conversation.initiatorId)
+        receiver_user_doc = _get_user_by_regno(db, current_user.Regno)
         if initiator_user_doc and receiver_user_doc:
             create_notification_service(
                 user_id=conversation.initiatorId,
@@ -248,7 +305,7 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
 
         # 1. Fetch the match document
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -271,7 +328,7 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the conversation
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation found for this match.")
 
@@ -286,18 +343,11 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conversation is not in requested status.")
 
         # 7. Update the conversation status
-        db.conversations.update(
-            {"_id": conversation.id},
-            {
-                "$set": {
-                    "status": "rejected"
-                }
-            }
-        )
+        _save_conversation(db, conversation.id, status="rejected")
         
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
-        initiator_user_doc = db.users.get_one({"Regno": conversation.initiatorId})
+        initiator_user_doc = _get_user_by_regno(db, conversation.initiatorId)
         if initiator_user_doc:
             create_notification_service(
                 user_id=conversation.initiatorId,
@@ -324,17 +374,20 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     current_time = datetime.now(timezone.utc)
 
     # Only find matches where current user is user_1 (initiator)
-    current_match = db.matches.get_one({
-        "user_1_regno": current_user.Regno,
-        "expires_at": {"$gt": current_time}
-    })
+    with db.sessions() as session:
+        active_match_row = session.scalar(select(MatchRecord).where(
+            MatchRecord.user_1_regno == current_user.Regno,
+            MatchRecord.expires_at > current_time,
+        ).order_by(MatchRecord.expires_at.desc()))
+        current_match = _match_data(active_match_row)
 
     if not current_match:
         # No active match where user is initiator — try to find the most recent one (expired or not)
-        current_match = db.matches.get_one(
-            {"user_1_regno": current_user.Regno},
-            sort=[("expires_at", -1)]
-        )
+        with db.sessions() as session:
+            recent_match_row = session.scalar(select(MatchRecord).where(
+                MatchRecord.user_1_regno == current_user.Regno
+            ).order_by(MatchRecord.expires_at.desc()).limit(1))
+            current_match = _match_data(recent_match_row)
         if not current_match:
             # No matches where user is initiator
             return {"status": "no_active_match", "message": "No active match found."}
@@ -349,12 +402,12 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         is_expired = False
 
     # Get the conversation for this match (may or may not exist)
-    conversation_doc = db.conversations.get_one({"matchId": match.id})
+    conversation_doc = _get_conversation(db, match.id)
     if not conversation_doc:
         # No conversation created yet; return match info and empty conversation placeholder
         # Return success so frontend shows the match in inbox even if expired
         other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
-        other_user_doc = db.users.get_one({"Regno": other_user_regno})
+        other_user_doc = _get_user_by_regno(db, other_user_regno)
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
         profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
@@ -392,7 +445,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     # If conversation exists, return it (allow expired)
     conversation = Conversation(**conversation_doc)
     other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
-    other_user_doc = db.users.get_one({"Regno": other_user_regno})
+    other_user_doc = _get_user_by_regno(db, other_user_regno)
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
     profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
@@ -441,7 +494,7 @@ def get_conversation_by_match_id(match_id_str: str, db: Database):
     except Exception:
         return None
     
-    conversation_doc = db.conversations.get_one({"matchId": match_id})
+    conversation_doc = _get_conversation(db, match_id)
     if not conversation_doc:
         return None
     
@@ -457,12 +510,8 @@ def update_conversation_status(match_id_str: str, status: str, db: Database):
     except Exception:
         return False
     
-    result = db.conversations.update(
-        {"matchId": match_id},
-        {"$set": {"status": status}}
-    )
-    
-    return result.modified_count > 0
+    conversation = _get_conversation(db, match_id)
+    return bool(conversation and _save_conversation(db, conversation["_id"], status=status))
 
 
 def get_received_conversations_service(current_user: UserDetails, db: Database):
@@ -473,10 +522,11 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
     current_time = datetime.now(timezone.utc)
     
     # Find matches where current user is user_2 (receiver)
-    received_matches = list(db.matches.list({
-        "user_2_regno": current_user.Regno,
-        "expires_at": {"$gt": current_time}
-    }))
+    with db.sessions() as session:
+        received_matches = [_match_data(row) for row in session.scalars(select(MatchRecord).where(
+            MatchRecord.user_2_regno == current_user.Regno,
+            MatchRecord.expires_at > current_time,
+        )).all()]
     
     if not received_matches:
         return {"status": "no_received_conversations", "conversations": []}
@@ -487,7 +537,7 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
         match = Match(**match_doc)
         
         # Get conversation for this match
-        conversation_doc = db.conversations.get_one({"matchId": match.id})
+        conversation_doc = _get_conversation(db, match.id)
         if not conversation_doc:
             continue
         
@@ -498,7 +548,7 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             continue
         
         # Get the initiator's info
-        initiator_user_doc = db.users.get_one({"Regno": match.user_1_regno})
+        initiator_user_doc = _get_user_by_regno(db, match.user_1_regno)
         if not initiator_user_doc:
             continue
         
@@ -558,7 +608,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
 
         # Fetch the match document
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -569,7 +619,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # Get conversation for this match
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             return {"status": "no_conversation", "message": "No conversation exists for this match."}
         
@@ -580,7 +630,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
         
         # Get the other user's info
         other_user_regno = match.user_2_regno if is_initiator else match.user_1_regno
-        other_user_doc = db.users.get_one({"Regno": other_user_regno})
+        other_user_doc = _get_user_by_regno(db, other_user_regno)
         if not other_user_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Other user not found.")
         
@@ -643,7 +693,7 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match ID.")
         
         # Get the match
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -654,21 +704,12 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
         
         # Get the conversation
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
         # Update conversation to blocked status
-        db.conversations.update(
-            {"_id": conversation_doc["_id"]},
-            {
-                "$set": {
-                    "isBlocked": True,
-                    "blockedBy": current_user.Regno,
-                    "blockedAt": datetime.now(timezone.utc)
-                }
-            }
-        )
+        _save_conversation(db, conversation_doc["_id"], isBlocked=True, blockedBy=current_user.Regno)
         
         logger.info(f"User {current_user.Regno} blocked conversation for match {match_id}")
         
@@ -696,7 +737,7 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match ID.")
         
         # Get the match
-        match_doc = db.matches.get_one({"_id": match_id})
+        match_doc = _get_match(db, match_id)
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
@@ -707,7 +748,7 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
         
         # Get the conversation
-        conversation_doc = db.conversations.get_one({"matchId": match_id})
+        conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
@@ -716,16 +757,7 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only unblock if you were the one who blocked.")
         
         # Update conversation to unblocked
-        db.conversations.update(
-            {"_id": conversation_doc["_id"]},
-            {
-                "$set": {
-                    "isBlocked": False,
-                    "blockedBy": None,
-                    "unblockedAt": datetime.now(timezone.utc)
-                }
-            }
-        )
+        _save_conversation(db, conversation_doc["_id"], isBlocked=False, blockedBy=None)
         
         logger.info(f"User {current_user.Regno} unblocked conversation for match {match_id}")
         

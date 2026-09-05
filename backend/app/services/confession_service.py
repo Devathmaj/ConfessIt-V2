@@ -1,9 +1,10 @@
 from ..logger import get_logger
-from ..postgres import PostgresClient, DESCENDING
-from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, Report, ConfessionUpdate
-from ..postgres import new_id, is_valid_id
+from sqlalchemy import func, or_, select
+from ..postgres import PostgresClient
+from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
+from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
 import datetime
-from ..config import settings
+from datetime import timezone
 from typing import Optional, List
 
 logger = get_logger(__name__)
@@ -11,50 +12,69 @@ logger = get_logger(__name__)
 class ConfessionService:
     def __init__(self):
         self.client = PostgresClient()
-        self.db = self.client[settings.DATABASE_NAME]
-        self.confessions_repo = self.db.confessions
-        self.comments_repo = self.db.confession_comments
-        self.users_repo = self.db.users
-        self.reports_repo = self.db.reports
+        self.sessions = self.client.sessions
         self.REACTION_TYPES = ["heart", "haha", "whoa", "heartbreak"]
 
     def _reporter_ids(self, content_id: str) -> List[str]:
-        return [str(report["reported_by_id"]) for report in self.reports_repo.list({"content_id": str(content_id)})]
+        with self.sessions() as session:
+            return [str(report.reported_by_id) for report in session.scalars(select(ReportRecord).where(or_(
+                ReportRecord.confession_id == str(content_id), ReportRecord.comment_id == str(content_id)
+            ))).all()]
 
     def _get_user_info(self, user_id: str) -> Optional[UserInfo]:
-        user_doc = self.users_repo.get_one({"_id": str(user_id)})
+        with self.sessions() as session:
+            user_doc = session.get(UserRecord, str(user_id))
         if user_doc:
-            display_name = user_doc.get("Name", "Anonymous User")
             return UserInfo(
-                id=str(user_doc["_id"]),
-                name=display_name,
-                avatar=user_doc.get("emoji")
+                id=str(user_doc.id), name=user_doc.Name or "Anonymous User", avatar=user_doc.emoji
             )
         return None
+
+    @staticmethod
+    def _confession_payload(row):
+        return {"_id": str(row.id), "confession": row.confession, "confessing_to": row.confessing_to,
+            "is_anonymous": row.is_anonymous, "is_comment": row.is_comment, "timestamp": row.timestamp,
+            "user_id": str(row.user_id), "is_approved": row.is_approved, "report_count": row.report_count,
+            "reactions": row.reactions or {}, "heart_count": row.heart_count, "haha_count": row.haha_count,
+            "whoa_count": row.whoa_count, "heartbreak_count": row.heartbreak_count,
+            "comment_count": row.comment_count}
+
+    @staticmethod
+    def _comment_payload(row, user=None):
+        return {"_id": str(row.id), "confession_id": str(row.confession_id), "user_id": str(row.user_id),
+            "user_info": {"id": str(row.user_id), "name": user.Name if user else "User", "avatar": user.emoji if user else None},
+            "message": row.message, "timestamp": row.timestamp, "likes": [str(x) for x in (row.likes or [])],
+            "dislikes": [str(x) for x in (row.dislikes or [])], "like_count": row.like_count,
+            "dislike_count": row.dislike_count, "report_count": row.report_count}
 
     def create_confession(self, confession_data: ConfessionCreate, user_id: str):
         confession_dict = confession_data.dict()
         confessing_to_value = confession_dict.get("confessing_to")
         if isinstance(confessing_to_value, str):
             confession_dict["confessing_to"] = confessing_to_value.strip()
-        confession_dict["_id"] = new_id()
-        confession_dict["user_id"] = user_id 
-        confession_dict["timestamp"] = datetime.datetime.now(datetime.timezone.utc)
-        confession_dict["reactions"] = {reaction: [] for reaction in self.REACTION_TYPES}
-        for reaction_type in self.REACTION_TYPES:
-            confession_dict[f"{reaction_type}_count"] = 0
-        confession_dict["report_count"] = 0
-        confession_dict["comment_count"] = 0
-
-        result = self.confessions_repo.add(confession_dict)
-        logger.info(f"Created confession {result.inserted_id}")
-        return self.get_confession(str(result.inserted_id), user_id)
+        created_at = datetime.datetime.now(datetime.timezone.utc)
+        with self.sessions.begin() as session:
+            row = ConfessionRecord(
+                confession=confession_dict["confession"], confessing_to=confession_dict.get("confessing_to"),
+                is_anonymous=confession_dict["is_anonymous"], is_comment=confession_dict["is_comment"],
+                timestamp=created_at, user_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
+            )
+            session.add(row)
+            session.flush()
+            confession_id = str(row.id)
+        logger.info(f"Created confession {confession_id}")
+        return self.get_confession(confession_id, user_id)
 
     def get_confessions(self, sort_by: str = 'popularity', user_id: Optional[str] = None) -> List[Confession]:
-        confession_rows = list(self.confessions_repo.list())
-        comments_by_confession = {}
-        for comment in self.comments_repo.list():
-            comments_by_confession.setdefault(comment.get("confession_id"), []).append(comment)
+        with self.sessions() as session:
+            confession_models = session.scalars(select(ConfessionRecord)).all()
+            comment_models = session.scalars(select(ConfessionCommentRecord).order_by(ConfessionCommentRecord.timestamp.desc())).all()
+            user_map = {user.id: user for user in session.scalars(select(UserRecord)).all()}
+            confession_rows = [self._confession_payload(row) for row in confession_models]
+            comments_by_confession = {}
+            for row in comment_models:
+                comment = self._comment_payload(row, user_map.get(row.user_id))
+                comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
 
         for confession in confession_rows:
             confession["reported_by"] = self._reporter_ids(confession["_id"])
@@ -65,19 +85,19 @@ class ConfessionService:
                 comment["report_count"] = len(comment["reported_by"])
             confession["comments"] = sorted(
                 comments_by_confession.get(confession_id, []),
-                key=lambda comment: comment.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc),
+                key=lambda comment: comment.get("timestamp") or datetime.datetime.min.replace(tzinfo=timezone.utc),
                 reverse=True,
             )
-            author = self.users_repo.get_one({"_id": str(confession.get("user_id"))})
+            author = user_map.get(str(confession.get("user_id")))
             confession["user_info"] = {
                 "id": str(confession.get("user_id")),
-                "name": (author or {}).get("Name", "Anonymous User"),
-                "avatar": (author or {}).get("emoji"),
+                "name": author.Name if author else "Anonymous User",
+                "avatar": author.emoji if author else None,
             }
 
         def timestamp_key(row):
             value = row.get("timestamp")
-            return value or datetime.min.replace(tzinfo=timezone.utc)
+            return value or datetime.datetime.min.replace(tzinfo=timezone.utc)
 
         if sort_by == "popularity":
             confession_rows.sort(key=lambda row: timestamp_key(row))
@@ -119,7 +139,9 @@ class ConfessionService:
         return confessions
 
     def get_confession(self, confession_id: str, user_id: Optional[str] = None) -> Optional[Confession]:
-        confession_doc = self.confessions_repo.get_one({"_id": str(confession_id)})
+        with self.sessions() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            confession_doc = self._confession_payload(row) if row else None
         if confession_doc:
             confession_doc["reported_by"] = self._reporter_ids(confession_id)
             confession_doc["report_count"] = len(confession_doc["reported_by"])
@@ -132,7 +154,14 @@ class ConfessionService:
             
             confession_doc['user_reaction'] = user_reaction
             
-            comments_cursor = self.comments_repo.list({"confession_id": confession_id}).sort("timestamp", DESCENDING)
+            with self.sessions() as session:
+                comment_models = session.scalars(select(ConfessionCommentRecord).where(
+                    ConfessionCommentRecord.confession_id == str(confession_id)
+                ).order_by(ConfessionCommentRecord.timestamp.desc())).all()
+                comment_users = {u.id: u for u in session.scalars(select(UserRecord).where(
+                    UserRecord.id.in_({c.user_id for c in comment_models})
+                )).all()} if comment_models else {}
+            comments_cursor = [self._comment_payload(c, comment_users.get(c.user_id)) for c in comment_models]
             comments_list = []
             for comment_doc in comments_cursor:
                 comment_doc["reported_by"] = self._reporter_ids(comment_doc["_id"])
@@ -159,7 +188,9 @@ class ConfessionService:
         """
         Used to update a confession's settings, such as toggling comments or anonymity.
         """
-        confession = self.confessions_repo.get_one({"_id": str(confession_id)})
+        with self.sessions() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            confession = self._confession_payload(row) if row else None
 
         if not confession:
             logger.error(f"Confession {confession_id} not found for update.")
@@ -190,10 +221,11 @@ class ConfessionService:
             # No valid changes were made, so we can return early.
             return self.get_confession(confession_id, user_id)
 
-        self.confessions_repo.update(
-            {"_id": str(confession_id)},
-            {"$set": update_fields}
-        )
+        with self.sessions.begin() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            if row:
+                if "is_comment" in update_fields: row.is_comment = update_fields["is_comment"]
+                if "is_anonymous" in update_fields: row.is_anonymous = update_fields["is_anonymous"]
 
         logger.info(f"User {user_id} updated confession {confession_id} with data: {update_fields}")
         return self.get_confession(confession_id, user_id)
@@ -202,7 +234,8 @@ class ConfessionService:
         """
         Used to get the total number of confessions in the database.
         """
-        count = self.confessions_repo.count({})
+        with self.sessions() as session:
+            count = session.scalar(select(func.count()).select_from(ConfessionRecord)) or 0
         logger.info(f"Retrieved total confession count: {count}")
         return count
 
@@ -210,37 +243,30 @@ class ConfessionService:
         if reaction not in self.REACTION_TYPES:
             return None 
 
-        confession = self.confessions_repo.get_one({"_id": str(confession_id)})
+        with self.sessions.begin() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            confession = self._confession_payload(row) if row else None
+            if not row:
+                return None
+            current_reactions = row.reactions or {r: [] for r in self.REACTION_TYPES}
+            user_previous_reaction = next((kind for kind, ids in current_reactions.items() if user_id in ids), None)
+            for ids in current_reactions.values():
+                if user_id in ids: ids.remove(user_id)
+            if user_previous_reaction != reaction:
+                current_reactions.setdefault(reaction, []).append(user_id)
+            row.reactions = current_reactions
+            for kind in self.REACTION_TYPES:
+                setattr(row, f"{kind}_count", len(current_reactions.get(kind, [])))
         if not confession:
             return None
 
-        update_fields = {}
-        current_reactions = confession.get('reactions', {r: [] for r in self.REACTION_TYPES})
-
-        user_previous_reaction = None
-        for reaction_type, user_ids in current_reactions.items():
-            if user_id in user_ids:
-                user_previous_reaction = reaction_type
-                current_reactions[reaction_type].remove(user_id)
-                break
-        
-        if user_previous_reaction != reaction:
-            current_reactions.setdefault(reaction, []).append(user_id)
-
-        update_fields['reactions'] = current_reactions
-        for r_type in self.REACTION_TYPES:
-            update_fields[f"{r_type}_count"] = len(current_reactions.get(r_type, []))
-
-        self.confessions_repo.update(
-            {"_id": str(confession_id)},
-            {"$set": update_fields}
-        )
-        
         logger.info(f"User {user_id} reacted to confession {confession_id} with {reaction}")
         return self.get_confession(confession_id, user_id)
 
     def add_comment_to_confession(self, confession_id: str, comment_data: CommentCreate, user: UserDetails) -> any:
-        confession = self.confessions_repo.get_one({"_id": str(confession_id)})
+        with self.sessions() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            confession = self._confession_payload(row) if row else None
         if not confession:
             return "CONFESSION_NOT_FOUND"
         if not confession.get("is_comment", True):
@@ -248,89 +274,61 @@ class ConfessionService:
             return "COMMENTS_DISABLED"
 
         user_id = str(user.id)
-        existing_comments_count = self.comments_repo.count({
-            "confession_id": confession_id,
-            "user_id": user_id
-        })
+        with self.sessions() as session:
+            existing_comments_count = session.scalar(select(func.count()).select_from(ConfessionCommentRecord).where(
+                ConfessionCommentRecord.confession_id == str(confession_id),
+                ConfessionCommentRecord.user_id == user_id,
+            )) or 0
         if existing_comments_count >= 3:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
             return "COMMENT_LIMIT_REACHED"
 
         user_info = UserInfo(id=user_id, name=user.Name, avatar=user.emoji)
 
-        comment_dict = {
-            "_id": new_id(),
-            "confession_id": confession_id,
-            "user_id": user_id,
-            "user_info": user_info.dict(),
-            "message": comment_data.message,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-            "likes": [],
-            "dislikes": [],
-            "like_count": 0,
-            "dislike_count": 0,
-            "report_count": 0,
-        }
-
-        result = self.comments_repo.add(comment_dict)
-        logger.info(f"Added comment {result.inserted_id} to confession {confession_id}")
-        
-        self.confessions_repo.update(
-            {"_id": str(confession_id)},
-            {"$inc": {"comment_count": 1}}
-        )
-
-        new_comment = self.comments_repo.get_one({"_id": result.inserted_id})
-        if new_comment:
-            return ConfessionComment(**new_comment)
-        return None
+        with self.sessions.begin() as session:
+            row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
+                message=comment_data.message, timestamp=datetime.datetime.now(datetime.timezone.utc))
+            session.add(row)
+            confession_row = session.get(ConfessionRecord, str(confession_id))
+            if confession_row: confession_row.comment_count += 1
+            session.flush()
+            new_comment = self._comment_payload(row, UserRecord(Name=user.Name, emoji=user.emoji))
+        logger.info(f"Added comment {new_comment['_id']} to confession {confession_id}")
+        return ConfessionComment(**new_comment)
 
     def _react_to_comment(self, comment_id: str, user_id: str, reaction_type: str) -> Optional[ConfessionComment]:
-        comment = self.comments_repo.get_one({"_id": str(comment_id)})
-        if not comment:
-            return None
-
-        likes = comment.get('likes', [])
-        dislikes = comment.get('dislikes', [])
-
         user_new_reaction = None
-        
-        if reaction_type == 'likes':
-            if user_id in dislikes:
-                dislikes.remove(user_id)
-            if user_id in likes:
-                likes.remove(user_id)
+        with self.sessions.begin() as session:
+            row = session.get(ConfessionCommentRecord, str(comment_id))
+            if not row:
+                return None
+            likes = [str(value) for value in (row.likes or [])]
+            dislikes = [str(value) for value in (row.dislikes or [])]
+            if reaction_type == 'likes':
+                if user_id in dislikes: dislikes.remove(user_id)
+                if user_id in likes: likes.remove(user_id)
+                else: likes.append(user_id); user_new_reaction = 'like'
             else:
-                likes.append(user_id)
-                user_new_reaction = 'like'
-        elif reaction_type == 'dislikes':
-            if user_id in likes:
-                likes.remove(user_id)
-            if user_id in dislikes:
-                dislikes.remove(user_id)
-            else:
-                dislikes.append(user_id)
-                user_new_reaction = 'dislike'
-
-        self.comments_repo.update(
-            {"_id": str(comment_id)},
-            {"$set": {
-                "likes": likes,
-                "dislikes": dislikes,
-                "like_count": len(likes),
-                "dislike_count": len(dislikes)
-            }}
-        )
+                if user_id in likes: likes.remove(user_id)
+                if user_id in dislikes: dislikes.remove(user_id)
+                else: dislikes.append(user_id); user_new_reaction = 'dislike'
+            row.likes = likes
+            row.dislikes = dislikes
+            row.like_count = len(likes)
+            row.dislike_count = len(dislikes)
         
         logger.info(f"User {user_id} reacted to comment {comment_id} with {reaction_type}")
         
-        updated_comment = self.comments_repo.get_one({"_id": str(comment_id)})
-        if updated_comment:
-            updated_comment["reported_by"] = self._reporter_ids(comment_id)
-            updated_comment["report_count"] = len(updated_comment["reported_by"])
-            updated_comment['user_reaction'] = user_new_reaction
-            return ConfessionComment(**updated_comment)
-        return None
+        with self.sessions() as session:
+            row = session.get(ConfessionCommentRecord, str(comment_id))
+            user = session.get(UserRecord, row.user_id) if row else None
+        if not row:
+            return None
+        updated_comment = self._comment_payload(row, user)
+        updated_comment["reported_by"] = self._reporter_ids(comment_id)
+        updated_comment["report_count"] = len(updated_comment["reported_by"])
+        updated_comment["user_reaction"] = user_new_reaction
+        return ConfessionComment(**updated_comment)
 
     def like_comment(self, comment_id: str, user_id: str) -> Optional[ConfessionComment]:
         return self._react_to_comment(comment_id, user_id, 'likes')
@@ -340,51 +338,53 @@ class ConfessionService:
 
     def report_comment(self, comment_id: str, report_data: ReportCreate, user: UserDetails) -> Optional[ConfessionComment]:
         user_id = str(user.id)
-        comment = self.comments_repo.get_one({"_id": str(comment_id)})
+        with self.sessions() as session:
+            comment = session.get(ConfessionCommentRecord, str(comment_id))
         if not comment:
             return None
 
-        if self.reports_repo.count({"content_id": str(comment_id), "reported_by_id": user_id}):
+        with self.sessions() as session:
+            duplicate = session.scalar(select(ReportRecord.id).where(
+                ReportRecord.comment_id == str(comment_id), ReportRecord.reported_by_id == user_id
+            ).limit(1))
+        if duplicate:
             return None
-
-        report = Report(
-            content_id=comment_id,
-            content_type='comment',
-            reported_by_id=user_id,
-            reported_by_name=user.Name,
-            reason=report_data.reason
-        )
-        self.reports_repo.add(report.dict(by_alias=True))
-
-        self.comments_repo.update({"_id": str(comment_id)}, {"$inc": {"report_count": 1}})
+        with self.sessions.begin() as session:
+            session.add(ReportRecord(comment_id=str(comment_id), reported_by_id=user_id,
+                reported_by_name=user.Name, reason=report_data.reason,
+                timestamp=datetime.datetime.now(datetime.timezone.utc)))
+            comment_row = session.get(ConfessionCommentRecord, str(comment_id))
+            if comment_row: comment_row.report_count += 1
 
         logger.info(f"User {user_id} reported comment {comment_id}")
-        updated_comment_doc = self.comments_repo.get_one({"_id": str(comment_id)})
-        if updated_comment_doc:
-            updated_comment_doc["reported_by"] = self._reporter_ids(comment_id)
-            updated_comment_doc["report_count"] = len(updated_comment_doc["reported_by"])
-            return ConfessionComment(**updated_comment_doc)
-        return None
+        with self.sessions() as session:
+            row = session.get(ConfessionCommentRecord, str(comment_id))
+            author = session.get(UserRecord, row.user_id) if row else None
+        if not row: return None
+        updated_comment_doc = self._comment_payload(row, author)
+        updated_comment_doc["reported_by"] = self._reporter_ids(comment_id)
+        updated_comment_doc["report_count"] = len(updated_comment_doc["reported_by"])
+        return ConfessionComment(**updated_comment_doc)
 
     def report_confession(self, confession_id: str, report_data: ReportCreate, user: UserDetails) -> Optional[Confession]:
         user_id = str(user.id)
-        confession = self.confessions_repo.get_one({"_id": str(confession_id)})
+        with self.sessions() as session:
+            confession = session.get(ConfessionRecord, str(confession_id))
         if not confession:
             return None
 
-        if self.reports_repo.count({"content_id": str(confession_id), "reported_by_id": user_id}):
+        with self.sessions() as session:
+            duplicate = session.scalar(select(ReportRecord.id).where(
+                ReportRecord.confession_id == str(confession_id), ReportRecord.reported_by_id == user_id
+            ).limit(1))
+        if duplicate:
             return None
-
-        report = Report(
-            content_id=confession_id,
-            content_type='confession',
-            reported_by_id=user_id,
-            reported_by_name=user.Name,
-            reason=report_data.reason
-        )
-        self.reports_repo.add(report.dict(by_alias=True))
-
-        self.confessions_repo.update({"_id": str(confession_id)}, {"$inc": {"report_count": 1}})
+        with self.sessions.begin() as session:
+            session.add(ReportRecord(confession_id=str(confession_id), reported_by_id=user_id,
+                reported_by_name=user.Name, reason=report_data.reason,
+                timestamp=datetime.datetime.now(datetime.timezone.utc)))
+            confession_row = session.get(ConfessionRecord, str(confession_id))
+            if confession_row: confession_row.report_count += 1
 
         logger.info(f"User {user_id} reported confession {confession_id}")
         return self.get_confession(confession_id, user_id)

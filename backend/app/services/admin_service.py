@@ -3,9 +3,12 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from sqlalchemy import func, or_, select, update
 
 from ..postgres import new_id, is_valid_id
 from ..postgres import Database
+from ..db_models import (ConfessionCommentRecord, ConfessionRecord, ConversationRecord,
+    LoginTokenRecord, LoveNoteRecord, MatchRecord, MessageRecord, ReportRecord, UserRecord)
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -57,7 +60,20 @@ def serialize_user_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any
     if not regno:
         return {"Regno": None}
 
-    doc = db.users.get_one({"Regno": regno})
+    with db.sessions() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        doc = None if not user else {
+            "_id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
+            "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class,
+            "gender": user.gender, "profile_picture_id": user.profile_picture_id,
+            "interests": user.interests or [], "user_role": user.user_role,
+            "isMatchmaking": user.isMatchmaking, "isNotifications": user.isNotifications,
+            "isLovenotesRecieve": user.isLovenotesRecieve, "isLovenotesSend": user.isLovenotesSend,
+            "reported_count": user.reported_count, "last_login_time": user.last_login_time,
+            "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+            "last_login_user_agent": user.last_login_user_agent,
+            "last_matchmaking_time": user.last_matchmaking_time, "is_blocked": user.is_blocked,
+        }
     if doc:
         return serialize_user_doc(doc)
     return {"Regno": regno, "Name": None, "email": None, "user_role": None}
@@ -76,26 +92,23 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     """Collect and return active user sessions within the specified time window."""
     now = datetime.now(timezone.utc)
     active_threshold = now - timedelta(hours=window_hours)
-    tokens_repo = db.login_tokens
-
-    # Mark previously-active sessions that are past the window as expired
-    tokens_repo.update_all(
-        {
-            "session_status": "active",
-            "consumed_at": {"$lt": active_threshold},
-        },
-        {"$set": {"session_status": "expired"}}
-    )
-
-    active_tokens = list(
-        tokens_repo.list(
-            {
-                "used": True,
-                "revoked": False,
-                "consumed_at": {"$gte": active_threshold},
-            }
-        )
-    )
+    with db.sessions.begin() as session:
+        session.execute(update(LoginTokenRecord).where(
+            LoginTokenRecord.session_status == "active",
+            LoginTokenRecord.consumed_at < active_threshold,
+        ).values(session_status="expired"))
+        token_rows = session.scalars(select(LoginTokenRecord).where(
+            LoginTokenRecord.used.is_(True), LoginTokenRecord.revoked.is_(False),
+            LoginTokenRecord.consumed_at >= active_threshold,
+        )).all()
+        active_tokens = [{
+            "_id": str(row.id), "user_id": str(row.user_id), "session_status": row.session_status,
+            "last_seen_at": row.last_seen_at, "consumed_at": row.consumed_at,
+            "consume_ip": str(row.consume_ip) if row.consume_ip else None,
+            "request_ip": str(row.request_ip) if row.request_ip else None,
+            "device": row.device, "consume_user_agent": row.consume_user_agent,
+            "request_user_agent": row.request_user_agent,
+        } for row in token_rows]
 
     if not active_tokens:
         return []
@@ -110,8 +123,20 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     # Fetch user documents
     user_map: Dict[str, Dict[str, Any]] = {}
     if user_ids:
-        user_docs = db.users.list({"_id": {"$in": user_ids}})
-        user_map = {str(doc.get("_id")): doc for doc in user_docs}
+        with db.sessions() as session:
+            rows = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()
+            user_map = {str(user.id): {
+                "_id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
+                "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class,
+                "gender": user.gender, "profile_picture_id": user.profile_picture_id,
+                "interests": user.interests or [], "user_role": user.user_role,
+                "isMatchmaking": user.isMatchmaking, "isNotifications": user.isNotifications,
+                "isLovenotesRecieve": user.isLovenotesRecieve, "isLovenotesSend": user.isLovenotesSend,
+                "reported_count": user.reported_count, "last_login_time": user.last_login_time,
+                "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+                "last_login_user_agent": user.last_login_user_agent,
+                "last_matchmaking_time": user.last_matchmaking_time, "is_blocked": user.is_blocked,
+            } for user in rows}
 
     # Build session entries
     session_entries: Dict[str, Dict[str, Any]] = {}
@@ -139,10 +164,10 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         else:
             parsed_last_seen = datetime.now(timezone.utc)
 
-        tokens_repo.update(
-            {"_id": token["_id"]},
-            {"$set": {"last_seen_at": parsed_last_seen}}
-        )
+        with db.sessions.begin() as session:
+            token_row = session.get(LoginTokenRecord, token["_id"])
+            if token_row:
+                token_row.last_seen_at = parsed_last_seen
 
         # Serialize user
         serialized_user = serialize_user_doc(user_doc) if user_doc else {
@@ -185,65 +210,61 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
 
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all confessions with comments and reports."""
-    confessions_repo = db.confessions
-    users_repo = db.users
-    comments_repo = db.confession_comments
-    reports_repo = db.reports
-
     reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
     items: List[Dict[str, Any]] = []
-
-    confession_docs = list(confessions_repo.list().sort("timestamp", -1))
-    confession_ids = [str(doc.get("_id")) for doc in confession_docs]
-
-    # Fetch comments
-    comments_by_confession: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    comment_ids: List[str] = []
-    if confession_ids:
-        for comment_doc in comments_repo.list({"confession_id": {"$in": confession_ids}}):
-            confession_id = comment_doc.get("confession_id")
-            comments_by_confession[confession_id].append(comment_doc)
-            comment_ids.append(str(comment_doc.get("_id")))
-
-    # Fetch reports
-    reports_by_content: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    report_ids_to_fetch = confession_ids + comment_ids
-    if report_ids_to_fetch:
-        for report_doc in reports_repo.list({"content_id": {"$in": report_ids_to_fetch}}):
-            content_id = report_doc.get("content_id")
-            reports_by_content[content_id].append(report_doc)
+    with db.sessions() as session:
+        confessions = session.scalars(select(ConfessionRecord).order_by(ConfessionRecord.timestamp.desc())).all()
+        confession_ids = [row.id for row in confessions]
+        comments = session.scalars(select(ConfessionCommentRecord).where(
+            ConfessionCommentRecord.confession_id.in_(confession_ids)
+        ).order_by(ConfessionCommentRecord.timestamp.desc())).all() if confession_ids else []
+        comment_ids = [row.id for row in comments]
+        report_targets = []
+        if confession_ids:
+            report_targets.append(ReportRecord.confession_id.in_(confession_ids))
+        if comment_ids:
+            report_targets.append(ReportRecord.comment_id.in_(comment_ids))
+        reports = session.scalars(select(ReportRecord).where(or_(*report_targets))).all() if report_targets else []
+        user_ids = {row.user_id for row in confessions} | {row.user_id for row in comments}
+        users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all() if user_ids else []
+    users_by_id = {user.id: user for user in users}
+    comments_by_confession: Dict[str, List[ConfessionCommentRecord]] = defaultdict(list)
+    for comment in comments:
+        comments_by_confession[comment.confession_id].append(comment)
+    reports_by_content: Dict[str, List[ReportRecord]] = defaultdict(list)
+    for report in reports:
+        target_id = report.comment_id or report.confession_id
+        if target_id:
+            reports_by_content[target_id].append(report)
 
     # Build confession items
-    for doc in confession_docs:
-        raw_user_id = doc.get("user_id")
-        sender_doc = None
-        if isinstance(raw_user_id, str) and is_valid_id(raw_user_id):
-            sender_doc = users_repo.get_one({"_id": str(raw_user_id)})
+    for doc in confessions:
+        sender_doc = users_by_id.get(doc.user_id)
 
         sender_info = {
-            "id": str(sender_doc.get("_id")) if sender_doc else None,
-            "name": sender_doc.get("Name") if sender_doc else None,
-            "regno": sender_doc.get("Regno") if sender_doc else None,
-            "email": sender_doc.get("email") if sender_doc else None,
+            "id": str(sender_doc.id) if sender_doc else None,
+            "name": sender_doc.Name if sender_doc else None,
+            "regno": sender_doc.Regno if sender_doc else None,
+            "email": sender_doc.email if sender_doc else None,
         }
 
-        confession_id = str(doc.get("_id"))
-        reactions = {key: doc.get("reactions", {}).get(key, []) for key in reaction_keys}
+        confession_id = str(doc.id)
+        reactions = {key: (doc.reactions or {}).get(key, []) for key in reaction_keys}
         
         # Process confession reports
         confession_reports_docs = sorted(
             reports_by_content.get(confession_id, []),
-            key=lambda item: item.get("timestamp") or datetime.min,
+            key=lambda item: item.timestamp or datetime.min,
             reverse=True
         )
         confession_reports = [
             {
-                "id": str(report.get("_id")),
-                "reason": report.get("reason"),
-                "timestamp": serialize_datetime(report.get("timestamp")),
+                "id": str(report.id),
+                "reason": report.reason,
+                "timestamp": serialize_datetime(report.timestamp),
                 "reporter": {
-                    "id": report.get("reported_by_id"),
-                    "name": report.get("reported_by_name"),
+                    "id": str(report.reported_by_id),
+                    "name": report.reported_by_name,
                 },
             }
             for report in confession_reports_docs
@@ -253,24 +274,24 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         comment_entries: List[Dict[str, Any]] = []
         comment_docs = sorted(
             comments_by_confession.get(confession_id, []),
-            key=lambda item: item.get("timestamp") or datetime.min,
+            key=lambda item: item.timestamp or datetime.min,
             reverse=True,
         )
         for comment_doc in comment_docs:
-            comment_id = str(comment_doc.get("_id"))
+            comment_id = str(comment_doc.id)
             comment_reports_docs = sorted(
                 reports_by_content.get(comment_id, []),
-                key=lambda item: item.get("timestamp") or datetime.min,
+                key=lambda item: item.timestamp or datetime.min,
                 reverse=True,
             )
             comment_reports = [
                 {
-                    "id": str(report.get("_id")),
-                    "reason": report.get("reason"),
-                    "timestamp": serialize_datetime(report.get("timestamp")),
+                    "id": str(report.id),
+                    "reason": report.reason,
+                    "timestamp": serialize_datetime(report.timestamp),
                     "reporter": {
-                        "id": report.get("reported_by_id"),
-                        "name": report.get("reported_by_name"),
+                        "id": str(report.reported_by_id),
+                        "name": report.reported_by_name,
                     },
                 }
                 for report in comment_reports_docs
@@ -279,13 +300,13 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
             comment_entries.append(
                 {
                     "id": comment_id,
-                    "message": comment_doc.get("message", ""),
-                    "timestamp": serialize_datetime(comment_doc.get("timestamp")),
-                    "user": comment_doc.get("user_info", {}),
-                    "report_count": comment_doc.get("report_count", 0),
-                    "reported_by": [str(report.get("reported_by_id")) for report in reports_by_content.get(comment_id, [])],
-                    "like_count": comment_doc.get("like_count", 0),
-                    "dislike_count": comment_doc.get("dislike_count", 0),
+                    "message": comment_doc.message,
+                    "timestamp": serialize_datetime(comment_doc.timestamp),
+                    "user": {"id": str(comment_doc.user_id), "name": (users_by_id.get(comment_doc.user_id).Name if users_by_id.get(comment_doc.user_id) else "User"), "avatar": (users_by_id.get(comment_doc.user_id).emoji if users_by_id.get(comment_doc.user_id) else None)},
+                    "report_count": comment_doc.report_count,
+                    "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(comment_id, [])],
+                    "like_count": comment_doc.like_count,
+                    "dislike_count": comment_doc.dislike_count,
                     "reports": comment_reports,
                 }
             )
@@ -293,21 +314,21 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         items.append(
             {
                 "id": confession_id,
-                "confession": doc.get("confession", ""),
-                "confessing_to": doc.get("confessing_to"),
-                "is_anonymous": doc.get("is_anonymous", True),
-                "is_comment": doc.get("is_comment", True),
-                "timestamp": serialize_datetime(doc.get("timestamp")),
+                "confession": doc.confession,
+                "confessing_to": doc.confessing_to,
+                "is_anonymous": doc.is_anonymous,
+                "is_comment": doc.is_comment,
+                "timestamp": serialize_datetime(doc.timestamp),
                 "sender": sender_info,
-                "report_count": doc.get("report_count", 0),
-                "reported_by": [str(report.get("reported_by_id")) for report in reports_by_content.get(confession_id, [])],
+                "report_count": doc.report_count,
+                "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(confession_id, [])],
                 "reports": confession_reports,
                 "reactions": {key: [str(user) for user in value] for key, value in reactions.items()},
-                "heart_count": doc.get("heart_count", 0),
-                "haha_count": doc.get("haha_count", 0),
-                "whoa_count": doc.get("whoa_count", 0),
-                "heartbreak_count": doc.get("heartbreak_count", 0),
-                "comment_count": doc.get("comment_count", 0),
+                "heart_count": doc.heart_count,
+                "haha_count": doc.haha_count,
+                "whoa_count": doc.whoa_count,
+                "heartbreak_count": doc.heartbreak_count,
+                "comment_count": doc.comment_count,
                 "comments": comment_entries,
             }
         )
@@ -317,66 +338,56 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all conversations with participant and message metadata."""
-    conversations_repo = db.conversations
-    matches_repo = db.matches
-
-    conversation_docs = list(conversations_repo.list().sort("createdAt", -1))
-
-    # Fetch match documents
-    match_ids: List[str] = []
-    for doc in conversation_docs:
-        match_id = doc.get("matchId")
-        if match_id is not None:
-            match_ids.append(match_id)
-
-    match_map: Dict[str, Dict[str, Any]] = {}
-    if match_ids:
-        unique_match_ids = list({match_id for match_id in match_ids})
-        match_docs = matches_repo.list({"_id": {"$in": unique_match_ids}})
-        match_map = {str(item["_id"]): item for item in match_docs}
+    with db.sessions() as session:
+        conversation_docs = session.scalars(select(ConversationRecord).order_by(ConversationRecord.createdAt.desc())).all()
+        match_ids = {row.matchId for row in conversation_docs}
+        match_map = {str(row.id): row for row in session.scalars(select(MatchRecord).where(MatchRecord.id.in_(match_ids))).all()} if match_ids else {}
+        message_rows = session.scalars(select(MessageRecord).where(
+            MessageRecord.conversation_id.in_([row.id for row in conversation_docs])
+        ).order_by(MessageRecord.timestamp.desc())).all() if conversation_docs else []
+    latest_by_conversation = {}
+    for message in message_rows:
+        latest_by_conversation.setdefault(message.conversation_id, message)
 
     results: List[Dict[str, Any]] = []
     for doc in conversation_docs:
-        conversation_id = str(doc.get("_id"))
-        match_id = doc.get("matchId")
+        conversation_id = str(doc.id)
+        match_id = doc.matchId
         match_doc = match_map.get(str(match_id)) if match_id is not None else None
 
         # Get latest message
         latest_message = None
-        latest_message_doc = db.messages.get_one(
-            {"conversation_id": str(conversation_id)},
-            sort=[("timestamp", -1)]
-        )
+        latest_message_doc = latest_by_conversation.get(doc.id)
         if latest_message_doc:
             latest_message = {
-                "id": str(latest_message_doc.get("_id")),
-                "sender_id": latest_message_doc.get("sender_id"),
-                "text": latest_message_doc.get("text"),
-                "timestamp": serialize_datetime(latest_message_doc.get("timestamp")),
+                "id": str(latest_message_doc.id),
+                "sender_id": latest_message_doc.sender_id,
+                "text": latest_message_doc.text,
+                "timestamp": serialize_datetime(latest_message_doc.timestamp),
             }
 
         results.append(
             {
                 "id": conversation_id,
-                "status": doc.get("status"),
-                "created_at": serialize_datetime(doc.get("createdAt")),
-                "requested_at": serialize_datetime(doc.get("requestedAt")),
-                "accepted_at": serialize_datetime(doc.get("acceptedAt")),
-                "terminated_at": serialize_datetime(doc.get("terminatedAt")),
-                "initiator": serialize_user_by_regno(db, doc.get("initiatorId")),
-                "receiver": serialize_user_by_regno(db, doc.get("receiverId")),
+                "status": doc.status,
+                "created_at": serialize_datetime(doc.createdAt),
+                "requested_at": serialize_datetime(doc.requestedAt),
+                "accepted_at": serialize_datetime(doc.acceptedAt),
+                "terminated_at": serialize_datetime(doc.terminatedAt),
+                "initiator": serialize_user_by_regno(db, doc.initiatorId),
+                "receiver": serialize_user_by_regno(db, doc.receiverId),
                 "match": None
                 if not match_doc
                 else {
-                    "id": str(match_doc.get("_id")),
-                    "user_1_regno": match_doc.get("user_1_regno"),
-                    "user_2_regno": match_doc.get("user_2_regno"),
-                    "created_at": serialize_datetime(match_doc.get("created_at")),
-                    "expires_at": serialize_datetime(match_doc.get("expires_at")),
+                    "id": str(match_doc.id),
+                    "user_1_regno": match_doc.user_1_regno,
+                    "user_2_regno": match_doc.user_2_regno,
+                    "created_at": serialize_datetime(match_doc.created_at),
+                    "expires_at": serialize_datetime(match_doc.expires_at),
                 },
                 "latest_message": latest_message,
-                "is_blocked": doc.get("is_blocked", False),
-                "blocked_by": doc.get("blocked_by"),
+                "is_blocked": bool(doc.blocked_by),
+                "blocked_by": (doc.blocked_by or [None])[0],
             }
         )
 
@@ -385,68 +396,62 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all matches excluding administrators."""
-    matches_repo = db.matches
-    conversations_repo = db.conversations
-    users_repo = db.users
-
-    # Get admin regnos to exclude
-    admin_regnos = {
-        doc.get("Regno")
-        for doc in users_repo.list({"user_role": "admin"}, {"Regno": 1})
-        if doc.get("Regno")
-    }
-
-    match_filter: Dict[str, Any] = {}
-    if admin_regnos:
-        match_filter = {
-            "$and": [
-                {"user_1_regno": {"$nin": list(admin_regnos)}},
-                {"user_2_regno": {"$nin": list(admin_regnos)}},
-            ]
-        }
-
-    matches = list(matches_repo.list(match_filter).sort("created_at", -1))
-    match_ids = [match.get("_id") for match in matches if match.get("_id")]
+    with db.sessions() as session:
+        admin_regnos = set(session.scalars(select(UserRecord.Regno).where(UserRecord.user_role == "admin")).all())
+        match_query = select(MatchRecord)
+        if admin_regnos:
+            match_query = match_query.where(
+                MatchRecord.user_1_regno.not_in(admin_regnos), MatchRecord.user_2_regno.not_in(admin_regnos)
+            )
+        matches = session.scalars(match_query.order_by(MatchRecord.created_at.desc())).all()
+        match_ids = [match.id for match in matches]
 
     # Fetch users
     regnos: set[str] = set()
     for match in matches:
-        user_1 = match.get("user_1_regno")
-        user_2 = match.get("user_2_regno")
+        user_1 = match.user_1_regno
+        user_2 = match.user_2_regno
         if user_1:
             regnos.add(user_1)
         if user_2:
             regnos.add(user_2)
 
-    users_by_regno: Dict[str, Dict[str, Any]] = {}
-    if regnos:
-        users_by_regno = {
-            doc.get("Regno"): doc
-            for doc in users_repo.list({"Regno": {"$in": list(regnos)}})
-        }
+    with db.sessions() as session:
+        user_rows = session.scalars(select(UserRecord).where(UserRecord.Regno.in_(regnos))).all() if regnos else []
+        users_by_regno = {user.Regno: {
+            "_id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
+            "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class, "gender": user.gender,
+            "profile_picture_id": user.profile_picture_id, "interests": user.interests or [],
+            "user_role": user.user_role, "isMatchmaking": user.isMatchmaking,
+            "isNotifications": user.isNotifications, "isLovenotesRecieve": user.isLovenotesRecieve,
+            "isLovenotesSend": user.isLovenotesSend, "reported_count": user.reported_count,
+            "last_login_time": user.last_login_time, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+            "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_time": user.last_matchmaking_time,
+            "is_blocked": user.is_blocked,
+        } for user in user_rows}
 
     # Fetch conversations
-    conversations_by_match: Dict[str, Dict[str, Any]] = {}
-    if match_ids:
-        for convo in conversations_repo.list({"matchId": {"$in": match_ids}}).sort("createdAt", -1):
-            match_id_value = convo.get("matchId")
-            if not match_id_value:
-                continue
-            key = str(match_id_value)
-            if key not in conversations_by_match:
-                conversations_by_match[key] = convo
+    with db.sessions() as session:
+        conversation_rows = session.scalars(select(ConversationRecord).where(
+            ConversationRecord.matchId.in_(match_ids)
+        ).order_by(ConversationRecord.createdAt.desc())).all() if match_ids else []
+    conversations_by_match = {}
+    for convo in conversation_rows:
+        conversations_by_match.setdefault(str(convo.matchId), {
+            "_id": str(convo.id), "matchId": str(convo.matchId), "status": convo.status,
+            "requestedAt": convo.requestedAt, "acceptedAt": convo.acceptedAt,
+            "initiatorId": convo.initiatorId, "receiverId": convo.receiverId,
+        })
 
     results: List[Dict[str, Any]] = []
     now = datetime.now(timezone.utc)
 
     for match in matches:
-        match_id = match.get("_id")
-        if not match_id:
-            continue
+        match_id = str(match.id)
 
         participants: List[Dict[str, Any]] = []
         skip_match = False
-        for regno in [match.get("user_1_regno"), match.get("user_2_regno")]:
+        for regno in [match.user_1_regno, match.user_2_regno]:
             if not regno:
                 continue
             user_doc = users_by_regno.get(regno)
@@ -458,7 +463,7 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
         if skip_match:
             continue
 
-        expires_at_value = match.get("expires_at")
+        expires_at_value = match.expires_at
         expired = False
         if isinstance(expires_at_value, datetime):
             expires_at_value = expires_at_value.astimezone(timezone.utc)
@@ -483,9 +488,9 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
 
         results.append(
             {
-                "id": str(match_id),
-                "created_at": serialize_datetime(match.get("created_at")),
-                "expires_at": serialize_datetime(match.get("expires_at")),
+                "id": match_id,
+                "created_at": serialize_datetime(match.created_at),
+                "expires_at": serialize_datetime(match.expires_at),
                 "expired": expired,
                 "status": normalized_status,
                 "participants": participants,
@@ -498,15 +503,16 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
 
 def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
     """Calculate high-level admin statistics."""
-    users_repo = db.users
-    confessions_repo = db.confessions
-    love_notes_repo = db.love_notes
-
-    total_users = users_repo.count({})
-    total_confessions = confessions_repo.count({})
-    total_love_notes = love_notes_repo.count({})
-    pending_love_notes = love_notes_repo.count({"status": "pending_review"})
-    blocked_users = users_repo.count({"is_blocked": True})
+    with db.sessions() as session:
+        total_users = session.scalar(select(func.count()).select_from(UserRecord)) or 0
+        total_confessions = session.scalar(select(func.count()).select_from(ConfessionRecord)) or 0
+        total_love_notes = session.scalar(select(func.count()).select_from(LoveNoteRecord)) or 0
+        pending_love_notes = session.scalar(select(func.count()).select_from(LoveNoteRecord).where(
+            LoveNoteRecord.status == "pending_review"
+        )) or 0
+        blocked_users = session.scalar(select(func.count()).select_from(UserRecord).where(
+            UserRecord.is_blocked.is_(True)
+        )) or 0
 
     active_session_entries = collect_active_sessions(db)
     active_sessions = len(active_session_entries)

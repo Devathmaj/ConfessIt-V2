@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from sqlalchemy import func, select
 
 from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 
 from ..dependencies import get_db
 from ..models import AdminUserCreate, AdminUserUpdate, UserDetails
+from ..db_models import (ConfessionRecord, ConversationRecord, MatchRecord, MessageRecord,
+    MessageReportRecord, UserRecord)
 from ..services.auth_service import get_current_user
 from ..services.admin_service import (
     serialize_datetime,
@@ -22,6 +25,28 @@ from ..services.admin_service import (
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+def _user_payload(user):
+    if user is None: return None
+    return {"_id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
+        "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class, "gender": user.gender,
+        "profile_picture_id": user.profile_picture_id, "interests": user.interests or [],
+        "user_role": user.user_role, "isMatchmaking": user.isMatchmaking,
+        "isNotifications": user.isNotifications, "isLovenotesRecieve": user.isLovenotesRecieve,
+        "isLovenotesSend": user.isLovenotesSend, "reported_count": user.reported_count,
+        "last_login_time": user.last_login_time, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+        "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_time": user.last_matchmaking_time,
+        "is_blocked": user.is_blocked}
+
+def _conversation_payload(row):
+    return {"_id": str(row.id), "matchId": str(row.matchId), "initiatorId": row.initiatorId,
+        "receiverId": row.receiverId, "status": row.status, "createdAt": row.createdAt,
+        "requestedAt": row.requestedAt, "acceptedAt": row.acceptedAt, "terminatedAt": row.terminatedAt,
+        "is_blocked": bool(row.blocked_by), "blocked_by": (row.blocked_by or [None])[0]}
+
+def _match_payload(row):
+    return {"_id": str(row.id), "user_1_regno": row.user_1_regno, "user_2_regno": row.user_2_regno,
+        "created_at": row.created_at, "expires_at": row.expires_at}
 
 
 def _require_admin(current_user: UserDetails = Depends(get_current_user)) -> UserDetails:
@@ -57,8 +82,10 @@ async def delete_confession(
     if not is_valid_id(confession_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
 
-    result = db.confessions.delete({"_id": str(confession_id)})
-    if result.deleted_count == 0:
+    with db.sessions.begin() as session:
+        confession = session.get(ConfessionRecord, str(confession_id))
+        if confession: session.delete(confession)
+    if not confession:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
     return {"deleted": confession_id}
 
@@ -69,10 +96,9 @@ async def get_all_users(
     _: UserDetails = Depends(_require_admin)
 ) -> List[Dict[str, Any]]:
     """Return every user profile for review."""
-    return [
-        serialize_user_doc(doc)
-        for doc in db.users.list().sort("Name", 1)
-    ]
+    with db.sessions() as session:
+        users = session.scalars(select(UserRecord).order_by(UserRecord.Name.asc())).all()
+        return [serialize_user_doc(_user_payload(user)) for user in users]
 
 
 @router.post("/users", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
@@ -85,14 +111,10 @@ async def create_user(
     normalized_regno = payload.Regno.strip()
     normalized_email = payload.email.strip().lower()
 
-    conflict = db.users.get_one(
-        {
-            "$or": [
-                {"Regno": normalized_regno},
-                {"email": normalized_email},
-            ]
-        }
-    )
+    with db.sessions() as session:
+        conflict = session.scalar(select(UserRecord.id).where(
+            (UserRecord.Regno == normalized_regno) | (UserRecord.email == normalized_email)
+        ).limit(1))
     if conflict:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -105,30 +127,20 @@ async def create_user(
         if normalized_interests:
             interests_value = normalized_interests
 
-    new_user_doc: Dict[str, Any] = {
-        "Regno": normalized_regno,
-        "Name": payload.Name.strip(),
-        "email": normalized_email,
-        "emoji": payload.emoji.strip() if payload.emoji else None,
-        "bio": payload.bio.strip() if payload.bio else None,
-        "which_class": payload.which_class.strip(),
-        "gender": payload.gender.strip(),
-        "profile_picture_id": payload.profile_picture_id.strip() if payload.profile_picture_id else None,
-        "interests": interests_value or [],
-        "isMatchmaking": payload.isMatchmaking,
-        "isNotifications": payload.isNotifications,
-        "isLovenotesRecieve": payload.isLovenotesRecieve,
-        "isLovenotesSend": payload.isLovenotesSend,
-        "user_role": payload.user_role,
-        "reported_count": 0,
-        "is_blocked": False,
-        "last_login_time": None,
-        "last_login_ip": None,
-        "last_matchmaking_time": None,
-    }
-
-    insert_result = db.users.add(new_user_doc)
-    created_doc = db.users.get_one({"_id": insert_result.inserted_id})
+    with db.sessions.begin() as session:
+        user = UserRecord(
+            Regno=normalized_regno, Name=payload.Name.strip(), email=normalized_email,
+            emoji=payload.emoji.strip() if payload.emoji else None,
+            bio=payload.bio.strip() if payload.bio else None, which_class=payload.which_class.strip(),
+            gender=payload.gender.strip(),
+            profile_picture_id=payload.profile_picture_id.strip() if payload.profile_picture_id else None,
+            interests=interests_value or [], isMatchmaking=payload.isMatchmaking,
+            isNotifications=payload.isNotifications, isLovenotesRecieve=payload.isLovenotesRecieve,
+            isLovenotesSend=payload.isLovenotesSend, user_role=payload.user_role,
+        )
+        session.add(user)
+        session.flush()
+        created_doc = _user_payload(user)
     return serialize_user_doc(created_doc)
 
 
@@ -146,8 +158,10 @@ async def set_user_block_state(
     if str(current_admin.id) == user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot change your own block status")
 
-    result = db.users.update({"_id": str(user_id)}, {"$set": {"is_blocked": blocked}})
-    if result.matched_count == 0:
+    with db.sessions.begin() as session:
+        user = session.get(UserRecord, str(user_id))
+        if user: user.is_blocked = blocked
+    if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return {"id": user_id, "is_blocked": blocked}
 
@@ -168,11 +182,15 @@ async def update_user_details(
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
 
-    result = db.users.update({"_id": str(user_id)}, {"$set": update_payload})
-    if result.matched_count == 0:
+    with db.sessions.begin() as session:
+        user = session.get(UserRecord, str(user_id))
+        if user:
+            for key, value in update_payload.items():
+                setattr(user, key, value)
+            updated_doc = _user_payload(user)
+    if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    updated_doc = db.users.get_one({"_id": str(user_id)})
     return serialize_user_doc(updated_doc)
 
 
@@ -195,29 +213,33 @@ async def get_conversation_detail(
     if not is_valid_id(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
-    conversation_doc = db.conversations.get_one({"_id": str(conversation_id)})
+    with db.sessions() as session:
+        conversation_row = session.get(ConversationRecord, str(conversation_id))
+        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     match_id = conversation_doc.get("matchId")
     match_doc = None
     if match_id is not None:
-        match_doc = db.matches.get_one({"_id": match_id})
+        with db.sessions() as session:
+            match_row = session.get(MatchRecord, match_id)
+            match_doc = _match_payload(match_row) if match_row else None
 
     # Get messages from the PostgreSQL messages table
     messages: List[Dict[str, Any]] = []
-    raw_messages = db.messages.list(
-        {"conversation_id": str(conversation_id)},
-        sort=[("timestamp", 1)]
-    )
+    with db.sessions() as session:
+        raw_messages = session.scalars(select(MessageRecord).where(
+            MessageRecord.conversation_id == str(conversation_id)
+        ).order_by(MessageRecord.timestamp.asc())).all()
     for message in raw_messages:
         messages.append(
             {
-                "id": str(message.get("_id")),
-                "sender_id": message.get("sender_id"),
-                "text": message.get("text"),
-                "timestamp": serialize_datetime(message.get("timestamp")),
-                "is_read": message.get("is_read", False),
+                "id": str(message.id),
+                "sender_id": message.sender_id,
+                "text": message.text,
+                "timestamp": serialize_datetime(message.timestamp),
+                "is_read": message.read,
             }
         )
 
@@ -256,23 +278,23 @@ async def terminate_conversation(
     if not is_valid_id(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
-    conversation_doc = db.conversations.get_one({"_id": str(conversation_id)})
+    with db.sessions() as session:
+        conversation_row = session.get(ConversationRecord, str(conversation_id))
+        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     match_id = conversation_doc.get("matchId")
     now = datetime.now(timezone.utc)
 
-    db.conversations.update(
-        {"_id": conversation_doc["_id"]},
-        {"$set": {"status": "terminated", "terminatedAt": now}}
-    )
-
-    if match_id is not None:
-        db.matches.update(
-            {"_id": match_id},
-            {"$set": {"expires_at": now}}
-        )
+    with db.sessions.begin() as session:
+        conversation = session.get(ConversationRecord, conversation_doc["_id"])
+        if conversation:
+            conversation.status = "terminated"
+            conversation.terminatedAt = now
+        if match_id is not None:
+            match = session.get(MatchRecord, match_id)
+            if match: match.expires_at = now
 
     return {
         "id": conversation_id,
@@ -301,11 +323,15 @@ async def update_matchmaking_status(
     if not is_valid_id(match_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match id")
 
-    match_obj = db.matches.get_one({"_id": str(match_id)})
+    with db.sessions() as session:
+        match_row = session.get(MatchRecord, str(match_id))
+        match_obj = _match_payload(match_row) if match_row else None
     if not match_obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
 
-    conversation_doc = db.conversations.get_one({"matchId": str(match_id)})
+    with db.sessions() as session:
+        conversation_row = session.scalar(select(ConversationRecord).where(ConversationRecord.matchId == str(match_id)))
+        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found for match")
 
@@ -322,8 +348,16 @@ async def update_matchmaking_status(
     else:
         update_payload["acceptedAt"] = None
 
-    db.conversations.update({"_id": conversation_doc["_id"]}, {"$set": update_payload})
-    updated_conversation = db.conversations.get_one({"_id": conversation_doc["_id"]})
+    with db.sessions.begin() as session:
+        updated_conversation_row = session.get(ConversationRecord, conversation_doc["_id"])
+        if updated_conversation_row:
+            updated_conversation_row.status = new_status
+            updated_conversation_row.acceptedAt = update_payload["acceptedAt"]
+            updated_conversation = _conversation_payload(updated_conversation_row)
+        else:
+            updated_conversation = None
+    if not updated_conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found for match")
 
     response_status = normalize_conversation_status(updated_conversation.get("status"))
 
@@ -446,48 +480,42 @@ async def get_message_reports(
 ) -> Dict[str, Any]:
     """Get all message reports with optional status filter"""
     
-    query = {}
+    filters = []
     if status_filter:
-        query["status"] = status_filter
-    
-    reports = list(
-        db.message_reports
-        .list(query)
-        .sort("reported_at", -1)
-        .skip(skip)
-        .limit(limit)
-    )
-    
-    total = db.message_reports.count(query)
+        filters.append(MessageReportRecord.status == status_filter)
+    with db.sessions() as session:
+        reports = session.scalars(select(MessageReportRecord).where(*filters)
+            .order_by(MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
+        total = session.scalar(select(func.count()).select_from(MessageReportRecord).where(*filters)) or 0
     
     # Enrich with user and message details
     enriched_reports = []
+    with db.sessions() as session:
+        regnos = {report.reporter_id for report in reports} | {report.reported_user_id for report in reports}
+        users = {user.Regno: user for user in session.scalars(select(UserRecord).where(UserRecord.Regno.in_(regnos))).all()} if regnos else {}
+        message_ids = {report.message_id for report in reports}
+        messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
     for report in reports:
-        # Get reporter info
-        reporter = db.users.get_one({"Regno": report["reporter_id"]})
-        
-        # Get reported user info
-        reported_user = db.users.get_one({"Regno": report["reported_user_id"]})
-        
-        # Get message
-        message = db.messages.get_one({"_id": report["message_id"]})
+        reporter = users.get(report.reporter_id)
+        reported_user = users.get(report.reported_user_id)
+        message = messages.get(str(report.message_id))
         
         enriched_reports.append({
-            "id": str(report["_id"]),
-            "message_id": str(report["message_id"]),
-            "message_text": message["text"] if message else "[Message not found]",
-            "conversation_id": str(report["conversation_id"]),
+            "id": str(report.id),
+            "message_id": str(report.message_id),
+            "message_text": message.text if message else "[Message not found]",
+            "conversation_id": str(message.conversation_id) if message else None,
             "reporter": {
-                "regno": report["reporter_id"],
-                "name": reporter["Name"] if reporter else "Unknown"
+                "regno": report.reporter_id,
+                "name": reporter.Name if reporter else "Unknown"
             },
             "reported_user": {
-                "regno": report["reported_user_id"],
-                "name": reported_user["Name"] if reported_user else "Unknown"
+                "regno": report.reported_user_id,
+                "name": reported_user.Name if reported_user else "Unknown"
             },
-            "reason": report["reason"],
-            "reported_at": serialize_datetime(report["reported_at"]),
-            "status": report.get("status", "pending")
+            "reason": report.reason,
+            "reported_at": serialize_datetime(report.reported_at),
+            "status": report.status
         })
     
     return {
@@ -508,12 +536,13 @@ async def update_message_report_status(
     """Update the status of a message report"""
     
     try:
-        result = db.message_reports.update(
-            {"_id": str(report_id)},
-            {"$set": {"status": new_status, "reviewed_at": datetime.now(timezone.utc)}}
-        )
-        
-        if result.matched_count == 0:
+        with db.sessions.begin() as session:
+            report = session.get(MessageReportRecord, str(report_id))
+            if report:
+                report.status = new_status
+                report.reviewed_at = datetime.now(timezone.utc)
+                report.reviewed_by = _.Regno if _ else None
+        if not report:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Report not found"

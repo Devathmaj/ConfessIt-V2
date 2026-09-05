@@ -5,6 +5,7 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
 from .postgres import Database
+from .db_models import LoginTokenRecord
 from fastapi import Request
 
 from .models import LoginToken
@@ -50,7 +51,25 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
     )
     
     # 5. Insert the new token document into the database
-    db.login_tokens.add(login_token_entry.dict(by_alias=True))
+    with db.sessions.begin() as session:
+        session.add(LoginTokenRecord(
+            id=login_token_entry.id,
+            user_id=login_token_entry.user_id,
+            token_hash=login_token_entry.token_hash,
+            issued_at=login_token_entry.issued_at,
+            expires_at=login_token_entry.expires_at,
+            consumed_at=login_token_entry.consumed_at,
+            used=login_token_entry.used,
+            revoked=login_token_entry.revoked,
+            request_ip=login_token_entry.request_ip,
+            request_user_agent=login_token_entry.request_user_agent,
+            consume_ip=login_token_entry.consume_ip,
+            consume_user_agent=login_token_entry.consume_user_agent,
+            attempt_count=login_token_entry.attempt_count,
+            session_status=login_token_entry.session_status,
+            last_seen_at=login_token_entry.last_seen_at,
+            device=login_token_entry.device,
+        ))
     
     # 6. Return the unhashed token to be used in the magic link
     return token

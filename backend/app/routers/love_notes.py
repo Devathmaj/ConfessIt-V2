@@ -1,5 +1,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from ..db_models import LoveNoteRecord, UserRecord
 from ..postgres import Database
 from typing import Annotated, List, Dict, Any
 from ..postgres import new_id, is_valid_id
@@ -91,36 +93,23 @@ async def get_received_love_notes(
     Used to fetch all accepted love notes sent to the current user.
     """
     # Find all love notes sent to current user with status 'approved'
-    love_notes = list(
-        db.love_notes.list({
-            "recipient_id": current_user.id,
-            "status": "approved"
-        }).sort("created_at", -1)
-    )
-    
-    # Enrich with sender information
-    result = []
-    for note in love_notes:
-        sender_id = note.get("sender_id")
-        sender = None
-        
-        if sender_id:
-            sender = db.users.get_one({"_id": sender_id})
-        
-        # Prepare sender name (handle anonymous)
-        sender_name = "Anonymous"
-        if not note.get("is_anonymous", False) and sender:
-            sender_name = sender.get("Name", "Unknown")
-        
-        result.append({
-            "id": str(note.get("_id")),
-            "from": sender_name,
-            "message": note.get("message_text", ""),
-            "image_url": note.get("image_url"),
-            "anonymous": note.get("is_anonymous", False),
-            "created_at": isoformat_datetime(note.get("created_at")),
-            "read_at": isoformat_datetime(note.get("read_at")),
-        })
+    with db.sessions() as session:
+        love_notes = session.scalars(select(LoveNoteRecord).where(
+            LoveNoteRecord.recipient_id == current_user.id,
+            LoveNoteRecord.status == "approved",
+        ).order_by(LoveNoteRecord.created_at.desc())).all()
+        sender_ids = {note.sender_id for note in love_notes if note.sender_id}
+        senders = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(sender_ids))).all()} if sender_ids else {}
+        result = []
+        for note in love_notes:
+            sender = senders.get(note.sender_id)
+            sender_name = "Anonymous" if note.is_anonymous or not sender else sender.Name or "Unknown"
+            result.append({
+                "id": str(note.id), "from": sender_name, "message": note.message_text,
+                "image_url": note.image_url, "anonymous": note.is_anonymous,
+                "created_at": isoformat_datetime(note.created_at),
+                "read_at": isoformat_datetime(note.read_at),
+            })
     
     return result
 
@@ -141,21 +130,18 @@ async def mark_love_note_read(
         )
     
     # Verify the note belongs to the current user
-    note = db.love_notes.get_one({
-        "_id": str(note_id),
-        "recipient_id": current_user.id
-    })
+    with db.sessions.begin() as session:
+        note = session.scalar(select(LoveNoteRecord).where(
+            LoveNoteRecord.id == str(note_id),
+            LoveNoteRecord.recipient_id == current_user.id,
+        ).with_for_update())
+        if note:
+            note.read_at = datetime.now(timezone.utc)
     
     if not note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Love note not found."
         )
-    
-    # Update read_at timestamp
-    db.love_notes.update(
-        {"_id": str(note_id)},
-        {"$set": {"read_at": datetime.now(timezone.utc)}}
-    )
     
     return {"message": "Love note marked as read."}

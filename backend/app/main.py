@@ -5,14 +5,15 @@ import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select, text
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
 from .services.auth_service import get_current_user
 from .dependencies import get_db 
 from .postgres import Database, PostgresClient
 from .services.storage_service import storage_service
 import uvicorn
-from .config import settings
 from .models import UserDetails
+from .db_models import UserRecord
 from .logger import get_logger
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -53,10 +54,10 @@ app = FastAPI(
 async def on_startup():
     logger.info("Initializing PostgreSQL storage...")
     postgres = PostgresClient()
-    db = postgres[settings.DATABASE_NAME]
     for attempt in range(30):
         try:
-            db.command("ping")
+            with postgres.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
             break
         except Exception:
             if attempt == 29:
@@ -65,14 +66,20 @@ async def on_startup():
 
     postgres.initialize()
 
-    users = db.users
     seeds = [
         UserDetails(Regno="user", Name="Test User", email="user@test.com", bio="This is a test user.", which_class="Test_Class", profile_picture_id="random_string_1", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"),
         UserDetails(Regno="admin", Name="Test Admin", email="admin@test.com", bio="This is a test admin.", which_class="Test_Class", profile_picture_id="random_string_2", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="admin"),
     ]
-    for user in seeds:
-        if not users.get_one({"Regno": user.Regno}):
-            users.add(user.model_dump(by_alias=True))
+    with postgres.sessions.begin() as session:
+        for user in seeds:
+            if not session.scalar(select(UserRecord.id).where(UserRecord.Regno == user.Regno)):
+                session.add(UserRecord(
+                    Regno=user.Regno, Name=user.Name, email=str(user.email), bio=user.bio,
+                    which_class=user.which_class, profile_picture_id=user.profile_picture_id,
+                    gender=user.gender, interests=user.interests or [], isMatchmaking=user.isMatchmaking,
+                    isNotifications=user.isNotifications, isLovenotesRecieve=user.isLovenotesRecieve,
+                    isLovenotesSend=user.isLovenotesSend, user_role=user.user_role,
+                ))
     logger.info("PostgreSQL storage initialized.")
 # ----------------------
 # CORS Middleware
@@ -165,7 +172,8 @@ async def read_root():
 def db_test(db: Database = Depends(get_db)):
     """Used to test the database connection."""
     try:
-        db.command("ping")
+        with db.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
         logger.info("Database connection test successful")
         return {"status": "success", "message": "Successfully connected to the database"}
     except Exception as e:

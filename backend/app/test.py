@@ -1,11 +1,11 @@
-import logging
 import psycopg
-from .config import settings
 from .postgres import PostgresClient
-from .models import UserDetails, LoginToken
+from .models import UserDetails
 import secrets
 from datetime import datetime, timedelta, timezone
 import hashlib
+from sqlalchemy import select
+from .db_models import LoginTokenRecord, UserRecord
 
 def create_magic_link_token() -> str:
     """
@@ -26,9 +26,6 @@ def main():
     """
     try:
         client = PostgresClient()
-        db = client[settings.DATABASE_NAME]
-        user_details_repo = db.users
-        login_tokens_repo = db.login_tokens
 
         # Define the user and admin documents
         users = [
@@ -54,53 +51,36 @@ def main():
             ),
         ]
 
-        # Insert the user and admin into the database
-        for user in users:
-            # Check if a user with the same email already exists
-            if not user_details_repo.get_one({"email": user.email}):
-                user_details_repo.add(user.dict(by_alias=True))
-                print(f"Successfully inserted user: {user.Name}")
-            else:
-                print(f"User with email {user.email} already exists.")
+        issued_tokens = []
+        with client.sessions.begin() as session:
+            for user in users:
+                user_row = session.scalar(select(UserRecord).where(UserRecord.email == str(user.email)))
+                if not user_row:
+                    user_row = UserRecord(Regno=user.Regno, Name=user.Name, email=str(user.email),
+                        which_class=user.which_class, profile_picture_id=user.profile_picture_id,
+                        gender=user.gender, isMatchmaking=user.isMatchmaking,
+                        isNotifications=user.isNotifications)
+                    session.add(user_row)
+                    session.flush()
+                    print(f"Successfully inserted user: {user.Name}")
+                else:
+                    print(f"User with email {user.email} already exists.")
 
-        # Generate, store, and print magic link tokens for the users
-        for user_data in users:
-            user_in_db = user_details_repo.get_one({"email": user_data.email})
-            if user_in_db:
-                user_id = str(user_in_db["_id"])
-                
-                # Generate a new token
                 token = create_magic_link_token()
-                
-                # Create and store the LoginToken document
-                token_hash = hash_token(token)
                 issued_at = datetime.now(timezone.utc)
-                expires_at = issued_at + timedelta(hours=1)
-                
-                login_token_entry = LoginToken(
-                    user_id=user_id,
-                    token_hash=token_hash,
-                    issued_at=issued_at,
-                    expires_at=expires_at,
-                    consumed_at=None,
-                    used=False,
-                    revoked=False,
-                    request_ip="127.0.0.1", # Dummy IP
-                    request_user_agent="Test Script", # Dummy User Agent
-                    consume_ip=None,
-                    consume_user_agent=None,
-                    attempt_count=0,
+                token_row = LoginTokenRecord(
+                    user_id=user_row.id, token_hash=hash_token(token), issued_at=issued_at,
+                    expires_at=issued_at + timedelta(hours=1), used=False, revoked=False,
+                    request_ip="127.0.0.1", request_user_agent="Test Script", attempt_count=0,
                     session_status="issued",
-                    last_seen_at=None,
-                    device=None
                 )
-                
-                login_tokens_repo.add(login_token_entry.dict(by_alias=True))
-                print(f"Successfully stored token for {user_data.Name}.")
+                session.add(token_row)
+                issued_tokens.append((user.Name, str(user.email), token))
 
-                # Print the unhashed token for testing purposes
-                print(f"\nMagic link token for {user_data.Name} ({user_data.email}):")
-                print(token)
+        for name, email, token in issued_tokens:
+            print(f"Successfully stored token for {name}.")
+            print(f"\nMagic link token for {name} ({email}):")
+            print(token)
 
 
     except psycopg.Error as e:

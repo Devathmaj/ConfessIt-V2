@@ -5,9 +5,11 @@ import gzip
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from sqlalchemy import delete, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
+from ..db_models import MessageRecord
 from ..utils import isoformat_datetime
 
 logger = logging.getLogger(__name__)
@@ -40,11 +42,11 @@ class MessageArchivalService:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_old)
             
             # Find old messages
-            old_messages = list(
-                db.messages.list({
-                    "timestamp": {"$lt": cutoff_time}
-                })
-            )
+            with db.sessions() as session:
+                rows = session.scalars(select(MessageRecord).where(MessageRecord.timestamp < cutoff_time)).all()
+                old_messages = [{"_id": row.id, "conversation_id": row.conversation_id,
+                    "sender_id": row.sender_id, "receiver_id": row.receiver_id,
+                    "text": row.text, "timestamp": row.timestamp, "read": row.read} for row in rows]
             
             if not old_messages:
                 logger.info("No messages to archive")
@@ -73,10 +75,9 @@ class MessageArchivalService:
             
             # Delete archived messages from PostgreSQL
             if archived_count > 0:
-                result = db.messages.delete_all({
-                    "timestamp": {"$lt": cutoff_time}
-                })
-                deleted_count = result.deleted_count
+                with db.sessions.begin() as session:
+                    result = session.execute(delete(MessageRecord).where(MessageRecord.timestamp < cutoff_time))
+                    deleted_count = result.rowcount or 0
                 
                 logger.info(
                     f"Archived {archived_count} messages to {len(archive_files)} files, "

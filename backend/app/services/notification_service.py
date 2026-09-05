@@ -2,7 +2,8 @@
 
 from datetime import datetime, timezone
 from ..postgres import Database
-from ..postgres import new_id, is_valid_id
+from sqlalchemy import select
+from ..db_models import NotificationRecord
 
 from ..models import Notification, NotificationContent
 from ..utils import isoformat_datetime
@@ -16,26 +17,40 @@ def create_notification_service(user_id: str, heading: str, body: str, db: Datab
         content=NotificationContent(heading=heading, body=body),
         timestamp=datetime.now(timezone.utc)
     )
-    result = db.notifications.add(notification.dict(by_alias=True))
-    return str(result.inserted_id)
+    with db.sessions.begin() as session:
+        row = NotificationRecord(
+            user_id=user_id,
+            heading=heading,
+            body=body,
+            timestamp=notification.timestamp,
+            read=False,
+        )
+        session.add(row)
+        session.flush()
+        return str(row.id)
 
 def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
     """
     Get notifications for a user, ordered by timestamp descending.
     """
-    notifications = db.notifications.list(
-        {"user_id": user_id}
-    ).sort("timestamp", -1).limit(limit)
+    with db.sessions() as session:
+        notifications = session.scalars(
+            select(NotificationRecord)
+            .where(NotificationRecord.user_id == user_id)
+            .order_by(NotificationRecord.timestamp.desc())
+            .limit(limit)
+        ).all()
     
     # Convert str to string and handle serialization
     result = []
     for notification in notifications:
-        notification_dict = dict(notification)
-        notification_dict["_id"] = str(notification_dict["_id"])
-        # Convert timestamp to ISO format string for JSON serialization
-        if "timestamp" in notification_dict and notification_dict["timestamp"]:
-            notification_dict["timestamp"] = isoformat_datetime(notification_dict["timestamp"])
-        result.append(notification_dict)
+        result.append({
+            "_id": str(notification.id),
+            "user_id": notification.user_id,
+            "content": {"heading": notification.heading, "body": notification.body},
+            "timestamp": isoformat_datetime(notification.timestamp),
+            "read": notification.read,
+        })
     
     return result
 
@@ -43,15 +58,22 @@ def mark_notification_read_service(notification_id: str, user_id: str, db: Datab
     """
     Mark a notification as read.
     """
-    db.notifications.update(
-        {"_id": str(notification_id), "user_id": user_id},
-        {"$set": {"read": True}}
-    )
+    with db.sessions.begin() as session:
+        notification = session.scalar(select(NotificationRecord).where(
+            NotificationRecord.id == notification_id,
+            NotificationRecord.user_id == user_id,
+        ))
+        if notification:
+            notification.read = True
 
 def delete_notification_service(notification_id: str, user_id: str, db: Database):
     """
     Delete a notification.
     """
-    db.notifications.delete(
-        {"_id": str(notification_id), "user_id": user_id}
-    )
+    with db.sessions.begin() as session:
+        notification = session.scalar(select(NotificationRecord).where(
+            NotificationRecord.id == notification_id,
+            NotificationRecord.user_id == user_id,
+        ))
+        if notification:
+            session.delete(notification)

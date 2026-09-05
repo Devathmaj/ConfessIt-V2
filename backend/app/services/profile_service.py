@@ -6,6 +6,8 @@ from typing import List, Optional
 from fastapi import File, HTTPException, UploadFile, status
 from ..postgres import Database
 from pydantic import BaseModel
+from sqlalchemy import select
+from ..db_models import UserRecord
 
 from ..models import UserDetails
 from ..services.storage_service import storage_service
@@ -37,14 +39,24 @@ async def update_user_profile_service(
             detail="No update data provided"
         )
 
-    updated_user_doc = db.users.get_and_update(
-        {"Regno": current_user.Regno},
-        {"$set": update_data},
-        return_after=True
-    )
-
-    if not updated_user_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    with db.sessions.begin() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno).with_for_update())
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        for field, value in update_data.items():
+            setattr(user, field, value)
+        updated_user_doc = {
+            "_id": str(user.id), "Regno": user.Regno, "Name": user.Name,
+            "email": user.email, "emoji": user.emoji, "bio": user.bio,
+            "which_class": user.which_class, "profile_picture_id": user.profile_picture_id,
+            "gender": user.gender, "interests": user.interests or [],
+            "isMatchmaking": user.isMatchmaking, "isNotifications": user.isNotifications,
+            "isLovenotesRecieve": user.isLovenotesRecieve, "isLovenotesSend": user.isLovenotesSend,
+            "is_blocked": user.is_blocked, "reported_count": user.reported_count,
+            "last_login_time": user.last_login_time, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+            "last_login_user_agent": user.last_login_user_agent, "user_role": user.user_role,
+            "last_matchmaking_time": user.last_matchmaking_time,
+        }
 
     enriched_doc = storage_service.with_profile_signed_url(updated_user_doc) or updated_user_doc
     return UserDetails(**enriched_doc)
@@ -92,10 +104,10 @@ async def upload_profile_picture_service(
 
     # Store the full Cloudinary URL in the database (not just the object path)
     cloudinary_url = upload_result["cloudinary_url"]
-    db.users.update(
-        {"Regno": current_user.Regno},
-        {"$set": {"profile_picture_id": cloudinary_url}}
-    )
+    with db.sessions.begin() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+        if user:
+            user.profile_picture_id = cloudinary_url
 
     return {
         "profile_picture_id": cloudinary_url,

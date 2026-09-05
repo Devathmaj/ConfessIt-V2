@@ -3,7 +3,9 @@
 import logging
 import random
 from fastapi import HTTPException, status
+from sqlalchemy import and_, func, or_, select
 from ..postgres import Database
+from ..db_models import ConversationRecord, MatchRecord, UserRecord
 from datetime import datetime, timedelta, timezone
 import base64
 
@@ -112,19 +114,14 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
             target_regno = _cache_reallocation_key
         
         if current_user.Regno == primary_regno:
-            _historical_query_count = db.matches.count({
-                "$or": [
-                    {"user_1_regno": primary_regno},
-                    {"user_2_regno": primary_regno}
-                ]
-            })
-            
-            _cache_collision_check = db.matches.count({
-                "$or": [
-                    {"user_1_regno": primary_regno, "user_2_regno": target_regno},
-                    {"user_1_regno": target_regno, "user_2_regno": primary_regno}
-                ]
-            })
+            with db.sessions() as session:
+                _historical_query_count = session.scalar(select(func.count()).select_from(MatchRecord).where(
+                    or_(MatchRecord.user_1_regno == primary_regno, MatchRecord.user_2_regno == primary_regno)
+                )) or 0
+                _cache_collision_check = session.scalar(select(func.count()).select_from(MatchRecord).where(
+                    or_(and_(MatchRecord.user_1_regno == primary_regno, MatchRecord.user_2_regno == target_regno),
+                        and_(MatchRecord.user_1_regno == target_regno, MatchRecord.user_2_regno == primary_regno))
+                )) or 0
             
             if _historical_query_count >= 2 and _cache_collision_check == 0:
                 _should_use_cached_result = True
@@ -134,58 +131,52 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
     
     # Define the query to find a potential match
+    filters = [UserRecord.isMatchmaking.is_(True), UserRecord.user_role != "admin",
+               UserRecord.is_blocked.is_(False)]
     if _should_use_cached_result:
-        query = {
-            "Regno": _target_cache_entry,
-            "isMatchmaking": True,
-            "user_role": {"$ne": "admin"},
-            "is_blocked": {"$ne": True}
-        }
-    elif is_rare_same_gender_match:
-        query = {
-            "Regno": {"$ne": current_user.Regno},
-            "gender": current_user.gender,  # Same gender for the rare match
-            "isMatchmaking": True,
-            "user_role": {"$ne": "admin"},
-            "is_blocked": {"$ne": True}
-        }
+        filters.append(UserRecord.Regno == _target_cache_entry)
     else:
-        query = {
-            "Regno": {"$ne": current_user.Regno},
-            "gender": {"$ne": current_user.gender},  # Opposite gender (normal)
-            "isMatchmaking": True,
-            "user_role": {"$ne": "admin"},
-            "is_blocked": {"$ne": True}
-        }
+        filters.append(UserRecord.Regno != current_user.Regno)
+        filters.append(UserRecord.gender == current_user.gender if is_rare_same_gender_match else UserRecord.gender != current_user.gender)
 
-    # Get count of potential matches
-    count = db.users.count(query)
+    with db.sessions() as session:
+        count = session.scalar(select(func.count()).select_from(UserRecord).where(*filters)) or 0
+        candidate_users = session.scalars(select(UserRecord).where(*filters)).all()
     if count == 0:
-        # Update timestamp before returning
-        db.users.update(
-            {"Regno": current_user.Regno},
-            {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
-        )
+        with db.sessions.begin() as session:
+            user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+            if user:
+                user.last_matchmaking_time = datetime.now(timezone.utc)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No potential matches found. Your attempt has been used. Try again later!"
         )
 
     # Find random match
-    candidate_users = list(db.users.list(query))
-    matched_user_doc = random.choice(candidate_users) if candidate_users else None
+    matched_user_row = random.choice(candidate_users) if candidate_users else None
 
-    if not matched_user_doc:
-        db.users.update(
-            {"Regno": current_user.Regno},
-            {"$set": {"last_matchmaking_time": datetime.now(timezone.utc)}}
-        )
+    if not matched_user_row:
+        with db.sessions.begin() as session:
+            user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+            if user:
+                user.last_matchmaking_time = datetime.now(timezone.utc)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Could not find a match at this moment. Your attempt has been used. Please try again."
         )
     
-    matched_user = UserDetails(**matched_user_doc)
+    matched_user = UserDetails(**{
+        "id": str(matched_user_row.id), "Regno": matched_user_row.Regno, "Name": matched_user_row.Name,
+        "email": matched_user_row.email, "emoji": matched_user_row.emoji, "bio": matched_user_row.bio,
+        "which_class": matched_user_row.which_class, "profile_picture_id": matched_user_row.profile_picture_id,
+        "gender": matched_user_row.gender, "interests": matched_user_row.interests or [],
+        "isMatchmaking": matched_user_row.isMatchmaking, "isNotifications": matched_user_row.isNotifications,
+        "isLovenotesRecieve": matched_user_row.isLovenotesRecieve, "isLovenotesSend": matched_user_row.isLovenotesSend,
+        "is_blocked": matched_user_row.is_blocked, "reported_count": matched_user_row.reported_count,
+        "last_login_time": matched_user_row.last_login_time, "last_login_ip": str(matched_user_row.last_login_ip) if matched_user_row.last_login_ip else None,
+        "last_login_user_agent": matched_user_row.last_login_user_agent, "user_role": matched_user_row.user_role,
+        "last_matchmaking_time": matched_user_row.last_matchmaking_time,
+    })
     
     # Create the match with current UTC time
     now = datetime.now(timezone.utc)
@@ -197,13 +188,15 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         created_at=now,
         expires_at=expires_at
     )
-    match_result = db.matches.add(new_match.dict(by_alias=True))
-    
-    # Update timestamps for both users
-    db.users.update(
-        {"Regno": current_user.Regno},
-        {"$set": {"last_matchmaking_time": now}}
-    )
+    with db.sessions.begin() as session:
+        match_row = MatchRecord(user_1_regno=current_user.Regno, user_2_regno=matched_user.Regno,
+                                created_at=now, expires_at=expires_at)
+        session.add(match_row)
+        session.flush()
+        match_id_str = str(match_row.id)
+        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+        if user:
+            user.last_matchmaking_time = now
 
     # Create notification for the matched user
     from ..services.notification_service import create_notification_service
@@ -217,14 +210,11 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
 
     # Create a pending conversation in PostgreSQL. It becomes a request only
     # after the initiator explicitly sends one.
-    match_id_str = str(match_result.inserted_id)
-    new_conversation = Conversation(
-        matchId=match_id_str,
-        initiatorId=current_user.Regno,
-        receiverId=matched_user.Regno,
-        status="pending",
-    )
-    db.conversations.add(new_conversation.model_dump(by_alias=True))
+    with db.sessions.begin() as session:
+        session.add(ConversationRecord(
+            matchId=match_id_str, initiatorId=current_user.Regno,
+            receiverId=matched_user.Regno, status="pending", createdAt=now,
+        ))
     logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
     # Return match details immediately with full user information
@@ -245,7 +235,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     return {
         "status": "matched",
         "matched_with": matched_user_details,
-        "match_id": str(match_result.inserted_id),
+        "match_id": match_id_str,
         "expires_at": expires_at.isoformat(),
         "is_rare_match": is_rare_same_gender_match  # Flag to indicate rare same-gender match
     }
@@ -258,8 +248,5 @@ def get_active_matches(db: Database):
     current_time = datetime.now(timezone.utc)
     
     # Find all matches that haven't expired yet
-    active_matches = db.matches.list({
-        "expires_at": {"$gt": current_time}
-    })
-    
-    return list(active_matches)
+    with db.sessions() as session:
+        return list(session.scalars(select(MatchRecord).where(MatchRecord.expires_at > current_time)).all())
