@@ -139,9 +139,14 @@ async def websocket_endpoint(
         
         # Validate user is participant
         try:
-            message_service.validate_conversation_participant(
+            conversation = message_service.validate_conversation_participant(
                 db, conversation_id, user.regno
             )
+            if conversation.get("is_blocked", False):
+                logger.warning(f"WebSocket rejected: conversation {conversation_id} is blocked")
+                await websocket.send_json({"error": "Conversation is blocked"})
+                await websocket.close(code=4003)
+                return
         except Exception as e:
             logger.error(f"WebSocket validation failed: {e}")
             await websocket.send_json({"error": str(e)})

@@ -87,7 +87,8 @@ class MessageService:
             "receiver_regno": row.receiver_regno, "status": row.status, "requested_at": row.requested_at,
             "accepted_at": row.accepted_at, "created_at": row.created_at,
             "last_message_at": row.last_message_at, "last_message_preview": row.last_message_preview,
-            "blocked_by": row.blocked_by or [], "terminated_at": row.terminated_at,
+            "is_blocked": bool(row.blocked_by), "blocked_by": row.blocked_by or [],
+            "terminated_at": row.terminated_at,
         }
     
     def send_message(
@@ -137,12 +138,17 @@ class MessageService:
         
         # Insert into PostgreSQL
         with db.sessions.begin() as session:
+            conversation_row = session.get(ConversationRecord, str(conversation_id))
+            if conversation_row and conversation_row.blocked_by:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot send messages: this conversation is blocked"
+                )
             row = MessageRecord(
                 conversation_id=str(conversation_id), sender_regno=sender.regno,
                 receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
             )
             session.add(row)
-            conversation_row = session.get(ConversationRecord, str(conversation_id))
             if conversation_row:
                 conversation_row.last_message_at = message_doc["created_at"]
                 conversation_row.last_message_preview = body[:100]
