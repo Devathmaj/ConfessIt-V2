@@ -19,6 +19,11 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
+# Claim set by the asset delivery proxy on its own short-lived tokens. Access tokens must
+# never be minted from one, and asset tokens must not be accepted as access tokens: they
+# travel in <img src> query strings and therefore leak into logs, referrers and history.
+ASSET_TOKEN_TYPE = "asset_delivery"
+
 def _user_payload(user: UserRecord) -> dict:
     return {
         "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
@@ -39,6 +44,37 @@ def _ensure_not_blocked(user: UserRecord) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been blocked. Contact an administrator.",
         )
+
+def _reject_asset_token(payload: dict) -> None:
+    """Refuse an asset delivery token presented as an API access token."""
+    if payload.get("typ") == ASSET_TOKEN_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+def load_active_user_service(db: Database, regno: str) -> UserDetails:
+    """
+    Load a user by registration number and reject unknown or blocked accounts.
+
+    Used when a request is authenticated by an asset delivery token rather than by the
+    normal bearer flow, so the account is re-validated against the database.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not regno:
+        raise credentials_exception
+    with db.sessions() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
+    if user is None:
+        raise credentials_exception
+    _ensure_not_blocked(user)
+    return UserDetails(**_user_payload(user))
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
 
@@ -77,6 +113,7 @@ def verify_token_service(token: str, db: Database) -> UserDetails:
         regno: str = payload.get("sub")
         if regno is None:
             raise credentials_exception
+        _reject_asset_token(payload)
     except jwt.PyJWTError as e:
         logger.error(f"JWT decode error: {e}")
         raise credentials_exception
@@ -104,6 +141,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends
         regno: str = payload.get("sub")
         if regno is None:
             raise credentials_exception
+        _reject_asset_token(payload)
     except jwt.PyJWTError:
         raise credentials_exception
 
@@ -125,6 +163,8 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         regno: str = payload.get("sub")
         if regno is None:
+            return None
+        if payload.get("typ") == ASSET_TOKEN_TYPE:
             return None
         with db.sessions() as session:
             user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))

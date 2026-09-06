@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     CLOUDINARY_DEFAULT_VIEW_TTL: int | None = None
     CLOUDINARY_ALLOWED_FORMATS: str | None = None
 
+    # Lifetime of the short-lived tokens embedded in backend image delivery URLs.
+    # Defaults to the access-token lifetime when unset.
+    ASSET_TOKEN_TTL_SECONDS: int | None = None
+
+    # Absolute base URL of the backend that serves the image proxy routes. Must point at
+    # the API, not the frontend. Falls back to PUBLIC_BASE_URL when unset.
+    ASSET_BASE_URL: str | None = None
+
     SECRET_KEY: str = secrets.token_hex(32)
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30

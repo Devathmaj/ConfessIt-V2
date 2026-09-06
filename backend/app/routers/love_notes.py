@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from ..dependencies import get_db
 from ..models import UserDetails
+from ..services import asset_delivery_service
 from ..services.auth_service import get_current_user
 from ..services.love_note_service import (
     LoveNoteCreate,
@@ -116,7 +117,14 @@ async def get_received_love_notes(
             sender_name = "Anonymous" if note.anonymous or not sender else sender.name or "Unknown"
             result.append({
                 "id": str(note.id), "from": sender_name, "body": note.body,
-                "image_url": note.image_url, "anonymous": note.anonymous,
+                # Only approved notes reach this list, so the recipient is entitled to
+                # the image and the proxy will serve it.
+                "image_url": asset_delivery_service.build_delivery_url(
+                    kind="love-notes",
+                    stored_identifier=note.image_url,
+                    regno=current_user.regno,
+                ) or note.image_url,
+                "anonymous": note.anonymous,
                 "created_at": isoformat_datetime(note.created_at),
                 "read_at": isoformat_datetime(note.read_at),
             })

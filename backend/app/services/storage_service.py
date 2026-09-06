@@ -45,6 +45,7 @@ class CloudinaryStorageService:
         self.bucket_name = os.getenv("CLOUDINARY_PROFILE_FOLDER")
         self.events_bucket = os.getenv("CLOUDINARY_EVENTS_FOLDER")
         self.gallery_bucket = os.getenv("CLOUDINARY_GALLERY_FOLDER")
+        self.love_notes_bucket = os.getenv("CLOUDINARY_LOVE_NOTES_FOLDER", "love_notes")
 
         try:
             self.max_image_size_mb = max(1, int(os.getenv("MAX_IMAGE_SIZE_MB", "2")))
@@ -103,6 +104,7 @@ class CloudinaryStorageService:
             "events": self.events_bucket,
             "gallery": self.gallery_bucket,
             "committee": self.gallery_bucket,
+            "love-notes": self.love_notes_bucket,
         }
 
     def _ensure_enabled(self):
@@ -557,6 +559,29 @@ class CloudinaryStorageService:
     def get_secure_url_for_bucket(self, bucket_name: str, object_path: str) -> str:
         """Public helper to get a public URL for an object in a specific bucket."""
         return self._build_secure_url(bucket_name, object_path)
+
+    def get_origin_url(self, route_key: str, object_path: str, secure: bool = True) -> str:
+        """Return the untransformed Cloudinary origin URL for an object.
+
+        Used by the asset delivery proxy, which fetches bytes server-side. Unlike
+        ``_build_secure_url`` this defaults to HTTPS so the backend never issues a
+        plain-HTTP request to the object store.
+        """
+        if not self.enabled:
+            raise HTTPException(status_code=503, detail="Object storage is disabled")
+        bucket_name = self._route_bucket_map.get(route_key)
+        if not bucket_name:
+            raise HTTPException(status_code=400, detail="Invalid route key")
+        public_id = self._build_public_id(bucket_name, object_path)
+        _, ext = os.path.splitext(object_path)
+        url, _ = cloudinary_url(
+            public_id,
+            format=ext.lstrip(".") or None,
+            secure=secure,
+            resource_type="image",
+            type="upload",
+        )
+        return url
 
     def get_signed_url_for_bucket(self, bucket_name: str, object_path: str, expires_in_seconds: Optional[int] = None) -> str:
         """Generate a public URL for an image in a specific bucket.

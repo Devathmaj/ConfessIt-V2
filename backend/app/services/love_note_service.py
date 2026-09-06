@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
 from ..services.storage_service import storage_service
+from ..services import asset_delivery_service
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -120,7 +121,10 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         return {
             "message": "Love note sent successfully for review.",
             "note_id": note_id,
-            "image_url": cloudinary_url
+            # The sender is always entitled to their own note, in any review state.
+            "image_url": asset_delivery_service.build_delivery_url(
+                kind="love-notes", stored_identifier=cloudinary_url, regno=sender.regno
+            ) or cloudinary_url
         }
     
     logger.error("Failed to insert love note into the database.")
@@ -134,7 +138,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
 # Admin-only Love Note Functions
 # ============================================================================
 
-async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
+async def get_all_love_notes_for_admin(db: Database, admin_regno: str) -> List[Dict[str, Any]]:
     """
     Fetch all love notes with full sender and recipient details for admin review.
     """
@@ -142,7 +146,7 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
     with db.sessions() as session:
         rows = session.scalars(select(LoveNoteRecord).order_by(LoveNoteRecord.created_at.desc())).all()
         user_ids = {note.sender_id for note in rows} | {note.recipient_id for note in rows}
-        users = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()}
+        users = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()} if user_ids else {}
     for doc in rows:
         sender_doc = users.get(doc.sender_id)
         recipient_doc = users.get(doc.recipient_id)
@@ -161,7 +165,10 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
                 "regno": recipient_doc.regno if recipient_doc else None,
                 "email": recipient_doc.email if recipient_doc else None,
             },
-            "image_url": doc.image_url,
+            # Admins moderate notes in every state, so the proxy serves them the image.
+            "image_url": asset_delivery_service.build_delivery_url(
+                kind="love-notes", stored_identifier=doc.image_url, regno=admin_regno
+            ) or doc.image_url,
             "body": doc.body,
             "anonymous": doc.anonymous,
             "status": doc.status,

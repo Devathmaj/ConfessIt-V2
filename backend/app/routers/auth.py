@@ -13,6 +13,7 @@ from ..services.auth_service import (
     get_current_user
 )
 from ..services.storage_service import storage_service
+from ..services import asset_delivery_service
 from pydantic import BaseModel
 
 router = APIRouter(
@@ -46,4 +47,15 @@ async def read_users_me(current_user: Annotated[UserDetails, Depends(get_current
     """
     user_payload = current_user.model_dump(by_alias=True)
     enriched = storage_service.with_profile_signed_url(user_payload) or user_payload
+    # The caller's own picture is addressed through the asset proxy, which re-checks
+    # ownership on every request. Avatars of *other* users stay on their public
+    # Cloudinary URL, because the proxy deliberately serves a profile asset only to
+    # the account that owns it.
+    delivery_url = asset_delivery_service.build_delivery_url(
+        kind="profile",
+        stored_identifier=enriched.get("profile_picture_url"),
+        regno=current_user.regno,
+    )
+    if delivery_url:
+        enriched["profile_picture_url"] = delivery_url
     return UserDetails(**enriched)

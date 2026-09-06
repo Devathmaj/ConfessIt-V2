@@ -11,6 +11,7 @@ from ..db_models import UserRecord
 
 from ..models import UserDetails
 from ..services.storage_service import storage_service
+from ..services import asset_delivery_service
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -64,6 +65,14 @@ async def update_user_profile_service(
         }
 
     enriched_doc = storage_service.with_profile_signed_url(updated_user_doc) or updated_user_doc
+    # The caller only ever sees their own picture here, so address it via the asset proxy.
+    delivery_url = asset_delivery_service.build_delivery_url(
+        kind="profile",
+        stored_identifier=enriched_doc.get("profile_picture_url"),
+        regno=current_user.regno,
+    )
+    if delivery_url:
+        enriched_doc["profile_picture_url"] = delivery_url
     return UserDetails(**enriched_doc)
 
 
@@ -114,8 +123,14 @@ async def upload_profile_picture_service(
         if user:
             user.profile_picture_url = cloudinary_url
 
+    # Hand back the proxy URL rather than the raw Cloudinary URL, so the frontend never
+    # learns an address it could reuse outside the proxy's authorisation check.
+    delivery_url = asset_delivery_service.build_delivery_url(
+        kind="profile", stored_identifier=cloudinary_url, regno=current_user.regno
+    )
+
     return {
-        "profile_picture_url": cloudinary_url,
-        "url": cloudinary_url,
+        "profile_picture_url": delivery_url or cloudinary_url,
+        "url": delivery_url or cloudinary_url,
         "message": "Profile picture uploaded successfully",
     }

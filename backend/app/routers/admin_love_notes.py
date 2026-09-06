@@ -32,10 +32,10 @@ def _require_admin(current_user: UserDetails = Depends(get_current_user)) -> Use
 @router.get("", response_model=List[Dict[str, Any]])
 async def get_all_love_notes(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    admin: UserDetails = Depends(_require_admin)
 ) -> List[Dict[str, Any]]:
     """Return every love note with full sender and recipient details for admin review."""
-    return await get_all_love_notes_for_admin(db)
+    return await get_all_love_notes_for_admin(db, admin.regno)
 
 
 @router.put("/{note_id}/status")

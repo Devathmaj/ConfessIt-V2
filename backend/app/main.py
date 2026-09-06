@@ -2,16 +2,17 @@
 
 import asyncio
 import os
-import secrets
-from fastapi import FastAPI, Depends, HTTPException
+from typing import Optional
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from sqlalchemy import select, text, update
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
-from .services.auth_service import get_current_user
+from .services.auth_service import oauth2_scheme, verify_token_service, load_active_user_service
 from .dependencies import get_db 
 from .postgres import Database, PostgresClient
 from .services.storage_service import storage_service
+from .services import asset_delivery_service
 from .models import UserDetails
 import uvicorn
 from .db_models import UserRecord
@@ -125,92 +126,91 @@ app.include_router(admin_love_notes.router)
 FastAPIInstrumentor.instrument_app(app)
 
 # ----------------------
-# File Serving Routes
+# Asset Delivery Routes
 # ----------------------
-def _paths_match(stored_path: str, object_path: str) -> bool:
-    """Compare two object paths without leaking their contents through timing.
+# These are the only paths user-uploaded images are served from. The backend mints the
+# URLs it hands out (see asset_delivery_service) and re-checks entitlement on every
+# request, so an image URL is never a standalone bearer capability.
+def _resolve_asset_requester(
+    db: Database,
+    kind: str,
+    object_path: str,
+    query_token: Optional[str],
+    bearer_token: Optional[str],
+) -> UserDetails:
+    """Identify the caller of an asset route.
 
-    ``compare_digest`` rejects non-ASCII input, and legacy rows may hold arbitrary text,
-    so fall back to a plain comparison in that case.
+    A scoped query token is preferred because ``<img src>`` cannot send an Authorization
+    header; a normal bearer token is still accepted for programmatic callers.
     """
-    try:
-        return secrets.compare_digest(stored_path, object_path)
-    except TypeError:
-        return stored_path == object_path
-
-
-def _require_owned_profile_asset(db: Database, current_user: UserDetails, object_path: str) -> None:
-    """Reject any profile object that is not the caller's own currently stored asset.
-
-    The stored value is read straight from the database rather than from the token so a
-    stale or forged claim cannot widen access.
-    """
-    with db.sessions() as session:
-        stored_url = session.scalar(
-            select(UserRecord.profile_picture_url).where(UserRecord.regno == current_user.regno)
+    if query_token:
+        regno = asset_delivery_service.verify_asset_token(
+            query_token, kind=kind, object_path=object_path
         )
+        return load_active_user_service(db, regno)
+    if bearer_token:
+        return verify_token_service(bearer_token, db)
+    raise HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-    stored_path = storage_service.normalize_stored_path(stored_url, "profile")
-    if not stored_path or not _paths_match(stored_path, object_path):
+
+def _serve_asset(
+    kind: str,
+    path: str,
+    query_token: Optional[str],
+    bearer_token: Optional[str],
+    db: Database,
+) -> Response:
+    """Validate, authorise and stream one stored object."""
+    # Defined as a sync route so the blocking origin fetch runs in FastAPI's threadpool.
+    object_path = storage_service.validate_object_path(path)
+    requester = _resolve_asset_requester(db, kind, object_path, query_token, bearer_token)
+
+    if not asset_delivery_service.is_entitled_to_asset(
+        db, kind=kind, object_path=object_path, user=requester
+    ):
         raise HTTPException(status_code=404, detail="File not found")
 
-
-def _redirect_to_delivery_url(route_key: str, object_path: str) -> RedirectResponse:
-    """Redirect to the delivery URL for a validated object.
-
-    Anything other than a definitive "you asked for something malformed" is reported as a
-    plain 404 so the endpoint cannot be used to probe which object IDs exist.
-    """
     try:
-        delivery_url = storage_service.generate_temporary_view_url(route_key, object_path)
-    except HTTPException as exc:
-        if exc.status_code == 400:
-            raise
-        logger.warning("Delivery URL unavailable for %s asset: %s", route_key, exc.detail)
+        origin_url = storage_service.get_origin_url(kind, object_path)
+    except HTTPException:
         raise HTTPException(status_code=404, detail="File not found")
-    return RedirectResponse(url=delivery_url)
+
+    payload, content_type = asset_delivery_service.fetch_asset_bytes(origin_url)
+    return Response(
+        content=payload,
+        media_type=content_type,
+        headers={
+            # Private so the bytes are only reused by the browser that was entitled.
+            "Cache-Control": f"private, max-age={asset_delivery_service.asset_token_ttl_seconds()}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/profile/files/{path:path}")
-async def get_profile_file(
+def get_profile_file(
     path: str,
-    current_user: UserDetails = Depends(get_current_user),
+    t: Optional[str] = Query(default=None, description="Scoped asset delivery token"),
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
     db: Database = Depends(get_db),
 ):
-    """Serve the caller's own profile file."""
-    object_path = storage_service.validate_object_path(path)
-    _require_owned_profile_asset(db, current_user, object_path)
-    return _redirect_to_delivery_url("profile", object_path)
+    """Serve a profile image. Only the account that owns it may load it."""
+    return _serve_asset("profile", path, t, bearer_token, db)
 
 
-@app.get("/api/events/files/{path:path}")
-async def get_event_file(
+@app.get("/api/love-notes/files/{path:path}")
+def get_love_note_file(
     path: str,
-    current_user: UserDetails = Depends(get_current_user),
+    t: Optional[str] = Query(default=None, description="Scoped asset delivery token"),
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    db: Database = Depends(get_db),
 ):
-    """Serve event files to authenticated users."""
-    object_path = storage_service.validate_object_path(path)
-    return _redirect_to_delivery_url("events", object_path)
-
-
-@app.get("/api/gallery/files/{path:path}")
-async def get_gallery_file(
-    path: str,
-    current_user: UserDetails = Depends(get_current_user),
-):
-    """Serve gallery files to authenticated users."""
-    object_path = storage_service.validate_object_path(path)
-    return _redirect_to_delivery_url("gallery", object_path)
-
-
-@app.get("/api/committee/files/{path:path}")
-async def get_committee_file(
-    path: str,
-    current_user: UserDetails = Depends(get_current_user),
-):
-    """Serve committee files to authenticated users."""
-    object_path = storage_service.validate_object_path(path)
-    return _redirect_to_delivery_url("committee", object_path)
+    """Serve a love note image to its recipient (once approved), its sender, or an admin."""
+    return _serve_asset("love-notes", path, t, bearer_token, db)
 
 
 
