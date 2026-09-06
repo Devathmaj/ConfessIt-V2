@@ -30,6 +30,11 @@ class CloudinaryStorageService:
     UPLOAD_SIGNATURE_TTL = 900     # 15 minutes for uploads
     TEMP_URL_TTL = 300            # 5 minutes for temporary access
 
+    # Object path validation limits
+    OBJECT_PATH_MAX_LENGTH = 512
+    OBJECT_PATH_MIN_SEGMENTS = 2   # {folder}/{token}/{timestamp}_{name}.{ext}
+    _OBJECT_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
     def __init__(self):
         self.cloudinary_url = os.getenv("CLOUDINARY_URL", "")
         self.api_key = os.getenv("CLOUDINARY_API_KEY")
@@ -192,6 +197,54 @@ class CloudinaryStorageService:
         """Public helper to derive the Cloudinary public ID for an object path."""
         return self._build_public_id(bucket_name, object_path)
 
+    def validate_object_path(self, object_path: Any) -> str:
+        """Validate an untrusted object path before it is turned into a public ID.
+
+        Upload helpers always generate paths shaped like
+        ``{folder}/{token}/{timestamp}_{name}.{ext}`` (see ``generate_object_path`` and
+        ``generate_generic_object_path``). Anything that cannot be produced by those
+        helpers is rejected here, so a caller-supplied path can never escape its
+        configured Cloudinary folder.
+
+        Returns the normalised path, or raises ``HTTPException`` with 400.
+        """
+        if not isinstance(object_path, str):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        candidate = object_path.strip()
+        if not candidate or len(candidate) > self.OBJECT_PATH_MAX_LENGTH:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        # Absolute paths, Windows separators and traversal sequences are never generated,
+        # and are the only ways a path could reach a neighbouring folder or bucket.
+        if candidate.startswith("/") or "\\" in candidate or ".." in candidate:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        # Percent signs are excluded by the segment allow-list below; this explicit check
+        # keeps double-encoded traversal attempts from being silently normalised later.
+        if "%" in candidate:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        # NUL and other control characters can truncate paths in downstream consumers.
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in candidate):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        segments = candidate.split("/")
+        if len(segments) < self.OBJECT_PATH_MIN_SEGMENTS:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        for segment in segments:
+            # Rejects empty segments ("//") and dot-only segments (".", "...") alike.
+            if not segment or set(segment) == {"."}:
+                raise HTTPException(status_code=400, detail="Invalid file path")
+            if not self._OBJECT_PATH_SEGMENT_RE.match(segment):
+                raise HTTPException(status_code=400, detail="Invalid file path")
+
+        _, ext = os.path.splitext(segments[-1])
+        if ext.lstrip(".").lower() not in self.allowed_extensions:
+            raise HTTPException(status_code=400, detail="Unsupported file type")
+
+        return candidate
+
     def _validate_extension(self, filename: str) -> str:
         """Used to validate the file extension for allowed image types."""
         _, ext = os.path.splitext(filename)
@@ -308,7 +361,8 @@ class CloudinaryStorageService:
         """Generate a short-lived signed URL for viewing an existing stored asset.
 
         NOTE: This MUST only be called from an authenticated backend route; do not
-        expose this method directly to untrusted callers.
+        expose this method directly to untrusted callers. ``object_path`` is validated
+        because routes forward request paths straight into it.
         """
         if not self.enabled:
             raise HTTPException(status_code=503, detail="Object storage disabled")
@@ -317,6 +371,7 @@ class CloudinaryStorageService:
         bucket_name = self._route_bucket_map.get(route_key)
         if not bucket_name:
             raise HTTPException(status_code=400, detail="Invalid route key")
+        object_path = self.validate_object_path(object_path)
         # Force a fixed 1 hour (3600s) expiration window regardless of caller input
         ttl_seconds = self.DEFAULT_SIGNED_URL_TTL
         return self.get_signed_url_for_bucket(bucket_name, object_path, expires_in_seconds=ttl_seconds)

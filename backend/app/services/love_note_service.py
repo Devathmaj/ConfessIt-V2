@@ -23,16 +23,19 @@ class LoveNoteCreate(BaseModel):
     body: str
     anonymous: bool
 
-async def get_all_users_service(db: Database, current_user_regno: str) -> List[UserDetails]:
+async def get_all_users_service(db: Database, current_user_regno: str) -> List[dict]:
     """
     Service to fetch all users available as love note recipients, excluding the
-    active user and any administrator accounts.
+    active user, any administrator accounts, and users who opted out of
+    receiving love notes.
     """
     with db.sessions() as session:
         rows = session.scalars(select(UserRecord).where(
-            UserRecord.regno != current_user_regno, UserRecord.role != "admin"
+            UserRecord.regno != current_user_regno,
+            UserRecord.role != "admin",
+            UserRecord.love_notes_receive_enabled.is_(True),
         )).all()
-        return [UserDetails(**_user_payload(row)) for row in rows]
+        return [_user_payload(row) for row in rows]
 
 async def get_all_classes_service(db: Database) -> List[str]:
     """
@@ -43,16 +46,9 @@ async def get_all_classes_service(db: Database) -> List[str]:
 
 def _user_payload(user: UserRecord) -> dict:
     payload = {
-        "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-        "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name,
-        "profile_picture_url": user.profile_picture_url, "gender": user.gender,
-        "interests": user.interests or [], "matchmaking_enabled": user.matchmaking_enabled,
-        "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
-        "love_notes_send_enabled": user.love_notes_send_enabled, "is_blocked": user.is_blocked,
-        "reported_count": user.reported_count, "last_login_at": user.last_login_at,
-        "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-        "last_login_user_agent": user.last_login_user_agent, "role": user.role,
-        "last_matchmaking_at": user.last_matchmaking_at,
+        "id": str(user.id), "name": user.name, "emoji": user.emoji,
+        "class_name": user.class_name, "gender": user.gender,
+        "interests": user.interests or [], "profile_picture_url": user.profile_picture_url,
     }
     return storage_service.with_profile_signed_url(payload) or payload
 

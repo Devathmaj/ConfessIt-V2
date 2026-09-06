@@ -6,9 +6,8 @@ def test_read_root(client: TestClient):
     assert response.status_code == 200
     assert response.json() == {"message": "Welcome to the ConfessIt API!"}
 
-def test_db_test(client: TestClient):
+def test_db_test_is_disabled_by_default(client: TestClient):
+    # /db-test is only registered when ENABLE_DEBUG_ENDPOINTS is set, so an unauthenticated
+    # request must not reach a live database connection check in a deployed environment.
     response = client.get("/db-test")
-    # The test fixture supplies a PostgreSQL-backed test database.
-    # but the endpoint is at least reachable.
-    assert response.status_code == 200
-    assert "status" in response.json()
+    assert response.status_code == 404

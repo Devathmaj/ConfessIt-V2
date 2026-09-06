@@ -1,9 +1,10 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from ..db_models import LoveNoteRecord, UserRecord
 from ..postgres import Database
-from typing import Annotated, List, Dict, Any
+from typing import Annotated, Any, Dict, List, Optional
 from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
 from datetime import datetime, timezone
@@ -23,13 +24,19 @@ router = APIRouter(
     tags=["Love Notes"]
 )
 
-class UserRecipient(UserDetails):
+class UserRecipient(BaseModel):
     """
-    A simplified UserDetails model for the recipient list.
+    A PII-free, minimal profile used for the love note recipient list.
     """
     id: str
+    name: str
+    emoji: Optional[str] = None
+    class_name: str
+    gender: str
+    interests: Optional[List[str]] = None
+    profile_picture_url: Optional[str] = None
 
-@router.get("/users", response_model=List[UserDetails])
+@router.get("/users", response_model=List[UserRecipient])
 async def get_all_users(
     current_user: Annotated[UserDetails, Depends(get_current_user)],
     db: Database = Depends(get_db)
@@ -40,7 +47,10 @@ async def get_all_users(
     return await get_all_users_service(db, current_user.regno)
 
 @router.get("/classes", response_model=List[str])
-async def get_all_classes(db: Database = Depends(get_db)):
+async def get_all_classes(
+    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    db: Database = Depends(get_db)
+):
     """
     Fetch all unique classes from the users table.
     """
