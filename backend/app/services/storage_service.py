@@ -3,7 +3,7 @@ import io
 import time
 import secrets
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, UploadFile
 from urllib.parse import quote, unquote, urlparse
@@ -167,7 +167,7 @@ class CloudinaryStorageService:
         """
         # Generate a secure random string (16 chars = 96 bits of entropy)
         random_string = secrets.token_urlsafe(16)
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         safe_filename = os.path.basename(filename or f"profile.{image_type}")
         if not safe_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
             safe_filename = f"{safe_filename}.{image_type}"
@@ -178,7 +178,7 @@ class CloudinaryStorageService:
     def generate_generic_object_path(self, filename: str, image_type: Optional[str] = None, prefix: Optional[str] = None) -> str:
         """Generate a unique path for non-user specific uploads with random string."""
         random_string = secrets.token_urlsafe(16)
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         base_name = filename or (f"image.{image_type}" if image_type else "file")
         safe_filename = os.path.basename(base_name)
         if image_type and not safe_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
@@ -762,7 +762,7 @@ class CloudinaryStorageService:
             
             # Generate a secure random path for the love note
             random_string = secrets.token_urlsafe(16)
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
             safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", sender_name)
             filename = f"love_note_{timestamp}.{image_format}"
             object_path = f"{safe_name}/{random_string}/{filename}"

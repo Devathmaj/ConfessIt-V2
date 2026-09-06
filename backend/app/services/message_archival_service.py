@@ -211,10 +211,14 @@ class MessageArchivalService:
                     file_size = os.path.getsize(filepath)
                     file_mtime = os.path.getmtime(filepath)
                     
+                    # Convert explicitly to UTC: fromtimestamp() defaults to naive local
+                    # time, which would disagree with the UTC-based "date" below and with
+                    # every other timestamp this service produces, and would also shift
+                    # across DST on servers whose local zone changes.
                     archives.append({
                         "filename": filename,
                         "size_kb": round(file_size / 1024, 2),
-                        "modified_at": datetime.fromtimestamp(file_mtime).isoformat(),
+                        "modified_at": datetime.fromtimestamp(file_mtime, tz=timezone.utc).isoformat(),
                         "date": filename.replace("messages_", "").replace(".json.gz", "")
                     })
             
