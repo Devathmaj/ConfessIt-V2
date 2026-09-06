@@ -1,6 +1,6 @@
 from ..logger import get_logger
 from sqlalchemy import func, or_, select
-from ..postgres import PostgresClient
+from ..postgres import PostgresClient, get_postgres_client
 from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
 import datetime
@@ -10,8 +10,10 @@ from typing import Optional, List
 logger = get_logger(__name__)
 
 class ConfessionService:
-    def __init__(self):
-        self.client = PostgresClient()
+    def __init__(self, client: Optional[PostgresClient] = None):
+        # Injected so the service never creates its own engine: an engine per instance
+        # would mean an unbounded pool, since this service is constructed per request.
+        self.client = client if client is not None else get_postgres_client()
         self.sessions = self.client.sessions
         self.REACTION_TYPES = ["heart", "haha", "whoa", "heartbreak"]
 

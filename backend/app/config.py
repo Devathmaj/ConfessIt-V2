@@ -8,6 +8,22 @@ class Settings(BaseSettings):
     TEST_DATABASE_URL: str = "postgresql+psycopg://confessit:confessit@postgres:5432/ConfessIt_Test"
     DATABASE_NAME: str = "ConfessIt"
 
+    # There is exactly one engine per process (see app.postgres), so the worst-case
+    # connection count against Postgres is (POOL_SIZE + MAX_OVERFLOW) * WEB_WORKERS plus
+    # whatever non-pooled connections exist. Keep that total under the server's
+    # max_connections; growing the pool means lowering it here, not adding engines.
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
+    # How long a request waits for a pooled connection before failing. Bounding this turns
+    # a saturated pool into a fast, visible 5xx instead of an unbounded request backlog.
+    DATABASE_POOL_TIMEOUT: int = 10
+    # Recycle connections before a proxy, load balancer or server idle timeout can drop
+    # them, so a stale socket is never handed to a request.
+    DATABASE_POOL_RECYCLE: int = 300
+    # Number of uvicorn workers the backend is expected to run. Only used to log a
+    # warning when the resulting connection budget exceeds a sane total.
+    WEB_WORKERS: int = 1
+
     CLOUDINARY_CLOUD_NAME: str | None = None
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None

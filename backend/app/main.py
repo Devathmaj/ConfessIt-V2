@@ -10,7 +10,7 @@ from sqlalchemy import select, text, update
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
 from .services.auth_service import oauth2_scheme, verify_token_service, load_active_user_service
 from .dependencies import get_db 
-from .postgres import Database, PostgresClient
+from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
 from .services import asset_delivery_service
 from .models import UserDetails
@@ -60,7 +60,8 @@ app = FastAPI(
 @app.on_event("startup")
 async def on_startup():
     logger.info("Initializing PostgreSQL storage...")
-    postgres = PostgresClient()
+    # The process-wide client, so startup and every request share one pool.
+    postgres = get_postgres_client()
     for attempt in range(30):
         try:
             with postgres.engine.connect() as connection:
@@ -91,6 +92,14 @@ async def on_startup():
             if not session.scalar(select(UserRecord.id).where(UserRecord.regno == seed["regno"])):
                 session.add(UserRecord(**seed))
     logger.info("PostgreSQL storage initialized.")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    # Hand the pool's connections back so a reload or restart does not leak them until
+    # Postgres itself times them out.
+    close_postgres_client()
+
 # ----------------------
 # CORS Middleware
 # ----------------------

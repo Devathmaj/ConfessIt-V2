@@ -10,6 +10,8 @@ from app.db_models import UserRecord
 
 
 def seed_database() -> None:
+    # A one-shot script owns its own engine and disposes it below; only the served app
+    # shares the singleton from app.postgres.
     db = PostgresClient()
     distributions = [
         ("1st year", 12, 13),

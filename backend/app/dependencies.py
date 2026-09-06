@@ -1,10 +1,10 @@
-from .postgres import PostgresClient
+from .postgres import Database, get_postgres_client
 
-client = PostgresClient()
 
-def get_db():
+def get_db() -> Database:
+    """Dependency yielding the process-wide engine/session provider.
+
+    The client is shared, so this must not close it: its pool outlives any single
+    request. Shutdown disposal is handled by ``close_postgres_client``.
     """
-    Dependency to get database connection.
-    FastAPI will automatically manage the connection lifecycle.
-    """
-    yield client
+    return get_postgres_client()

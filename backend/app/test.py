@@ -24,6 +24,7 @@ def main():
     and generate and store magic link tokens.
     """
     try:
+        # A one-shot script owns its own engine and disposes it in the finally block.
         client = PostgresClient()
 
         # Define the user and admin documents
