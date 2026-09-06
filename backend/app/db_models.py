@@ -150,6 +150,12 @@ class MatchRecord(Base):
     user_2_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # Canonical "lower|upper" form of the two regnos, so a pair is identified the same way
+    # regardless of who initiated. Unique, which is what stops two concurrent requests
+    # from matching the same two people. Cleared to NULL when the match lapses, and NULLs
+    # are not compared by a unique index, so an expired match frees the pair for good
+    # without needing a background job to sweep it.
+    pair_key: Mapped[Optional[str]] = mapped_column(String(201), unique=True, index=True)
     __table_args__ = (CheckConstraint("user_1_regno <> user_2_regno", name="ck_matches_distinct_users"),)
 
 
