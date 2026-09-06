@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql://confessit:confessit@postgres:5432/ConfessIt"
-    TEST_DATABASE_URL: str = "postgresql://confessit:confessit@postgres:5432/ConfessIt_Test"
+    DATABASE_URL: str = "postgresql+psycopg://confessit:confessit@postgres:5432/ConfessIt"
+    TEST_DATABASE_URL: str = "postgresql+psycopg://confessit:confessit@postgres:5432/ConfessIt_Test"
     DATABASE_NAME: str = "ConfessIt"
 
     CLOUDINARY_CLOUD_NAME: str | None = None

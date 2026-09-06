@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
 from .services.auth_service import get_current_user
 from .dependencies import get_db 
@@ -67,15 +67,18 @@ async def on_startup():
 
     seeds = [
         {"regno": "user", "name": "Test User", "email": "user@test.com", "bio": "This is a test user.",
-         "class_name": "Test_Class", "profile_picture_url": "random_string_1", "gender": "male", "interests": [],
+         "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
          "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
          "love_notes_send_enabled": False, "role": "user"},
         {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "bio": "This is a test admin.",
-         "class_name": "Test_Class", "profile_picture_url": "random_string_2", "gender": "male", "interests": [],
+         "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
          "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
          "love_notes_send_enabled": False, "role": "admin"},
     ]
     with postgres.sessions.begin() as session:
+        session.execute(update(UserRecord).where(
+            UserRecord.profile_picture_url.in_(["random_string_1", "random_string_2"])
+        ).values(profile_picture_url=None))
         for seed in seeds:
             if not session.scalar(select(UserRecord.id).where(UserRecord.regno == seed["regno"])):
                 session.add(UserRecord(**seed))

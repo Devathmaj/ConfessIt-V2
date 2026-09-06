@@ -25,7 +25,7 @@ def seed_database() -> None:
             seeds.append({
                 "regno": regno, "name": f"Test User {regno}", "email": f"{regno.lower()}@test.com",
                 "bio": "This is a test user.", "class_name": class_name,
-                "profile_picture_url": "random_string_1", "gender": "male", "interests": [],
+                "profile_picture_url": None, "gender": "male", "interests": [],
                 "matchmaking_enabled": True, "notifications_enabled": True,
                 "love_notes_receive_enabled": True, "love_notes_send_enabled": False, "role": "user",
             })
@@ -35,7 +35,7 @@ def seed_database() -> None:
             seeds.append({
                 "regno": regno, "name": f"Test User {regno}", "email": f"{regno.lower()}@test.com",
                 "bio": "This is a test user.", "class_name": class_name,
-                "profile_picture_url": "random_string_1", "gender": "female", "interests": [],
+                "profile_picture_url": None, "gender": "female", "interests": [],
                 "matchmaking_enabled": True, "notifications_enabled": True,
                 "love_notes_receive_enabled": True, "love_notes_send_enabled": False, "role": "user",
             })

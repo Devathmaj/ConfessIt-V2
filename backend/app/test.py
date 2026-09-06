@@ -29,10 +29,10 @@ def main():
         # Define the user and admin documents
         users = [
             {"regno": "user", "name": "Test User", "email": "user@test.com", "class_name": "Test_Class",
-             "profile_picture_url": "random_string_1", "gender": "male", "matchmaking_enabled": True,
+             "profile_picture_url": None, "gender": "male", "matchmaking_enabled": True,
              "notifications_enabled": True},
             {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "class_name": "Test_Class",
-             "profile_picture_url": "random_string_2", "gender": "male", "matchmaking_enabled": True,
+             "profile_picture_url": None, "gender": "male", "matchmaking_enabled": True,
              "notifications_enabled": True, "role": "admin"},
         ]
 

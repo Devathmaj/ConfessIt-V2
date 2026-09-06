@@ -309,7 +309,7 @@ export const InboxPage = () => {
 
   // Converts a timestamp to a human-readable "time ago" format.
   const getTimeAgo = (created_at: string) => {
-    const parsed = parseTimestamp(timestamp);
+    const parsed = parseTimestamp(created_at);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
     const nowUTC = Date.now();

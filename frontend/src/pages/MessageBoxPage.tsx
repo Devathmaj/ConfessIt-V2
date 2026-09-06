@@ -133,7 +133,7 @@ export const MessageBoxPage = () => {
   };
 
   const getTimeAgo = (created_at: string) => {
-    const parsed = parseTimestamp(timestamp);
+    const parsed = parseTimestamp(created_at);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
     const nowUTC = Date.now();
