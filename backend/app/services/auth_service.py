@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
-from sqlalchemy import select
+from sqlalchemy import select, update
 from ..db_models import UserRecord, LoginTokenRecord
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -182,48 +182,67 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
 
     now = datetime.now(timezone.utc)
 
+    if request is None or request.client is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request context is required")
+
     with db.sessions.begin() as session:
         login_token = session.scalar(select(LoginTokenRecord).where(
             LoginTokenRecord.token_hash == hashed_token,
             LoginTokenRecord.used.is_(False),
             LoginTokenRecord.revoked.is_(False),
             LoginTokenRecord.expires_at > now,
-        ).with_for_update())
-        if login_token:
-            user = session.get(UserRecord, login_token.user_id)
-            if user is not None and user.is_blocked:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Your account has been blocked. Contact an administrator.",
-                )
-            login_token.used = True
-            login_token.consumed_at = now
+        ))
 
     if not login_token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
 
-    # Check if the consumer IP matches the request IP from token generation
-    if request is None or request.client is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request context is required")
+    login_token_id = str(login_token.id)
+    user_id = str(login_token.user_id)
+    request_user_agent = login_token.request_user_agent
+
     if str(login_token.request_ip) != request.client.host:
+        with db.sessions.begin() as session:
+            session.execute(
+                update(LoginTokenRecord)
+                .where(LoginTokenRecord.id == login_token_id)
+                .values(attempt_count=LoginTokenRecord.attempt_count + 1)
+            )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same IP address")
 
-    # Update the token as used
     consume_ip = request.client.host
     consume_user_agent = request.headers.get("user-agent", "unknown")
+
     with db.sessions.begin() as session:
-        login_token = session.get(LoginTokenRecord, login_token.id)
-        user = session.get(UserRecord, login_token.user_id) if login_token else None
+        login_token_row = session.get(LoginTokenRecord, login_token_id)
+        user = session.get(UserRecord, user_id) if login_token_row else None
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User associated with token not found")
-        login_token.used = True
-        login_token.consumed_at = now
-        login_token.consume_ip = consume_ip
-        login_token.consume_user_agent = consume_user_agent
-        login_token.attempt_count = 1
-        login_token.session_status = "active"
-        login_token.last_seen_at = now
-        login_token.device = consume_user_agent or login_token.request_user_agent or "unknown"
+        if user.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account has been blocked. Contact an administrator.",
+            )
+        result = session.execute(
+            update(LoginTokenRecord)
+            .where(
+                LoginTokenRecord.id == login_token_id,
+                LoginTokenRecord.used.is_(False),
+                LoginTokenRecord.revoked.is_(False),
+                LoginTokenRecord.expires_at > now,
+            )
+            .values(
+                used=True,
+                consumed_at=now,
+                consume_ip=consume_ip,
+                consume_user_agent=consume_user_agent,
+                attempt_count=LoginTokenRecord.attempt_count + 1,
+                session_status="active",
+                last_seen_at=now,
+                device=consume_user_agent or request_user_agent or "unknown",
+            )
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
         user.last_login_at = now
         user.last_login_ip = consume_ip
         user.last_login_user_agent = consume_user_agent
