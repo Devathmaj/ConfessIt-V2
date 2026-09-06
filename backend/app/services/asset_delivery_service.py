@@ -162,6 +162,19 @@ def build_delivery_url(*, kind: str, stored_identifier: Optional[str], regno: st
     return f"{_delivery_base()}{ROUTE_PREFIXES[kind]}{quote(object_path)}?t={quote(token)}"
 
 
+def profile_image_url(stored_identifier: Optional[str], *, regno: str) -> Optional[str]:
+    """Proxy URL for a profile image, falling back to the stored value.
+
+    Every response that shows a profile picture should call this so there is a single
+    delivery mechanism. Values that are not a servable object in the profile bucket (a
+    data URL, a placeholder, nothing at all) are passed through untouched.
+    """
+    proxied = build_delivery_url(
+        kind="profile", stored_identifier=stored_identifier, regno=regno
+    )
+    return proxied or storage_service.get_signed_profile_url(stored_identifier)
+
+
 # ----------------------------------------------------------------------
 # Entitlement
 # ----------------------------------------------------------------------
@@ -172,11 +185,23 @@ def _matches_stored_asset(stored_identifier: Optional[str], kind: str, object_pa
     return hmac.compare_digest(candidate, object_path)
 
 
-def _owns_profile_asset(db: Database, regno: str, object_path: str) -> bool:
-    """A profile object is served only to the account that owns it."""
+def _profile_asset_is_published(db: Database, object_path: str) -> bool:
+    """Profile images are visible to any signed-in account, not just the owner.
+
+    Profiles surface in matchmaking, confessions and chat, so restricting these to the
+    owner would break those screens. What still has to hold is that the object is a
+    profile picture some user currently references, so the proxy cannot be used to pull
+    arbitrary or already-replaced objects out of the bucket.
+
+    Profile objects are stored as ``{regno}/{token}/{filename}``, so the first segment
+    identifies the owning account without scanning every row.
+    """
+    owner_regno = object_path.split("/", 1)[0]
+    if not owner_regno:
+        return False
     with db.sessions() as session:
         stored_url = session.scalar(
-            select(UserRecord.profile_picture_url).where(UserRecord.regno == regno)
+            select(UserRecord.profile_picture_url).where(UserRecord.regno == owner_regno)
         )
     return _matches_stored_asset(stored_url, "profile", object_path)
 
@@ -216,9 +241,13 @@ def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str)
 
 
 def is_entitled_to_asset(db: Database, *, kind: str, object_path: str, user: UserDetails) -> bool:
-    """Authorisation gate applied to every proxy request."""
+    """Authorisation gate applied to every proxy request.
+
+    Both kinds require a signed-in account. Profile images are then visible to anyone
+    signed in; love note images stay restricted to the note's parties.
+    """
     if kind == "profile":
-        return _owns_profile_asset(db, user.regno, object_path)
+        return _profile_asset_is_published(db, object_path)
     if kind == "love-notes":
         return _may_view_love_note_asset(db, user, object_path)
     return False

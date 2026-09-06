@@ -64,16 +64,11 @@ async def update_user_profile_service(
             "last_matchmaking_at": user.last_matchmaking_at,
         }
 
-    enriched_doc = storage_service.with_profile_signed_url(updated_user_doc) or updated_user_doc
-    # The caller only ever sees their own picture here, so address it via the asset proxy.
-    delivery_url = asset_delivery_service.build_delivery_url(
-        kind="profile",
-        stored_identifier=enriched_doc.get("profile_picture_url"),
-        regno=current_user.regno,
+    # Profile images are delivered through the asset proxy.
+    updated_user_doc["profile_picture_url"] = asset_delivery_service.profile_image_url(
+        updated_user_doc.get("profile_picture_url"), regno=current_user.regno
     )
-    if delivery_url:
-        enriched_doc["profile_picture_url"] = delivery_url
-    return UserDetails(**enriched_doc)
+    return UserDetails(**updated_user_doc)
 
 
 async def upload_profile_picture_service(

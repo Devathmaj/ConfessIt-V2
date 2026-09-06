@@ -11,6 +11,7 @@ import base64
 
 from ..models import Conversation, Match, UserDetails
 from ..services.storage_service import storage_service
+from ..services import asset_delivery_service
 # Removed top-level import to prevent circular dependency
 # from ..services.conversation_service import request_conversation_service 
 
@@ -218,15 +219,15 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
     # Return match details immediately with full user information
-    matched_user_signed_url = storage_service.get_signed_profile_url(matched_user.profile_picture_url)
+    matched_user_picture_url = asset_delivery_service.profile_image_url(
+        matched_user.profile_picture_url, regno=current_user.regno
+    )
 
     matched_user_details = {
         "regno": matched_user.regno,
-        "regno": matched_user.regno,
         "name": matched_user.name,
-        "name": matched_user.name,
-        "profile_picture_url": matched_user_signed_url,
-        "profile_picture": matched_user_signed_url,
+        "profile_picture_url": matched_user_picture_url,
+        "profile_picture": matched_user_picture_url,
         "class_name": matched_user.class_name,
         "interests": getattr(matched_user, "interests", []) or []
     }

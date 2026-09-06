@@ -36,7 +36,7 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[d
             UserRecord.role != "admin",
             UserRecord.love_notes_receive_enabled.is_(True),
         )).all()
-        return [_user_payload(row) for row in rows]
+        return [_user_payload(row, regno=current_user_regno) for row in rows]
 
 async def get_all_classes_service(db: Database) -> List[str]:
     """
@@ -45,13 +45,16 @@ async def get_all_classes_service(db: Database) -> List[str]:
     with db.sessions() as session:
         return list(session.scalars(select(UserRecord.class_name).distinct().where(UserRecord.class_name.is_not(None))))
 
-def _user_payload(user: UserRecord) -> dict:
+def _user_payload(user: UserRecord, *, regno: str) -> dict:
     payload = {
         "id": str(user.id), "name": user.name, "emoji": user.emoji,
         "class_name": user.class_name, "gender": user.gender,
-        "interests": user.interests or [], "profile_picture_url": user.profile_picture_url,
+        "interests": user.interests or [],
+        "profile_picture_url": asset_delivery_service.profile_image_url(
+            user.profile_picture_url, regno=regno
+        ),
     }
-    return storage_service.with_profile_signed_url(payload) or payload
+    return payload
 
 async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: Database):
     """

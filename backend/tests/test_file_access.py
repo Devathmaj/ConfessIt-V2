@@ -338,13 +338,15 @@ def test_profile_entitled_to_owner():
     ) is True
 
 
-def test_profile_not_entitled_to_other_account():
+def test_profile_visible_to_another_signed_in_account():
+    """Profiles are not owner-only: matchmaking, confessions and chat all show them."""
     assert is_entitled_to_asset(
         profile_db(), kind="profile", object_path=OWNED_PATH, user=user_details("stranger", STRANGER_ID)
-    ) is False
+    ) is True
 
 
 def test_profile_denied_when_stored_value_is_someone_elses_asset():
+    """The row for the path's own regno must be the asset actually being requested."""
     db = _FakeDatabase(
         users={"testuser": make_user_row("testuser", OWNER_ID)},
         profile_pictures={"testuser": stored_url("profile", OTHER_PATH)},
@@ -354,11 +356,26 @@ def test_profile_denied_when_stored_value_is_someone_elses_asset():
     ) is False
 
 
-def test_profile_denied_when_user_has_no_picture():
+def test_profile_denied_when_owner_has_no_picture():
     db = _FakeDatabase(users={"testuser": make_user_row("testuser", OWNER_ID)}, profile_pictures={})
     assert is_entitled_to_asset(
         db, kind="profile", object_path=OWNED_PATH, user=user_details("testuser", OWNER_ID)
     ) is False
+
+
+def test_profile_denied_for_superseded_upload():
+    """An object the owner has since replaced is no longer a published profile picture.
+
+    Both paths sit under the same ``regno`` prefix, so the row decides which one is live.
+    """
+    db = profile_db()  # testuser's current picture is OWNED_PATH
+    stale = "testuser/ZzYyXxWwVvUuTtSsRrQqPp/20230101_120000_000000_photo.jpg"
+    assert is_entitled_to_asset(
+        db, kind="profile", object_path=stale, user=user_details("stranger", STRANGER_ID)
+    ) is False
+    assert is_entitled_to_asset(
+        db, kind="profile", object_path=OWNED_PATH, user=user_details("stranger", STRANGER_ID)
+    ) is True
 
 
 # ----------------------------------------------------------------------
@@ -442,6 +459,57 @@ def test_build_delivery_url_declines_non_asset_values(stored):
 
 
 # ----------------------------------------------------------------------
+# Unified profile delivery (matchmaking / conversations / love note picker)
+# ----------------------------------------------------------------------
+def test_profile_image_url_rewrites_a_servable_profile_object():
+    url = asset_delivery_service.profile_image_url(
+        stored_url("profile", OWNED_PATH), regno="testuser"
+    )
+    assert "/api/profile/files/" in url
+    assert "res.cloudinary.com" not in url
+
+
+@pytest.mark.parametrize("stored", [None, "https://placehold.co/128x128", "data:image/png;base64,AAAA"])
+def test_profile_image_url_passes_through_non_asset_values(stored):
+    """Placeholders and data URLs are not proxyable, so the stored value is kept."""
+    assert asset_delivery_service.profile_image_url(stored, regno="testuser") == stored
+
+
+def test_profile_image_url_normalises_empty_to_none():
+    """Matches the helper this replaced, which treats any falsy value as no picture."""
+    assert asset_delivery_service.profile_image_url("", regno="testuser") is None
+
+
+def test_profile_delivery_token_is_bound_to_the_requester_not_the_owner():
+    """A viewer's link must not be replayable by a different account.
+
+    The picture belongs to ``testuser`` but the link is minted for ``stranger``, because
+    ``stranger`` is the one who will present it. The token therefore has to carry the
+    requester's identity, otherwise anyone could reuse a link copied out of a payload.
+    """
+    url = asset_delivery_service.profile_image_url(
+        stored_url("profile", OWNED_PATH), regno="stranger"
+    )
+    token = url.split("?t=", 1)[1]
+    assert verify_asset_token(token, kind="profile", object_path=OWNED_PATH) == "stranger"
+
+
+def test_viewer_can_load_a_profile_picture_minted_for_them(serve):
+    """End to end: the viewer presents their own link and gets the bytes."""
+    db = _FakeDatabase(
+        users={"stranger": make_user_row("stranger", STRANGER_ID)},
+        profile_pictures={"testuser": stored_url("profile", OWNED_PATH)},
+    )
+    client = serve(db)
+    url = asset_delivery_service.profile_image_url(
+        stored_url("profile", OWNED_PATH), regno="stranger"
+    )
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\nfake"
+
+
+# ----------------------------------------------------------------------
 # Route behaviour
 # ----------------------------------------------------------------------
 @pytest.mark.parametrize("route", FILE_ROUTES)
@@ -460,9 +528,19 @@ def test_profile_route_streams_owned_asset(serve):
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
-def test_profile_route_rejects_a_valid_token_from_another_account(serve):
-    """Owning a valid token is not enough; the account must own the asset."""
+def test_profile_route_serves_another_account(serve):
+    """A signed-in account may load a profile image it does not own."""
     client = serve(profile_db(actor_regno="stranger", actor_id=STRANGER_ID))
+    token = mint_asset_token(regno="stranger", kind="profile", object_path=OWNED_PATH)
+    assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 200
+
+
+def test_profile_route_still_rejects_an_unpublished_object(serve):
+    """Relaxing ownership must not turn the proxy into a reader for the whole bucket."""
+    db = _FakeDatabase(
+        users={"stranger": make_user_row("stranger", STRANGER_ID)}, profile_pictures={}
+    )
+    client = serve(db)
     token = mint_asset_token(regno="stranger", kind="profile", object_path=OWNED_PATH)
     assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 404
 

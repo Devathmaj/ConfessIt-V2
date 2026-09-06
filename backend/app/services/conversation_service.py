@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
+from ..services import asset_delivery_service
 from ..config import settings
 
 # Logger
@@ -410,7 +411,9 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         other_user_doc = _get_user_by_regno(db, other_user_regno)
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url if other_user else None)
+        profile_picture_url = asset_delivery_service.profile_image_url(
+            other_user.profile_picture_url if other_user else None, regno=current_user.regno
+        )
 
         return {
             "status": "success",
@@ -430,8 +433,6 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             },
             "other_user": {
                 "regno": other_user.regno if other_user else None,
-                "regno": other_user.regno if other_user else None,
-                "name": other_user.name if other_user else None,
                 "name": other_user.name if other_user else None,
                 "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
@@ -448,7 +449,9 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     other_user_doc = _get_user_by_regno(db, other_user_regno)
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-    profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url if other_user else None)
+    profile_picture_url = asset_delivery_service.profile_image_url(
+        other_user.profile_picture_url if other_user else None, regno=current_user.regno
+    )
 
     response_data = {
         "status": "success",
@@ -468,8 +471,6 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         },
         "other_user": {
             "regno": other_user.regno if other_user else None,
-            "regno": other_user.regno if other_user else None,
-            "name": other_user.name if other_user else None,
             "name": other_user.name if other_user else None,
             "profile_picture_url": profile_picture_url,
             "profile_picture": profile_picture_url,
@@ -553,7 +554,9 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             continue
         
         initiator_user = UserDetails(**initiator_user_doc)
-        profile_picture_url = storage_service.get_signed_profile_url(initiator_user.profile_picture_url)
+        profile_picture_url = asset_delivery_service.profile_image_url(
+            initiator_user.profile_picture_url, regno=current_user.regno
+        )
         
         match_expires_at = match.expires_at
         if match_expires_at.tzinfo is None:
@@ -577,8 +580,6 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             },
             "other_user": {
                 "regno": initiator_user.regno,
-                "regno": initiator_user.regno,
-                "name": initiator_user.name,
                 "name": initiator_user.name,
                 "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
@@ -635,7 +636,9 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Other user not found.")
         
         other_user = UserDetails(**other_user_doc)
-        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url)
+        profile_picture_url = asset_delivery_service.profile_image_url(
+            other_user.profile_picture_url, regno=current_user.regno
+        )
         
         # Check if match is expired
         current_time = datetime.now(timezone.utc)

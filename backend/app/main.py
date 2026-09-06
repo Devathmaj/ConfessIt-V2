@@ -207,7 +207,11 @@ def get_profile_file(
     bearer_token: Optional[str] = Depends(oauth2_scheme),
     db: Database = Depends(get_db),
 ):
-    """Serve a profile image. Only the account that owns it may load it."""
+    """Serve a profile image to any signed-in account.
+
+    Profiles appear across matchmaking, confessions and chat, so these are not
+    owner-only; love note images remain restricted to the note's parties.
+    """
     return _serve_asset("profile", path, t, bearer_token, db)
 
 
