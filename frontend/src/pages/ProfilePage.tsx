@@ -40,9 +40,9 @@ export const ProfilePage = () => {
   const [emoji, setEmoji] = useState(user?.emoji || '💕');
   const [bio, setBio] = useState(user?.bio || '');
   const [interests, setInterests] = useState<string[]>(user?.interests || []);
-  const [isMatchmaking, setIsMatchmaking] = useState(user?.isMatchmaking || false);
-  const [isNotifications, setIsNotifications] = useState(user?.isNotifications || false);
-  const [isLovenotesRecieve, setIsLovenotesRecieve] = useState(user?.isLovenotesRecieve ?? true);
+  const [matchmaking_enabled, setMatchmakingEnabled] = useState(user?.matchmaking_enabled || false);
+  const [notifications_enabled, setNotificationsEnabled] = useState(user?.notifications_enabled || false);
+  const [love_notes_receive_enabled, setLoveNotesReceiveEnabled] = useState(user?.love_notes_receive_enabled ?? true);
   
   // State for UI elements
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
@@ -56,9 +56,9 @@ export const ProfilePage = () => {
       emoji: user.emoji || '💕',
       bio: user.bio || '',
       interests: user.interests || [],
-      isMatchmaking: user.isMatchmaking || false,
-      isNotifications: user.isNotifications || false,
-      isLovenotesRecieve: user.isLovenotesRecieve ?? true,
+      matchmaking_enabled: user.matchmaking_enabled || false,
+      notifications_enabled: user.notifications_enabled || false,
+      love_notes_receive_enabled: user.love_notes_receive_enabled ?? true,
     };
   }, [user]);
 
@@ -68,10 +68,10 @@ export const ProfilePage = () => {
       setEmoji(user.emoji || '💕');
       setBio(user.bio || '');
       setInterests(user.interests || []);
-      setIsMatchmaking(user.isMatchmaking || false);
-      setIsNotifications(user.isNotifications || false);
-      setIsLovenotesRecieve(user.isLovenotesRecieve ?? true);
-      setProfilePictureUrl(resolveProfilePictureUrl(user.profile_picture_id));
+      setMatchmakingEnabled(user.matchmaking_enabled || false);
+      setNotificationsEnabled(user.notifications_enabled || false);
+      setLoveNotesReceiveEnabled(user.love_notes_receive_enabled ?? true);
+      setProfilePictureUrl(resolveProfilePictureUrl(user.profile_picture_url));
     } else {
       setProfilePictureUrl(resolveProfilePictureUrl(null));
     }
@@ -85,14 +85,14 @@ export const ProfilePage = () => {
       emoji,
       bio,
       interests,
-      isMatchmaking,
-      isNotifications,
-      isLovenotesRecieve,
+      matchmaking_enabled,
+      notifications_enabled,
+      love_notes_receive_enabled,
     };
     
     // Use lodash's isEqual for a deep comparison, especially for the interests array
     setHasUnsavedChanges(!isEqual(initialProfileState, currentState));
-  }, [emoji, bio, interests, isMatchmaking, isNotifications, isLovenotesRecieve, initialProfileState]);
+  }, [emoji, bio, interests, matchmaking_enabled, notifications_enabled, love_notes_receive_enabled, initialProfileState]);
 
   const handleInterestChange = (interest: string) => {
     setInterests(prev => 
@@ -128,9 +128,9 @@ export const ProfilePage = () => {
       emoji,
       bio,
       interests,
-      isMatchmaking,
-      isNotifications,
-      isLovenotesRecieve,
+      matchmaking_enabled,
+      notifications_enabled,
+      love_notes_receive_enabled,
     };
 
     try {
@@ -151,9 +151,9 @@ export const ProfilePage = () => {
       setEmoji(initialProfileState.emoji);
       setBio(initialProfileState.bio);
       setInterests(initialProfileState.interests);
-      setIsMatchmaking(initialProfileState.isMatchmaking);
-      setIsNotifications(initialProfileState.isNotifications);
-      setIsLovenotesRecieve(initialProfileState.isLovenotesRecieve);
+      setMatchmakingEnabled(initialProfileState.matchmaking_enabled);
+      setNotificationsEnabled(initialProfileState.notifications_enabled);
+      setLoveNotesReceiveEnabled(initialProfileState.love_notes_receive_enabled);
       toast.info('Changes have been discarded.');
     }
   };
@@ -185,11 +185,11 @@ export const ProfilePage = () => {
                 <div className="relative">
                     <div className="w-32 h-32 rounded-full p-1 bg-secondary">
                         <img
-                            src={profilePictureUrl || `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.Name?.[0] || 'U'}`}
+                            src={profilePictureUrl || `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.name?.[0] || 'U'}`}
                             alt="Profile"
                             className="w-full h-full rounded-full object-cover"
                             onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.Name?.[0] || 'U'}`;
+                                (e.target as HTMLImageElement).src = `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.name?.[0] || 'U'}`;
                             }}
                         />
                     </div>
@@ -213,12 +213,12 @@ export const ProfilePage = () => {
             {/* Non-Editable Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label className="text-romantic font-semibold">Name</Label>
-                <Input value={user?.Name || ''} disabled className="bg-muted" />
+                <Label className="text-romantic font-semibold">name</Label>
+                <Input value={user?.name || ''} disabled className="bg-muted" />
               </div>
               <div>
                 <Label className="text-romantic font-semibold">Registration No.</Label>
-                <Input value={user?.Regno || ''} disabled className="bg-muted" />
+                <Input value={user?.regno || ''} disabled className="bg-muted" />
               </div>
               <div>
                 <Label className="text-romantic font-semibold">Email</Label>
@@ -226,7 +226,7 @@ export const ProfilePage = () => {
               </div>
               <div>
                 <Label className="text-romantic font-semibold">Class</Label>
-                <Input value={user?.which_class || ''} disabled className="bg-muted" />
+                <Input value={user?.class_name || ''} disabled className="bg-muted" />
               </div>
                <div>
                 <Label className="text-romantic font-semibold">Gender</Label>
@@ -302,8 +302,8 @@ export const ProfilePage = () => {
                   </p>
                 </div>
                 <Switch 
-                  checked={isMatchmaking} 
-                  onCheckedChange={setIsMatchmaking} 
+                  checked={matchmaking_enabled} 
+                  onCheckedChange={setMatchmakingEnabled} 
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -317,8 +317,8 @@ export const ProfilePage = () => {
                   </p>
                 </div>
                 <Switch 
-                  checked={isLovenotesRecieve} 
-                  onCheckedChange={setIsLovenotesRecieve} 
+                  checked={love_notes_receive_enabled} 
+                  onCheckedChange={setLoveNotesReceiveEnabled} 
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -332,8 +332,8 @@ export const ProfilePage = () => {
                   </p>
                 </div>
                 <Switch 
-                  checked={isNotifications} 
-                  onCheckedChange={setIsNotifications} 
+                  checked={notifications_enabled} 
+                  onCheckedChange={setNotificationsEnabled} 
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -386,3 +386,4 @@ export const ProfilePage = () => {
     </div>
   );
 };
+

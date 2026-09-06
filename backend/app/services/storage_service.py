@@ -253,7 +253,7 @@ class CloudinaryStorageService:
         # Excluding max_file_size from signing because the frontend currently omits it, causing signature mismatch.
         params_to_sign = {
             "public_id": public_id,
-            "timestamp": timestamp,
+            "created_at": timestamp,
             "invalidate": "true",
             "overwrite": "false",
             "access_mode": "public",  # Use public access with random strings
@@ -286,7 +286,7 @@ class CloudinaryStorageService:
             "api_key": api_key,
             "cloud_name": cloud_name,
             "signature": signature,
-            "timestamp": timestamp,
+            "created_at": timestamp,
             "public_id": public_id,
             "object_path": object_path,
             "asset_url": asset_url,
@@ -473,7 +473,7 @@ class CloudinaryStorageService:
         except Exception:
             return None
 
-    def with_profile_signed_url(self, user_doc: Optional[Dict[str, Any]], *, field: str = "profile_picture_id") -> Optional[Dict[str, Any]]:
+    def with_profile_signed_url(self, user_doc: Optional[Dict[str, Any]], *, field: str = "profile_picture_url") -> Optional[Dict[str, Any]]:
         """Return a shallow copy of ``user_doc`` with a signed profile picture URL."""
         if not user_doc:
             return user_doc

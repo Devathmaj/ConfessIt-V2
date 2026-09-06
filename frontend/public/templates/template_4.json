@@ -3,7 +3,7 @@
   "image": "template_4.png",
   "fields": [
     {
-      "name": "message_text",
+      "name": "body",
       "type": "text",
       "x": 455,
       "y": 225,

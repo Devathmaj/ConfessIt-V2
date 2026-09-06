@@ -44,10 +44,10 @@ import {
 
 interface AdminConversationParticipant {
   id?: string | null;
-  Regno?: string | null;
-  Name?: string | null;
+  regno?: string | null;
+  name?: string | null;
   email?: string | null;
-  user_role?: string | null;
+  role?: string | null;
 }
 
 interface AdminConversationMatch {
@@ -60,10 +60,9 @@ interface AdminConversationMatch {
 
 interface AdminConversationMessage {
   id: string;
-  sender_id?: string | null;
-  text?: string | null;
+  sender_regno?: string | null;
+  body?: string | null;
   created_at?: string | null;
-  timestamp?: string | null;
 }
 
 interface AdminConversationSummary {
@@ -102,7 +101,7 @@ const resolveDisplayName = (participant?: AdminConversationParticipant) => {
   if (!participant) {
     return 'Unknown';
   }
-  return participant.Name || participant.Regno || 'Unknown';
+  return participant.name || participant.regno || 'Unknown';
 };
 
 const truncate = (value?: string | null, length = 80) => {
@@ -294,7 +293,7 @@ const ChatMonitor = () => {
                   <div className="divide-y">
                     {filteredConversations.map((conversation) => {
                       const isActive = selectedId === conversation.id;
-                      const previewText = truncate(conversation.latest_message?.text, 90) || 'No messages yet';
+                      const previewText = truncate(conversation.latest_message?.body, 90) || 'No messages yet';
                       return (
                         <button
                           key={conversation.id}
@@ -312,7 +311,7 @@ const ChatMonitor = () => {
                           </div>
                           <p className="text-xs text-muted-foreground">{previewText}</p>
                           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                            Updated {formatTimestamp(conversation.latest_message?.timestamp || conversation.latest_message?.created_at || conversation.accepted_at || conversation.created_at)}
+                            Updated {formatTimestamp(conversation.latest_message?.created_at || conversation.accepted_at || conversation.created_at)}
                           </p>
                         </button>
                       );
@@ -388,12 +387,12 @@ const ChatMonitor = () => {
                                 >
                                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                                     <MessageSquare className="h-3.5 w-3.5" />
-                                    <span>{message.sender_id || 'Unknown sender'}</span>
+                                    <span>{message.sender_regno || 'Unknown sender'}</span>
                                     <span>•</span>
-                                    <span>{formatTimestamp(message.timestamp || message.created_at)}</span>
+                                    <span>{formatTimestamp(message.created_at || message.created_at)}</span>
                                   </div>
                                   <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">
-                                    {message.text || 'No content'}
+                                    {message.body || 'No content'}
                                   </p>
                                 </div>
                               ))

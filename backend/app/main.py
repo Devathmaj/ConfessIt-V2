@@ -12,7 +12,6 @@ from .dependencies import get_db
 from .postgres import Database, PostgresClient
 from .services.storage_service import storage_service
 import uvicorn
-from .models import UserDetails
 from .db_models import UserRecord
 from .logger import get_logger
 from opentelemetry import trace
@@ -67,19 +66,19 @@ async def on_startup():
     postgres.initialize()
 
     seeds = [
-        UserDetails(Regno="user", Name="Test User", email="user@test.com", bio="This is a test user.", which_class="Test_Class", profile_picture_id="random_string_1", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"),
-        UserDetails(Regno="admin", Name="Test Admin", email="admin@test.com", bio="This is a test admin.", which_class="Test_Class", profile_picture_id="random_string_2", gender="male", interests=[], isMatchmaking=True, isNotifications=True, isLovenotesRecieve=True, isLovenotesSend=False, user_role="admin"),
+        {"regno": "user", "name": "Test User", "email": "user@test.com", "bio": "This is a test user.",
+         "class_name": "Test_Class", "profile_picture_url": "random_string_1", "gender": "male", "interests": [],
+         "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
+         "love_notes_send_enabled": False, "role": "user"},
+        {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "bio": "This is a test admin.",
+         "class_name": "Test_Class", "profile_picture_url": "random_string_2", "gender": "male", "interests": [],
+         "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
+         "love_notes_send_enabled": False, "role": "admin"},
     ]
     with postgres.sessions.begin() as session:
-        for user in seeds:
-            if not session.scalar(select(UserRecord.id).where(UserRecord.Regno == user.Regno)):
-                session.add(UserRecord(
-                    Regno=user.Regno, Name=user.Name, email=str(user.email), bio=user.bio,
-                    which_class=user.which_class, profile_picture_id=user.profile_picture_id,
-                    gender=user.gender, interests=user.interests or [], isMatchmaking=user.isMatchmaking,
-                    isNotifications=user.isNotifications, isLovenotesRecieve=user.isLovenotesRecieve,
-                    isLovenotesSend=user.isLovenotesSend, user_role=user.user_role,
-                ))
+        for seed in seeds:
+            if not session.scalar(select(UserRecord.id).where(UserRecord.regno == seed["regno"])):
+                session.add(UserRecord(**seed))
     logger.info("PostgreSQL storage initialized.")
 # ----------------------
 # CORS Middleware

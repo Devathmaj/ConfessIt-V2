@@ -49,9 +49,9 @@ const icebreakerCards = [
 
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
-    { id: 'mock1', Name: 'Alex', Regno: '123', emoji: '😊', which_class: 'CSE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
-    { id: 'mock2', Name: 'Jordan', Regno: '456', emoji: '😎', which_class: 'ECE', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
-    { id: 'mock3', Name: 'Taylor', Regno: '789', emoji: '🤩', which_class: 'MECH', profile_picture_id: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
+    { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', class_name: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
+    { id: 'mock2', name: 'Jordan', regno: '456', emoji: '😎', class_name: 'ECE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
+    { id: 'mock3', name: 'Taylor', regno: '789', emoji: '🤩', class_name: 'MECH', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
 ];
 
 /**
@@ -171,7 +171,7 @@ const MatchExpiryTimer = ({ expiryTimestamp }: { expiryTimestamp: string }) => {
 export const MatchmakingPage = () => {
   const { user } = useAuth();
   const [isMatching, setIsMatching] = useState(false);
-  const [matchedProfile, setMatchedProfile] = useState<User & { matchId?: string } | null>(null);
+  const [matchedProfile, setMatchedProfile] = useState<User & { match_id?: string } | null>(null);
   const [slotMachineUser, setSlotMachineUser] = useState<User | null>(null);
   const [heartFill, setHeartFill] = useState(0);
   const [showChat, setShowChat] = useState(false);
@@ -208,8 +208,8 @@ export const MatchmakingPage = () => {
           // Match is expired, don't set it
           return;
         }
-        console.log("Setting matched profile with:", { ...response.matched_with, matchId: response.match_id }); // Debug log
-        setMatchedProfile({ ...response.matched_with, matchId: response.match_id });
+        console.log("Setting matched profile with:", { ...response.matched_with, match_id: response.match_id }); // Debug log
+        setMatchedProfile({ ...response.matched_with, match_id: response.match_id });
         setExpiresAt(response.expires_at);
         
         // Check if there's already a conversation for this match
@@ -220,7 +220,7 @@ export const MatchmakingPage = () => {
     }
   }, []);
 
-    const checkForExistingConversation = async (matchId?: string) => {
+    const checkForExistingConversation = async (match_id?: string) => {
     try {
       const response = await getCurrentConversation();
       if (response.status === 'success') {
@@ -228,7 +228,7 @@ export const MatchmakingPage = () => {
           // Only show the matched profile if not expired
           setMatchedProfile({
             ...response.other_user,
-            matchId: response.match.id
+            match_id: response.match.id
           });
           setExpiresAt(response.match.expires_at);
           setConversationStatus(response.conversation.status);
@@ -281,8 +281,8 @@ export const MatchmakingPage = () => {
   };
 
   const refreshConversationStatus = async () => {
-    if (matchedProfile?.matchId) {
-      await checkForExistingConversation(matchedProfile.matchId);
+    if (matchedProfile?.match_id) {
+      await checkForExistingConversation(matchedProfile.match_id);
     }
   };
 
@@ -297,15 +297,15 @@ export const MatchmakingPage = () => {
    */
   const handleSendMessageRequest = async () => {
     console.log("matchedProfile:", matchedProfile);
-    if (!matchedProfile?.matchId) {
+    if (!matchedProfile?.match_id) {
         toast.error("Cannot send message request: Match ID is missing.");
-        console.log("matchId is missing from:", matchedProfile);
+        console.log("match_id is missing from:", matchedProfile);
         return;
     }
     try {
-        console.log("Sending message request with matchId:", matchedProfile.matchId);
-        await requestConversation(matchedProfile.matchId);
-        toast.success(`Message request sent to ${matchedProfile.Name}!`);
+        console.log("Sending message request with match_id:", matchedProfile.match_id);
+        await requestConversation(matchedProfile.match_id);
+        toast.success(`Message request sent to ${matchedProfile.name}!`);
         setConversationStatus('requested');
         await refreshConversationStatus(); // Refresh to get updated status
     } catch (error: any) {
@@ -328,7 +328,7 @@ export const MatchmakingPage = () => {
             // Only show the matched profile if not expired
             setMatchedProfile({
               ...response.other_user,
-              matchId: response.match.id
+              match_id: response.match.id
             });
             setExpiresAt(response.match.expires_at);
             setConversationStatus(response.conversation.status);
@@ -364,7 +364,7 @@ export const MatchmakingPage = () => {
       }
 
       // Check for conversation expiry if active
-      if (hasActiveConversation && matchedProfile?.matchId) {
+      if (hasActiveConversation && matchedProfile?.match_id) {
         try {
           const response = await getCurrentConversation();
           if (response.status === 'success' && response.match.is_expired) {
@@ -379,7 +379,7 @@ export const MatchmakingPage = () => {
     }, 60000); // Check every minute
 
     return () => clearInterval(interval);
-  }, [hasActiveConversation, matchedProfile?.matchId]);
+  }, [hasActiveConversation, matchedProfile?.match_id]);
 
   /**
    * Handles the click event on the main heart icon.
@@ -401,8 +401,8 @@ export const MatchmakingPage = () => {
           // Match is expired, don't set it
           return;
         }
-        console.log("Setting matched profile from handleHeartClick:", { ...response.matched_with, matchId: response.match_id }); // Debug log
-        setMatchedProfile({ ...response.matched_with, matchId: response.match_id });
+        console.log("Setting matched profile from handleHeartClick:", { ...response.matched_with, match_id: response.match_id }); // Debug log
+        setMatchedProfile({ ...response.matched_with, match_id: response.match_id });
         setExpiresAt(response.expires_at);
         toast.info("You already have a match!");
       }
@@ -454,7 +454,7 @@ export const MatchmakingPage = () => {
               // and automatically creates a pending conversation
               const newMatchedProfile = { 
                 ...finalMatch.matched_with, 
-                matchId: finalMatch.match_id 
+                match_id: finalMatch.match_id 
               };
               setMatchedProfile(newMatchedProfile);
               setExpiresAt(finalMatch.expires_at);
@@ -492,7 +492,7 @@ export const MatchmakingPage = () => {
     setTimeout(() => {
       const responses = ["That's so sweet! 💕", "I'd love to chat more!", "You seem really interesting!"];
       const response = responses[Math.floor(Math.random() * responses.length)];
-      setChatMessages(prev => [...prev, `${matchedProfile?.Name}: ${response}`]);
+      setChatMessages(prev => [...prev, `${matchedProfile?.name}: ${response}`]);
     }, 1000);
   };
 
@@ -506,12 +506,12 @@ export const MatchmakingPage = () => {
     <Card className="confession-card">
       <CardHeader className="items-center text-center">
         <img 
-            src={getProfilePictureUrl(profile.profile_picture_id)} 
-            alt={profile.Name}
+            src={getProfilePictureUrl(profile.profile_picture_url)} 
+            alt={profile.name}
             className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg"
         />
-        <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.Name}</CardTitle>
-        <CardDescription>{profile.which_class}</CardDescription>
+        <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.name}</CardTitle>
+        <CardDescription>{profile.class_name}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
@@ -571,7 +571,7 @@ export const MatchmakingPage = () => {
                 <div className="text-center space-y-4">
                   <div className="text-4xl">💬</div>
                   <h2 className="text-2xl font-dancing text-romantic">Conversation Active!</h2>
-                  <p className="text-muted-foreground">You have an active conversation with {matchedProfile.Name}</p>
+                  <p className="text-muted-foreground">You have an active conversation with {matchedProfile.name}</p>
                   <Button 
                     onClick={() => setShowConversationDialog(true)}
                     className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
@@ -592,7 +592,7 @@ export const MatchmakingPage = () => {
                 <div className="text-center space-y-4">
                   <div className="text-4xl">⏳</div>
                   <h2 className="text-2xl font-dancing text-romantic">Waiting for Response</h2>
-                  <p className="text-muted-foreground">Waiting for {matchedProfile.Name} to accept your message request</p>
+                  <p className="text-muted-foreground">Waiting for {matchedProfile.name} to accept your message request</p>
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
@@ -606,7 +606,7 @@ export const MatchmakingPage = () => {
                 <div className="text-center space-y-4">
                   <div className="text-4xl">❌</div>
                   <h2 className="text-2xl font-dancing text-romantic">Message Request Rejected</h2>
-                  <p className="text-muted-foreground">{matchedProfile.Name} rejected your message request</p>
+                  <p className="text-muted-foreground">{matchedProfile.name} rejected your message request</p>
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
@@ -620,7 +620,7 @@ export const MatchmakingPage = () => {
                 <div className="text-center space-y-4">
                   <div className="text-4xl">💕</div>
                   <h2 className="text-2xl font-dancing text-romantic">Match Found!</h2>
-                  <p className="text-muted-foreground">You matched with {matchedProfile.Name}!</p>
+                  <p className="text-muted-foreground">You matched with {matchedProfile.name}!</p>
                   <Button 
                     onClick={handleSendMessageRequest}
                     className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
@@ -645,12 +645,12 @@ export const MatchmakingPage = () => {
                         <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-card z-10" />
                         <div className="text-center animate-pulse" style={{ filter: 'blur(4px)' }}>
                             <img 
-                                src={getProfilePictureUrl(slotMachineUser.profile_picture_id)} 
-                                alt={slotMachineUser.Name}
+                                src={getProfilePictureUrl(slotMachineUser.profile_picture_url)} 
+                                alt={slotMachineUser.name}
                                 className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg mx-auto mb-4"
                             />
-                            <h3 className="text-xl font-dancing text-romantic">{slotMachineUser.Name}</h3>
-                            <p className="text-sm text-muted-foreground">{slotMachineUser.which_class}</p>
+                            <h3 className="text-xl font-dancing text-romantic">{slotMachineUser.name}</h3>
+                            <p className="text-sm text-muted-foreground">{slotMachineUser.class_name}</p>
                         </div>
                         <div className="absolute inset-0 bg-gradient-to-b from-card via-transparent to-card z-10" />
                     </div>
@@ -677,7 +677,7 @@ export const MatchmakingPage = () => {
                       <ArrowLeft className="w-4 h-4" />
                     </Button>
                     <CardTitle className="flex items-center gap-3 text-xl font-dancing text-romantic">
-                       Chat with {matchedProfile?.Name}
+                       Chat with {matchedProfile?.name}
                     </CardTitle>
                   </div>
                 </CardHeader>
@@ -709,7 +709,7 @@ export const MatchmakingPage = () => {
                       <div className="text-center space-y-4">
                         <div className="text-2xl">💕</div>
                         <h3 className="text-xl font-semibold text-romantic">Send a Message Request!</h3>
-                        <p className="text-muted-foreground">Click "Send Message Request" to start a conversation with {matchedProfile?.Name}.</p>
+                        <p className="text-muted-foreground">Click "Send Message Request" to start a conversation with {matchedProfile?.name}.</p>
                       </div>
                     )}
 

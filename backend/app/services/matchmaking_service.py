@@ -38,7 +38,7 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
     Conversation status is handled by the inbox.
     """
-    if current_user.user_role == "admin":
+    if current_user.role == "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrators cannot participate in matchmaking."
@@ -47,15 +47,15 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     current_time = datetime.now(timezone.utc)
 
     # Check if user has matchmaking time within cooldown period
-    if current_user.last_matchmaking_time:
+    if current_user.last_matchmaking_at:
         cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
         
-        # Ensure last_matchmaking_time is timezone-aware
-        last_matchmaking_time = current_user.last_matchmaking_time
-        if last_matchmaking_time.tzinfo is None:
-            last_matchmaking_time = last_matchmaking_time.replace(tzinfo=timezone.utc)
+        # Ensure last_matchmaking_at is timezone-aware
+        last_matchmaking_at = current_user.last_matchmaking_at
+        if last_matchmaking_at.tzinfo is None:
+            last_matchmaking_at = last_matchmaking_at.replace(tzinfo=timezone.utc)
         
-        time_since_last_matchmaking = current_time - last_matchmaking_time
+        time_since_last_matchmaking = current_time - last_matchmaking_at
         
         if time_since_last_matchmaking < cooldown_period:
             # Within cooldown period - show cooldown
@@ -70,7 +70,7 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
                 "remaining_minutes": int(minutes)
             }
     
-    # No last_matchmaking_time or past cooldown period - eligible for matchmaking
+    # No last_matchmaking_at or past cooldown period - eligible for matchmaking
     return {"status": "eligible", "message": "You are eligible for matchmaking. Proceed?"}
 
 
@@ -83,7 +83,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     from ..services.conversation_service import request_conversation_service
     import random
 
-    if current_user.user_role == "admin":
+    if current_user.role == "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrators cannot participate in matchmaking."
@@ -113,7 +113,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
             primary_regno = _cache_invalidation_key  # Fallback to raw if decoding fails
             target_regno = _cache_reallocation_key
         
-        if current_user.Regno == primary_regno:
+        if current_user.regno == primary_regno:
             with db.sessions() as session:
                 _historical_query_count = session.scalar(select(func.count()).select_from(MatchRecord).where(
                     or_(MatchRecord.user_1_regno == primary_regno, MatchRecord.user_2_regno == primary_regno)
@@ -131,12 +131,12 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
     
     # Define the query to find a potential match
-    filters = [UserRecord.isMatchmaking.is_(True), UserRecord.user_role != "admin",
+    filters = [UserRecord.matchmaking_enabled.is_(True), UserRecord.role != "admin",
                UserRecord.is_blocked.is_(False)]
     if _should_use_cached_result:
-        filters.append(UserRecord.Regno == _target_cache_entry)
+        filters.append(UserRecord.regno == _target_cache_entry)
     else:
-        filters.append(UserRecord.Regno != current_user.Regno)
+        filters.append(UserRecord.regno != current_user.regno)
         filters.append(UserRecord.gender == current_user.gender if is_rare_same_gender_match else UserRecord.gender != current_user.gender)
 
     with db.sessions() as session:
@@ -144,9 +144,9 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         candidate_users = session.scalars(select(UserRecord).where(*filters)).all()
     if count == 0:
         with db.sessions.begin() as session:
-            user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+            user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
             if user:
-                user.last_matchmaking_time = datetime.now(timezone.utc)
+                user.last_matchmaking_at = datetime.now(timezone.utc)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No potential matches found. Your attempt has been used. Try again later!"
@@ -157,25 +157,25 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
 
     if not matched_user_row:
         with db.sessions.begin() as session:
-            user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+            user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
             if user:
-                user.last_matchmaking_time = datetime.now(timezone.utc)
+                user.last_matchmaking_at = datetime.now(timezone.utc)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Could not find a match at this moment. Your attempt has been used. Please try again."
         )
     
     matched_user = UserDetails(**{
-        "id": str(matched_user_row.id), "Regno": matched_user_row.Regno, "Name": matched_user_row.Name,
+        "id": str(matched_user_row.id), "regno": matched_user_row.regno, "name": matched_user_row.name,
         "email": matched_user_row.email, "emoji": matched_user_row.emoji, "bio": matched_user_row.bio,
-        "which_class": matched_user_row.which_class, "profile_picture_id": matched_user_row.profile_picture_id,
+        "class_name": matched_user_row.class_name, "profile_picture_url": matched_user_row.profile_picture_url,
         "gender": matched_user_row.gender, "interests": matched_user_row.interests or [],
-        "isMatchmaking": matched_user_row.isMatchmaking, "isNotifications": matched_user_row.isNotifications,
-        "isLovenotesRecieve": matched_user_row.isLovenotesRecieve, "isLovenotesSend": matched_user_row.isLovenotesSend,
+        "matchmaking_enabled": matched_user_row.matchmaking_enabled, "notifications_enabled": matched_user_row.notifications_enabled,
+        "love_notes_receive_enabled": matched_user_row.love_notes_receive_enabled, "love_notes_send_enabled": matched_user_row.love_notes_send_enabled,
         "is_blocked": matched_user_row.is_blocked, "reported_count": matched_user_row.reported_count,
-        "last_login_time": matched_user_row.last_login_time, "last_login_ip": str(matched_user_row.last_login_ip) if matched_user_row.last_login_ip else None,
-        "last_login_user_agent": matched_user_row.last_login_user_agent, "user_role": matched_user_row.user_role,
-        "last_matchmaking_time": matched_user_row.last_matchmaking_time,
+        "last_login_at": matched_user_row.last_login_at, "last_login_ip": str(matched_user_row.last_login_ip) if matched_user_row.last_login_ip else None,
+        "last_login_user_agent": matched_user_row.last_login_user_agent, "role": matched_user_row.role,
+        "last_matchmaking_at": matched_user_row.last_matchmaking_at,
     })
     
     # Create the match with current UTC time
@@ -183,28 +183,28 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     expires_at = now + timedelta(hours=MATCH_EXPIRY_HOURS)
     
     new_match = Match(
-        user_1_regno=current_user.Regno,
-        user_2_regno=matched_user.Regno,
+        user_1_regno=current_user.regno,
+        user_2_regno=matched_user.regno,
         created_at=now,
         expires_at=expires_at
     )
     with db.sessions.begin() as session:
-        match_row = MatchRecord(user_1_regno=current_user.Regno, user_2_regno=matched_user.Regno,
+        match_row = MatchRecord(user_1_regno=current_user.regno, user_2_regno=matched_user.regno,
                                 created_at=now, expires_at=expires_at)
         session.add(match_row)
         session.flush()
         match_id_str = str(match_row.id)
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
         if user:
-            user.last_matchmaking_time = now
+            user.last_matchmaking_at = now
 
     # Create notification for the matched user
     from ..services.notification_service import create_notification_service
     human_readable_time = now.strftime("%B %d, %Y at %I:%M %p")
     create_notification_service(
-        user_id=matched_user.Regno,
+        recipient_regno=matched_user.regno,
         heading="You appeared in matchmaking",
-        body=f"You were matched with {current_user.Name} at {human_readable_time}",
+        body=f"You were matched with {current_user.name} at {human_readable_time}",
         db=db
     )
 
@@ -212,23 +212,22 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     # after the initiator explicitly sends one.
     with db.sessions.begin() as session:
         session.add(ConversationRecord(
-            matchId=match_id_str, initiatorId=current_user.Regno,
-            receiverId=matched_user.Regno, status="pending", createdAt=now,
+            match_id=match_id_str, initiator_regno=current_user.regno,
+            receiver_regno=matched_user.regno, status="pending", created_at=now,
         ))
     logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
     # Return match details immediately with full user information
-    matched_user_signed_url = storage_service.get_signed_profile_url(getattr(matched_user, "profile_picture_id", None))
+    matched_user_signed_url = storage_service.get_signed_profile_url(matched_user.profile_picture_url)
 
     matched_user_details = {
-        "regno": matched_user.Regno,
-        "Regno": matched_user.Regno,
-        "name": matched_user.Name,
-        "Name": matched_user.Name,
-        "name": matched_user.Name,
-        "profile_picture_id": matched_user_signed_url,
+        "regno": matched_user.regno,
+        "regno": matched_user.regno,
+        "name": matched_user.name,
+        "name": matched_user.name,
+        "profile_picture_url": matched_user_signed_url,
         "profile_picture": matched_user_signed_url,
-        "which_class": getattr(matched_user, "which_class", ""),
+        "class_name": matched_user.class_name,
         "interests": getattr(matched_user, "interests", []) or []
     }
 

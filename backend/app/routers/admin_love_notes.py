@@ -21,7 +21,7 @@ def _require_admin(current_user: UserDetails = Depends(get_current_user)) -> Use
     """Ensure the requester has administrator privileges."""
     from fastapi import HTTPException, status
     
-    if current_user.user_role != "admin":
+    if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access required."

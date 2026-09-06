@@ -21,11 +21,11 @@ type MatchmakingStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
 interface MatchParticipant {
   id?: string;
-  Name?: string | null;
-  Regno?: string | null;
-  which_class?: string | null;
+  name?: string | null;
+  regno?: string | null;
+  class_name?: string | null;
   email?: string | null;
-  user_role?: string | null;
+  role?: string | null;
 }
 
 interface MatchmakingItem {
@@ -199,10 +199,10 @@ export const MatchmakingReview = () => {
                     <div className="mt-2 grid gap-3 md:grid-cols-2">
                       {request.participants.map((participant, index) => (
                         <div key={`${request.id}-${index}`} className="rounded-lg border border-border p-3 text-sm">
-                          <p className="font-medium">{participant.Name ?? participant.Regno ?? 'Unknown user'}</p>
+                          <p className="font-medium">{participant.name ?? participant.regno ?? 'Unknown user'}</p>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {participant.Regno && <p>Regno: {participant.Regno}</p>}
-                            {participant.which_class && <p>Class: {participant.which_class}</p>}
+                            {participant.regno && <p>regno: {participant.regno}</p>}
+                            {participant.class_name && <p>Class: {participant.class_name}</p>}
                             {participant.email && <p>Email: {participant.email}</p>}
                           </div>
                         </div>

@@ -21,16 +21,16 @@ interface ConversationData {
   conversation: {
     id: string;
     status: 'pending' | 'requested' | 'accepted' | 'rejected';
-    initiator_id: string;
-    receiver_id: string;
+    initiator_regno: string;
+    receiver_regno: string;
     created_at: string;
     accepted_at?: string;
   };
   other_user: {
     regno: string;
     name: string;
-    profile_picture_id: string;
-    which_class: string;
+    profile_picture_url: string;
+    class_name: string;
     bio: string;
     interests: string[];
   };
@@ -132,7 +132,7 @@ export const MessageBoxPage = () => {
     return `in ${hours}h ${minutes}m`;
   };
 
-  const getTimeAgo = (timestamp: string) => {
+  const getTimeAgo = (created_at: string) => {
     const parsed = parseTimestamp(timestamp);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
@@ -202,7 +202,7 @@ export const MessageBoxPage = () => {
                   <CardTitle className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <img
-                        src={resolveProfilePictureUrl(conversation.other_user.profile_picture_id)}
+                        src={resolveProfilePictureUrl(conversation.other_user.profile_picture_url)}
                         alt={conversation.other_user.name}
                         className="w-12 h-12 rounded-full object-cover"
                       />

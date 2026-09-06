@@ -21,16 +21,16 @@ logger = get_logger(__name__)
 
 def _user_payload(user: UserRecord) -> dict:
     return {
-        "id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
-        "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class,
-        "profile_picture_id": user.profile_picture_id, "gender": user.gender,
-        "interests": user.interests or [], "isMatchmaking": user.isMatchmaking,
-        "isNotifications": user.isNotifications, "isLovenotesRecieve": user.isLovenotesRecieve,
-        "isLovenotesSend": user.isLovenotesSend, "is_blocked": user.is_blocked,
-        "reported_count": user.reported_count, "last_login_time": user.last_login_time,
+        "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
+        "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name,
+        "profile_picture_url": user.profile_picture_url, "gender": user.gender,
+        "interests": user.interests or [], "matchmaking_enabled": user.matchmaking_enabled,
+        "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
+        "love_notes_send_enabled": user.love_notes_send_enabled, "is_blocked": user.is_blocked,
+        "reported_count": user.reported_count, "last_login_at": user.last_login_at,
         "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-        "last_login_user_agent": user.last_login_user_agent, "user_role": user.user_role,
-        "last_matchmaking_time": user.last_matchmaking_time,
+        "last_login_user_agent": user.last_login_user_agent, "role": user.role,
+        "last_matchmaking_at": user.last_matchmaking_at,
     }
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
@@ -75,7 +75,7 @@ def verify_token_service(token: str, db: Database) -> UserDetails:
         raise credentials_exception
 
     with db.sessions() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         if user is None:
             raise credentials_exception
         return UserDetails(**_user_payload(user))
@@ -100,7 +100,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends
         raise credentials_exception
 
     with db.sessions() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         if user is None:
             raise credentials_exception
         return UserDetails(**_user_payload(user))
@@ -118,7 +118,7 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
         if regno is None:
             return None
         with db.sessions() as session:
-            user = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+            user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
             return UserDetails(**_user_payload(user)) if user else None
     except jwt.PyJWTError:
         return None
@@ -128,7 +128,7 @@ def admin_required(current_user: UserDetails = Depends(get_current_user)):
     """
     Used to verify that the current user is an admin based on their role.
     """
-    if current_user.user_role != "admin":
+    if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access this resource",
@@ -145,7 +145,7 @@ async def generate_magic_link_service(request: Request, db: Database):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number is required")
 
     with db.sessions() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
     if not user:
         logger.warning(f"No user found with registration number: {regno}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -155,7 +155,7 @@ async def generate_magic_link_service(request: Request, db: Database):
     token = create_and_store_magic_token(db, str(user.id), request)
 
     magic_link = f"http://localhost:5173/verify-login?token={token}"
-    logger.info(f"Magic Link for {user.Name}: {magic_link}")
+    logger.info(f"Magic Link for {user.name}: {magic_link}")
 
     return {"message": "Magic link generated. Check the backend console."}
 
@@ -207,11 +207,11 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         login_token.session_status = "active"
         login_token.last_seen_at = now
         login_token.device = consume_user_agent or login_token.request_user_agent or "unknown"
-        user.last_login_time = now
+        user.last_login_at = now
         user.last_login_ip = consume_ip
         user.last_login_user_agent = consume_user_agent
-        user_regno = user.Regno
-        user_role = user.user_role
+        user_regno = user.regno
+        role = user.role
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -220,7 +220,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     )
 
     # Used to determine the redirect URL based on the user's role.
-    redirect_url = "/admin" if user_role == "admin" else "/dashboard"
+    redirect_url = "/admin" if role == "admin" else "/dashboard"
 
     return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
 

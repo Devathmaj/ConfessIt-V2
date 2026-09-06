@@ -23,39 +23,39 @@ class UserRecord(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    Regno: Mapped[str] = mapped_column("regno", String(100), unique=True, index=True)
-    Name: Mapped[str] = mapped_column("name", String(160))
+    regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
-    which_class: Mapped[str] = mapped_column("class_name", String(80), index=True)
-    profile_picture_id: Mapped[Optional[str]] = mapped_column("profile_picture_url", Text)
+    class_name: Mapped[str] = mapped_column(String(80), index=True)
+    profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
     gender: Mapped[str] = mapped_column(String(24))
     interests: Mapped[list[str]] = mapped_column(ARRAY(String(80)), default=list, server_default=text("'{}'"))
-    isMatchmaking: Mapped[bool] = mapped_column("matchmaking_enabled", Boolean, default=True, server_default=text("true"))
-    isNotifications: Mapped[bool] = mapped_column("notifications_enabled", Boolean, default=True, server_default=text("true"))
-    isLovenotesRecieve: Mapped[bool] = mapped_column("love_notes_receive_enabled", Boolean, default=True, server_default=text("true"))
-    isLovenotesSend: Mapped[bool] = mapped_column("love_notes_send_enabled", Boolean, default=False, server_default=text("false"))
+    matchmaking_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     reported_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    last_login_time: Mapped[Optional[datetime]] = mapped_column("last_login_at", DateTime(timezone=True))
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_login_ip: Mapped[Optional[str]] = mapped_column(INET)
     last_login_user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    user_role: Mapped[str] = mapped_column("role", String(20), default="user", server_default=text("'user'"), index=True)
-    last_matchmaking_time: Mapped[Optional[datetime]] = mapped_column("last_matchmaking_at", DateTime(timezone=True))
+    role: Mapped[str] = mapped_column(String(20), default="user", server_default=text("'user'"), index=True)
+    last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class ConfessionRecord(Base):
     __tablename__ = "confessions"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    confession: Mapped[str] = mapped_column("body", Text)
-    confessing_to: Mapped[Optional[str]] = mapped_column("recipient_name", String(160))
-    is_anonymous: Mapped[bool] = mapped_column("anonymous", Boolean, default=False, server_default=text("false"))
-    is_comment: Mapped[bool] = mapped_column("comments_enabled", Boolean, default=False, server_default=text("false"))
-    timestamp: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
-    user_id: Mapped[str] = mapped_column("author_id", Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    is_approved: Mapped[bool] = mapped_column("approved", Boolean, default=True, server_default=text("true"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    recipient_name: Mapped[Optional[str]] = mapped_column(String(160))
+    anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    comments_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    author_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    approved: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), index=True)
     report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     reactions: Mapped[dict[str, list[str]]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     heart_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -71,8 +71,8 @@ class ConfessionCommentRecord(Base):
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     confession_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("confessions.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    message: Mapped[str] = mapped_column("body", Text)
-    timestamp: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     likes: Mapped[list[str]] = mapped_column(ARRAY(Uuid(as_uuid=False)), default=list, server_default=text("'{}'"))
     dislikes: Mapped[list[str]] = mapped_column(ARRAY(Uuid(as_uuid=False)), default=list, server_default=text("'{}'"))
     like_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -94,7 +94,7 @@ class ReportRecord(Base):
     reported_by_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     reported_by_name: Mapped[str] = mapped_column(String(160))
     reason: Mapped[str] = mapped_column(String(1000))
-    timestamp: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class LoginTokenRecord(Base):
@@ -125,8 +125,8 @@ class LoveNoteRecord(Base):
     sender_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     recipient_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     image_url: Mapped[str] = mapped_column(Text)
-    message_text: Mapped[str] = mapped_column("body", String(2000))
-    is_anonymous: Mapped[bool] = mapped_column("anonymous", Boolean, default=False, server_default=text("false"))
+    body: Mapped[str] = mapped_column(String(2000))
+    anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -157,17 +157,17 @@ class ConversationRecord(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    matchId: Mapped[str] = mapped_column("match_id", Uuid(as_uuid=False), ForeignKey("matches.id", ondelete="CASCADE"), unique=True, index=True)
-    initiatorId: Mapped[str] = mapped_column("initiator_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
-    receiverId: Mapped[str] = mapped_column("receiver_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    match_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("matches.id", ondelete="CASCADE"), unique=True, index=True)
+    initiator_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    receiver_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
-    requestedAt: Mapped[Optional[datetime]] = mapped_column("requested_at", DateTime(timezone=True))
-    acceptedAt: Mapped[Optional[datetime]] = mapped_column("accepted_at", DateTime(timezone=True))
-    createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
+    requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_message_text: Mapped[Optional[str]] = mapped_column(String(160))
+    last_message_preview: Mapped[Optional[str]] = mapped_column(String(160))
     blocked_by: Mapped[list[str]] = mapped_column(ARRAY(String(100)), default=list, server_default=text("'{}'"))
-    terminatedAt: Mapped[Optional[datetime]] = mapped_column("terminated_at", DateTime(timezone=True))
+    terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class MessageRecord(Base):
@@ -175,11 +175,11 @@ class MessageRecord(Base):
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     conversation_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
-    sender_id: Mapped[str] = mapped_column("sender_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
-    receiver_id: Mapped[str] = mapped_column("receiver_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
-    text: Mapped[str] = mapped_column("body", Text)
-    timestamp: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
-    read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    sender_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    receiver_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)
 
 
@@ -187,11 +187,11 @@ class NotificationRecord(Base):
     __tablename__ = "notifications"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column("recipient_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    recipient_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     heading: Mapped[str] = mapped_column(String(120))
     body: Mapped[str] = mapped_column(String(500))
-    timestamp: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), index=True)
-    read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 class MessageReportRecord(Base):
@@ -199,11 +199,11 @@ class MessageReportRecord(Base):
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     message_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("messages.id", ondelete="CASCADE"), index=True)
-    reporter_id: Mapped[str] = mapped_column("reporter_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
-    reported_user_id: Mapped[str] = mapped_column("reported_user_regno", String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    reporter_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    reported_user_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     reason: Mapped[str] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    reviewed_by: Mapped[Optional[str]] = mapped_column("reviewed_by_regno", String(100), ForeignKey("users.regno", ondelete="SET NULL"))
+    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), ForeignKey("users.regno", ondelete="SET NULL"))
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)

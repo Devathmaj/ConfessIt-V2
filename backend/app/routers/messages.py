@@ -24,7 +24,7 @@ router = APIRouter(
 
 class MessageCreate(BaseModel):
     conversation_id: str
-    text: str
+    body: str
 
 
 class MessageReport(BaseModel):
@@ -51,7 +51,7 @@ def send_message(
         db=db,
         conversation_id=message_data.conversation_id,
         sender=current_user,
-        text=message_data.text
+        body=message_data.body
     )
 
 
@@ -140,7 +140,7 @@ async def websocket_endpoint(
         # Validate user is participant
         try:
             message_service.validate_conversation_participant(
-                db, conversation_id, user.Regno
+                db, conversation_id, user.regno
             )
         except Exception as e:
             logger.error(f"WebSocket validation failed: {e}")
@@ -148,7 +148,7 @@ async def websocket_endpoint(
             await websocket.close(code=4003)
             return
         
-        logger.info(f"WebSocket connected: {user.Regno} to conversation {conversation_id}")
+        logger.info(f"WebSocket connected: {user.regno} to conversation {conversation_id}")
         
         # Subscribe to Redis pub/sub
         pubsub = redis_service.subscribe_to_conversation(conversation_id)
@@ -162,7 +162,7 @@ async def websocket_endpoint(
         await websocket.send_json({
             "type": "connected",
             "conversation_id": conversation_id,
-            "user_id": user.Regno
+            "user_regno": user.regno
         })
         
         # Listen for messages from Redis
@@ -217,12 +217,12 @@ async def websocket_endpoint(
                     await websocket.send_text("pong")
                     
         except WebSocketDisconnect:
-            logger.info(f"WebSocket disconnected: {user.Regno}")
+            logger.info(f"WebSocket disconnected: {user.regno}")
         finally:
             # Cleanup
             listener_task.cancel()
             redis_service.unsubscribe(pubsub, conversation_id)
-            logger.info(f"WebSocket cleaned up: {user.Regno}")
+            logger.info(f"WebSocket cleaned up: {user.regno}")
             
     except Exception as e:
         logger.error(f"WebSocket error: {e}")

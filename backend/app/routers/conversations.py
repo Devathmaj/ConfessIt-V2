@@ -33,7 +33,7 @@ def request_conversation(
     """
     Used to create a pending conversation request for a given match.
     """
-    return request_conversation_service(current_user, conversation_data.matchId, db)
+    return request_conversation_service(current_user, conversation_data.match_id, db)
 
 @router.get("/{match_id}/status")
 def get_conversation_status(

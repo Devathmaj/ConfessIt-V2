@@ -26,7 +26,7 @@ def get_notifications(
     """
     Get all notifications for the current user.
     """
-    notifications = get_user_notifications_service(current_user.Regno, db)
+    notifications = get_user_notifications_service(current_user.regno, db)
     return {"notifications": notifications}
 
 @router.put("/{notification_id}/read")
@@ -38,7 +38,7 @@ def mark_notification_read(
     """
     Mark a notification as read.
     """
-    mark_notification_read_service(notification_id, current_user.Regno, db)
+    mark_notification_read_service(notification_id, current_user.regno, db)
     return {"message": "Notification marked as read"}
 
 @router.delete("/{notification_id}")
@@ -50,5 +50,5 @@ def delete_notification(
     """
     Delete a notification.
     """
-    delete_notification_service(notification_id, current_user.Regno, db)
+    delete_notification_service(notification_id, current_user.regno, db)
     return {"message": "Notification deleted"}

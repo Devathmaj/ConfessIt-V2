@@ -20,18 +20,18 @@ def override_get_db():
 
 def override_get_current_user():
     return {
-        "Regno": "testuser",
-        "Name": "Test User",
+        "regno": "testuser",
+        "name": "Test User",
         "email": "test@user.com",
-        "user_role": "user"
+        "role": "user"
     }
 
 def override_get_admin_user():
     return {
-        "Regno": "adminuser",
-        "Name": "Admin User",
+        "regno": "adminuser",
+        "name": "Admin User",
         "email": "admin@user.com",
-        "user_role": "admin"
+        "role": "admin"
     }
 
 app.dependency_overrides[get_db] = override_get_db

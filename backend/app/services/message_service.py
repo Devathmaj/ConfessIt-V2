@@ -48,8 +48,8 @@ class MessageService:
         
         # Check if user is participant
         is_participant = (
-            conversation.get("initiatorId") == user_regno or
-            conversation.get("receiverId") == user_regno
+            conversation.get("initiator_regno") == user_regno or
+            conversation.get("receiver_regno") == user_regno
         )
         
         if not is_participant:
@@ -69,7 +69,7 @@ class MessageService:
         # The block check is only enforced in send_message() to prevent sending new messages
         
         # Check if expired (4 hours from creation)
-        created_at = conversation.get("createdAt")
+        created_at = conversation.get("created_at")
         if created_at:
             expiry_time = created_at + timedelta(hours=4)
             if datetime.now(timezone.utc) > expiry_time:
@@ -83,11 +83,11 @@ class MessageService:
     @staticmethod
     def _conversation_payload(row):
         return {
-            "_id": str(row.id), "matchId": str(row.matchId), "initiatorId": row.initiatorId,
-            "receiverId": row.receiverId, "status": row.status, "requestedAt": row.requestedAt,
-            "acceptedAt": row.acceptedAt, "createdAt": row.createdAt,
-            "last_message_at": row.last_message_at, "last_message_text": row.last_message_text,
-            "blocked_by": row.blocked_by or [], "terminatedAt": row.terminatedAt,
+            "id": str(row.id), "match_id": str(row.match_id), "initiator_regno": row.initiator_regno,
+            "receiver_regno": row.receiver_regno, "status": row.status, "requested_at": row.requested_at,
+            "accepted_at": row.accepted_at, "created_at": row.created_at,
+            "last_message_at": row.last_message_at, "last_message_preview": row.last_message_preview,
+            "blocked_by": row.blocked_by or [], "terminated_at": row.terminated_at,
         }
     
     def send_message(
@@ -95,7 +95,7 @@ class MessageService:
         db: Database,
         conversation_id: str,
         sender: UserDetails,
-        text: str
+        body: str
     ) -> Dict[str, Any]:
         """
         Send a message in a conversation
@@ -108,11 +108,11 @@ class MessageService:
         """
         # Validate sender is participant (allows reading but not sending if blocked)
         conversation = self.validate_conversation_participant(
-            db, conversation_id, sender.Regno
+            db, conversation_id, sender.regno
         )
         
         # IMPORTANT: Check if conversation is blocked (prevents sending, but reading is OK)
-        if conversation.get("isBlocked", False):
+        if conversation.get("is_blocked", False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot send messages: this conversation is blocked"
@@ -120,59 +120,59 @@ class MessageService:
         
         # Determine receiver
         receiver_id = (
-            conversation["receiverId"] 
-            if conversation["initiatorId"] == sender.Regno 
-            else conversation["initiatorId"]
+            conversation["receiver_regno"] 
+            if conversation["initiator_regno"] == sender.regno 
+            else conversation["initiator_regno"]
         )
         
         # Create message document
         message_doc = {
             "conversation_id": str(conversation_id),
-            "sender_id": sender.Regno,
-            "receiver_id": receiver_id,
-            "text": text,
-            "timestamp": datetime.now(timezone.utc),
-            "read": False
+            "sender_regno": sender.regno,
+            "receiver_regno": receiver_id,
+            "body": body,
+            "created_at": datetime.now(timezone.utc),
+            "is_read": False
         }
         
         # Insert into PostgreSQL
         with db.sessions.begin() as session:
             row = MessageRecord(
-                conversation_id=str(conversation_id), sender_id=sender.Regno,
-                receiver_id=receiver_id, text=text, timestamp=message_doc["timestamp"], read=False,
+                conversation_id=str(conversation_id), sender_regno=sender.regno,
+                receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
             )
             session.add(row)
             conversation_row = session.get(ConversationRecord, str(conversation_id))
             if conversation_row:
-                conversation_row.last_message_at = message_doc["timestamp"]
-                conversation_row.last_message_text = text[:100]
+                conversation_row.last_message_at = message_doc["created_at"]
+                conversation_row.last_message_preview = body[:100]
             session.flush()
-            message_doc["_id"] = str(row.id)
+            message_doc["id"] = str(row.id)
         
         # Publish to Redis for real-time delivery
         redis_message = {
-            "id": str(message_doc["_id"]),
+            "id": str(message_doc["id"]),
             "conversation_id": conversation_id,
-            "sender_id": sender.Regno,
-            "sender_name": sender.Name,
-            "receiver_id": receiver_id,
-            "text": text,
-            "timestamp": isoformat_datetime(message_doc["timestamp"]),
-            "read": False
+            "sender_regno": sender.regno,
+            "sender_name": sender.name,
+            "receiver_regno": receiver_id,
+            "body": body,
+            "created_at": isoformat_datetime(message_doc["created_at"]),
+            "is_read": False
         }
         
         redis_service.publish_message(conversation_id, redis_message)
         
-        logger.info(f"Message sent: {sender.Regno} -> {receiver_id} in conversation {conversation_id}")
+        logger.info(f"Message sent: {sender.regno} -> {receiver_id} in conversation {conversation_id}")
         
         return {
-            "id": str(message_doc["_id"]),
+            "id": str(message_doc["id"]),
             "conversation_id": conversation_id,
-            "sender_id": sender.Regno,
-            "receiver_id": receiver_id,
-            "text": text,
-            "timestamp": isoformat_datetime(message_doc["timestamp"]),
-            "read": False
+            "sender_regno": sender.regno,
+            "receiver_regno": receiver_id,
+            "body": body,
+            "created_at": isoformat_datetime(message_doc["created_at"]),
+            "is_read": False
         }
     
     def get_messages(
@@ -190,41 +190,41 @@ class MessageService:
         - Conversation is accepted
         """
         # Skip validation for admin users - they can view all conversations
-        if user.user_role != "admin":
+        if user.role != "admin":
             # Validate user is participant
-            self.validate_conversation_participant(db, conversation_id, user.Regno)
+            self.validate_conversation_participant(db, conversation_id, user.regno)
         
         # Fetch messages
         with db.sessions() as session:
             rows = session.scalars(select(MessageRecord)
                 .where(MessageRecord.conversation_id == str(conversation_id))
-                .order_by(MessageRecord.timestamp.asc()).limit(limit)).all()
-            messages = [{"_id": str(row.id), "conversation_id": row.conversation_id,
-                "sender_id": row.sender_id, "receiver_id": row.receiver_id, "text": row.text,
-                "timestamp": row.timestamp, "read": row.read} for row in rows]
+                .order_by(MessageRecord.created_at.asc()).limit(limit)).all()
+            messages = [{"id": str(row.id), "conversation_id": row.conversation_id,
+                "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
+                "created_at": row.created_at, "is_read": row.is_read} for row in rows]
         
         # Mark messages as read for receiver (but not for admin viewers)
-        if user.user_role != "admin":
+        if user.role != "admin":
             with db.sessions.begin() as session:
                 rows = session.scalars(select(MessageRecord).where(
                     MessageRecord.conversation_id == str(conversation_id),
-                    MessageRecord.receiver_id == user.Regno,
-                    MessageRecord.read.is_(False),
+                    MessageRecord.receiver_regno == user.regno,
+                    MessageRecord.is_read.is_(False),
                 )).all()
                 for row in rows:
-                    row.read = True
+                    row.is_read = True
         
         # Format response
         return [
             {
-                "id": str(msg["_id"]),
+                "id": str(msg["id"]),
                 "conversation_id": conversation_id,
-                "sender_id": msg["sender_id"],
-                "receiver_id": msg["receiver_id"],
-                "text": msg["text"],
-                "timestamp": isoformat_datetime(msg["timestamp"]),
-                "read": msg.get("read", False),
-                "is_sender": msg["sender_id"] == user.Regno
+                "sender_regno": msg["sender_regno"],
+                "receiver_regno": msg["receiver_regno"],
+                "body": msg["body"],
+                "created_at": isoformat_datetime(msg["created_at"]),
+                "is_read": msg.get("is_read", False),
+                "is_sender": msg["sender_regno"] == user.regno
             }
             for msg in messages
         ]
@@ -248,9 +248,9 @@ class MessageService:
         try:
             with db.sessions() as session:
                 row = session.get(MessageRecord, str(message_id))
-                message = {"_id": str(row.id), "conversation_id": row.conversation_id,
-                    "sender_id": row.sender_id, "receiver_id": row.receiver_id,
-                    "text": row.text, "timestamp": row.timestamp, "read": row.read} if row else None
+                message = {"id": str(row.id), "conversation_id": row.conversation_id,
+                    "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno,
+                    "body": row.body, "created_at": row.created_at, "is_read": row.is_read} if row else None
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -264,7 +264,7 @@ class MessageService:
             )
         
         # Validate reporter is receiver
-        if message["receiver_id"] != reporter.Regno:
+        if message["receiver_regno"] != reporter.regno:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only report messages sent to you"
@@ -285,7 +285,7 @@ class MessageService:
         with db.sessions() as session:
             existing_report = session.scalar(select(MessageReportRecord).where(
                 MessageReportRecord.message_id == str(message_id),
-                MessageReportRecord.reporter_id == reporter.Regno,
+                MessageReportRecord.reporter_regno == reporter.regno,
             ))
         
         if existing_report:
@@ -297,20 +297,24 @@ class MessageService:
         # Create report
         report_doc = {
             "message_id": str(message_id),
-            "reporter_id": reporter.Regno,
-            "reported_user_id": message["sender_id"],
+            "reporter_regno": reporter.regno,
+            "reported_user_regno": message["sender_regno"],
             "reason": reason,
             "reported_at": datetime.now(timezone.utc),
             "status": "pending"
         }
         
         with db.sessions.begin() as session:
-            row = MessageReportRecord(**report_doc)
+            row = MessageReportRecord(
+                message_id=report_doc["message_id"], reporter_regno=report_doc["reporter_regno"],
+                reported_user_regno=report_doc["reported_user_regno"], reason=report_doc["reason"],
+                reported_at=report_doc["reported_at"], status=report_doc["status"],
+            )
             session.add(row)
             session.flush()
             report_id = str(row.id)
         
-        logger.info(f"Message {message_id} reported by {reporter.Regno} for: {reason}")
+        logger.info(f"Message {message_id} reported by {reporter.regno} for: {reason}")
         
         return {
             "id": report_id,

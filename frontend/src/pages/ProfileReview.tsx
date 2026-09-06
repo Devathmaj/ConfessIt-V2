@@ -31,41 +31,41 @@ import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 interface AdminUserProfile {
   id: string;
-  Regno?: string | null;
-  Name?: string | null;
+  regno?: string | null;
+  name?: string | null;
   email?: string | null;
-  which_class?: string | null;
+  class_name?: string | null;
   gender?: string | null;
-  user_role?: string | null;
-  isMatchmaking?: boolean;
-  isNotifications?: boolean;
-  isLovenotesRecieve?: boolean;
-  isLovenotesSend?: boolean;
+  role?: string | null;
+  matchmaking_enabled?: boolean;
+  notifications_enabled?: boolean;
+  love_notes_receive_enabled?: boolean;
+  love_notes_send_enabled?: boolean;
   reported_count?: number;
-  last_login_time?: string | null;
+  last_login_at?: string | null;
   last_login_ip?: string | null;
   is_blocked?: boolean;
   bio?: string | null;
   emoji?: string | null;
-  profile_picture_id?: string | null;
+  profile_picture_url?: string | null;
   interests?: string[] | null;
-  last_matchmaking_time?: string | null;
+  last_matchmaking_at?: string | null;
 }
 
 type CreateUserForm = {
-  Regno: string;
-  Name: string;
+  regno: string;
+  name: string;
   email: string;
-  which_class: string;
+  class_name: string;
   gender: string;
   emoji: string;
   bio: string;
-  profile_picture_id: string;
-  isMatchmaking: boolean;
-  isNotifications: boolean;
-  isLovenotesRecieve: boolean;
-  isLovenotesSend: boolean;
-  user_role: 'user' | 'admin';
+  profile_picture_url: string;
+  matchmaking_enabled: boolean;
+  notifications_enabled: boolean;
+  love_notes_receive_enabled: boolean;
+  love_notes_send_enabled: boolean;
+  role: 'user' | 'admin';
 };
 
 const formatDate = (value?: string | null) => {
@@ -85,19 +85,19 @@ const makeInitials = (name?: string | null) => {
 
 export const ProfileReview = () => {
   const buildDefaultCreateForm = (): CreateUserForm => ({
-    Regno: '',
-    Name: '',
+    regno: '',
+    name: '',
     email: '',
-    which_class: '',
+    class_name: '',
     gender: '',
     emoji: '',
     bio: '',
-    profile_picture_id: '',
-    isMatchmaking: true,
-    isNotifications: true,
-    isLovenotesRecieve: true,
-    isLovenotesSend: false,
-    user_role: 'user',
+    profile_picture_url: '',
+    matchmaking_enabled: true,
+    notifications_enabled: true,
+    love_notes_receive_enabled: true,
+    love_notes_send_enabled: false,
+    role: 'user',
   });
 
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
@@ -136,10 +136,10 @@ export const ProfileReview = () => {
     if (!query) return profiles;
     return profiles.filter((profile) => {
       const haystack = [
-        profile.Name,
-        profile.Regno,
+        profile.name,
+        profile.regno,
         profile.email,
-        profile.which_class,
+        profile.class_name,
       ]
         .filter(Boolean)
         .join(' ') // join to single string
@@ -172,18 +172,18 @@ export const ProfileReview = () => {
   const openProfileEditor = (profile: AdminUserProfile) => {
     setSelectedProfile(profile);
     setEditForm({
-      Name: profile.Name ?? '',
-      Regno: profile.Regno ?? '',
+      name: profile.name ?? '',
+      regno: profile.regno ?? '',
       email: profile.email ?? '',
-      which_class: profile.which_class ?? '',
+      class_name: profile.class_name ?? '',
       gender: profile.gender ?? '',
       bio: profile.bio ?? '',
       emoji: profile.emoji ?? '',
-      profile_picture_id: profile.profile_picture_id ?? '',
-      isMatchmaking: profile.isMatchmaking ?? false,
-      isNotifications: profile.isNotifications ?? false,
-      isLovenotesRecieve: profile.isLovenotesRecieve ?? true,
-      isLovenotesSend: profile.isLovenotesSend ?? false,
+      profile_picture_url: profile.profile_picture_url ?? '',
+      matchmaking_enabled: profile.matchmaking_enabled ?? false,
+      notifications_enabled: profile.notifications_enabled ?? false,
+      love_notes_receive_enabled: profile.love_notes_receive_enabled ?? true,
+      love_notes_send_enabled: profile.love_notes_send_enabled ?? false,
     });
     setInterestsInput(profile.interests?.join(', ') ?? '');
     setEditOpen(true);
@@ -204,20 +204,20 @@ export const ProfileReview = () => {
 
     const payload: Record<string, unknown> = {};
     const textFields: Array<keyof AdminUserProfile> = [
-      'Name',
-      'Regno',
+      'name',
+      'regno',
       'email',
-      'which_class',
+      'class_name',
       'gender',
       'bio',
       'emoji',
-      'profile_picture_id',
+      'profile_picture_url',
     ];
     const booleanFields: Array<keyof AdminUserProfile> = [
-      'isMatchmaking',
-      'isNotifications',
-      'isLovenotesRecieve',
-      'isLovenotesSend',
+      'matchmaking_enabled',
+      'notifications_enabled',
+      'love_notes_receive_enabled',
+      'love_notes_send_enabled',
     ];
 
     textFields.forEach((field) => {
@@ -285,10 +285,10 @@ export const ProfileReview = () => {
 
   const handleCreateUser = async () => {
     const requiredFields: Array<[keyof CreateUserForm, string]> = [
-      ['Name', createForm.Name],
-      ['Regno', createForm.Regno],
+      ['name', createForm.name],
+      ['regno', createForm.regno],
       ['email', createForm.email],
-      ['which_class', createForm.which_class],
+      ['class_name', createForm.class_name],
       ['gender', createForm.gender],
     ];
 
@@ -304,16 +304,16 @@ export const ProfileReview = () => {
       .filter(Boolean);
 
     const payload: Record<string, unknown> = {
-      Regno: createForm.Regno.trim(),
-      Name: createForm.Name.trim(),
+      regno: createForm.regno.trim(),
+      name: createForm.name.trim(),
       email: createForm.email.trim(),
-      which_class: createForm.which_class.trim(),
+      class_name: createForm.class_name.trim(),
       gender: createForm.gender.trim(),
-      user_role: createForm.user_role,
-      isMatchmaking: createForm.isMatchmaking,
-      isNotifications: createForm.isNotifications,
-      isLovenotesRecieve: createForm.isLovenotesRecieve,
-      isLovenotesSend: createForm.isLovenotesSend,
+      role: createForm.role,
+      matchmaking_enabled: createForm.matchmaking_enabled,
+      notifications_enabled: createForm.notifications_enabled,
+      love_notes_receive_enabled: createForm.love_notes_receive_enabled,
+      love_notes_send_enabled: createForm.love_notes_send_enabled,
     };
 
     if (createForm.emoji.trim()) {
@@ -322,8 +322,8 @@ export const ProfileReview = () => {
     if (createForm.bio.trim()) {
       payload.bio = createForm.bio.trim();
     }
-    if (createForm.profile_picture_id.trim()) {
-      payload.profile_picture_id = createForm.profile_picture_id.trim();
+    if (createForm.profile_picture_url.trim()) {
+      payload.profile_picture_url = createForm.profile_picture_url.trim();
     }
     if (sanitizedInterests.length > 0) {
       payload.interests = sanitizedInterests;
@@ -334,7 +334,7 @@ export const ProfileReview = () => {
       const createdProfile = await createAdminUser(payload);
       setProfiles((prev) => [createdProfile, ...prev]);
       toast.success(
-        `${createForm.user_role === 'admin' ? 'Administrator' : 'User'} account created successfully.`
+        `${createForm.role === 'admin' ? 'Administrator' : 'User'} account created successfully.`
       );
       resetCreateDialog();
     } catch (error: unknown) {
@@ -421,31 +421,31 @@ export const ProfileReview = () => {
                             }}
                             role="button"
                             tabIndex={0}
-                            aria-label={`View profile for ${profile.Name ?? 'user'}`}
+                            aria-label={`View profile for ${profile.name ?? 'user'}`}
                           >
                             <Avatar className="h-12 w-12">
-                              <AvatarFallback>{makeInitials(profile.Name)}</AvatarFallback>
+                              <AvatarFallback>{makeInitials(profile.name)}</AvatarFallback>
                             </Avatar>
                             <div className="grid gap-1 text-sm">
                               <div className="flex flex-wrap items-center gap-2 text-base font-semibold">
-                                <span>{profile.Name ?? 'Unknown user'}</span>
-                                {profile.user_role && (
-                                  <Badge variant={profile.user_role === 'admin' ? 'default' : 'secondary'}>
-                                    {profile.user_role}
+                                <span>{profile.name ?? 'Unknown user'}</span>
+                                {profile.role && (
+                                  <Badge variant={profile.role === 'admin' ? 'default' : 'secondary'}>
+                                    {profile.role}
                                   </Badge>
                                 )}
                                 {blocked && <Badge variant="destructive">Blocked</Badge>}
                               </div>
                               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                                {profile.Regno && (
+                                {profile.regno && (
                                   <span className="flex items-center gap-1">
                                     <User className="h-3 w-3" />
-                                    {profile.Regno}
+                                    {profile.regno}
                                   </span>
                                 )}
-                                {profile.which_class && (
+                                {profile.class_name && (
                                   <span className="flex items-center gap-1">
-                                    <Badge variant="outline">{profile.which_class}</Badge>
+                                    <Badge variant="outline">{profile.class_name}</Badge>
                                   </span>
                                 )}
                                 {profile.email && (
@@ -457,7 +457,7 @@ export const ProfileReview = () => {
                               </div>
                               <div className="grid gap-1 text-xs text-muted-foreground">
                                 <span>Reports: {profile.reported_count ?? 0}</span>
-                                <span>Last login: {formatDate(profile.last_login_time)}</span>
+                                <span>Last login: {formatDate(profile.last_login_at)}</span>
                                 {profile.last_login_ip && <span>Last IP: {profile.last_login_ip}</span>}
                               </div>
                             </div>
@@ -488,9 +488,9 @@ export const ProfileReview = () => {
                             )}
                           </Button>
                           <div className="text-xs text-muted-foreground">
-                            Matchmaking: {profile.isMatchmaking ? 'Enabled' : 'Disabled'} · Notifications:{' '}
-                            {profile.isNotifications ? 'On' : 'Off'} · Love notes receive:{' '}
-                            {profile.isLovenotesRecieve ? 'On' : 'Off'}
+                            Matchmaking: {profile.matchmaking_enabled ? 'Enabled' : 'Disabled'} · Notifications:{' '}
+                            {profile.notifications_enabled ? 'On' : 'Off'} · Love notes receive:{' '}
+                            {profile.love_notes_receive_enabled ? 'On' : 'Off'}
                           </div>
                         </div>
                       </div>
@@ -528,9 +528,9 @@ export const ProfileReview = () => {
                     <Label htmlFor="edit-name">Full name</Label>
                     <Input
                       id="edit-name"
-                      value={editForm.Name ?? ''}
+                      value={editForm.name ?? ''}
                       onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, Name: event.target.value } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, name: event.target.value } : prev))
                       }
                       placeholder="Enter full name"
                     />
@@ -551,9 +551,9 @@ export const ProfileReview = () => {
                     <Label htmlFor="edit-regno">Register number</Label>
                     <Input
                       id="edit-regno"
-                      value={editForm.Regno ?? ''}
+                      value={editForm.regno ?? ''}
                       onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, Regno: event.target.value } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, regno: event.target.value } : prev))
                       }
                       placeholder="Enter register number"
                     />
@@ -562,9 +562,9 @@ export const ProfileReview = () => {
                     <Label htmlFor="edit-class">Class / department</Label>
                     <Input
                       id="edit-class"
-                      value={editForm.which_class ?? ''}
+                      value={editForm.class_name ?? ''}
                       onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, which_class: event.target.value } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, class_name: event.target.value } : prev))
                       }
                       placeholder="CSE, ECE, Year, etc."
                     />
@@ -598,10 +598,10 @@ export const ProfileReview = () => {
                     <Label htmlFor="edit-avatar">Profile picture ID</Label>
                     <Input
                       id="edit-avatar"
-                      value={editForm.profile_picture_id ?? ''}
+                      value={editForm.profile_picture_url ?? ''}
                       onChange={(event) =>
                         setEditForm((prev) =>
-                          prev ? { ...prev, profile_picture_id: event.target.value } : prev
+                          prev ? { ...prev, profile_picture_url: event.target.value } : prev
                         )
                       }
                       placeholder="Optional asset identifier"
@@ -645,9 +645,9 @@ export const ProfileReview = () => {
                       </p>
                     </div>
                     <Switch
-                      checked={Boolean(editForm.isMatchmaking)}
+                      checked={Boolean(editForm.matchmaking_enabled)}
                       onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, isMatchmaking: checked } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, matchmaking_enabled: checked } : prev))
                       }
                     />
                   </div>
@@ -659,9 +659,9 @@ export const ProfileReview = () => {
                       </p>
                     </div>
                     <Switch
-                      checked={Boolean(editForm.isNotifications)}
+                      checked={Boolean(editForm.notifications_enabled)}
                       onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, isNotifications: checked } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, notifications_enabled: checked } : prev))
                       }
                     />
                   </div>
@@ -673,9 +673,9 @@ export const ProfileReview = () => {
                       </p>
                     </div>
                     <Switch
-                      checked={Boolean(editForm.isLovenotesRecieve)}
+                      checked={Boolean(editForm.love_notes_receive_enabled)}
                       onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, isLovenotesRecieve: checked } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, love_notes_receive_enabled: checked } : prev))
                       }
                     />
                   </div>
@@ -687,9 +687,9 @@ export const ProfileReview = () => {
                       </p>
                     </div>
                     <Switch
-                      checked={Boolean(editForm.isLovenotesSend)}
+                      checked={Boolean(editForm.love_notes_send_enabled)}
                       onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, isLovenotesSend: checked } : prev))
+                        setEditForm((prev) => (prev ? { ...prev, love_notes_send_enabled: checked } : prev))
                       }
                     />
                   </div>
@@ -735,9 +735,9 @@ export const ProfileReview = () => {
                   <Label htmlFor="create-name">Full name *</Label>
                   <Input
                     id="create-name"
-                    value={createForm.Name}
+                    value={createForm.name}
                     onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, Name: event.target.value }))
+                      setCreateForm((prev) => ({ ...prev, name: event.target.value }))
                     }
                     placeholder="Enter full name"
                   />
@@ -746,9 +746,9 @@ export const ProfileReview = () => {
                   <Label htmlFor="create-regno">Register number *</Label>
                   <Input
                     id="create-regno"
-                    value={createForm.Regno}
+                    value={createForm.regno}
                     onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, Regno: event.target.value }))
+                      setCreateForm((prev) => ({ ...prev, regno: event.target.value }))
                     }
                     placeholder="eg. 21CS100"
                   />
@@ -769,9 +769,9 @@ export const ProfileReview = () => {
                   <Label htmlFor="create-class">Class / department *</Label>
                   <Input
                     id="create-class"
-                    value={createForm.which_class}
+                    value={createForm.class_name}
                     onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, which_class: event.target.value }))
+                      setCreateForm((prev) => ({ ...prev, class_name: event.target.value }))
                     }
                     placeholder="CSE, ECE, Year, etc."
                   />
@@ -799,12 +799,12 @@ export const ProfileReview = () => {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="create-avatar">Profile picture ID</Label>
+                  <Label htmlFor="create-avatar">Profile picture URL</Label>
                   <Input
                     id="create-avatar"
-                    value={createForm.profile_picture_id}
+                    value={createForm.profile_picture_url}
                     onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, profile_picture_id: event.target.value }))
+                      setCreateForm((prev) => ({ ...prev, profile_picture_url: event.target.value }))
                     }
                     placeholder="Optional asset identifier"
                   />
@@ -841,9 +841,9 @@ export const ProfileReview = () => {
               <div className="grid gap-2">
                 <Label>Account role *</Label>
                 <Select
-                  value={createForm.user_role}
+                  value={createForm.role}
                   onValueChange={(value) =>
-                    setCreateForm((prev) => ({ ...prev, user_role: value as 'user' | 'admin' }))
+                    setCreateForm((prev) => ({ ...prev, role: value as 'user' | 'admin' }))
                   }
                 >
                   <SelectTrigger id="create-role">
@@ -865,9 +865,9 @@ export const ProfileReview = () => {
                     </p>
                   </div>
                   <Switch
-                    checked={createForm.isMatchmaking}
+                    checked={createForm.matchmaking_enabled}
                     onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, isMatchmaking: checked }))
+                      setCreateForm((prev) => ({ ...prev, matchmaking_enabled: checked }))
                     }
                   />
                 </div>
@@ -879,9 +879,9 @@ export const ProfileReview = () => {
                     </p>
                   </div>
                   <Switch
-                    checked={createForm.isNotifications}
+                    checked={createForm.notifications_enabled}
                     onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, isNotifications: checked }))
+                      setCreateForm((prev) => ({ ...prev, notifications_enabled: checked }))
                     }
                   />
                 </div>
@@ -893,9 +893,9 @@ export const ProfileReview = () => {
                     </p>
                   </div>
                   <Switch
-                    checked={createForm.isLovenotesRecieve}
+                    checked={createForm.love_notes_receive_enabled}
                     onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, isLovenotesRecieve: checked }))
+                      setCreateForm((prev) => ({ ...prev, love_notes_receive_enabled: checked }))
                     }
                   />
                 </div>
@@ -907,9 +907,9 @@ export const ProfileReview = () => {
                     </p>
                   </div>
                   <Switch
-                    checked={createForm.isLovenotesSend}
+                    checked={createForm.love_notes_send_enabled}
                     onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, isLovenotesSend: checked }))
+                      setCreateForm((prev) => ({ ...prev, love_notes_send_enabled: checked }))
                     }
                   />
                 </div>

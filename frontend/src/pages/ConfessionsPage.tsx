@@ -43,8 +43,8 @@ interface ConfessionComment {
   id: string;
   confession_id?: string;
   user_info: UserInfo;
-  message: string;
-  timestamp: string;
+  body: string;
+  created_at: string;
   like_count: number;
   dislike_count: number;
   user_reaction: 'like' | 'dislike' | null;
@@ -55,13 +55,13 @@ interface ConfessionComment {
 // Interface for a single confession post
 interface Confession {
   id: string;
-  confession: string;
-  confessing_to?: string | null;
-  is_anonymous: boolean;
-  is_comment: boolean;
-  user_id: string;
+  body: string;
+  recipient_name?: string | null;
+  anonymous: boolean;
+  comments_enabled: boolean;
+  author_id: string;
   user_info: UserInfo;
-  timestamp: string;
+  created_at: string;
   comments: ConfessionComment[];
   heart_count: number;
   haha_count: number;
@@ -301,10 +301,10 @@ export const ConfessionsPage = () => {
 
     try {
       const confessionData = {
-        confession: newConfession,
-        confessing_to: confessingTo.trim(),
-        is_anonymous: isAnonymous,
-        is_comment: allowComments,
+        body: newConfession,
+        recipient_name: confessingTo.trim(),
+        anonymous: isAnonymous,
+        comments_enabled: allowComments,
       };
       const newConfessionResponse = await createConfession(confessionData);
       setConfessions([newConfessionResponse, ...confessions]);
@@ -413,20 +413,20 @@ export const ConfessionsPage = () => {
 
   const handleEditClick = (confession: Confession) => {
     setConfessionToEdit(confession);
-    setEditIsAnonymous(confession.is_anonymous);
-    setEditAllowComments(confession.is_comment);
+    setEditIsAnonymous(confession.anonymous);
+    setEditAllowComments(confession.comments_enabled);
   };
 
   const handleSaveChanges = async () => {
     if (!confessionToEdit) return;
 
-    const payload: { is_anonymous?: boolean; is_comment?: boolean } = {};
+    const payload: { anonymous?: boolean; comments_enabled?: boolean } = {};
 
-    if (editAllowComments !== confessionToEdit.is_comment) {
-      payload.is_comment = editAllowComments;
+    if (editAllowComments !== confessionToEdit.comments_enabled) {
+      payload.comments_enabled = editAllowComments;
     }
-    if (editIsAnonymous !== confessionToEdit.is_anonymous) {
-      payload.is_anonymous = editIsAnonymous;
+    if (editIsAnonymous !== confessionToEdit.anonymous) {
+      payload.anonymous = editIsAnonymous;
     }
 
     if (Object.keys(payload).length === 0) {
@@ -565,17 +565,17 @@ export const ConfessionsPage = () => {
                 <div className="flex justify-between items-start">
                   <div>
                     <CardTitle className="text-lg font-dancing text-romantic">
-                      {confession.is_anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
+                      {confession.anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
                     </CardTitle>
-                    <CardDescription>{formatDateTimeDDMMYYYY(confession.timestamp)}</CardDescription>
-                    {confession.confessing_to && (
+                    <CardDescription>{formatDateTimeDDMMYYYY(confession.created_at)}</CardDescription>
+                    {confession.recipient_name && (
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Confessing to: <span className="font-medium text-foreground">{confession.confessing_to}</span>
+                        Confessing to: <span className="font-medium text-foreground">{confession.recipient_name}</span>
                       </p>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    {isAuthenticated && user?.id === confession.user_id && (
+                    {isAuthenticated && user?.id === confession.author_id && (
                         <Button
                         size="icon"
                         variant="ghost"
@@ -605,7 +605,7 @@ export const ConfessionsPage = () => {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-foreground leading-relaxed">{confession.confession}</p>
+                <p className="text-foreground leading-relaxed">{confession.body}</p>
                 <div className="flex items-center justify-between pt-4 border-t border-border">
                   <div className="flex items-center gap-2 md:gap-4">
                     {reactionTypes.map(reaction => {
@@ -642,17 +642,17 @@ export const ConfessionsPage = () => {
             <>
               <DialogHeader className="p-6 pb-4">
                 <DialogTitle className="font-dancing text-2xl text-romantic">
-                  {selectedConfession.is_anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
+                  {selectedConfession.anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
                 </DialogTitle>
-                <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.timestamp)}</DialogDescription>
-                {selectedConfession.confessing_to && (
+                <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.created_at)}</DialogDescription>
+                {selectedConfession.recipient_name && (
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Confessing to: <span className="font-semibold text-foreground">{selectedConfession.confessing_to}</span>
+                    Confessing to: <span className="font-semibold text-foreground">{selectedConfession.recipient_name}</span>
                   </p>
                 )}
               </DialogHeader>
               <div className="px-6 pb-4 border-b">
-                <p className="text-foreground leading-relaxed">{selectedConfession.confession}</p>
+                <p className="text-foreground leading-relaxed">{selectedConfession.body}</p>
               </div>
 
               <div className="flex-grow overflow-y-auto p-6 space-y-4">
@@ -666,9 +666,9 @@ export const ConfessionsPage = () => {
                          <span className="text-lg">{comment.user_info.avatar || '👤'}</span>
                          <p className="font-bold text-foreground">{comment.user_info.name}</p>
                       </div>
-                      <p className="my-2">{comment.message}</p>
+                      <p className="my-2">{comment.body}</p>
                       <div className="flex items-center justify-between">
-                          <p className="text-xs text-muted-foreground">{formatDateTimeDDMMYYYY(comment.timestamp)}</p>
+                          <p className="text-xs text-muted-foreground">{formatDateTimeDDMMYYYY(comment.created_at)}</p>
                           <div className="flex items-center gap-2">
                               <Button 
                                 size="icon" 
@@ -720,7 +720,7 @@ export const ConfessionsPage = () => {
               </div>
 
               <DialogFooter className="p-4 border-t bg-background/95">
-                {selectedConfession.is_comment ? (
+                {selectedConfession.comments_enabled ? (
                     <div className="flex gap-2 items-start w-full">
                         <Textarea
                         placeholder="Write a thoughtful comment..."
@@ -838,10 +838,10 @@ export const ConfessionsPage = () => {
                 <Switch
                 checked={editIsAnonymous}
                 onCheckedChange={setEditIsAnonymous}
-                disabled={!confessionToEdit?.is_anonymous}
+                disabled={!confessionToEdit?.anonymous}
                 />
             </div>
-            {!confessionToEdit?.is_anonymous && (
+            {!confessionToEdit?.anonymous && (
                 <p className="text-xs text-muted-foreground">You cannot make a public confession anonymous after posting.</p>
             )}
             </div>

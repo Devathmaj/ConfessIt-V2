@@ -43,10 +43,10 @@ class MessageArchivalService:
             
             # Find old messages
             with db.sessions() as session:
-                rows = session.scalars(select(MessageRecord).where(MessageRecord.timestamp < cutoff_time)).all()
-                old_messages = [{"_id": row.id, "conversation_id": row.conversation_id,
-                    "sender_id": row.sender_id, "receiver_id": row.receiver_id,
-                    "text": row.text, "timestamp": row.timestamp, "read": row.read} for row in rows]
+                rows = session.scalars(select(MessageRecord).where(MessageRecord.created_at < cutoff_time)).all()
+                old_messages = [{"id": row.id, "conversation_id": row.conversation_id,
+                    "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno,
+                    "body": row.body, "created_at": row.created_at, "is_read": row.is_read} for row in rows]
             
             if not old_messages:
                 logger.info("No messages to archive")
@@ -58,7 +58,7 @@ class MessageArchivalService:
             # Group messages by date
             messages_by_date = {}
             for msg in old_messages:
-                date_key = msg["timestamp"].strftime("%Y-%m-%d")
+                date_key = msg["created_at"].strftime("%Y-%m-%d")
                 if date_key not in messages_by_date:
                     messages_by_date[date_key] = []
                 messages_by_date[date_key].append(msg)
@@ -76,7 +76,7 @@ class MessageArchivalService:
             # Delete archived messages from PostgreSQL
             if archived_count > 0:
                 with db.sessions.begin() as session:
-                    result = session.execute(delete(MessageRecord).where(MessageRecord.timestamp < cutoff_time))
+                    result = session.execute(delete(MessageRecord).where(MessageRecord.created_at < cutoff_time))
                     deleted_count = result.rowcount or 0
                 
                 logger.info(
@@ -126,9 +126,9 @@ class MessageArchivalService:
             serializable_messages = []
             for msg in messages:
                 msg_copy = msg.copy()
-                msg_copy["_id"] = str(msg_copy["_id"])
+                msg_copy["id"] = str(msg_copy["id"])
                 msg_copy["conversation_id"] = str(msg_copy["conversation_id"])
-                msg_copy["timestamp"] = isoformat_datetime(msg_copy["timestamp"])
+                msg_copy["created_at"] = isoformat_datetime(msg_copy["created_at"])
                 serializable_messages.append(msg_copy)
             
             # Write to compressed file
@@ -180,8 +180,8 @@ class MessageArchivalService:
             if user_regno:
                 messages = [
                     msg for msg in messages
-                    if msg.get("sender_id") == user_regno or 
-                       msg.get("receiver_id") == user_regno
+                    if msg.get("sender_regno") == user_regno or 
+                       msg.get("receiver_regno") == user_regno
                 ]
             
             if conversation_id:

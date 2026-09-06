@@ -55,7 +55,7 @@ interface Template {
 interface LoveNote {
     id: string;
     from: string;
-    message: string;
+    body: string;
     image_url: string;
     anonymous: boolean;
     created_at: string | null;
@@ -64,7 +64,7 @@ interface LoveNote {
 
 // Used to define the structure for a user in the recipient list
 interface Recipient extends User {
-    _id: string;
+    id: string;
 }
 
 const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '💫', '⭐', '🌟', '💎', '👑'];
@@ -175,7 +175,7 @@ export const LoveNotesPage = () => {
                 const fontSize = field.font?.size || 16;
 
                 switch (field.name) {
-                    case 'message_text':
+                    case 'body':
                         textToRender = noteMessage || 'Your message here...';
                         if (selectedFontStyle === 'italic') fontStyle = 'italic';
                         if (selectedFontStyle === 'bold') fontWeight = 'bold';
@@ -185,7 +185,7 @@ export const LoveNotesPage = () => {
                         fontWeight = '900'; // Enforce extra bold
                         break;
                     case 'sender_name':
-                        textToRender = isAnonymous ? 'Anonymous' : (user?.Name || 'Your Name');
+                        textToRender = isAnonymous ? 'Anonymous' : (user?.name || 'Your name');
                         fontWeight = '900'; // Enforce extra bold
                         break;
                     case 'emoji':
@@ -278,7 +278,7 @@ export const LoveNotesPage = () => {
     
     // Used to open the recipient modal after validation
     const handleOpenRecipientModal = () => {
-        if (user?.isLovenotesSend) {
+        if (user?.love_notes_send_enabled) {
             toast.info("You've already sent your love note this season!");
             return;
         }
@@ -300,10 +300,10 @@ export const LoveNotesPage = () => {
 
         try {
             await sendLoveNote({
-                recipient_id: selectedRecipient._id,
+                recipient_id: selectedRecipient.id,
                 image_base64: imageBase64,
-                message_text: noteMessage,
-                is_anonymous: isAnonymous,
+                body: noteMessage,
+                anonymous: isAnonymous,
             });
             toast.success('Love note sent for review! 💕');
             setIsRecipientModalOpen(false);
@@ -312,7 +312,7 @@ export const LoveNotesPage = () => {
             setSelectedRecipient(null);
             setSearchTerm('');
             setSelectedClass('All');
-            // Used to refresh user data to get the updated isLovenotesSend status
+            // Used to refresh user data to get the updated love_notes_send_enabled status
             if (token) {
                 fetchAndSetUser(token);
             }
@@ -339,8 +339,8 @@ export const LoveNotesPage = () => {
     // Used to filter users based on search term and class
     const filteredUsers = useMemo(() => {
         return allUsers.filter(u => {
-            const nameMatch = u.Name.toLowerCase().includes(searchTerm.toLowerCase());
-            const classMatch = selectedClass === 'All' || u.which_class === selectedClass;
+            const nameMatch = u.name.toLowerCase().includes(searchTerm.toLowerCase());
+            const classMatch = selectedClass === 'All' || u.class_name === selectedClass;
             return nameMatch && classMatch;
         });
     }, [allUsers, searchTerm, selectedClass]);
@@ -528,11 +528,11 @@ export const LoveNotesPage = () => {
                                     </div>
                                     <Button
                                         onClick={handleOpenRecipientModal}
-                                        disabled={user?.isLovenotesSend}
+                                        disabled={user?.love_notes_send_enabled}
                                         className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3 mt-4"
                                     >
                                         <Send className="w-5 h-5 mr-2" />
-                                        {user?.isLovenotesSend ? "You've Already Sent Your Note" : "Send Your Love Note"}
+                                        {user?.love_notes_send_enabled ? "You've Already Sent Your Note" : "Send Your Love Note"}
                                     </Button>
                                 </CardContent>
                             </Card>
@@ -577,7 +577,7 @@ export const LoveNotesPage = () => {
                                                     </div>
                                                 </div>
                                                 <div className="p-4 space-y-3">
-                                                    <p className="text-sm text-muted-foreground line-clamp-2">{note.message}</p>
+                                                    <p className="text-sm text-muted-foreground line-clamp-2">{note.body}</p>
                                                     {note.created_at && (
                                                         <p className="text-xs text-muted-foreground">
                                                             {formatDateTimeDDMMYYYY(note.created_at)}
@@ -669,19 +669,19 @@ export const LoveNotesPage = () => {
                             <div className="space-y-2">
                                 {filteredUsers.length > 0 ? filteredUsers.map(u => (
                                     <div
-                                        key={u._id}
+                                        key={u.id}
                                         onClick={() => setSelectedRecipient(u)}
-                                        className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?._id === u._id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
+                                        className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?.id === u.id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
                                     >
                                         <img
-                                            src={resolveProfilePictureUrl(u.profile_picture_id)}
-                                            alt={u.Name}
+                                            src={resolveProfilePictureUrl(u.profile_picture_url)}
+                                            alt={u.name}
                                             className="w-10 h-10 rounded-full mr-4 object-cover"
                                             onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/40' }}
                                         />
                                         <div>
-                                            <p className="font-semibold">{u.Name}</p>
-                                            <p className="text-sm text-muted-foreground">{u.which_class}</p>
+                                            <p className="font-semibold">{u.name}</p>
+                                            <p className="text-sm text-muted-foreground">{u.class_name}</p>
                                         </div>
                                     </div>
                                 )) : (
@@ -691,7 +691,7 @@ export const LoveNotesPage = () => {
                         </ScrollArea>
                         {selectedRecipient && (
                             <p className="text-center text-sm text-romantic font-semibold">
-                                Selected: {selectedRecipient.Name}
+                                Selected: {selectedRecipient.name}
                             </p>
                         )}
                     </div>
@@ -780,7 +780,7 @@ export const LoveNotesPage = () => {
                                         <div className="text-center">
                                             <h2 className="font-dancing text-4xl mb-4 text-romantic">💌 Love Note 💌</h2>
                                             <div className="bg-muted/30 rounded-lg p-6 mb-4">
-                                                <p className="text-lg leading-relaxed">{selectedNote.message}</p>
+                                                <p className="text-lg leading-relaxed">{selectedNote.body}</p>
                                             </div>
                                             <div className="space-y-2">
                                                 <p className="text-lg font-dancing text-romantic">

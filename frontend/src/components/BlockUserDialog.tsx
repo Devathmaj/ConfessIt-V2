@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 interface BlockUserDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  matchId: string;
+  match_id: string;
   otherUserName: string;
   onBlockSuccess: () => void;
 }
@@ -24,7 +24,7 @@ interface BlockUserDialogProps {
 export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
   isOpen,
   onClose,
-  matchId,
+  match_id,
   otherUserName,
   onBlockSuccess,
 }) => {
@@ -33,7 +33,7 @@ export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
   const handleBlock = async () => {
     setIsBlocking(true);
     try {
-      await blockConversation(matchId);
+      await blockConversation(match_id);
       toast.success(`${otherUserName} has been blocked`);
       onBlockSuccess();
       onClose();

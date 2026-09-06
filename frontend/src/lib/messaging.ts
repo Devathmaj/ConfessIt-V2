@@ -7,18 +7,18 @@
 interface Message {
   id: string;
   conversation_id: string;
-  sender_id: string;
-  receiver_id: string;
-  text: string;
-  timestamp: string;
-  read: boolean;
+  sender_regno: string;
+  receiver_regno: string;
+  body: string;
+  created_at: string;
+  is_read: boolean;
   is_sender?: boolean;
 }
 
 interface WebSocketMessage {
   type: 'connected' | 'message' | 'error';
   conversation_id?: string;
-  user_id?: string;
+  user_regno?: string;
   data?: Message;
   error?: string;
 }
@@ -79,7 +79,7 @@ class MessagingClient {
             const data: WebSocketMessage = JSON.parse(event.data);
             
             if (data.type === 'connected') {
-              console.log('✅ WebSocket authenticated:', data.user_id);
+              console.log('✅ WebSocket authenticated:', data.user_regno);
               resolve();
             } else if (data.type === 'message' && data.data) {
               // Broadcast message to all callbacks
@@ -215,7 +215,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
  */
 export async function sendMessage(
   conversationId: string,
-  text: string,
+  body: string,
   token: string
 ): Promise<Message> {
   const response = await fetch(`${API_URL}/messages/send`, {
@@ -226,7 +226,7 @@ export async function sendMessage(
     },
     body: JSON.stringify({
       conversation_id: conversationId,
-      text
+      body
     })
   });
 

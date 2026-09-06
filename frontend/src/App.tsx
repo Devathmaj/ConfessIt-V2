@@ -70,7 +70,7 @@ const AdminRoute = ({ children }: { children: ReactNode }) => {
     }
   
     // Used to redirect to the main dashboard if the user is not an admin.
-    if (user?.user_role !== 'admin') {
+    if (user?.role !== 'admin') {
       return <Navigate to="/dashboard" replace />;
     }
   
@@ -102,7 +102,7 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             {/* Used to redirect logged-in users from the root path to their respective dashboard based on their role. */}
-            <Navigate to={user?.user_role === 'admin' ? '/admin' : '/dashboard'} replace />
+            <Navigate to={user?.role === 'admin' ? '/admin' : '/dashboard'} replace />
           </ProtectedRoute>
         }
       />

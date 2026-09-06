@@ -5,25 +5,26 @@ from ..postgres import Database
 from sqlalchemy import select
 from ..db_models import NotificationRecord
 
-from ..models import Notification, NotificationContent
+from ..models import Notification
 from ..utils import isoformat_datetime
 
-def create_notification_service(user_id: str, heading: str, body: str, db: Database) -> str:
+def create_notification_service(recipient_regno: str, heading: str, body: str, db: Database) -> str:
     """
     Create a new notification for a user.
     """
     notification = Notification(
-        user_id=user_id,
-        content=NotificationContent(heading=heading, body=body),
-        timestamp=datetime.now(timezone.utc)
+        recipient_regno=recipient_regno,
+        heading=heading,
+        body=body,
+        created_at=datetime.now(timezone.utc)
     )
     with db.sessions.begin() as session:
         row = NotificationRecord(
-            user_id=user_id,
+            recipient_regno=recipient_regno,
             heading=heading,
             body=body,
-            timestamp=notification.timestamp,
-            read=False,
+            created_at=notification.created_at,
+            is_read=False,
         )
         session.add(row)
         session.flush()
@@ -36,8 +37,8 @@ def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
     with db.sessions() as session:
         notifications = session.scalars(
             select(NotificationRecord)
-            .where(NotificationRecord.user_id == user_id)
-            .order_by(NotificationRecord.timestamp.desc())
+            .where(NotificationRecord.recipient_regno == user_id)
+            .order_by(NotificationRecord.created_at.desc())
             .limit(limit)
         ).all()
     
@@ -45,11 +46,12 @@ def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
     result = []
     for notification in notifications:
         result.append({
-            "_id": str(notification.id),
-            "user_id": notification.user_id,
-            "content": {"heading": notification.heading, "body": notification.body},
-            "timestamp": isoformat_datetime(notification.timestamp),
-            "read": notification.read,
+            "id": str(notification.id),
+            "recipient_regno": notification.recipient_regno,
+            "heading": notification.heading,
+            "body": notification.body,
+            "created_at": isoformat_datetime(notification.created_at),
+            "is_read": notification.is_read,
         })
     
     return result
@@ -61,10 +63,10 @@ def mark_notification_read_service(notification_id: str, user_id: str, db: Datab
     with db.sessions.begin() as session:
         notification = session.scalar(select(NotificationRecord).where(
             NotificationRecord.id == notification_id,
-            NotificationRecord.user_id == user_id,
+            NotificationRecord.recipient_regno == user_id,
         ))
         if notification:
-            notification.read = True
+            notification.is_read = True
 
 def delete_notification_service(notification_id: str, user_id: str, db: Database):
     """
@@ -73,7 +75,7 @@ def delete_notification_service(notification_id: str, user_id: str, db: Database
     with db.sessions.begin() as session:
         notification = session.scalar(select(NotificationRecord).where(
             NotificationRecord.id == notification_id,
-            NotificationRecord.user_id == user_id,
+            NotificationRecord.recipient_regno == user_id,
         ))
         if notification:
             session.delete(notification)

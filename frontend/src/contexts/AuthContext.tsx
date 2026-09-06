@@ -7,21 +7,20 @@ import { getCurrentUser } from '../services/api';
 // Used to define the structure of the User object
 export interface User {
   id: string;
-  _id?: string; // Used to capture the raw _id from the backend if present
-  Name: string;
-  Regno: string;
+  name: string;
+  regno: string;
   email?: string;
   emoji: string;
   bio?: string;
-  which_class?: string;
-  profile_picture_id?: string;
+  class_name?: string;
+  profile_picture_url?: string;
   gender?: string;
   interests?: string[];
-  isMatchmaking?: boolean;
-  isNotifications?: boolean;
-  isLovenotesRecieve?: boolean;
-  isLovenotesSend?: boolean; // Used to track if the user has sent a love note
-  user_role?: 'user' | 'admin';
+  matchmaking_enabled?: boolean;
+  notifications_enabled?: boolean;
+  love_notes_receive_enabled?: boolean;
+  love_notes_send_enabled?: boolean; // Used to track if the user has sent a love note
+  role?: 'user' | 'admin';
 }
 
 interface VerifyTokenResult {
@@ -60,8 +59,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const userData = await getCurrentUser(currentToken);
       
-      // Used to robustly get the user ID, whether the backend sends 'id' or '_id'
-      const userId = userData.id || userData._id;
+      // Used to robustly get the user ID, whether the backend sends 'id' or 'id'
+      const userId = userData.id;
 
       if (userId) {
         setUser({

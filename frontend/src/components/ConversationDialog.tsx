@@ -35,16 +35,16 @@ interface ConversationData {
   conversation: {
     id: string;
     status: 'pending' | 'requested' | 'accepted' | 'rejected';
-    initiator_id: string;
-    receiver_id: string;
+    initiator_regno: string;
+    receiver_regno: string;
     created_at: string;
     accepted_at?: string;
   };
   other_user: {
     regno: string;
     name: string;
-    profile_picture_id: string;
-    which_class: string;
+    profile_picture_url: string;
+    class_name: string;
     bio: string;
     interests: string[];
   };
@@ -55,10 +55,10 @@ interface ConversationData {
 
 interface Message {
   id: string;
-  text: string;
-  sender_id: string;
-  receiver_id: string;
-  timestamp: string;
+  body: string;
+  sender_regno: string;
+  receiver_regno: string;
+  created_at: string;
   is_sender?: boolean;
 }
 
@@ -94,8 +94,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [selectedMessageForReport, setSelectedMessageForReport] = useState<Message | null>(null);
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
-  const [isBlocked, setIsBlocked] = useState(false);
-  const [blockedBy, setBlockedBy] = useState<string | null>(null);
+  const [is_blocked, setIsBlocked] = useState(false);
+  const [blocked_by, setBlockedBy] = useState<string | null>(null);
   const [messagesHidden, setMessagesHidden] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentUserRef = useRef<string | null>(null);
@@ -148,13 +148,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     const shouldInitialize = (
       conversationData.conversation.status === 'accepted' &&
       !conversationData.match.is_expired &&
-      !isBlocked
+      !is_blocked
     );
 
     if (shouldInitialize) {
       console.log('🚀 Initializing messaging (not blocked)');
       initializeMessaging();
-    } else if (isBlocked && conversationData.conversation.status === 'accepted') {
+    } else if (is_blocked && conversationData.conversation.status === 'accepted') {
       // If blocked, load messages without WebSocket (only if we don't have messages already)
       console.log('⚠️ Blocked state - checking if messages need loading', {
         current_messages: messages.length,
@@ -172,8 +172,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     }
 
     // Note: Cleanup is handled separately, not here
-    // We don't want to clean up messages when isBlocked changes
-  }, [conversationData?.conversation?.id, conversationData?.conversation?.status, isBlocked]);
+    // We don't want to clean up messages when is_blocked changes
+  }, [conversationData?.conversation?.id, conversationData?.conversation?.status, is_blocked]);
 
   const cleanup = () => {
     if (unsubscribeMessageRef.current) {
@@ -201,7 +201,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     console.log('🔍 Initializing messaging:', {
       conversation_id: conversationId,
       has_token: !!token,
-      is_blocked: isBlocked
+      is_blocked: is_blocked
     });
 
     try {
@@ -211,7 +211,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       console.log('✅ Messages loaded');
 
       // Only connect WebSocket if not blocked (for real-time updates)
-      if (!isBlocked) {
+      if (!is_blocked) {
         console.log('⏳ Connecting to WebSocket...');
         await messagingClient.connect(conversationId, token);
         console.log('✅ WebSocket connection promise resolved');
@@ -221,7 +221,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           console.log('📨 New message received:', newMessage);
           const messageWithFlag = {
             ...newMessage,
-            is_sender: newMessage.sender_id === currentUserRef.current
+            is_sender: newMessage.sender_regno === currentUserRef.current
           };
           setMessages((prev) => [...prev, messageWithFlag]);
           scrollToBottom();
@@ -244,7 +244,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     } catch (error) {
       console.error('Failed to initialize messaging:', error);
       // Don't show error toast if just loading messages failed when blocked
-      if (!isBlocked) {
+      if (!is_blocked) {
         toast.error('Failed to load messages');
       }
       setIsConnected(false);
@@ -272,7 +272,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // Add is_sender flag to each message
       const messagesWithFlags = messages.map((msg) => ({
         ...msg,
-        is_sender: msg.sender_id === currentUserRef.current
+        is_sender: msg.sender_regno === currentUserRef.current
       }));
 
       setMessages(messagesWithFlags);
@@ -293,19 +293,19 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const setupConversationData = (data: ConversationData) => {
     // Store current user ID from the logged-in user (most reliable)
     // Fall back to conversation data if user not available
-    if (user?.Regno) {
-      currentUserRef.current = user.Regno;
+    if (user?.regno) {
+      currentUserRef.current = user.regno;
     } else if (data.is_initiator) {
-      currentUserRef.current = data.conversation.initiator_id;
+      currentUserRef.current = data.conversation.initiator_regno;
     } else {
-      currentUserRef.current = data.conversation.receiver_id;
+      currentUserRef.current = data.conversation.receiver_regno;
     }
     
     console.log('👤 Current user set to:', currentUserRef.current, {
-      from_auth: user?.Regno,
+      from_auth: user?.regno,
       is_initiator: data.is_initiator,
-      initiator_id: data.conversation.initiator_id,
-      receiver_id: data.conversation.receiver_id
+      initiator_regno: data.conversation.initiator_regno,
+      receiver_regno: data.conversation.receiver_regno
     });
     
     // Set block status from the data
@@ -582,7 +582,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
               .then(fetchedMessages => {
                 const messagesWithFlags = fetchedMessages.map((msg) => ({
                   ...msg,
-                  is_sender: msg.sender_id === currentUserRef.current
+                  is_sender: msg.sender_regno === currentUserRef.current
                 }));
                 setMessages(messagesWithFlags);
                 messagesBackupRef.current = messagesWithFlags;
@@ -699,13 +699,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 sm:gap-3 mb-2">
                 <img
-                  src={getProfilePictureUrl(conversationData.other_user.profile_picture_id)}
+                  src={getProfilePictureUrl(conversationData.other_user.profile_picture_url)}
                   alt={conversationData.other_user.name}
                   className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover flex-shrink-0"
                 />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base sm:text-xl truncate">{conversationData.other_user.name}</CardTitle>
-                  <CardDescription className="text-xs sm:text-sm truncate">{conversationData.other_user.name} • {conversationData.other_user.which_class}</CardDescription>
+                  <CardDescription className="text-xs sm:text-sm truncate">{conversationData.other_user.name} • {conversationData.other_user.class_name}</CardDescription>
                 </div>
                 <div className="hidden sm:block flex-shrink-0">
                   {getStatusBadge(conversationData.conversation.status, isExpired)}
@@ -733,7 +733,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     ● Connected
                   </Badge>
                 )}
-                {isBlocked && (
+                {is_blocked && (
                   <Badge variant="destructive" className="flex items-center gap-1 text-xs px-2 py-0 flex-shrink-0">
                     <ShieldOff className="h-3 w-3" />
                     Blocked
@@ -744,7 +744,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
               {/* Block/Unblock Actions */}
               {isAccepted && !isExpired && (
                 <div className="flex flex-wrap gap-2 mt-3">
-                  {!isBlocked ? (
+                  {!is_blocked ? (
                     <Button
                       variant="outline"
                       size="sm"
@@ -756,7 +756,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     </Button>
                   ) : (
                     <>
-                      {blockedBy === currentUserRef.current && (
+                      {blocked_by === currentUserRef.current && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -803,14 +803,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           {/* Main Chat Area */}
           <div className="flex-1 flex flex-col">
             {/* Blocked Warning */}
-            {isBlocked && (
+            {is_blocked && (
               <div className="bg-red-50 border-b border-red-200 p-3 sm:p-4">
                 <div className="flex items-center gap-2 text-red-900">
                   <ShieldOff className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
                   <div className="min-w-0">
                     <p className="font-semibold text-sm sm:text-base">This conversation is blocked</p>
                     <p className="text-xs sm:text-sm">
-                      {blockedBy === currentUserRef.current 
+                      {blocked_by === currentUserRef.current 
                         ? 'You blocked this user. They have been notified.' 
                         : `${conversationData.other_user.name} blocked this conversation.`}
                     </p>
@@ -899,19 +899,19 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                             : 'bg-muted'
                         }`}
                       >
-                        <p className="text-xs sm:text-sm break-words">{message.text}</p>
+                        <p className="text-xs sm:text-sm break-words">{message.body}</p>
                         <p className={`text-[10px] sm:text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                          {new Date(message.timestamp).toLocaleTimeString()}
+                          {new Date(message.created_at).toLocaleTimeString()}
                         </p>
                       </div>
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem onClick={() => handleCopyMessage(message.text)}>
+                    <ContextMenuItem onClick={() => handleCopyMessage(message.body)}>
                       <Copy className="mr-2 h-4 w-4" />
                       Copy
                     </ContextMenuItem>
-                    {!message.is_sender && !isBlocked && (
+                    {!message.is_sender && !is_blocked && (
                       <ContextMenuItem 
                         onClick={() => handleReportMessage(message)}
                         className="text-red-600 focus:text-red-600"
@@ -946,10 +946,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             </div>
 
             {/* Message Input */}
-            {canChat && !isBlocked && (
+            {canChat && !is_blocked && (
               <div className="border-t p-2 sm:p-4 flex gap-2">
                 {/* Debug: Log states */}
-                {console.log('🔍 Message Input States:', { canChat, isBlocked, sending, isConnected })}
+                {console.log('🔍 Message Input States:', { canChat, is_blocked, sending, isConnected })}
                 <input
                   type="text"
                   value={messageText}
@@ -970,7 +970,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             )}
 
             {/* Blocked State Message */}
-            {isBlocked && canChat && (
+            {is_blocked && canChat && (
               <div className="border-t p-3 sm:p-4 bg-red-50">
                 <div className="flex items-center justify-center gap-2 text-red-900">
                   <ShieldOff className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -1013,11 +1013,11 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             setSelectedMessageForReport(null);
           }}
           messageId={selectedMessageForReport.id}
-          messageText={selectedMessageForReport.text}
+          messageText={selectedMessageForReport.body}
           reporterId={currentUserRef.current!}
           reportedUserId={conversationData.is_initiator 
-            ? conversationData.conversation.receiver_id 
-            : conversationData.conversation.initiator_id}
+            ? conversationData.conversation.receiver_regno 
+            : conversationData.conversation.initiator_regno}
           conversationId={conversationData.conversation.id}
         />
       )}
@@ -1027,7 +1027,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         <BlockUserDialog
           isOpen={blockDialogOpen}
           onClose={() => setBlockDialogOpen(false)}
-          matchId={conversationData.match.id}
+          match_id={conversationData.match.id}
           otherUserName={conversationData.other_user.name}
           onBlockSuccess={handleBlockSuccess}
         />

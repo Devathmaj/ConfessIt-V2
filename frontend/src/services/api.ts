@@ -27,7 +27,7 @@ export const createConfession = async (confession: any) => {
   return response.data;
 };
 
-export const updateConfession = async (confessionId: string, updateData: { is_anonymous?: boolean; is_comment?: boolean }) => {
+export const updateConfession = async (confessionId: string, updateData: { anonymous?: boolean; comments_enabled?: boolean }) => {
     const response = await axios.put(
       `${API_URL}/confessions/${confessionId}`,
       updateData,
@@ -56,10 +56,10 @@ export const reportConfession = async (confessionId: string, reason: string) => 
 
 // --- Comment Endpoints ---
 
-export const createComment = async (confessionId: string, message: string) => {
+export const createComment = async (confessionId: string, body: string) => {
   const response = await axios.post(
     `${API_URL}/confessions/${confessionId}/comment`,
-    { message: message }, 
+    { body },
     { headers: getAuthHeaders() }
   );
   return response.data;
@@ -140,38 +140,38 @@ export const findMatch = async () => {
 };
 
 // --- Conversation Endpoints ---
-export const requestConversation = async (matchId: string) => {
-    console.log("API: requestConversation called with matchId:", matchId); // Debug log
-    const response = await axios.post(`${API_URL}/conversations/request`, { matchId }, {
+export const requestConversation = async (match_id: string) => {
+    console.log("API: requestConversation called with match_id:", match_id); // Debug log
+    const response = await axios.post(`${API_URL}/conversations/request`, { match_id }, {
         headers: getAuthHeaders(),
     });
     console.log("API: requestConversation response:", response.data); // Debug log
     return response.data;
 };
 
-export const getConversationStatus = async (matchId: string) => {
-    const response = await axios.get(`${API_URL}/conversations/${matchId}/status`, {
+export const getConversationStatus = async (match_id: string) => {
+    const response = await axios.get(`${API_URL}/conversations/${match_id}/status`, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const acceptConversation = async (matchId: string) => {
-    const response = await axios.post(`${API_URL}/conversations/${matchId}/accept`, {}, {
+export const acceptConversation = async (match_id: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${match_id}/accept`, {}, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const rejectConversation = async (matchId: string) => {
-    const response = await axios.post(`${API_URL}/conversations/${matchId}/reject`, {}, {
+export const rejectConversation = async (match_id: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${match_id}/reject`, {}, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const sendMessage = async (matchId: string, text: string) => {
-    const response = await axios.post(`${API_URL}/conversations/${matchId}/messages`, { text }, {
+export const sendMessage = async (conversation_id: string, body: string) => {
+    const response = await axios.post(`${API_URL}/messages/send`, { conversation_id, body }, {
         headers: getAuthHeaders(),
     });
     return response.data;
@@ -191,29 +191,29 @@ export const getReceivedConversations = async () => {
     return response.data;
 };
 
-export const getConversationByMatch = async (matchId: string) => {
-    const response = await axios.get(`${API_URL}/conversations/${matchId}`, {
+export const getConversationByMatch = async (match_id: string) => {
+    const response = await axios.get(`${API_URL}/conversations/${match_id}`, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const getConversationMessages = async (matchId: string) => {
-    const response = await axios.get(`${API_URL}/conversations/${matchId}/messages`, {
+export const getConversationMessages = async (conversation_id: string) => {
+    const response = await axios.get(`${API_URL}/messages/${conversation_id}`, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const blockConversation = async (matchId: string) => {
-    const response = await axios.post(`${API_URL}/conversations/${matchId}/block`, {}, {
+export const blockConversation = async (match_id: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${match_id}/block`, {}, {
         headers: getAuthHeaders(),
     });
     return response.data;
 };
 
-export const unblockConversation = async (matchId: string) => {
-    const response = await axios.post(`${API_URL}/conversations/${matchId}/unblock`, {}, {
+export const unblockConversation = async (match_id: string) => {
+    const response = await axios.post(`${API_URL}/conversations/${match_id}/unblock`, {}, {
         headers: getAuthHeaders(),
     });
     return response.data;
@@ -238,8 +238,8 @@ export const getClasses = async () => {
 export const sendLoveNote = async (noteData: {
     recipient_id: string;
     image_base64: string;
-    message_text: string;
-    is_anonymous: boolean;
+    body: string;
+    anonymous: boolean;
 }) => {
     const response = await axios.post(`${API_URL}/love-notes/send`, noteData, { headers: getAuthHeaders() });
     return response.data;
@@ -371,11 +371,11 @@ export const getAdminMatchmaking = async () => {
 };
 
 export const updateAdminMatchmakingStatus = async (
-    matchId: string,
+    match_id: string,
     status: 'approved' | 'rejected' | 'pending'
 ) => {
     const response = await axios.put(
-        `${API_URL}/admin/matchmaking/${matchId}/status`,
+        `${API_URL}/admin/matchmaking/${match_id}/status`,
         {},
         {
             headers: getAuthHeaders(),

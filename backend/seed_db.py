@@ -1,56 +1,57 @@
 import os
 import sys
 
-# Add the current directory to sys.path so we can import 'app' module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app.config import settings
+from sqlalchemy import select
+
 from app.postgres import PostgresClient
-from app.models import UserDetails
+from app.db_models import UserRecord
 
-def seed_database():
-    print("Connecting to database...")
-    db = PostgresClient()[settings.DATABASE_NAME]
-    users = db["UserDetails"]
 
-    class_distributions = [
+def seed_database() -> None:
+    db = PostgresClient()
+    distributions = [
         ("1st year", 12, 13),
         ("2nd year", 13, 12),
         ("3rd year", 12, 13),
         ("4th year", 13, 12),
     ]
-    
     seeds = []
-    m_count = 1
-    f_count = 1
-    for cls_name, m_limit, f_limit in class_distributions:
-        for _ in range(m_limit):
-            regno = f"MA{m_count}"
-            seeds.append(UserDetails(
-                Regno=regno, Name=f"Test User {regno}", email=f"{regno.lower()}@test.com", 
-                bio="This is a test user.", which_class=cls_name, profile_picture_id="random_string_1", 
-                gender="male", interests=[], isMatchmaking=True, isNotifications=True, 
-                isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"
-            ))
-            m_count += 1
-        for _ in range(f_limit):
-            regno = f"FE{f_count}"
-            seeds.append(UserDetails(
-                Regno=regno, Name=f"Test User {regno}", email=f"{regno.lower()}@test.com", 
-                bio="This is a test user.", which_class=cls_name, profile_picture_id="random_string_1", 
-                gender="female", interests=[], isMatchmaking=True, isNotifications=True, 
-                isLovenotesRecieve=True, isLovenotesSend=False, user_role="user"
-            ))
-            f_count += 1
+    male_number = female_number = 1
+    for class_name, male_count, female_count in distributions:
+        for _ in range(male_count):
+            regno = f"MA{male_number}"
+            seeds.append({
+                "regno": regno, "name": f"Test User {regno}", "email": f"{regno.lower()}@test.com",
+                "bio": "This is a test user.", "class_name": class_name,
+                "profile_picture_url": "random_string_1", "gender": "male", "interests": [],
+                "matchmaking_enabled": True, "notifications_enabled": True,
+                "love_notes_receive_enabled": True, "love_notes_send_enabled": False, "role": "user",
+            })
+            male_number += 1
+        for _ in range(female_count):
+            regno = f"FE{female_number}"
+            seeds.append({
+                "regno": regno, "name": f"Test User {regno}", "email": f"{regno.lower()}@test.com",
+                "bio": "This is a test user.", "class_name": class_name,
+                "profile_picture_url": "random_string_1", "gender": "female", "interests": [],
+                "matchmaking_enabled": True, "notifications_enabled": True,
+                "love_notes_receive_enabled": True, "love_notes_send_enabled": False, "role": "user",
+            })
+            female_number += 1
 
-    print(f"Prepared {len(seeds)} users for insertion. Checking if they exist...")
     inserted_count = 0
-    for user in seeds:
-        if not users.find_one({"Regno": user.Regno}):
-            users.insert_one(user.model_dump(by_alias=True))
-            inserted_count += 1
+    with db.sessions.begin() as session:
+        existing_regnos = set(session.scalars(select(UserRecord.regno)).all())
+        for seed in seeds:
+            if seed["regno"] not in existing_regnos:
+                session.add(UserRecord(**seed))
+                inserted_count += 1
 
     print(f"Successfully inserted {inserted_count} new test users.")
+    db.close()
+
 
 if __name__ == "__main__":
     seed_database()

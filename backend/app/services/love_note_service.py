@@ -20,8 +20,8 @@ class LoveNoteCreate(BaseModel):
     """
     recipient_id: str
     image_base64: str
-    message_text: str
-    is_anonymous: bool
+    body: str
+    anonymous: bool
 
 async def get_all_users_service(db: Database, current_user_regno: str) -> List[UserDetails]:
     """
@@ -30,29 +30,29 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[U
     """
     with db.sessions() as session:
         rows = session.scalars(select(UserRecord).where(
-            UserRecord.Regno != current_user_regno, UserRecord.user_role != "admin"
+            UserRecord.regno != current_user_regno, UserRecord.role != "admin"
         )).all()
         return [UserDetails(**_user_payload(row)) for row in rows]
 
 async def get_all_classes_service(db: Database) -> List[str]:
     """
-    Service to fetch all distinct 'which_class' values.
+    Service to fetch all distinct 'class_name' values.
     """
     with db.sessions() as session:
-        return list(session.scalars(select(UserRecord.which_class).distinct().where(UserRecord.which_class.is_not(None))))
+        return list(session.scalars(select(UserRecord.class_name).distinct().where(UserRecord.class_name.is_not(None))))
 
 def _user_payload(user: UserRecord) -> dict:
     payload = {
-        "id": str(user.id), "Regno": user.Regno, "Name": user.Name, "email": user.email,
-        "emoji": user.emoji, "bio": user.bio, "which_class": user.which_class,
-        "profile_picture_id": user.profile_picture_id, "gender": user.gender,
-        "interests": user.interests or [], "isMatchmaking": user.isMatchmaking,
-        "isNotifications": user.isNotifications, "isLovenotesRecieve": user.isLovenotesRecieve,
-        "isLovenotesSend": user.isLovenotesSend, "is_blocked": user.is_blocked,
-        "reported_count": user.reported_count, "last_login_time": user.last_login_time,
+        "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
+        "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name,
+        "profile_picture_url": user.profile_picture_url, "gender": user.gender,
+        "interests": user.interests or [], "matchmaking_enabled": user.matchmaking_enabled,
+        "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
+        "love_notes_send_enabled": user.love_notes_send_enabled, "is_blocked": user.is_blocked,
+        "reported_count": user.reported_count, "last_login_at": user.last_login_at,
         "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-        "last_login_user_agent": user.last_login_user_agent, "user_role": user.user_role,
-        "last_matchmaking_time": user.last_matchmaking_time,
+        "last_login_user_agent": user.last_login_user_agent, "role": user.role,
+        "last_matchmaking_at": user.last_matchmaking_at,
     }
     return storage_service.with_profile_signed_url(payload) or payload
 
@@ -69,13 +69,13 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
             detail="Recipient not found."
         )
 
-    if recipient.user_role == "admin":
+    if recipient.role == "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrators cannot receive love notes."
         )
 
-    if sender.user_role == "admin":
+    if sender.role == "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrators are not permitted to send love notes."
@@ -85,7 +85,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         # Upload the love note image to Cloudinary
         upload_result = storage_service.upload_love_note_image(
             image_base64=note_data.image_base64,
-            sender_name=sender.Name or sender.Regno
+            sender_name=sender.name or sender.regno
         )
         
         # Use the Cloudinary URL instead of the base64 string
@@ -103,22 +103,22 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         sender_id=sender.id,
         recipient_id=str(note_data.recipient_id),
         image_url=cloudinary_url,
-        message_text=note_data.message_text,
-        is_anonymous=note_data.is_anonymous,
+        body=note_data.body,
+        anonymous=note_data.anonymous,
         status="pending_review"
     )
 
     with db.sessions.begin() as session:
         row = LoveNoteRecord(
             sender_id=sender.id, recipient_id=str(note_data.recipient_id),
-            image_url=cloudinary_url, message_text=note_data.message_text,
-            is_anonymous=note_data.is_anonymous, status="pending_review",
+            image_url=cloudinary_url, body=note_data.body,
+            anonymous=note_data.anonymous, status="pending_review",
             created_at=love_note.created_at,
         )
         session.add(row)
         sender_row = session.get(UserRecord, sender.id)
         if sender_row:
-            sender_row.isLovenotesSend = True
+            sender_row.love_notes_send_enabled = True
         session.flush()
         note_id = str(row.id)
         return {
@@ -155,19 +155,19 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
             "id": str(doc.id),
             "sender": {
                 "id": str(doc.sender_id) if doc.sender_id else None,
-                "name": sender_doc.Name if sender_doc else None,
-                "regno": sender_doc.Regno if sender_doc else None,
+                "name": sender_doc.name if sender_doc else None,
+                "regno": sender_doc.regno if sender_doc else None,
                 "email": sender_doc.email if sender_doc else None,
             },
             "recipient": {
                 "id": str(doc.recipient_id) if doc.recipient_id else None,
-                "name": recipient_doc.Name if recipient_doc else None,
-                "regno": recipient_doc.Regno if recipient_doc else None,
+                "name": recipient_doc.name if recipient_doc else None,
+                "regno": recipient_doc.regno if recipient_doc else None,
                 "email": recipient_doc.email if recipient_doc else None,
             },
             "image_url": doc.image_url,
-            "message_text": doc.message_text,
-            "is_anonymous": doc.is_anonymous,
+            "body": doc.body,
+            "anonymous": doc.anonymous,
             "status": doc.status,
             "created_at": isoformat_datetime(doc.created_at),
             "read_at": isoformat_datetime(doc.read_at),
@@ -218,11 +218,11 @@ async def update_love_note_status_service(
     if status_value == "approved":
         # Notify recipient that they received a love note
         if recipient:
-            sender_name = "Someone" if love_note.is_anonymous else (
-                sender.Name if sender else "Someone"
+            sender_name = "Someone" if love_note.anonymous else (
+                sender.name if sender else "Someone"
             )
             create_notification_service(
-                user_id=recipient.Regno,
+                recipient_regno=recipient.regno,
                 heading="💌 You received a Love Note!",
                 body=f"{sender_name} sent you a love note! Go to Love Notes → Inbox to view it.",
                 db=db
@@ -231,7 +231,7 @@ async def update_love_note_status_service(
         # Notify sender that their love note was accepted
         if sender:
             create_notification_service(
-                user_id=sender.Regno,
+                recipient_regno=sender.regno,
                 heading="✅ Love Note Delivered!",
                 body="Your love note was reviewed and successfully delivered to the recipient.",
                 db=db
@@ -241,7 +241,7 @@ async def update_love_note_status_service(
         # Notify sender that their love note was rejected
         if sender:
             create_notification_service(
-                user_id=sender.Regno,
+                recipient_regno=sender.regno,
                 heading="❌ Love Note Not Delivered",
                 body="Your love note could not be sent. It may have violated our community guidelines.",
                 db=db

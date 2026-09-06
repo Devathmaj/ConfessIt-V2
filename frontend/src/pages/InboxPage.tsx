@@ -42,16 +42,16 @@ interface ConversationData {
   conversation: {
     id: string;
     status: 'pending' | 'requested' | 'accepted' | 'rejected';
-    initiator_id: string;
-    receiver_id: string;
+    initiator_regno: string;
+    receiver_regno: string;
     created_at: string;
     accepted_at?: string;
   };
   other_user: {
     regno: string;
     name: string;
-    profile_picture_id: string;
-    which_class: string;
+    profile_picture_url: string;
+    class_name: string;
     bio: string;
     interests: string[];
   };
@@ -63,8 +63,8 @@ interface NotificationItem {
   id: string;
   type: 'matchmaking' | 'message_request_sent' | 'message_request_received' | 'message_accepted' | 'message_rejected';
   title: string;
-  message: string;
-  timestamp: string;
+  body: string;
+  created_at: string;
   user_name?: string;
   user_profile_picture?: string;
   match_id?: string;
@@ -152,16 +152,16 @@ export const InboxPage = () => {
           // Skip notifications about message requests being accepted/rejected
           // as we generate those from conversation data below
           const isConversationNotification = 
-            notification.content.heading.includes('accepted your message request') ||
-            notification.content.heading.includes('rejected your message request');
+            notification.heading.includes('accepted your message request') ||
+            notification.heading.includes('rejected your message request');
           
           if (!isConversationNotification) {
             notifications.push({
-              id: notification._id,
+              id: notification.id,
               type: 'matchmaking',
-              title: notification.content.heading,
-              message: notification.content.body,
-              timestamp: notification.timestamp,
+              title: notification.heading,
+              body: notification.body,
+              created_at: notification.created_at,
             });
           }
         });
@@ -174,10 +174,10 @@ export const InboxPage = () => {
             id: `${conversationResponse.conversation.id}_accepted`,
             type: 'message_accepted',
             title: `${conversationResponse.other_user.name} accepted your message request`,
-            message: `${conversationResponse.other_user.name} accepted your message request. You can now start chatting!`,
-            timestamp: conversationResponse.conversation.accepted_at,
+            body: `${conversationResponse.other_user.name} accepted your message request. You can now start chatting!`,
+            created_at: conversationResponse.conversation.accepted_at,
             user_name: conversationResponse.other_user.name,
-            user_profile_picture: conversationResponse.other_user.profile_picture_id,
+            user_profile_picture: conversationResponse.other_user.profile_picture_url,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
             status: 'accepted'
@@ -187,10 +187,10 @@ export const InboxPage = () => {
             id: `${conversationResponse.conversation.id}_rejected`,
             type: 'message_rejected',
             title: `${conversationResponse.other_user.name} rejected your message request`,
-            message: `${conversationResponse.other_user.name} rejected your message request.`,
-            timestamp: conversationResponse.conversation.created_at,
+            body: `${conversationResponse.other_user.name} rejected your message request.`,
+            created_at: conversationResponse.conversation.created_at,
             user_name: conversationResponse.other_user.name,
-            user_profile_picture: conversationResponse.other_user.profile_picture_id,
+            user_profile_picture: conversationResponse.other_user.profile_picture_url,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
             status: 'rejected'
@@ -207,10 +207,10 @@ export const InboxPage = () => {
               id: conv.conversation.id,
               type: 'message_request_received',
               title: `Message request from ${conv.other_user.name}`,
-              message: `${conv.other_user.name} wants to start a conversation with you!`,
-              timestamp: conv.conversation.created_at,
+              body: `${conv.other_user.name} wants to start a conversation with you!`,
+              created_at: conv.conversation.created_at,
               user_name: conv.other_user.name,
-              user_profile_picture: conv.other_user.profile_picture_id,
+              user_profile_picture: conv.other_user.profile_picture_url,
               match_id: conv.match.id,
               conversation_id: conv.conversation.id,
               status: conv.conversation.status
@@ -224,10 +224,10 @@ export const InboxPage = () => {
                 id: `${conv.conversation.id}_rejected`,
                 type: 'message_rejected',
                 title: `You rejected ${conv.other_user.name}'s message request`,
-                message: `You rejected the message request from ${conv.other_user.name}.`,
-                timestamp: conv.conversation.created_at,
+                body: `You rejected the message request from ${conv.other_user.name}.`,
+                created_at: conv.conversation.created_at,
                 user_name: conv.other_user.name,
-                user_profile_picture: conv.other_user.profile_picture_id,
+                user_profile_picture: conv.other_user.profile_picture_url,
                 match_id: conv.match.id,
                 conversation_id: conv.conversation.id,
                 status: 'rejected'
@@ -308,7 +308,7 @@ export const InboxPage = () => {
   };
 
   // Converts a timestamp to a human-readable "time ago" format.
-  const getTimeAgo = (timestamp: string) => {
+  const getTimeAgo = (created_at: string) => {
     const parsed = parseTimestamp(timestamp);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
@@ -374,7 +374,7 @@ export const InboxPage = () => {
     const matchesSearch = (notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase())) ||
                          notification.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         notification.message?.toLowerCase().includes(searchQuery.toLowerCase());
+                         notification.body?.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesSearch;
   });
 
@@ -574,7 +574,7 @@ export const InboxPage = () => {
           ) : (
             <div className="grid gap-4">
               {filteredNotifications
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                 .map((notification) => (
                 <Card 
                   key={notification.id} 
@@ -610,12 +610,12 @@ export const InboxPage = () => {
                             </div>
                           </div>
                           <div className="text-sm text-muted-foreground">
-                            {getTimeAgo(notification.timestamp)}
+                            {getTimeAgo(notification.created_at)}
                           </div>
                         </div>
                         
                         <p className="text-sm text-muted-foreground mb-3">
-                          {notification.message}
+                          {notification.body}
                         </p>
                         
                         <div className="flex items-center justify-between">
@@ -727,7 +727,7 @@ export const InboxPage = () => {
                   <CardContent className="p-6">
                     <div className="flex items-start space-x-4">
                       <img
-                        src={getProfilePictureUrl(conversation.other_user.profile_picture_id)}
+                        src={getProfilePictureUrl(conversation.other_user.profile_picture_url)}
                         alt={conversation.other_user.name}
                         className="w-16 h-16 rounded-full object-cover border-2 border-pink-500 flex-shrink-0"
                       />
@@ -738,7 +738,7 @@ export const InboxPage = () => {
                               {conversation.other_user.name}
                             </h3>
                             <p className="text-sm text-muted-foreground">
-                              {conversation.other_user.name} • {conversation.other_user.which_class}
+                              {conversation.other_user.name} • {conversation.other_user.class_name}
                             </p>
                           </div>
                           <div className="flex items-center space-x-2">

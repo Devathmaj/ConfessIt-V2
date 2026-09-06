@@ -16,13 +16,13 @@ class ConfessionCreate(BaseModel):
     """
     Model for creating a confession (input from the client).
     """
-    confession: str
-    is_anonymous: bool
-    is_comment: bool
-    confessing_to: str
+    body: str
+    anonymous: bool
+    comments_enabled: bool
+    recipient_name: str
 
-    @validator("confessing_to")
-    def _validate_confessing_to(cls, value: str) -> str:
+    @validator("recipient_name")
+    def _validate_recipient_name(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("The name of the person you are confessing to cannot be empty.")
@@ -32,14 +32,14 @@ class ConfessionUpdate(BaseModel):
     """
     Model for updating a confession's settings.
     """
-    is_anonymous: Optional[bool] = None
-    is_comment: Optional[bool] = None
+    anonymous: Optional[bool] = None
+    comments_enabled: Optional[bool] = None
 
 class ReactionCreate(BaseModel):
     reaction: str
 
 class CommentCreate(BaseModel):
-    message: str
+    body: str
 
 class ReportCreate(BaseModel):
     """
@@ -60,11 +60,11 @@ class ConfessionComment(BaseModel):
     """
     Represents a comment on a confession post.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
+    id: str = Field(default_factory=new_id)
     confession_id: str
     user_info: UserInfo
-    message: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    body: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     likes: List[str] = Field(default_factory=list)
     dislikes: List[str] = Field(default_factory=list)
@@ -87,13 +87,14 @@ class Confession(BaseModel):
     """
     Represents a single confession post within the application.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
-    confession: str
-    confessing_to: Optional[str] = None
-    is_anonymous: bool
-    is_comment: bool
-    timestamp: Optional[datetime] = None
-    user_id: str
+    id: str = Field(default_factory=new_id)
+    body: str
+    recipient_name: Optional[str] = None
+    anonymous: bool
+    comments_enabled: bool
+    created_at: Optional[datetime] = None
+    author_id: str
+    approved: bool = True
     user_info: Optional[UserInfo] = None
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
@@ -114,42 +115,24 @@ class Confession(BaseModel):
         
         populate_by_name = True
 
-class Report(BaseModel):
-    """
-    Represents a report made by a user for a comment or a confession.
-    """
-    id: str = Field(default_factory=new_id, alias="_id")
-    content_id: str
-    content_type: str # 'comment' or 'confession'
-    reported_by_id: str
-    reported_by_name: str
-    reason: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
-
-
 class AdminUserBase(BaseModel):
     """
     Shared attributes for creating or updating user accounts via the admin APIs.
     """
-    Regno: str
-    Name: str
+    regno: str
+    name: str
     email: EmailStr
     emoji: Optional[str] = None
     bio: Optional[str] = None
-    which_class: str
+    class_name: str
     gender: str
-    profile_picture_id: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     interests: Optional[List[str]] = None
-    isMatchmaking: bool = True
-    isNotifications: bool = True
-    isLovenotesRecieve: bool = True
-    isLovenotesSend: bool = False
-    user_role: str = "user"
+    matchmaking_enabled: bool = True
+    notifications_enabled: bool = True
+    love_notes_receive_enabled: bool = True
+    love_notes_send_enabled: bool = False
+    role: str = "user"
 
 
 class AdminUserCreate(AdminUserBase):
@@ -162,20 +145,20 @@ class AdminUserUpdate(BaseModel):
     """
     Payload for updating existing user accounts via the admin APIs.
     """
-    Regno: Optional[str] = None
-    Name: Optional[str] = None
+    regno: Optional[str] = None
+    name: Optional[str] = None
     email: Optional[EmailStr] = None
     emoji: Optional[str] = None
     bio: Optional[str] = None
-    which_class: Optional[str] = None
+    class_name: Optional[str] = None
     gender: Optional[str] = None
-    profile_picture_id: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     interests: Optional[List[str]] = None
-    isMatchmaking: Optional[bool] = None
-    isNotifications: Optional[bool] = None
-    isLovenotesRecieve: Optional[bool] = None
-    isLovenotesSend: Optional[bool] = None
-    user_role: Optional[str] = None
+    matchmaking_enabled: Optional[bool] = None
+    notifications_enabled: Optional[bool] = None
+    love_notes_receive_enabled: Optional[bool] = None
+    love_notes_send_enabled: Optional[bool] = None
+    role: Optional[str] = None
     is_blocked: Optional[bool] = None
 
 
@@ -183,27 +166,27 @@ class UserDetails(BaseModel):
     """
     Stores detailed information for a user profile.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
-    Regno: str
-    Name: str
+    id: str = Field(default_factory=new_id)
+    regno: str
+    name: str
     email: EmailStr
     emoji: Optional[str] = None
     bio: Optional[str] = None
-    which_class: str
-    profile_picture_id: Optional[str] = None
+    class_name: str
+    profile_picture_url: Optional[str] = None
     gender: str
     interests: Optional[List[str]] = Field(default_factory=list)
-    isMatchmaking: bool
-    isNotifications: bool
-    isLovenotesRecieve: bool = True
-    isLovenotesSend: bool = False
+    matchmaking_enabled: bool
+    notifications_enabled: bool
+    love_notes_receive_enabled: bool = True
+    love_notes_send_enabled: bool = False
     is_blocked: bool = False
     reported_count: int = 0
-    last_login_time: Optional[datetime] = None
+    last_login_at: Optional[datetime] = None
     last_login_ip: Optional[str] = None
     last_login_user_agent: Optional[str] = None
-    user_role: str = "user"
-    last_matchmaking_time: Optional[datetime] = None
+    role: str = "user"
+    last_matchmaking_at: Optional[datetime] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -214,7 +197,7 @@ class LoginToken(BaseModel):
     """
     Represents a securely stored authentication token in the database.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
+    id: str = Field(default_factory=new_id)
     user_id: str
     token_hash: str
     issued_at: datetime
@@ -240,7 +223,7 @@ class LoveNoteTemplate(BaseModel):
     """
     Stores predefined templates for Love Notes.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
+    id: str = Field(default_factory=new_id)
     name: str
     image_url: str
     description: str
@@ -256,12 +239,12 @@ class LoveNote(BaseModel):
     Represents an individual Love Note sent from one user to another.
     Persistent image URL for the note.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
+    id: str = Field(default_factory=new_id)
     sender_id: str
     recipient_id: str
     image_url: str
-    message_text: str
-    is_anonymous: bool = False
+    body: str
+    anonymous: bool = False
     status: str = "pending_review"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     read_at: Optional[datetime] = None
@@ -276,7 +259,7 @@ class Match(BaseModel):
     """
     Represents a match between two users from matchmaking.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
+    id: str = Field(default_factory=new_id)
     user_1_regno: str
     user_2_regno: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -291,14 +274,14 @@ class Conversation(BaseModel):
     """
     Represents a conversation request and its state between two matched users.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
-    matchId: str
-    initiatorId: str
-    receiverId: str
+    id: str = Field(default_factory=new_id)
+    match_id: str
+    initiator_regno: str
+    receiver_regno: str
     status: str = "pending"  # Can be 'pending' (not requested yet), 'requested' (waiting for response), 'accepted', 'rejected'
-    requestedAt: Optional[datetime] = None  # When initiator clicked "Send Message Request"
-    acceptedAt: Optional[datetime] = None
-    createdAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    requested_at: Optional[datetime] = None  # When initiator clicked "Send Message Request"
+    accepted_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         arbitrary_types_allowed = True
@@ -309,12 +292,13 @@ class Message(BaseModel):
     """
     Defines the structure for a single message within a conversation.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
-    matchId: str
-    senderId: str
-    receiverId: str
-    text: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    id: str = Field(default_factory=new_id)
+    conversation_id: str
+    sender_regno: str
+    receiver_regno: str
+    body: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    is_read: bool = False
 
     class Config:
         arbitrary_types_allowed = True
@@ -325,25 +309,19 @@ class ConversationCreate(BaseModel):
     """
     Model for creating a conversation request.
     """
-    matchId: str
+    match_id: str
 
-
-class NotificationContent(BaseModel):
-    """
-    Structure for notification content.
-    """
-    heading: str
-    body: str
 
 class Notification(BaseModel):
     """
     Represents a notification for a user.
     """
-    id: str = Field(default_factory=new_id, alias="_id")
-    user_id: str
-    content: NotificationContent
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    read: bool = False
+    id: str = Field(default_factory=new_id)
+    recipient_regno: str
+    heading: str
+    body: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    is_read: bool = False
 
     class Config:
         arbitrary_types_allowed = True

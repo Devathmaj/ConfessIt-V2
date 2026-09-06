@@ -47,8 +47,8 @@ interface AdminLoveNote {
   sender: PersonDetails;
   recipient: PersonDetails;
   image_url: string | null;
-  message_text: string;
-  is_anonymous: boolean;
+  body: string;
+  anonymous: boolean;
   status: 'approved' | 'rejected' | 'pending_review';
   created_at: string | null;
   read_at: string | null;
@@ -102,8 +102,8 @@ export const LoveNotesReview = () => {
                 email: item.recipient?.email ?? null,
               },
               image_url: item.image_url ?? null,
-              message_text: item.message_text ?? '',
-              is_anonymous: item.is_anonymous ?? false,
+              body: item.body ?? '',
+              anonymous: item.anonymous ?? false,
               status: (item.status as AdminLoveNote['status']) ?? 'pending_review',
               created_at: item.created_at ?? null,
               read_at: item.read_at ?? null,
@@ -194,7 +194,7 @@ export const LoveNotesReview = () => {
       </div>
       <div className="grid gap-1 text-xs sm:text-sm">
         <p>
-          <span className="text-muted-foreground">Name:</span> {person.name ?? 'Unknown'}
+          <span className="text-muted-foreground">name:</span> {person.name ?? 'Unknown'}
         </p>
         <p>
           <span className="text-muted-foreground">Reg No:</span> {person.regno ?? 'Unknown'}
@@ -305,7 +305,7 @@ export const LoveNotesReview = () => {
                                   Created {formatTimestamp(note.created_at)}
                                 </span>
                                 <span className="text-xs text-muted-foreground/80">
-                                  Sender visible: {note.is_anonymous ? 'No (anonymous)' : 'Yes'}
+                                  Sender visible: {note.anonymous ? 'No (anonymous)' : 'Yes'}
                                 </span>
                               </div>
                               <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
@@ -335,13 +335,13 @@ export const LoveNotesReview = () => {
 
                               <div className="rounded-2xl border border-border bg-background/60 p-4">
                                 <p className="text-sm uppercase tracking-wide text-muted-foreground">Message</p>
-                                <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.message_text}</p>
+                                <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.body}</p>
                               </div>
 
                               <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
                                 <div className="rounded-2xl border border-border bg-muted/20 p-4">
                                   <p className="font-medium text-foreground/80">Visibility</p>
-                                  <p>{note.is_anonymous ? 'Anonymous to recipient' : 'Sender details revealed to recipient'}</p>
+                                  <p>{note.anonymous ? 'Anonymous to recipient' : 'Sender details revealed to recipient'}</p>
                                 </div>
                                 <div className="rounded-2xl border border-border bg-muted/20 p-4">
                                   <p className="font-medium text-foreground/80">Read status</p>

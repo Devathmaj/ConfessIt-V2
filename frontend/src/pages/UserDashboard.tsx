@@ -35,10 +35,10 @@ interface NavigationItem {
 // Interface for a confession
 interface Confession {
   id: string;
-  confession: string;
-  is_anonymous: boolean;
-  user_id: string;
-  timestamp: string;
+  body: string;
+  anonymous: boolean;
+  author_id: string;
+  created_at: string;
   comments: any[];
   heart_count: number;
   haha_count: number;
@@ -85,7 +85,7 @@ export const UserDashboard = () => {
 
   useEffect(() => {
     // Set profile picture URL if available
-    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_id ?? null));
+    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
 
     // Fetch trending confessions
     fetchTrendingConfessions();
@@ -108,34 +108,34 @@ export const UserDashboard = () => {
       
       // First two: most popular confessions
       if (popularConfessions.length > 0) {
-        selectedConfessions.push(popularConfessions[0].confession);
+        selectedConfessions.push(popularConfessions[0].body);
         if (popularConfessions.length > 1) {
-          selectedConfessions.push(popularConfessions[1].confession);
+          selectedConfessions.push(popularConfessions[1].body);
         }
       }
       
       // Third: most commented confession (if not already included)
       if (commentedConfessions.length > 0) {
-        const mostCommented = commentedConfessions[0].confession;
+        const mostCommented = commentedConfessions[0].body;
         if (!selectedConfessions.includes(mostCommented)) {
           selectedConfessions.push(mostCommented);
         } else if (commentedConfessions.length > 1) {
           // If the most commented is already included, take the next one
-          selectedConfessions.push(commentedConfessions[1].confession);
+          selectedConfessions.push(commentedConfessions[1].body);
         }
       }
       
       // Fourth: most recent confession (if not already included)
       if (recentConfessions.length > 0) {
-        const mostRecent = recentConfessions[0].confession;
+        const mostRecent = recentConfessions[0].body;
         if (!selectedConfessions.includes(mostRecent)) {
           selectedConfessions.push(mostRecent);
         } else if (recentConfessions.length > 1) {
           // If the most recent is already included, take the next one
-          selectedConfessions.push(recentConfessions[1].confession);
+          selectedConfessions.push(recentConfessions[1].body);
         } else if (commentedConfessions.length > 2) {
           // If no recent available, take another commented
-          selectedConfessions.push(commentedConfessions[2].confession);
+          selectedConfessions.push(commentedConfessions[2].body);
         }
       }
       
@@ -246,7 +246,7 @@ export const UserDashboard = () => {
         <header className="w-full max-w-6xl flex justify-between items-center mb-6 sm:mb-8 mt-2 sm:mt-4 px-2">
           <div className="text-left min-w-0 flex-1 mr-2">
             <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold bg-gradient-to-r from-pink-300 to-purple-300 bg-clip-text text-transparent truncate">
-              Welcome back, {user?.Name}!
+              Welcome back, {user?.name}!
             </h1>
             <p className="text-xs sm:text-sm text-white/70 mt-1">
               Ready to spread some love today?
@@ -285,13 +285,13 @@ export const UserDashboard = () => {
                   ) : null}
                   {!profilePictureUrl && (
                     <span className="text-lg sm:text-xl font-bold text-white">
-                      {user?.Name?.charAt(0)}
+                      {user?.name?.charAt(0)}
                     </span>
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-bold text-base sm:text-lg truncate">{user?.Name}</p>
-                  <p className="text-xs sm:text-sm text-white/70 mt-1 truncate">Reg: {user?.Regno}</p>
+                  <p className="font-bold text-base sm:text-lg truncate">{user?.name}</p>
+                  <p className="text-xs sm:text-sm text-white/70 mt-1 truncate">Reg: {user?.regno}</p>
                 </div>
               </div>
               

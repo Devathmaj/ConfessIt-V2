@@ -37,7 +37,7 @@ async def get_all_users(
     """
     Used to fetch all users from the database, excluding the current user.
     """
-    return await get_all_users_service(db, current_user.Regno)
+    return await get_all_users_service(db, current_user.regno)
 
 @router.get("/classes", response_model=List[str])
 async def get_all_classes(db: Database = Depends(get_db)):
@@ -56,14 +56,14 @@ async def send_love_note(
     Used to send a love note. The note is marked as 'pending_review'.
     """
     # Used to check if the user has already sent a love note
-    if current_user.isLovenotesSend:
+    if current_user.love_notes_send_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You have already sent your love note for this season."
         )
 
     # Basic validation
-    if not note_data.message_text.strip():
+    if not note_data.body.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message cannot be empty."
@@ -103,10 +103,10 @@ async def get_received_love_notes(
         result = []
         for note in love_notes:
             sender = senders.get(note.sender_id)
-            sender_name = "Anonymous" if note.is_anonymous or not sender else sender.Name or "Unknown"
+            sender_name = "Anonymous" if note.anonymous or not sender else sender.name or "Unknown"
             result.append({
-                "id": str(note.id), "from": sender_name, "message": note.message_text,
-                "image_url": note.image_url, "anonymous": note.is_anonymous,
+                "id": str(note.id), "from": sender_name, "body": note.body,
+                "image_url": note.image_url, "anonymous": note.anonymous,
                 "created_at": isoformat_datetime(note.created_at),
                 "read_at": isoformat_datetime(note.read_at),
             })

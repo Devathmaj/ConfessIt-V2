@@ -51,14 +51,14 @@ interface AdminReporter {
 interface AdminReport {
   id: string;
   reason: string | null;
-  timestamp: string | null;
+  created_at: string | null;
   reporter: AdminReporter;
 }
 
 interface AdminComment {
   id: string;
-  message: string;
-  timestamp: string | null;
+  body: string;
+  created_at: string | null;
   user: {
     id?: string | null;
     avatar?: string | null;
@@ -72,11 +72,11 @@ interface AdminComment {
 
 interface AdminConfession {
   id: string;
-  confession: string;
-  confessing_to?: string | null;
-  is_anonymous: boolean;
-  is_comment: boolean;
-  timestamp: string | null;
+  body: string;
+  recipient_name?: string | null;
+  anonymous: boolean;
+  comments_enabled: boolean;
+  created_at: string | null;
   sender: {
     id: string | null;
     name: string | null;
@@ -105,7 +105,7 @@ const reactionDisplay = [
   { key: 'heartbreak', label: 'Heartbreaks', icon: HeartCrack, color: 'text-rose-400' },
 ];
 
-const formatTimestamp = (timestamp: string | null) => {
+const formatTimestamp = (created_at: string | null) => {
   return formatDateTimeDDMMYYYY(timestamp);
 };
 
@@ -127,11 +127,11 @@ export const ConfessionsAdmin = () => {
         const normalized = Array.isArray(data)
           ? data.map((item: Partial<AdminConfession>, index) => ({
               id: item.id ?? `confession-${index}`,
-              confession: item.confession ?? '',
-              confessing_to: item.confessing_to ?? null,
-              is_anonymous: item.is_anonymous ?? true,
-              is_comment: item.is_comment ?? true,
-              timestamp: item.timestamp ?? null,
+              body: item.body ?? '',
+              recipient_name: item.recipient_name ?? null,
+              anonymous: item.anonymous ?? true,
+              comments_enabled: item.comments_enabled ?? true,
+              created_at: item.created_at ?? null,
               sender: {
                 id: item.sender?.id ?? null,
                 name: item.sender?.name ?? null,
@@ -144,7 +144,7 @@ export const ConfessionsAdmin = () => {
                 ? item.reports.map((report: Partial<AdminReport>, reportIndex) => ({
                     id: report.id ?? `confession-${index}-report-${reportIndex}`,
                     reason: report.reason ?? null,
-                    timestamp: report.timestamp ?? null,
+                    created_at: report.created_at ?? null,
                     reporter: {
                       id: report.reporter?.id ?? null,
                       name: report.reporter?.name ?? null,
@@ -160,8 +160,8 @@ export const ConfessionsAdmin = () => {
               comments: Array.isArray(item.comments)
                 ? item.comments.map((comment: Partial<AdminComment>, commentIndex) => ({
                     id: comment.id ?? `confession-${index}-comment-${commentIndex}`,
-                    message: comment.message ?? '',
-                    timestamp: comment.timestamp ?? null,
+                    body: comment.body ?? '',
+                    created_at: comment.created_at ?? null,
                     user: {
                       id: comment.user?.id ?? null,
                       name: comment.user?.name ?? null,
@@ -175,7 +175,7 @@ export const ConfessionsAdmin = () => {
                       ? comment.reports.map((commentReport: Partial<AdminReport>, reportIndex) => ({
                           id: commentReport.id ?? `confession-${index}-comment-${commentIndex}-report-${reportIndex}`,
                           reason: commentReport.reason ?? null,
-                          timestamp: commentReport.timestamp ?? null,
+                          created_at: commentReport.created_at ?? null,
                           reporter: {
                             id: commentReport.reporter?.id ?? null,
                             name: commentReport.reporter?.name ?? null,
@@ -215,7 +215,7 @@ export const ConfessionsAdmin = () => {
         (confession) => (confession.report_count ?? 0) > 0 || confession.reports.length > 0
       );
     } else if (filterOption === 'anonymous') {
-      entries = entries.filter((confession) => confession.is_anonymous);
+      entries = entries.filter((confession) => confession.anonymous);
     } else if (filterOption === 'with-comments') {
       entries = entries.filter((confession) => confession.comments.length > 0);
     }
@@ -224,8 +224,8 @@ export const ConfessionsAdmin = () => {
       const query = searchTerm.trim().toLowerCase();
       entries = entries.filter((confession) => {
         const haystack = [
-          confession.confession,
-          confession.confessing_to,
+          confession.body,
+          confession.recipient_name,
           confession.sender.name,
           confession.sender.email,
           confession.sender.regno,
@@ -258,8 +258,8 @@ export const ConfessionsAdmin = () => {
       case 'recent':
       default:
         sorted.sort((a, b) => {
-          const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
           return bTime - aTime;
         });
     }
@@ -375,7 +375,7 @@ export const ConfessionsAdmin = () => {
           ) : (
             processedConfessions.map((confession) => {
               const senderVisible = visibleSenders[confession.id];
-              const anonymityVariant: 'default' | 'secondary' = confession.is_anonymous ? 'secondary' : 'default';
+              const anonymityVariant: 'default' | 'secondary' = confession.anonymous ? 'secondary' : 'default';
               const commentTotal = Math.max(confession.comment_count, confession.comments.length);
               return (
                 <Card key={confession.id} className="border border-border">
@@ -384,19 +384,19 @@ export const ConfessionsAdmin = () => {
                       <div>
                         <CardTitle className="text-lg">Confession</CardTitle>
                         <CardDescription>
-                          Submitted {formatTimestamp(confession.timestamp)} · Comments {commentTotal}
+                          Submitted {formatTimestamp(confession.created_at)} · Comments {commentTotal}
                         </CardDescription>
-                        {confession.confessing_to && (
+                        {confession.recipient_name && (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Confessing to: <span className="font-semibold text-foreground">{confession.confessing_to}</span>
+                            Confessing to: <span className="font-semibold text-foreground">{confession.recipient_name}</span>
                           </p>
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={anonymityVariant}>
-                          {confession.is_anonymous ? 'Anonymous to users' : 'Public confession'}
+                          {confession.anonymous ? 'Anonymous to users' : 'Public confession'}
                         </Badge>
-                        {!confession.is_comment && <Badge variant="outline">Comments disabled</Badge>}
+                        {!confession.comments_enabled && <Badge variant="outline">Comments disabled</Badge>}
                         {confession.report_count > 0 && (
                           <Badge variant="destructive">
                             <span className="flex items-center gap-1">
@@ -410,7 +410,7 @@ export const ConfessionsAdmin = () => {
                   </CardHeader>
                   <CardContent className="space-y-6">
                     <p className="rounded-2xl border border-border bg-muted/40 p-4 leading-relaxed">
-                      {confession.confession}
+                      {confession.body}
                     </p>
 
                     <div className="grid gap-4 lg:grid-cols-2">
@@ -434,7 +434,7 @@ export const ConfessionsAdmin = () => {
                         {senderVisible ? (
                           <div className="grid gap-1 text-sm">
                             <p>
-                              <span className="text-muted-foreground">Name:</span> {confession.sender.name ?? 'Unknown'}
+                              <span className="text-muted-foreground">name:</span> {confession.sender.name ?? 'Unknown'}
                             </p>
                             <p>
                               <span className="text-muted-foreground">Reg No:</span> {confession.sender.regno ?? 'Unknown'}
@@ -504,7 +504,7 @@ export const ConfessionsAdmin = () => {
                             <p className="font-medium">
                               {report.reporter.name ?? 'Anonymous reporter'}
                             </p>
-                            <p className="text-xs opacity-80">{formatTimestamp(report.timestamp)}</p>
+                            <p className="text-xs opacity-80">{formatTimestamp(report.created_at)}</p>
                             <p className="mt-2 text-destructive-foreground/90">
                               {report.reason ?? 'No reason provided.'}
                             </p>
@@ -559,12 +559,12 @@ export const ConfessionsAdmin = () => {
                                     </div>
                                   </div>
                                   <span className="text-xs text-muted-foreground">
-                                    {formatTimestamp(comment.timestamp)}
+                                    {formatTimestamp(comment.created_at)}
                                   </span>
                                 </div>
                               </AccordionTrigger>
                               <AccordionContent className="px-3 pb-4">
-                                <p className="text-sm leading-relaxed">{comment.message}</p>
+                                <p className="text-sm leading-relaxed">{comment.body}</p>
                                 {comment.reports.length > 0 && (
                                   <div className="mt-3 space-y-2">
                                     {comment.reports.map((report) => (
@@ -576,7 +576,7 @@ export const ConfessionsAdmin = () => {
                                           {report.reporter.name ?? 'Anonymous reporter'}
                                         </p>
                                         <p className="text-[10px] uppercase tracking-wide opacity-75">
-                                          {formatTimestamp(report.timestamp)}
+                                          {formatTimestamp(report.created_at)}
                                         </p>
                                         <p className="mt-2 text-sm text-destructive-foreground/90">
                                           {report.reason ?? 'No reason provided.'}

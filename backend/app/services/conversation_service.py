@@ -19,37 +19,37 @@ def _user_data(row):
     if row is None:
         return None
     return {
-        "_id": str(row.id), "id": str(row.id), "Regno": row.Regno, "Name": row.Name,
+        "id": str(row.id), "regno": row.regno, "name": row.name,
         "email": row.email, "emoji": row.emoji, "bio": row.bio,
-        "which_class": row.which_class, "profile_picture_id": row.profile_picture_id,
+        "class_name": row.class_name, "profile_picture_url": row.profile_picture_url,
         "gender": row.gender, "interests": row.interests or [],
-        "isMatchmaking": row.isMatchmaking, "isNotifications": row.isNotifications,
-        "isLovenotesRecieve": row.isLovenotesRecieve, "isLovenotesSend": row.isLovenotesSend,
+        "matchmaking_enabled": row.matchmaking_enabled, "notifications_enabled": row.notifications_enabled,
+        "love_notes_receive_enabled": row.love_notes_receive_enabled, "love_notes_send_enabled": row.love_notes_send_enabled,
         "is_blocked": row.is_blocked, "reported_count": row.reported_count,
-        "last_login_time": row.last_login_time,
+        "last_login_at": row.last_login_at,
         "last_login_ip": str(row.last_login_ip) if row.last_login_ip else None,
-        "last_login_user_agent": row.last_login_user_agent, "user_role": row.user_role,
-        "last_matchmaking_time": row.last_matchmaking_time,
+        "last_login_user_agent": row.last_login_user_agent, "role": row.role,
+        "last_matchmaking_at": row.last_matchmaking_at,
     }
 
 def _match_data(row):
     if row is None:
         return None
-    return {"_id": str(row.id), "user_1_regno": row.user_1_regno,
+    return {"id": str(row.id), "user_1_regno": row.user_1_regno,
             "user_2_regno": row.user_2_regno, "created_at": row.created_at,
             "expires_at": row.expires_at}
 
 def _conversation_data(row):
     if row is None:
         return None
-    return {"_id": str(row.id), "matchId": str(row.matchId),
-            "initiatorId": row.initiatorId, "receiverId": row.receiverId,
-            "status": row.status, "requestedAt": row.requestedAt,
-            "acceptedAt": row.acceptedAt, "createdAt": row.createdAt,
+    return {"id": str(row.id), "match_id": str(row.match_id),
+            "initiator_regno": row.initiator_regno, "receiver_regno": row.receiver_regno,
+            "status": row.status, "requested_at": row.requested_at,
+            "accepted_at": row.accepted_at, "created_at": row.created_at,
             "last_message_at": row.last_message_at,
-            "last_message_text": row.last_message_text,
-            "isBlocked": bool(row.blocked_by),
-            "blockedBy": row.blocked_by[0] if row.blocked_by else None}
+            "last_message_preview": row.last_message_preview,
+            "is_blocked": bool(row.blocked_by),
+            "blocked_by": row.blocked_by[0] if row.blocked_by else None}
 
 def _get_match(db, match_id):
     with db.sessions() as session:
@@ -57,12 +57,12 @@ def _get_match(db, match_id):
 
 def _get_conversation(db, match_id):
     with db.sessions() as session:
-        row = session.scalar(select(ConversationRecord).where(ConversationRecord.matchId == str(match_id)))
+        row = session.scalar(select(ConversationRecord).where(ConversationRecord.match_id == str(match_id)))
         return _conversation_data(row)
 
 def _get_user_by_regno(db, regno):
     with db.sessions() as session:
-        row = session.scalar(select(UserRecord).where(UserRecord.Regno == regno))
+        row = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         return _user_data(row)
 
 def _save_conversation(db, conversation_id, **changes):
@@ -71,18 +71,18 @@ def _save_conversation(db, conversation_id, **changes):
         if not row:
             return False
         for name, value in changes.items():
-            if name == "isBlocked":
+            if name == "is_blocked":
                 row.blocked_by = list(row.blocked_by or [])
-                if value and changes.get("blockedBy") and changes["blockedBy"] not in row.blocked_by:
-                    row.blocked_by.append(changes["blockedBy"])
+                if value and changes.get("blocked_by") and changes["blocked_by"] not in row.blocked_by:
+                    row.blocked_by.append(changes["blocked_by"])
                 elif not value:
                     row.blocked_by = []
-            elif name == "blockedBy":
+            elif name == "blocked_by":
                 if value and value not in (row.blocked_by or []):
                     row.blocked_by = list(row.blocked_by or []) + [value]
                 elif value is None:
                     row.blocked_by = []
-            elif name in {"status", "requestedAt", "acceptedAt", "terminatedAt"}:
+            elif name in {"status", "requested_at", "accepted_at", "terminated_at"}:
                 setattr(row, name, value)
         return True
 
@@ -119,7 +119,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_410_GONE, detail="This match has expired.")
 
         # 3. Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the existing conversation (should exist with status 'pending')
@@ -130,7 +130,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         conversation = Conversation(**conversation_doc)
         
         # 5. Verify current user is the initiator
-        if conversation.initiatorId != current_user.Regno:
+        if conversation.initiator_regno != current_user.regno:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the initiator can send the message request.")
 
         # 6. Check if already requested
@@ -139,21 +139,21 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
 
         # 7. Update conversation status to 'requested'
         requested_at = datetime.now(timezone.utc)
-        _save_conversation(db, conversation.id, status="requested", requestedAt=requested_at)
+        _save_conversation(db, conversation.id, status="requested", requested_at=requested_at)
         
         # 8. Create notification for the receiver
         from ..services.notification_service import create_notification_service
-        receiver_user_doc = _get_user_by_regno(db, conversation.receiverId)
+        receiver_user_doc = _get_user_by_regno(db, conversation.receiver_regno)
         if receiver_user_doc:
             receiver_user = UserDetails(**receiver_user_doc)
             create_notification_service(
-                user_id=conversation.receiverId,
-                heading=f"Message request from {current_user.Name}",
-                body=f"{current_user.Name} wants to start a conversation with you!",
+                recipient_regno=conversation.receiver_regno,
+                heading=f"Message request from {current_user.name}",
+                body=f"{current_user.name} wants to start a conversation with you!",
                 db=db
             )
         
-        logger.info(f"Conversation request sent from {current_user.Regno} to {conversation.receiverId} for match {match_id}")
+        logger.info(f"Conversation request sent from {current_user.regno} to {conversation.receiver_regno} for match {match_id}")
 
         return {"status": "success", "message": "Message request sent."}
     except Exception as e: # <--- FIX: This except block is now correctly placed
@@ -191,7 +191,7 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
             raise HTTPException(status_code=status.HTTP_410_GONE, detail="This match has expired.")
 
         # 3. Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get conversation status
@@ -204,10 +204,10 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
         return {
             "status": "success",
             "conversation_status": conversation.status,
-            "initiator_id": conversation.initiatorId,
-            "receiver_id": conversation.receiverId,
-            "created_at": conversation.createdAt,
-            "accepted_at": conversation.acceptedAt
+            "initiator_regno": conversation.initiator_regno,
+            "receiver_regno": conversation.receiver_regno,
+            "created_at": conversation.created_at,
+            "accepted_at": conversation.accepted_at
         }
     except Exception as e: # <--- FIX: Added missing except block
         logger.error(f"Error in get_conversation_status_service: {e}")
@@ -244,7 +244,7 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_410_GONE, detail="This match has expired.")
 
         # 3. Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the conversation
@@ -255,7 +255,7 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         conversation = Conversation(**conversation_doc)
 
         # 5. Check if the current user is the receiver
-        if conversation.receiverId != current_user.Regno:
+        if conversation.receiver_regno != current_user.regno:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the receiver can accept the conversation.")
 
         # 6. Check if the conversation is already accepted
@@ -268,21 +268,21 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
 
         # 7. Update the conversation status
         accepted_at = datetime.now(timezone.utc)
-        _save_conversation(db, conversation.id, status="accepted", acceptedAt=accepted_at)
+        _save_conversation(db, conversation.id, status="accepted", accepted_at=accepted_at)
         
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
-        initiator_user_doc = _get_user_by_regno(db, conversation.initiatorId)
-        receiver_user_doc = _get_user_by_regno(db, current_user.Regno)
+        initiator_user_doc = _get_user_by_regno(db, conversation.initiator_regno)
+        receiver_user_doc = _get_user_by_regno(db, current_user.regno)
         if initiator_user_doc and receiver_user_doc:
             create_notification_service(
-                user_id=conversation.initiatorId,
-                heading=f"{current_user.Name} accepted your message request",
-                body=f"{current_user.Name} accepted your message request. You can now start chatting!",
+                recipient_regno=conversation.initiator_regno,
+                heading=f"{current_user.name} accepted your message request",
+                body=f"{current_user.name} accepted your message request. You can now start chatting!",
                 db=db
             )
         
-        logger.info(f"Conversation {conversation.id} accepted by {current_user.Regno}")
+        logger.info(f"Conversation {conversation.id} accepted by {current_user.regno}")
 
         return {
             "status": "success",
@@ -324,7 +324,7 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
             raise HTTPException(status_code=status.HTTP_410_GONE, detail="This match has expired.")
 
         # 3. Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # 4. Get the conversation
@@ -335,7 +335,7 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         conversation = Conversation(**conversation_doc)
 
         # 5. Check if the current user is the receiver
-        if conversation.receiverId != current_user.Regno:
+        if conversation.receiver_regno != current_user.regno:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the receiver can reject the conversation.")
 
         # 6. Check if the conversation is already accepted or rejected
@@ -347,16 +347,16 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         
         # Create notification for the initiator
         from ..services.notification_service import create_notification_service
-        initiator_user_doc = _get_user_by_regno(db, conversation.initiatorId)
+        initiator_user_doc = _get_user_by_regno(db, conversation.initiator_regno)
         if initiator_user_doc:
             create_notification_service(
-                user_id=conversation.initiatorId,
-                heading=f"{current_user.Name} rejected your message request",
-                body=f"{current_user.Name} rejected your message request.",
+                recipient_regno=conversation.initiator_regno,
+                heading=f"{current_user.name} rejected your message request",
+                body=f"{current_user.name} rejected your message request.",
                 db=db
             )
         
-        logger.info(f"Conversation {conversation.id} rejected by {current_user.Regno}")
+        logger.info(f"Conversation {conversation.id} rejected by {current_user.regno}")
 
         return {"status": "success", "message": "Conversation rejected successfully."}
     except Exception as e: # <--- FIX: Added missing except block
@@ -376,7 +376,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     # Only find matches where current user is user_1 (initiator)
     with db.sessions() as session:
         active_match_row = session.scalar(select(MatchRecord).where(
-            MatchRecord.user_1_regno == current_user.Regno,
+            MatchRecord.user_1_regno == current_user.regno,
             MatchRecord.expires_at > current_time,
         ).order_by(MatchRecord.expires_at.desc()))
         current_match = _match_data(active_match_row)
@@ -385,7 +385,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         # No active match where user is initiator — try to find the most recent one (expired or not)
         with db.sessions() as session:
             recent_match_row = session.scalar(select(MatchRecord).where(
-                MatchRecord.user_1_regno == current_user.Regno
+                MatchRecord.user_1_regno == current_user.regno
             ).order_by(MatchRecord.expires_at.desc()).limit(1))
             current_match = _match_data(recent_match_row)
         if not current_match:
@@ -406,11 +406,11 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     if not conversation_doc:
         # No conversation created yet; return match info and empty conversation placeholder
         # Return success so frontend shows the match in inbox even if expired
-        other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
+        other_user_regno = match.user_2_regno if current_user.regno == match.user_1_regno else match.user_1_regno
         other_user_doc = _get_user_by_regno(db, other_user_regno)
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
+        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url if other_user else None)
 
         return {
             "status": "success",
@@ -423,19 +423,19 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "conversation": {
                 "id": None,
                 "status": "none",
-                "initiator_id": None,
-                "receiver_id": None,
+                "initiator_regno": None,
+                "receiver_regno": None,
                 "created_at": None,
                 "accepted_at": None
             },
             "other_user": {
-                "regno": other_user.Regno if other_user else None,
-                "Regno": other_user.Regno if other_user else None,
-                "name": other_user.Name if other_user else None,
-                "Name": other_user.Name if other_user else None,
-                "profile_picture_id": profile_picture_url,
+                "regno": other_user.regno if other_user else None,
+                "regno": other_user.regno if other_user else None,
+                "name": other_user.name if other_user else None,
+                "name": other_user.name if other_user else None,
+                "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
-                "which_class": other_user.which_class if other_user else None,
+                "class_name": other_user.class_name if other_user else None,
                 "bio": other_user.bio if other_user else None,
                 "interests": other_user.interests if other_user else []
             },
@@ -444,11 +444,11 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
 
     # If conversation exists, return it (allow expired)
     conversation = Conversation(**conversation_doc)
-    other_user_regno = match.user_2_regno if current_user.Regno == match.user_1_regno else match.user_1_regno
+    other_user_regno = match.user_2_regno if current_user.regno == match.user_1_regno else match.user_1_regno
     other_user_doc = _get_user_by_regno(db, other_user_regno)
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-    profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id if other_user else None)
+    profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url if other_user else None)
 
     response_data = {
         "status": "success",
@@ -461,25 +461,25 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         "conversation": {
             "id": str(conversation.id),
             "status": conversation.status,
-            "initiator_id": conversation.initiatorId,
-            "receiver_id": conversation.receiverId,
-            "created_at": conversation.createdAt.isoformat(),
-            "accepted_at": conversation.acceptedAt.isoformat() if conversation.acceptedAt else None
+            "initiator_regno": conversation.initiator_regno,
+            "receiver_regno": conversation.receiver_regno,
+            "created_at": conversation.created_at.isoformat(),
+            "accepted_at": conversation.accepted_at.isoformat() if conversation.accepted_at else None
         },
         "other_user": {
-            "regno": other_user.Regno if other_user else None,
-            "Regno": other_user.Regno if other_user else None,
-            "name": other_user.Name if other_user else None,
-            "Name": other_user.Name if other_user else None,
-            "profile_picture_id": profile_picture_url,
+            "regno": other_user.regno if other_user else None,
+            "regno": other_user.regno if other_user else None,
+            "name": other_user.name if other_user else None,
+            "name": other_user.name if other_user else None,
+            "profile_picture_url": profile_picture_url,
             "profile_picture": profile_picture_url,
-            "which_class": other_user.which_class if other_user else None,
+            "class_name": other_user.class_name if other_user else None,
             "bio": other_user.bio if other_user else None,
             "interests": other_user.interests if other_user else []
         },
-        "is_initiator": conversation.initiatorId == current_user.Regno,
-        "is_blocked": conversation_doc.get("isBlocked", False),
-        "blocked_by": conversation_doc.get("blockedBy", None)
+        "is_initiator": conversation.initiator_regno == current_user.regno,
+        "is_blocked": conversation_doc.get("is_blocked", False),
+        "blocked_by": conversation_doc.get("blocked_by", None)
     }
     
     return response_data
@@ -511,7 +511,7 @@ def update_conversation_status(match_id_str: str, status: str, db: Database):
         return False
     
     conversation = _get_conversation(db, match_id)
-    return bool(conversation and _save_conversation(db, conversation["_id"], status=status))
+    return bool(conversation and _save_conversation(db, conversation["id"], status=status))
 
 
 def get_received_conversations_service(current_user: UserDetails, db: Database):
@@ -524,7 +524,7 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
     # Find matches where current user is user_2 (receiver)
     with db.sessions() as session:
         received_matches = [_match_data(row) for row in session.scalars(select(MatchRecord).where(
-            MatchRecord.user_2_regno == current_user.Regno,
+            MatchRecord.user_2_regno == current_user.regno,
             MatchRecord.expires_at > current_time,
         )).all()]
     
@@ -553,7 +553,7 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             continue
         
         initiator_user = UserDetails(**initiator_user_doc)
-        profile_picture_url = storage_service.get_signed_profile_url(initiator_user.profile_picture_id)
+        profile_picture_url = storage_service.get_signed_profile_url(initiator_user.profile_picture_url)
         
         match_expires_at = match.expires_at
         if match_expires_at.tzinfo is None:
@@ -570,25 +570,25 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             "conversation": {
                 "id": str(conversation.id),
                 "status": conversation.status,
-                "initiator_id": conversation.initiatorId,
-                "receiver_id": conversation.receiverId,
-                "created_at": conversation.createdAt.isoformat(),
-                "accepted_at": conversation.acceptedAt.isoformat() if conversation.acceptedAt else None
+                "initiator_regno": conversation.initiator_regno,
+                "receiver_regno": conversation.receiver_regno,
+                "created_at": conversation.created_at.isoformat(),
+                "accepted_at": conversation.accepted_at.isoformat() if conversation.accepted_at else None
             },
             "other_user": {
-                "regno": initiator_user.Regno,
-                "Regno": initiator_user.Regno,
-                "name": initiator_user.Name,
-                "Name": initiator_user.Name,
-                "profile_picture_id": profile_picture_url,
+                "regno": initiator_user.regno,
+                "regno": initiator_user.regno,
+                "name": initiator_user.name,
+                "name": initiator_user.name,
+                "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
-                "which_class": initiator_user.which_class,
+                "class_name": initiator_user.class_name,
                 "bio": initiator_user.bio,
                 "interests": initiator_user.interests or []
             },
             "is_initiator": False,
-            "is_blocked": conversation_doc.get("isBlocked", False),
-            "blocked_by": conversation_doc.get("blockedBy", None)
+            "is_blocked": conversation_doc.get("is_blocked", False),
+            "blocked_by": conversation_doc.get("blocked_by", None)
         }
         
         conversations.append(conversation_data)
@@ -615,7 +615,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
         match = Match(**match_doc)
 
         # Verify the current user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
         # Get conversation for this match
@@ -626,7 +626,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
         conversation = Conversation(**conversation_doc)
         
         # Determine if current user is initiator
-        is_initiator = current_user.Regno == match.user_1_regno
+        is_initiator = current_user.regno == match.user_1_regno
         
         # Get the other user's info
         other_user_regno = match.user_2_regno if is_initiator else match.user_1_regno
@@ -635,7 +635,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Other user not found.")
         
         other_user = UserDetails(**other_user_doc)
-        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_id)
+        profile_picture_url = storage_service.get_signed_profile_url(other_user.profile_picture_url)
         
         # Check if match is expired
         current_time = datetime.now(timezone.utc)
@@ -655,22 +655,22 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             "conversation": {
                 "id": str(conversation.id),
                 "status": conversation.status,
-                "initiator_id": conversation.initiatorId,
-                "receiver_id": conversation.receiverId,
-                "created_at": conversation.createdAt.isoformat(),
-                "accepted_at": conversation.acceptedAt.isoformat() if conversation.acceptedAt else None
+                "initiator_regno": conversation.initiator_regno,
+                "receiver_regno": conversation.receiver_regno,
+                "created_at": conversation.created_at.isoformat(),
+                "accepted_at": conversation.accepted_at.isoformat() if conversation.accepted_at else None
             },
             "other_user": {
-                "regno": other_user.Regno,
-                "name": other_user.Name,
-                "profile_picture_id": profile_picture_url,
-                "which_class": other_user.which_class,
+                "regno": other_user.regno,
+                "name": other_user.name,
+                "profile_picture_url": profile_picture_url,
+                "class_name": other_user.class_name,
                 "bio": other_user.bio,
                 "interests": other_user.interests or []
             },
             "is_initiator": is_initiator,
-            "is_blocked": conversation_doc.get("isBlocked", False),
-            "blocked_by": conversation_doc.get("blockedBy", None)
+            "is_blocked": conversation_doc.get("is_blocked", False),
+            "blocked_by": conversation_doc.get("blocked_by", None)
         }
         
         return conversation_data
@@ -700,7 +700,7 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
         match = Match(**match_doc)
         
         # Verify user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
         
         # Get the conversation
@@ -709,14 +709,14 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
         # Update conversation to blocked status
-        _save_conversation(db, conversation_doc["_id"], isBlocked=True, blockedBy=current_user.Regno)
+        _save_conversation(db, conversation_doc["id"], is_blocked=True, blocked_by=current_user.regno)
         
-        logger.info(f"User {current_user.Regno} blocked conversation for match {match_id}")
+        logger.info(f"User {current_user.regno} blocked conversation for match {match_id}")
         
         return {
             "status": "success",
             "message": "Conversation blocked successfully.",
-            "blocked_by": current_user.Regno
+            "blocked_by": current_user.regno
         }
         
     except HTTPException:
@@ -744,7 +744,7 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
         match = Match(**match_doc)
         
         # Verify user is part of the match
-        if current_user.Regno not in [match.user_1_regno, match.user_2_regno]:
+        if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
         
         # Get the conversation
@@ -753,13 +753,13 @@ def unblock_conversation_service(current_user: UserDetails, match_id_str: str, d
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
         
         # Check if user is the one who blocked
-        if conversation_doc.get("blockedBy") != current_user.Regno:
+        if conversation_doc.get("blocked_by") != current_user.regno:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only unblock if you were the one who blocked.")
         
         # Update conversation to unblocked
-        _save_conversation(db, conversation_doc["_id"], isBlocked=False, blockedBy=None)
+        _save_conversation(db, conversation_doc["id"], is_blocked=False, blocked_by=None)
         
-        logger.info(f"User {current_user.Regno} unblocked conversation for match {match_id}")
+        logger.info(f"User {current_user.regno} unblocked conversation for match {match_id}")
         
         return {
             "status": "success",

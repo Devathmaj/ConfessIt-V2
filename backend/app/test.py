@@ -1,6 +1,5 @@
 import psycopg
 from .postgres import PostgresClient
-from .models import UserDetails
 import secrets
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -29,42 +28,25 @@ def main():
 
         # Define the user and admin documents
         users = [
-            UserDetails(
-                Regno="user",
-                Name="Test User",
-                email="user@test.com",
-                which_class="Test_Class",
-                profile_picture_id="random_string_1",
-                gender="male",
-                isMatchmaking=True,
-                isNotifications=True,
-            ),
-            UserDetails(
-                Regno="admin",
-                Name="Test Admin",
-                email="admin@test.com",
-                which_class="Test_Class",
-                profile_picture_id="random_string_2",
-                gender="male",
-                isMatchmaking=True,
-                isNotifications=True,
-            ),
+            {"regno": "user", "name": "Test User", "email": "user@test.com", "class_name": "Test_Class",
+             "profile_picture_url": "random_string_1", "gender": "male", "matchmaking_enabled": True,
+             "notifications_enabled": True},
+            {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "class_name": "Test_Class",
+             "profile_picture_url": "random_string_2", "gender": "male", "matchmaking_enabled": True,
+             "notifications_enabled": True, "role": "admin"},
         ]
 
         issued_tokens = []
         with client.sessions.begin() as session:
             for user in users:
-                user_row = session.scalar(select(UserRecord).where(UserRecord.email == str(user.email)))
+                user_row = session.scalar(select(UserRecord).where(UserRecord.email == user["email"]))
                 if not user_row:
-                    user_row = UserRecord(Regno=user.Regno, Name=user.Name, email=str(user.email),
-                        which_class=user.which_class, profile_picture_id=user.profile_picture_id,
-                        gender=user.gender, isMatchmaking=user.isMatchmaking,
-                        isNotifications=user.isNotifications)
+                    user_row = UserRecord(**user)
                     session.add(user_row)
                     session.flush()
-                    print(f"Successfully inserted user: {user.Name}")
+                    print(f"Successfully inserted user: {user['name']}")
                 else:
-                    print(f"User with email {user.email} already exists.")
+                    print(f"User with email {user['email']} already exists.")
 
                 token = create_magic_link_token()
                 issued_at = datetime.now(timezone.utc)
@@ -75,7 +57,7 @@ def main():
                     session_status="issued",
                 )
                 session.add(token_row)
-                issued_tokens.append((user.Name, str(user.email), token))
+                issued_tokens.append((user["name"], user["email"], token))
 
         for name, email, token in issued_tokens:
             print(f"Successfully stored token for {name}.")

@@ -33,7 +33,7 @@
 ## 1. Executive Summary
 
 **Project Overview:**
-ConfessIt is a full-stack web application serving as a safe, anonymous space for users (likely students within an institution, given fields like `Regno` and `which_class`) to share thoughts, confess feelings, and connect. 
+ConfessIt is a full-stack web application serving as a safe, anonymous space for users (likely students within an institution, given fields like `regno` and `class_name`) to share thoughts, confess feelings, and connect. 
 
 **Business Purpose:**
 To foster community engagement through anonymity and gamified social interaction, providing tools like anonymous confessions, matchmaking, and "love notes".
@@ -213,7 +213,7 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 ### `app.models` (Domain Entities)
 - **Responsibility:** Single source of truth for data structures.
 - **Key Models:** `Confession`, `ConfessionComment`, `UserDetails`, `LoginToken`, `LoveNote`, `Match`, `Conversation`, `Message`.
-- **Logic:** Uses Pydantic to ensure that IDs map correctly between standard strings and string IDs (using `alias="_id"`).
+- **Logic:** Uses Pydantic models with canonical `id` fields and snake_case API fields.
 
 ### `src/contexts/AuthContext` (Frontend State)
 - **Responsibility:** Manage global authentication state.
@@ -237,12 +237,12 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 **Technology:** PostgreSQL
 
 **Relational Tables & Indexes:**
-1. **`UserDetails`**: Users. Indexed uniquely on `Regno`. Indexed on `email`, `user_role`.
-2. **`Confessions`**: Posts. Indexed on `timestamp`, `user_id`, `is_approved`.
-3. **`LoginTokens`**: Auth tokens. Indexed on `expires_at`, `consumed_at`.
-4. **`matches`**: Matchmaking results. Indexed on `[user_1_regno, user_2_regno]`.
-5. **`conversations` & `messages`**: Chat features. Indexed heavily on `match_id`, `participants`, `timestamp`.
-6. **`LoveNotes`**: Sent notes. Indexed on `sender_id`, `recipient_id`, `status`.
+1. **`users`**: Indexed uniquely on `regno` and `email`, and indexed on `role` and `class_name`.
+2. **`confessions`**: Indexed on `created_at`, `author_id`, and `approved`.
+3. **`login_tokens`**: Indexed on `user_id`, `token_hash`, `expires_at`, and `session_status`.
+4. **`matches`**: Indexed on each participant and on `created_at` / `expires_at`.
+5. **`conversations` and `messages`**: Indexed on participant keys, `match_id`, `conversation_id`, and `created_at`.
+6. **`love_notes`**: Indexed on `sender_id`, `recipient_id`, `status`, and `created_at`.
 
 **Data Lifecycle:** Confessions and messages persist indefinitely unless deleted by admins. Login tokens logically expire and are marked `consumed`.
 
@@ -265,8 +265,8 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 
 ### Conversations
 - `POST /conversations/request`: Initiate chat with match.
-- `GET /conversations/{matchId}/messages`: Fetch chat history.
-- `POST /conversations/{matchId}/messages`: Send message.
+- `GET /messages/{conversation_id}`: Fetch chat history.
+- `POST /messages/send`: Send a message with `conversation_id` and `body`.
 
 ---
 
@@ -276,7 +276,7 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 Stateless JWT (JSON Web Tokens). Issued upon successful Magic Link verification. Stored locally by the client (`localStorage.getItem('accessToken')`). Passed as Bearer tokens in the `Authorization` header via Axios.
 
 **Authorization:**
-- **Role System:** Controlled by `user_role` in `UserDetails` (values: `"user"`, `"admin"`).
+- **Role System:** Controlled by `role` in `UserDetails` (values: `"user"`, `"admin"`).
 - **Security Boundaries:** Backend endpoints verify roles via dependencies. Frontend uses the `AdminRoute` wrapper component to prevent unauthorized UI access.
 
 ---
@@ -365,7 +365,7 @@ This is a heavily instrumented project.
 ## 21. Performance Analysis
 
 **Optimization:**
-- Heavy reliance on PostgreSQL indexes (e.g., `idx_timestamp_desc`, `idx_user_regno`) created at startup ensures fast querying even at scale.
+- PostgreSQL indexes are declared alongside SQLAlchemy table models and created from current metadata at startup.
 - Frontend uses TanStack Query to eliminate redundant API requests.
 
 **Bottlenecks:**
@@ -434,5 +434,5 @@ graph TD
 
 - **Email Infrastructure:** It is inferred that an external email provider (like SendGrid or SMTP) is configured via environment variables to handle the Magic Link dispatches, although the specific integration wasn't deeply examined.
 - **Cloudinary:** Love-note and profile image assets are stored as URLs in PostgreSQL.
-- **User Demographics:** Based on the presence of `Regno` (Registration Number) and `which_class`, it is assumed this app is targeted at a specific university or school demographic.
+- **User Demographics:** Based on the presence of `regno` (Registration Number) and `class_name`, it is assumed this app is targeted at a specific university or school demographic.
 - **WebSocket Usage:** The `main.py` has a commented section for `WebSocket Endpoints`, inferring that real-time chat might currently rely on polling or is in transition to WebSockets.

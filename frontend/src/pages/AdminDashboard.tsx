@@ -130,10 +130,10 @@ interface ActiveSessionRecord {
   device?: string | null;
   user?: {
     id?: string | null;
-    Name?: string | null;
-    Regno?: string | null;
+    name?: string | null;
+    regno?: string | null;
     email?: string | null;
-    user_role?: string | null;
+    role?: string | null;
     is_blocked?: boolean;
   };
 }
@@ -149,7 +149,7 @@ export const AdminDashboard = () => {
   const [activeSessionsLoading, setActiveSessionsLoading] = useState(false);
 
   useEffect(() => {
-    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_id ?? null));
+    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
 
     const fetchStats = async () => {
       try {
@@ -326,7 +326,7 @@ export const AdminDashboard = () => {
             <div>
               <p className="text-sm uppercase tracking-wider text-white/60">Administrator Dashboard</p>
               <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">
-                Welcome back, {user?.Name ?? 'Admin'}
+                Welcome back, {user?.name ?? 'Admin'}
               </h1>
               <p className="mt-2 max-w-xl text-sm text-white/70">
                 Review community activity, moderate submissions, and keep ConfessIt safe for everyone.
@@ -344,13 +344,13 @@ export const AdminDashboard = () => {
                     }}
                   />
                 ) : (
-                  <span className="text-2xl font-semibold">{user?.Name?.[0] ?? 'A'}</span>
+                  <span className="text-2xl font-semibold">{user?.name?.[0] ?? 'A'}</span>
                 )}
               </div>
               <div>
                 <p className="text-sm text-white/60">Signed in as</p>
                 <p className="text-base font-medium">{user?.email}</p>
-                <p className="text-xs text-white/50">Reg. No. {user?.Regno}</p>
+                <p className="text-xs text-white/50">Reg. No. {user?.regno}</p>
               </div>
               <Button
                 onClick={handleLogout}
@@ -448,7 +448,7 @@ export const AdminDashboard = () => {
               <ul className="space-y-3">
                 {activeSessions.map((session) => {
                   const user = session.user || {};
-                  const displayName = user.Name || user.Regno || 'Unknown user';
+                  const displayName = user.name || user.regno || 'Unknown user';
                   const lastSeen = session.last_seen ? formatDateTimeDDMMYYYY(session.last_seen) : 'Unknown';
                   return (
                     <li key={session.session_id} className="rounded-2xl border border-border bg-muted/30 p-4">
@@ -457,14 +457,14 @@ export const AdminDashboard = () => {
                           <p className="text-sm font-medium text-foreground">{displayName}</p>
                           <p className="text-xs text-muted-foreground">
                             {user.email || 'No email on file'}
-                            {user.Regno ? ` · ${user.Regno}` : ''}
+                            {user.regno ? ` · ${user.regno}` : ''}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">{session.status}</Badge>
                           {user.is_blocked && <Badge variant="destructive">Blocked</Badge>}
-                          <Badge variant={user.user_role === 'admin' ? 'default' : 'secondary'}>
-                            {user.user_role || 'user'}
+                          <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+                            {user.role || 'user'}
                           </Badge>
                         </div>
                       </div>

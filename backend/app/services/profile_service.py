@@ -20,9 +20,9 @@ class UserProfileUpdate(BaseModel):
     emoji: Optional[str] = None
     bio: Optional[str] = None
     interests: Optional[List[str]] = None
-    isMatchmaking: Optional[bool] = None
-    isNotifications: Optional[bool] = None
-    isLovenotesRecieve: Optional[bool] = None
+    matchmaking_enabled: Optional[bool] = None
+    notifications_enabled: Optional[bool] = None
+    love_notes_receive_enabled: Optional[bool] = None
 
 
 async def update_user_profile_service(
@@ -40,22 +40,27 @@ async def update_user_profile_service(
         )
 
     with db.sessions.begin() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno).with_for_update())
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno).with_for_update())
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        field_map = {
+            "emoji": "emoji", "bio": "bio", "interests": "interests",
+            "matchmaking_enabled": "matchmaking_enabled", "notifications_enabled": "notifications_enabled",
+            "love_notes_receive_enabled": "love_notes_receive_enabled",
+        }
         for field, value in update_data.items():
-            setattr(user, field, value)
+            setattr(user, field_map[field], value)
         updated_user_doc = {
-            "_id": str(user.id), "Regno": user.Regno, "Name": user.Name,
+            "id": str(user.id), "regno": user.regno, "name": user.name,
             "email": user.email, "emoji": user.emoji, "bio": user.bio,
-            "which_class": user.which_class, "profile_picture_id": user.profile_picture_id,
+            "class_name": user.class_name, "profile_picture_url": user.profile_picture_url,
             "gender": user.gender, "interests": user.interests or [],
-            "isMatchmaking": user.isMatchmaking, "isNotifications": user.isNotifications,
-            "isLovenotesRecieve": user.isLovenotesRecieve, "isLovenotesSend": user.isLovenotesSend,
+            "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
+            "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,
             "is_blocked": user.is_blocked, "reported_count": user.reported_count,
-            "last_login_time": user.last_login_time, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-            "last_login_user_agent": user.last_login_user_agent, "user_role": user.user_role,
-            "last_matchmaking_time": user.last_matchmaking_time,
+            "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
+            "last_login_user_agent": user.last_login_user_agent, "role": user.role,
+            "last_matchmaking_at": user.last_matchmaking_at,
         }
 
     enriched_doc = storage_service.with_profile_signed_url(updated_user_doc) or updated_user_doc
@@ -78,16 +83,16 @@ async def upload_profile_picture_service(
         logger.error(f"Unexpected error while validating profile image: {exc}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
 
-    previous_identifier = current_user.profile_picture_id
+    previous_identifier = current_user.profile_picture_url
     if previous_identifier:
         try:
             storage_service.delete_profile_asset(previous_identifier)
         except HTTPException as exc:
-            logger.warning(f"Failed to delete previous profile asset for {current_user.Regno}: {exc.detail}")
+            logger.warning(f"Failed to delete previous profile asset for {current_user.regno}: {exc.detail}")
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Unexpected error deleting previous profile asset for {current_user.Regno}: {exc}")
+            logger.warning(f"Unexpected error deleting previous profile asset for {current_user.regno}: {exc}")
 
-    upload_target_name = current_user.Regno or "user"
+    upload_target_name = current_user.regno or "user"
     try:
         upload_result = storage_service.upload_profile_image(
             file=file,
@@ -96,21 +101,21 @@ async def upload_profile_picture_service(
         )
         storage_service.verify_uploaded_asset("profile", upload_result["object_path"])
     except HTTPException as exc:
-        logger.error(f"Cloudinary upload failed for user {current_user.Regno}: {exc.detail}")
+        logger.error(f"Cloudinary upload failed for user {current_user.regno}: {exc.detail}")
         raise exc
     except Exception as exc:  # pragma: no cover - defensive
-        logger.error(f"Unexpected error uploading profile image for {current_user.Regno}: {exc}")
+        logger.error(f"Unexpected error uploading profile image for {current_user.regno}: {exc}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload profile picture")
 
     # Store the full Cloudinary URL in the database (not just the object path)
     cloudinary_url = upload_result["cloudinary_url"]
     with db.sessions.begin() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.Regno == current_user.Regno))
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
         if user:
-            user.profile_picture_id = cloudinary_url
+            user.profile_picture_url = cloudinary_url
 
     return {
-        "profile_picture_id": cloudinary_url,
+        "profile_picture_url": cloudinary_url,
         "url": cloudinary_url,
         "message": "Profile picture uploaded successfully",
     }
