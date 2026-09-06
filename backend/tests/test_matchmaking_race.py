@@ -59,6 +59,20 @@ def db():
     return get_postgres_client()
 
 
+@pytest.fixture(autouse=True)
+def deterministic_pairing(monkeypatch):
+    """Switch off the rare same-gender roll for every test in this file.
+
+    ``SAME_GENDER_MATCH_CHANCE`` is a real feature: on a 0.1% roll the candidate filter
+    flips from "different gender" to "same gender". Most tests here seed exactly one
+    opposite-gender partner, so on that rare roll there is no candidate at all and the
+    request 404s instead of matching -- which is correct behaviour, but it made these
+    tests fail roughly once every few hundred runs for no real reason. The same-gender
+    path is covered deliberately by ``test_rare_same_gender_matching_can_apply``.
+    """
+    monkeypatch.setattr(matchmaking_service, "SAME_GENDER_MATCH_CHANCE", 0)
+
+
 def test_single_request_creates_exactly_one_match(db):
     make_user(db, "alice", "female")
     for regno in ("bob", "carol", "dave"):
@@ -170,6 +184,38 @@ def test_dead_cache_globals_are_gone():
     """The obfuscated-regno cache was never written, so the whole branch was dead."""
     for name in ("_cache_invalidation_key", "_cache_reallocation_key"):
         assert not hasattr(matchmaking_service, name), f"{name} is still dead code"
+
+
+def test_opposite_gender_pairing_is_the_default(db):
+    """Without the rare roll, the candidate filter is strictly opposite-gender.
+
+    Kept separate from the same-gender test on purpose: each test starts from a truncated
+    table, so "the only eligible partner" is unambiguous in both directions.
+    """
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+
+    result = matchmaking_service.find_match_service(as_user(db, "alice"), db)
+    assert result["status"] == "matched"
+    assert result["matched_with"]["regno"] == "bob"
+    assert result["is_rare_match"] is False
+
+
+def test_rare_same_gender_matching_can_apply(db, monkeypatch):
+    """The rare same-gender roll is a real feature, so pin its behaviour explicitly.
+
+    The suite-wide fixture disables the roll; this test re-enables it to prove the
+    filter genuinely switches to same-gender candidates rather than being dead code.
+    """
+    make_user(db, "erin", "female")
+    make_user(db, "frank", "female")
+
+    monkeypatch.setattr(matchmaking_service, "SAME_GENDER_MATCH_CHANCE", 100)
+    result = matchmaking_service.find_match_service(as_user(db, "erin"), db)
+
+    assert result["status"] == "matched"
+    assert result["matched_with"]["regno"] == "frank"
+    assert result["is_rare_match"] is True
 
 
 def test_concurrent_requests_never_double_match_a_pair(db):

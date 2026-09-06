@@ -87,15 +87,6 @@ async def upload_profile_picture_service(
         logger.error(f"Unexpected error while validating profile image: {exc}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
 
-    previous_identifier = current_user.profile_picture_url
-    if previous_identifier:
-        try:
-            storage_service.delete_profile_asset(previous_identifier)
-        except HTTPException as exc:
-            logger.warning(f"Failed to delete previous profile asset for {current_user.regno}: {exc.detail}")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Unexpected error deleting previous profile asset for {current_user.regno}: {exc}")
-
     upload_target_name = current_user.regno or "user"
     try:
         upload_result = storage_service.upload_profile_image(
@@ -111,6 +102,7 @@ async def upload_profile_picture_service(
         logger.error(f"Unexpected error uploading profile image for {current_user.regno}: {exc}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload profile picture")
 
+
     # Store the full Cloudinary URL in the database (not just the object path)
     cloudinary_url = upload_result["cloudinary_url"]
     with db.sessions.begin() as session:
@@ -123,6 +115,31 @@ async def upload_profile_picture_service(
     delivery_url = asset_delivery_service.build_delivery_url(
         kind="profile", stored_identifier=cloudinary_url, regno=current_user.regno
     )
+
+    # Only now that the replacement is stored do we retire the old object. Deleting it
+    # before the upload was attempted meant a failed upload left the account pointing at
+    # an asset that had already been destroyed, which no retry could recover from.
+    # ``delete_profile_asset`` re-checks that the path is under this account's folder, so
+    # a stored value naming somebody else's object is refused rather than acted on.
+    previous_identifier = current_user.profile_picture_url
+    if previous_identifier:
+        previous_path = storage_service.normalize_stored_path(previous_identifier, "profile")
+        new_path = storage_service.normalize_stored_path(cloudinary_url, "profile")
+        if previous_path and previous_path != new_path:
+            try:
+                storage_service.delete_profile_asset(
+                    previous_identifier, owner_regno=current_user.regno
+                )
+            except HTTPException as exc:
+                # The new picture is already saved, so a stale object is a cleanup
+                # problem, not a reason to fail the request.
+                logger.warning(
+                    f"Failed to delete previous profile asset for {current_user.regno}: {exc.detail}"
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    f"Unexpected error deleting previous profile asset for {current_user.regno}: {exc}"
+                )
 
     return {
         "profile_picture_url": delivery_url or cloudinary_url,

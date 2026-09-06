@@ -687,39 +687,118 @@ class CloudinaryStorageService:
         """Used to delete a file from the default bucket."""
         return self.delete_file_from_bucket(self.bucket_name, object_path)
 
-    def delete_file_from_bucket(self, bucket_name: str, object_path: Optional[str]) -> bool:
-        """Used to delete a file from a specified bucket."""
+    def delete_file_from_bucket(
+        self,
+        bucket_name: str,
+        object_path: Optional[str],
+        *,
+        actor: Optional[str] = None,
+        asset_kind: Optional[str] = None,
+    ) -> bool:
+        """Used to delete a file from a specified bucket.
+
+        ``actor`` and ``asset_kind`` are recorded on both the success and failure paths.
+        Destructive Cloudinary calls are otherwise invisible after the fact: a wrong
+        public_id is destroyed immediately and there is no way to tell afterwards which
+        account caused it.
+        """
         if not object_path:
             return False
         if not self.enabled:
             return False
+        public_id = self._build_public_id(bucket_name, object_path)
         try:
-            public_id = self._build_public_id(bucket_name, object_path)
             result = cloudinary_destroy(public_id, resource_type="image", invalidate=True)
-            return result.get("result") in {"ok", "not found"}
         except Exception as exc:
-            print(f"Error deleting from Cloudinary (bucket={bucket_name}, path={object_path}): {exc}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(exc)}")
+            # Log the full detail server-side; the client only ever sees a generic
+            # message, because the raw Cloudinary error embeds the bucket and public_id.
+            logger.error(
+                "Cloudinary delete failed bucket=%s kind=%s actor=%s public_id=%s: %s",
+                bucket_name, asset_kind, actor, public_id, exc, exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail="Failed to delete file")
+        deleted = result.get("result") in {"ok", "not found"}
+        logger.info(
+            "Cloudinary delete bucket=%s kind=%s actor=%s public_id=%s result=%s",
+            bucket_name, asset_kind, actor, public_id, result.get("result"),
+        )
+        return deleted
 
-    def delete_profile_asset(self, identifier: Optional[str]) -> bool:
-        """Used to delete a user's profile asset."""
+    @staticmethod
+    def asset_owner_segment(object_path: Optional[str]) -> Optional[str]:
+        """Return the account folder that owns ``object_path``, or None if unknowable.
+
+        Every generated path is ``{owner}/{token}/{filename}`` (see
+        ``generate_object_path``), so the first segment is the owner. This is the same
+        fact ``asset_delivery_service`` relies on to authorise reads; deletion has to
+        agree with it, or an account could be unable to see an asset yet still destroy it.
+        """
+        if not object_path:
+            return None
+        head = str(object_path).split("/", 1)[0].strip()
+        return head or None
+
+    def delete_profile_asset(
+        self, identifier: Optional[str], *, owner_regno: str
+    ) -> bool:
+        """Used to delete a user's profile asset, refusing anything they do not own.
+
+        The identifier is a stored column, not a trusted input, and the URL parser
+        accepts any host -- so a value that was copied, or written by an admin creating
+        a user, can name a different account's object. Requiring the parsed path to sit
+        under the caller's own folder makes that impossible regardless of how the column
+        came to hold the value.
+
+        ``owner_regno`` is keyword-only and required so that no new call site can forget
+        it: an unowned delete is exactly the bug this guards against.
+        """
         object_path = self.normalize_stored_path(identifier, "profile")
-        return self.delete_file_from_bucket(self.bucket_name, object_path)
+        if not object_path:
+            return False
+
+        if not owner_regno or not str(owner_regno).strip():
+            # Without a known owner there is nothing to check against, so refuse rather
+            # than risk destroying an asset that belongs to somebody else.
+            logger.warning(
+                "Refused profile asset delete: no owning account supplied (actor=%s, public_id=%s)",
+                owner_regno, self._build_public_id(self.bucket_name, object_path),
+            )
+            return False
+
+        owner_segment = self.asset_owner_segment(object_path)
+        if owner_segment != str(owner_regno).strip():
+            logger.warning(
+                "Refused profile asset delete: path is not owned by the requesting "
+                "account (actor=%s, path_owner=%s, public_id=%s)",
+                owner_regno, owner_segment,
+                self._build_public_id(self.bucket_name, object_path),
+            )
+            return False
+
+        return self.delete_file_from_bucket(
+            self.bucket_name, object_path, actor=owner_regno, asset_kind="profile"
+        )
 
     def delete_event_asset(self, identifier: Optional[str]) -> bool:
         """Used to delete an asset associated with an event."""
         object_path = self.normalize_stored_path(identifier, "events")
-        return self.delete_file_from_bucket(self.events_bucket, object_path)
+        return self.delete_file_from_bucket(
+            self.events_bucket, object_path, asset_kind="events"
+        )
 
     def delete_gallery_asset(self, identifier: Optional[str]) -> bool:
         """Used to delete an asset from the gallery."""
         object_path = self.normalize_stored_path(identifier, "gallery")
-        return self.delete_file_from_bucket(self.gallery_bucket, object_path)
+        return self.delete_file_from_bucket(
+            self.gallery_bucket, object_path, asset_kind="gallery"
+        )
 
     def delete_committee_asset(self, identifier: Optional[str]) -> bool:
         """Used to delete a committee-related asset."""
         object_path = self.normalize_stored_path(identifier, "committee")
-        return self.delete_file_from_bucket(self.gallery_bucket, object_path)
+        return self.delete_file_from_bucket(
+            self.gallery_bucket, object_path, asset_kind="committee"
+        )
 
     def upload_love_note_image(self, *, image_base64: str, sender_name: str) -> Dict[str, Any]:
         """Upload a love note image (base64) to Cloudinary with a secure random URL.
