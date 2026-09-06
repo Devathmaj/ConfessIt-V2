@@ -33,6 +33,13 @@ def _user_payload(user: UserRecord) -> dict:
         "last_matchmaking_at": user.last_matchmaking_at,
     }
 
+def _ensure_not_blocked(user: UserRecord) -> None:
+    if user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been blocked. Contact an administrator.",
+        )
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -78,6 +85,7 @@ def verify_token_service(token: str, db: Database) -> UserDetails:
         user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         if user is None:
             raise credentials_exception
+        _ensure_not_blocked(user)
         return UserDetails(**_user_payload(user))
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends(get_db)) -> UserDetails:
@@ -103,6 +111,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends
         user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         if user is None:
             raise credentials_exception
+        _ensure_not_blocked(user)
         return UserDetails(**_user_payload(user))
 
 def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db: Database = Depends(get_db)) -> Optional[UserDetails]:
@@ -119,7 +128,9 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
             return None
         with db.sessions() as session:
             user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
-            return UserDetails(**_user_payload(user)) if user else None
+            if user is None or user.is_blocked:
+                return None
+            return UserDetails(**_user_payload(user))
     except jwt.PyJWTError:
         return None
 
@@ -179,6 +190,12 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
             LoginTokenRecord.expires_at > now,
         ).with_for_update())
         if login_token:
+            user = session.get(UserRecord, login_token.user_id)
+            if user is not None and user.is_blocked:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Your account has been blocked. Contact an administrator.",
+                )
             login_token.used = True
             login_token.consumed_at = now
 
