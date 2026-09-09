@@ -80,6 +80,21 @@ def client():
     with TestClient(app) as c:
         yield c
 
+
+@pytest.fixture
+def admin_client():
+    """A client whose ``get_current_user`` resolves to an admin.
+
+    ``admin_required`` depends on ``get_current_user``, so overriding that single
+    dependency is enough to reach the admin routes.
+    """
+    app.dependency_overrides[get_current_user] = override_get_admin_user
+    try:
+        yield TestClient(app, follow_redirects=False)
+    finally:
+        app.dependency_overrides[get_current_user] = override_get_current_user
+
+
 @pytest.fixture(scope="module")
 def db():
     return test_db

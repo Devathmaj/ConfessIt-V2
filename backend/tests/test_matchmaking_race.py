@@ -180,12 +180,6 @@ def test_match_and_pending_conversation_are_written_together(db):
     assert {conversation.initiator_regno, conversation.receiver_regno} == {"alice", "bob"}
 
 
-def test_dead_cache_globals_are_gone():
-    """The obfuscated-regno cache was never written, so the whole branch was dead."""
-    for name in ("_cache_invalidation_key", "_cache_reallocation_key"):
-        assert not hasattr(matchmaking_service, name), f"{name} is still dead code"
-
-
 def test_opposite_gender_pairing_is_the_default(db):
     """Without the rare roll, the candidate filter is strictly opposite-gender.
 

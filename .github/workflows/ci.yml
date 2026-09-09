@@ -32,32 +32,53 @@ jobs:
     defaults:
       run:
         working-directory: ./backend
+    env:
+      # One credential block, so the service, the CREATE DATABASE step and the suite
+      # cannot drift apart the way a duplicated literal in three places would.
+      POSTGRES_USER: confessit
+      POSTGRES_PASSWORD: ConfessItLocalPassword
+      DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt"
+      TEST_DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt_Test"
     services:
-      mongodb:
-        image: mongo:latest
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: confessit
+          POSTGRES_PASSWORD: ConfessItLocalPassword
+          POSTGRES_DB: ConfessIt
         ports:
-          - 27017:27017
+          - 5432:5432
+        # The suite truncates TEST_DATABASE_URL before every test, so the server has to be
+        # accepting connections before pytest starts; otherwise the first session fails on
+        # a connection refused and the whole run is a false negative.
+        options: >-
+          --health-cmd "pg_isready -U confessit -d ConfessIt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          # Matches backend/Dockerfile, so the suite runs on the interpreter the app ships.
+          python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: './backend/requirements.txt'
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Create the test database
+        # tests/conftest.py refuses to start unless TEST_DATABASE_URL names a database
+        # other than DATABASE_URL, because its clear_db fixture truncates every table.
+        run: |
+          PGPASSWORD="$POSTGRES_PASSWORD" psql \
+            -h localhost -U "$POSTGRES_USER" -d ConfessIt \
+            -c 'CREATE DATABASE "ConfessIt_Test";'
       - name: Run tests
         env:
-          CI: "true"
-          MONGO_URI: "mongodb://localhost:27017/"
-          MONGODB_URI: "mongodb://localhost:27017/"
-          DATABASE_NAME: "ConfessDB_Test"
-          CLOUD: "true"
           PYTHONPATH: .
-          MONGO_PASSWORD: "testpassword"
         run: pytest
 
   docker-build:

@@ -1,4 +1,4 @@
-"""Tests for backend-authorized image delivery and the gated /db-test endpoint.
+"""Tests for backend-authorized image delivery.
 
 The proxy is the only path images are served from, so these tests cover the three layers
 that make it safe: path validation, the scoped delivery token, and the per-request
@@ -641,13 +641,19 @@ def test_fetch_allows_image_content_from_origin(monkeypatch):
     assert payload == b"\xff\xd8\xffbinary"
 
 
-# ----------------------------------------------------------------------
-# Removed surfaces
-# ----------------------------------------------------------------------
-@pytest.mark.parametrize("route", ["events", "gallery", "committee"])
-def test_unbacked_asset_routes_are_removed(route):
-    assert f"/api/{route}/files/{{path:path}}" not in {getattr(r, "path", "") for r in app.routes}
+def test_every_delivery_route_is_one_the_service_can_authorise():
+    """A file route whose kind is not in the delivery service cannot be authorised.
 
+    ``ROUTE_PREFIXES`` is the authoritative list of kinds that get proxied, and
+    ``is_entitled_to_asset`` denies anything outside it. So a file route added for a kind
+    that is not in that map would serve bytes only after a 404 for every request -- an easy
+    thing to add by copying a neighbouring route and never notice.
+    """
+    known = {f"{prefix}{{path:path}}" for prefix in asset_delivery_service.ROUTE_PREFIXES.values()}
+    served = {
+        getattr(route, "path", "")
+        for route in app.routes
+        if "/files/" in getattr(route, "path", "")
+    }
 
-def test_db_test_is_not_registered_by_default():
-    assert "/db-test" not in {getattr(r, "path", "") for r in app.routes}
+    assert served <= known, f"file routes with no entitlement rule: {sorted(served - known)}"

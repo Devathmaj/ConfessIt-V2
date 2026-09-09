@@ -40,28 +40,29 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 def upload(data: bytes, *, declared=None, filename: str = "pic.png") -> UploadFile:
-    """An UploadFile over ``data``.
+    """An ``UploadFile`` over ``data``, carrying the size the multipart parser recorded."""
+    return UploadFile(
+        filename=filename,
+        file=io.BytesIO(data),
+        size=len(data) if declared is None else declared,
+    )
 
-    ``size`` is assigned after construction rather than passed in, because the pinned
-    Starlette may predate the constructor argument. The result is the same either way:
-    what the multipart parser would have populated.
+
+class UndeclaredSizeUpload:
+    """An upload part with no ``size``, so only the chunked read can bound it.
+
+    The multipart parser fills ``UploadFile.size`` from the part headers, but a chunked
+    request has no part headers to read. The declared-size guard then has nothing to check,
+    and the bounded read is the only thing standing between that client and the heap -- so
+    it has to hold for an upload that never declared a length in the first place.
     """
-    f = UploadFile(filename=filename, file=io.BytesIO(data))
-    f.size = len(data) if declared is None else declared
-    return f
 
-
-class LegacyUpload:
-    """An upload with no ``size`` attribute, as older Starlette versions produced.
-
-    The bounded read must still hold, because a chunked request carries no declared
-    length to check in the first place.
-    """
-
-    def __init__(self, stream):
+    def __init__(self, stream, *, size=None):
         self.file = stream
         self.filename = "pic.png"
         self.content_type = "image/png"
+        if size is not None:
+            self.size = size
 
     async def read(self, size: int = -1):
         return self.file.read(size)
@@ -125,7 +126,7 @@ async def test_unbounded_body_is_cut_off_partway_through():
     has to enforce the limit rather than trusting a header.
     """
     stream = EndlessStream()
-    f = LegacyUpload(stream)
+    f = UndeclaredSizeUpload(stream)
 
     with pytest.raises(HTTPException) as excinfo:
         await storage_service.read_upload_capped(f)
@@ -140,8 +141,7 @@ async def test_unbounded_body_is_cut_off_partway_through():
 async def test_chunked_read_understated_size_is_still_bounded():
     """A part that lies about its size (declared 1 byte, actually huge) is still cut off."""
     stream = EndlessStream()
-    f = LegacyUpload(stream)
-    f.size = 1
+    f = UndeclaredSizeUpload(stream, size=1)
 
     with pytest.raises(HTTPException) as excinfo:
         await storage_service.read_upload_capped(f)
@@ -153,14 +153,14 @@ async def test_chunked_read_understated_size_is_still_bounded():
 @pytest.mark.asyncio
 async def test_chunked_body_within_the_cap_is_returned_whole():
     data = png_bytes(8, 8)
-    f = LegacyUpload(io.BytesIO(data))
+    f = UndeclaredSizeUpload(io.BytesIO(data))
 
     assert await storage_service.read_upload_capped(f) == data
 
 
 @pytest.mark.asyncio
 async def test_explicit_cap_is_honoured():
-    f = LegacyUpload(io.BytesIO(b"x" * 5000))
+    f = UndeclaredSizeUpload(io.BytesIO(b"x" * 5000))
 
     with pytest.raises(HTTPException) as excinfo:
         await storage_service.read_upload_capped(f, max_bytes=1000)
@@ -171,7 +171,7 @@ async def test_explicit_cap_is_honoured():
 @pytest.mark.asyncio
 async def test_empty_upload_is_not_an_error_at_the_size_layer():
     """An empty part is a validation problem, not a size one; it must reach the validator."""
-    assert await storage_service.read_upload_capped(LegacyUpload(io.BytesIO(b""))) == b""
+    assert await storage_service.read_upload_capped(UndeclaredSizeUpload(io.BytesIO(b""))) == b""
 
 
 # ----------------------------------------------------------------------
@@ -191,7 +191,7 @@ async def test_profile_upload_does_not_buffer_an_unbounded_body():
     user = type("U", (), {"regno": "22CS045", "profile_picture_url": None})()
 
     with pytest.raises(HTTPException) as excinfo:
-        await profile_service.upload_profile_picture_service(user, None, LegacyUpload(stream))
+        await profile_service.upload_profile_picture_service(user, None, UndeclaredSizeUpload(stream))
 
     assert excinfo.value.status_code == 413
     assert stream.total <= storage_service.max_image_bytes + storage_service.UPLOAD_READ_CHUNK_BYTES
