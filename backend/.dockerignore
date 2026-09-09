@@ -1,0 +1,15 @@
+# Docker resolves .dockerignore from the root of the build context, and this service's
+# context is ./backend, so this file is what applies; the one at the repo root does not.
+# backend/Dockerfile ends in `COPY . .`, so anything not excluded here is baked into an
+# image layer. That includes the gitignored .env holding the Cloudinary, Supabase and Redis
+# credentials, and the my_app.log* files, which carry request and user data. Both are
+# supplied at run time instead: .env by the bind mount in docker-compose.yml, credentials
+# by the environment.
+.env
+*/.env
+.git
+my_app.log*
+archives/
+**/__pycache__/
+*.pyc
+.pytest_cache/

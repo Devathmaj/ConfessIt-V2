@@ -1,2 +1,17 @@
+# Applies only to builds whose context is the repo root, such as
+# `docker build -f backend/Dockerfile .`. The Compose services build from ./backend and
+# ./frontend, so the .dockerignore next to each of those Dockerfiles is what is in effect
+# for them; this file cannot protect them.
 node_modules
+**/node_modules
 venv
+.env
+*/.env
+**/.env
+db_password.txt
+my_app.log*
+archives/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.git
