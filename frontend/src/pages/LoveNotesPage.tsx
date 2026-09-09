@@ -71,6 +71,10 @@ const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '
 const availableFonts = ['sans-serif', 'serif', 'monospace', 'cursive'];
 const availableFontStyles = ['normal', 'bold', 'italic'];
 
+// Keep in step with the backend's MAX_IMAGE_SIZE_MB (2MB) cap on the decoded love note
+// image, so an oversized note is refused before it is built into a request body.
+const MAX_NOTE_IMAGE_BYTES = 2 * 1024 * 1024;
+
 export const LoveNotesPage = () => {
     const { user, fetchAndSetUser, token } = useAuth();
     const [activeTab, setActiveTab] = useState<'create' | 'inbox'>('create');
@@ -298,6 +302,15 @@ export const LoveNotesPage = () => {
 
         const imageBase64 = canvasRef.current.toDataURL('image/png');
 
+        // Mirrors the backend's MAX_IMAGE_SIZE_MB cap on the decoded image. base64
+        // spends 4 characters per 3 bytes and the data URI prefix only makes this an
+        // overestimate, so an over-limit note is caught here rather than after a
+        // multi-megabyte upload the server will reject anyway.
+        if ((imageBase64.length * 3) / 4 > MAX_NOTE_IMAGE_BYTES) {
+            toast.error('This note is too large to send. Please try a different template.');
+            return;
+        }
+
         try {
             await sendLoveNote({
                 recipient_id: selectedRecipient.id,
@@ -318,8 +331,13 @@ export const LoveNotesPage = () => {
             }
         } catch (error: any) {
             console.error("Failed to send love note:", error);
-            const errorMessage = error.response?.data?.detail || "Failed to send love note. Please try again.";
-            toast.error(errorMessage);
+            // Schema validation failures (422) report `detail` as a list of objects,
+            // while a raised HTTPException reports it as a plain string.
+            const detail = error.response?.data?.detail;
+            const errorMessage = Array.isArray(detail)
+                ? detail[0]?.msg
+                : detail;
+            toast.error(errorMessage || "Failed to send love note. Please try again.");
         }
     };
 

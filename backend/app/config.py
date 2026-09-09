@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     CLOUDINARY_EVENTS_FOLDER: str | None = None
     CLOUDINARY_GALLERY_FOLDER: str | None = None
     MAX_IMAGE_SIZE_MB: int | None = None
+    # Geometry caps for uploaded images. A byte limit alone does not bound image
+    # processing: a small compressed file can describe a bitmap that costs gigabytes
+    # to decode. Read by storage_service, which falls back to its own defaults.
+    MAX_IMAGE_DIMENSION: int | None = None
+    MAX_IMAGE_PIXELS: int | None = None
     PUBLIC_BASE_URL: str | None = None
     CLOUDINARY_USE_ADVANCED_TRANSFORMS: str | None = None
     CLOUDINARY_DEFAULT_VIEW_TTL: int | None = None

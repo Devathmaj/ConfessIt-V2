@@ -3,6 +3,7 @@ import io
 import time
 import secrets
 import logging
+import base64
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException, UploadFile
@@ -20,6 +21,18 @@ load_dotenv()
 
 # Logger
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read a positive integer from the environment, falling back to ``default``.
+
+    A malformed value must not silently disable a limit, so anything unparseable or
+    below ``minimum`` falls back to the built-in default rather than being trusted.
+    """
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
 
 
 class CloudinaryStorageService:
@@ -53,6 +66,20 @@ class CloudinaryStorageService:
             self.max_image_size_mb = 2
         self.max_image_bytes = self.max_image_size_mb * 1024 * 1024
         self.allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
+
+        # Geometry limits. A byte cap alone does not bound image processing: a few
+        # hundred KB of compressed data can describe a bitmap that costs gigabytes
+        # to decode, so both the per-side dimensions and the total pixel count are
+        # capped and checked from the header before any pixel data is touched.
+        self.max_image_dimension = _env_int("MAX_IMAGE_DIMENSION", 6000)
+        self.max_image_pixels = _env_int("MAX_IMAGE_PIXELS", 12_000_000)
+
+        # Upper bound on a base64 image payload, used for JSON-body uploads (love
+        # notes) where the encoded string arrives as a request field. base64 spends
+        # 4 characters per 3 bytes, plus slack for a data URI prefix and the padding
+        # on the final group. Enforced *before* b64decode so an oversized body is
+        # rejected without the decode ever allocating a second copy of it.
+        self.max_base64_chars = (self.max_image_bytes // 3) * 4 + 4096
 
         # Optional public base URL to construct absolute URLs (e.g., http://localhost:8080)
         self.public_base = (os.getenv("PUBLIC_BASE_URL", "") or "").rstrip("/")
@@ -158,6 +185,106 @@ class CloudinaryStorageService:
             )
 
         return kind or "jpeg"
+
+    def _check_image_dimensions(self, width: Optional[int], height: Optional[int]) -> None:
+        """Reject images whose decoded pixel grid is too large to process safely.
+
+        Called with dimensions read from the image header, before any pixel data is
+        decoded, so the cost of the rejection is independent of the claimed size.
+        """
+        if not width or not height or width < 1 or height < 1:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        if width > self.max_image_dimension or height > self.max_image_dimension:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Image too large. Maximum dimensions are "
+                    f"{self.max_image_dimension}x{self.max_image_dimension} pixels."
+                ),
+            )
+
+        if width * height > self.max_image_pixels:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image too large. Maximum total size is {self.max_image_pixels} pixels.",
+            )
+
+    def decode_base64_image(self, image_base64: str) -> Tuple[bytes, str, Tuple[int, int]]:
+        """Decode and validate a base64-encoded image, bounding work at every stage.
+
+        Used by JSON-body upload paths, where the encoded string is already fully
+        resident in memory by the time this runs. The order of the checks is the point:
+
+        1. the encoded length, because ``b64decode`` allocates a second buffer of the
+           same order and an unbounded body is the cheapest way to exhaust memory;
+        2. the decoded length, before the buffer is handed to an image parser;
+        3. format and header dimensions, read from the image header only -- PIL's
+           ``Image.open`` is lazy, so nothing is decompressed until ``.size`` is
+           compared against the limits above.
+
+        The first check is O(1) and happens before the payload is even scanned, so the
+        cost of refusing a large body does not grow with the size of that body.
+
+        Returns:
+            Tuple of (decoded bytes, lowercase format, (width, height)).
+        """
+        if not isinstance(image_base64, str):
+            raise HTTPException(status_code=400, detail="Image data is required")
+
+        # Checked against the raw field, before anything scans it. Stripping the data
+        # URI prefix and folding whitespace out can only make the string shorter, so
+        # this is exact and it costs O(1) -- an oversized body is turned away without
+        # walking its tens of megabytes, let alone decoding it.
+        if len(image_base64) > self.max_base64_chars:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {self.max_image_size_mb}MB",
+            )
+
+        # Accept both a bare base64 string and a data URI ("data:image/png;base64,...").
+        payload = image_base64.split(",", 1)[1] if "," in image_base64 else image_base64
+        # Fold out any whitespace, which is legal in base64 but would otherwise count
+        # against the encoded-length budget without contributing any decoded bytes.
+        payload = "".join(payload.split())
+        if not payload:
+            raise HTTPException(status_code=400, detail="Image data is required")
+
+        try:
+            image_bytes = base64.b64decode(payload)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        if len(image_bytes) > self.max_image_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {self.max_image_size_mb}MB",
+            )
+
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            width, height = img.size
+            image_format = (img.format or "").lower() or None
+            img.close()
+        except HTTPException:
+            raise
+        except Exception:
+            # Unreadable, truncated, or a decompression bomb PIL refused outright.
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+        if not image_format:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+        if image_format not in self.allowed_extensions:
+            raise HTTPException(
+                status_code=415,
+                detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed",
+            )
+
+        self._check_image_dimensions(width, height)
+        return image_bytes, image_format, (width, height)
 
     def generate_object_path(self, user_folder: str, filename: str, image_type: str) -> str:
         """Generate a unique path with a random string for security (prevents URL guessing).
@@ -804,8 +931,9 @@ class CloudinaryStorageService:
         """Upload a love note image (base64) to Cloudinary with a secure random URL.
         
         This method:
-        1. Decodes the base64 image data
-        2. Validates it's a proper image
+        1. Decodes the base64 image data, refusing payloads that exceed the encoded,
+           decoded, or per-side/total-pixel limits
+        2. Validates it's a proper, supported image
         3. Generates a secure, unpredictable path using random tokens
         4. Uploads to Cloudinary in a dedicated love_notes folder
         5. Returns the Cloudinary URL for storage in the database
@@ -816,6 +944,10 @@ class CloudinaryStorageService:
             
         Returns:
             Dictionary containing the Cloudinary URL and metadata
+
+        Raises:
+            HTTPException: 400 for undecodable/invalid data, 413 when the payload
+                exceeds a size or dimension limit, 415 for an unsupported format.
         """
         self._ensure_enabled()
         
@@ -823,21 +955,9 @@ class CloudinaryStorageService:
         love_notes_bucket = os.getenv("CLOUDINARY_LOVE_NOTES_FOLDER", "love_notes")
         
         try:
-            # Remove data URI prefix if present
-            if "," in image_base64:
-                image_base64 = image_base64.split(",", 1)[1]
-            
-            # Decode base64 to bytes
-            import base64
-            image_bytes = base64.b64decode(image_base64)
-            
-            # Validate it's actually an image
-            try:
-                img = Image.open(io.BytesIO(image_bytes))
-                image_format = img.format.lower() if img.format else "png"
-                img.close()
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid image data")
+            # Decoding and validation are bounded before the buffer is parsed; see
+            # decode_base64_image for why the checks run in that order.
+            image_bytes, image_format, (width, height) = self.decode_base64_image(image_base64)
             
             # Generate a secure random path for the love note
             random_string = secrets.token_urlsafe(16)
@@ -859,6 +979,15 @@ class CloudinaryStorageService:
                 access_mode="public",
                 type="upload",
                 filename=filename,
+                # Second line of defence, for anything that reached Cloudinary without
+                # passing the local checks. "limit" scales to fit inside the box and
+                # never upscales, so a note at or below the limits is stored untouched
+                # while an oversized one cannot be stored or delivered unbounded.
+                transformation={
+                    "width": self.max_image_dimension,
+                    "height": self.max_image_dimension,
+                    "crop": "limit",
+                },
             )
             
             # Get the secure URL from Cloudinary
@@ -871,14 +1000,19 @@ class CloudinaryStorageService:
                 "url": cloudinary_secure_url,
                 "version": upload_result.get("version"),
                 "format": upload_result.get("format", image_format),
+                "width": width,
+                "height": height,
             }
             
         except HTTPException:
             raise
-        except Exception as exc:
+        except Exception:
+            # Log the cause server-side; the raw Cloudinary error embeds the bucket and
+            # public_id, so the client only ever sees a generic message.
+            logger.error("Failed to upload love note image to Cloudinary", exc_info=True)
             raise HTTPException(
                 status_code=500, 
-                detail=f"Failed to upload love note image to Cloudinary: {str(exc)}"
+                detail="Failed to upload love note image to Cloudinary"
             )
 
     def delete_love_note_image(self, cloudinary_url: str) -> bool:

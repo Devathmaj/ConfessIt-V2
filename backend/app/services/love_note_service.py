@@ -2,7 +2,7 @@ import logging
 from sqlalchemy import select
 from ..postgres import Database
 from ..db_models import LoveNoteRecord, UserRecord
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
@@ -20,8 +20,15 @@ class LoveNoteCreate(BaseModel):
     Pydantic model for creating a love note.
     """
     recipient_id: str
-    image_base64: str
-    body: str
+    # Capped here so an oversized body is rejected during validation, before the
+    # service (or base64.b64decode) allocates anything. This is the same budget
+    # storage_service applies to the encoded string, so a payload that validates is
+    # still within what the decoder will accept once the data URI prefix and any
+    # embedded whitespace are folded out.
+    image_base64: str = Field(max_length=storage_service.max_base64_chars)
+    # Matches the String(2000) column in db_models.LoveNoteRecord; without a cap here
+    # this field is just as unbounded as the image was.
+    body: str = Field(max_length=2000)
     anonymous: bool
 
 async def get_all_users_service(db: Database, current_user_regno: str) -> List[dict]:
@@ -91,11 +98,16 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
         # Use the Cloudinary URL instead of the base64 string
         cloudinary_url = upload_result["cloudinary_url"]
         
+    except HTTPException:
+        # Size, format and dimension rejections are the sender's problem and carry a
+        # message worth showing. Re-raise as-is instead of collapsing them into a 500
+        # that reports a server fault and hides which limit was hit.
+        raise
     except Exception as e:
-        logger.error(f"Failed to upload love note image to Cloudinary: {str(e)}")
+        logger.error(f"Failed to upload love note image to Cloudinary: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload love note image: {str(e)}"
+            detail="Failed to upload love note image"
         )
     
     # Create the love note with the Cloudinary URL
