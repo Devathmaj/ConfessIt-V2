@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 
 from app.db_models import ConversationRecord, MatchRecord, UserRecord
 from app.models import UserDetails
@@ -281,3 +282,86 @@ def test_live_partner_is_excluded_from_the_candidate_pool(db):
 
     second = matchmaking_service.find_match_service(as_user(db, "alice"), db)
     assert second["matched_with"]["regno"] != first["matched_with"]["regno"]
+
+
+# ------------------------------------------------------------------ the pair_key guarantee
+
+
+def make_match(db, first, second, pair_key):
+    with db.sessions.begin() as session:
+        row = MatchRecord(
+            user_1_regno=first, user_2_regno=second,
+            created_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=4),
+            pair_key=pair_key,
+        )
+        session.add(row)
+        session.flush()
+        return str(row.id)
+
+
+def test_pair_key_is_unique_in_the_live_schema(db):
+    """The unique index on ``pair_key`` is the entire race guard, so check the real schema.
+
+    ``create_all`` builds it from the model's ``unique=True``. Asserting against the live
+    schema rather than the model declaration is the point: the service can only read a
+    duplicate as "already taken" if the database actually refuses to store it.
+    """
+    with db.engine.begin() as connection:
+        indexes = connection.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = 'public' AND tablename = 'matches' "
+                "AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%(pair_key)%'"
+            )
+        ).scalars().all()
+
+    assert indexes, "no unique index on matches.pair_key in the database"
+
+
+def test_the_database_refuses_two_live_matches_for_one_pair(db):
+    """Writing the same pair twice must fail at the database, not merely look wrong later."""
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    make_match(db, "alice", "bob", "alice|bob")
+
+    with db.sessions.begin() as session:
+        session.add(
+            MatchRecord(
+                user_1_regno="bob", user_2_regno="alice",
+                created_at=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=4),
+                pair_key=matchmaking_service._pair_key("alice", "bob"),
+            )
+        )
+        with pytest.raises(IntegrityError) as excinfo:
+            session.flush()
+
+    # Either spelling is acceptable; what matters is that the index is what refused it.
+    assert "pair_key" in str(excinfo.value) or "ix_matches_pair_key" in str(excinfo.value)
+
+
+def test_a_pair_the_database_refuses_is_treated_as_taken(db):
+    """A collision the candidate filter cannot see must be absorbed, not surfaced as a 500.
+
+    ``_create_match_attempt`` filters out partners who are already matched to this user,
+    but that filter is only an optimisation -- it reads a candidate list and then writes,
+    and the unique index is what actually settles a race between two requests that read
+    the same list. The blocking row here is filed under a different pair's regnos while
+    holding alice|bob's key, which is precisely the state the filter cannot see and the
+    index can. Every retry then draws the same taken partner, so the service must exhaust
+    its retries and report a conflict rather than propagate the IntegrityError.
+    """
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    # Same gender as alice, so they are never candidates for her, but they can carry the
+    # blocking row: the constraint is on the key, not on who the participants are.
+    make_user(db, "carol", "female")
+    make_user(db, "dave", "female")
+    make_match(db, "carol", "dave", matchmaking_service._pair_key("alice", "bob"))
+
+    with pytest.raises(HTTPException) as excinfo:
+        matchmaking_service.find_match_service(as_user(db, "alice"), db)
+
+    assert excinfo.value.status_code == 409, excinfo.value.detail
+    assert count_matches(db, "alice", "bob") == 0

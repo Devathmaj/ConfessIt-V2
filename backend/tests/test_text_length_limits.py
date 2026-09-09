@@ -251,6 +251,12 @@ def test_migration_preserves_rows_that_predate_the_limit(db):
     Rows written before the limit existed are left untouched, because the constraint is
     added NOT VALID. Truncating user content to make a migration fit is not a decision the
     migration gets to make on its own.
+
+    Each step commits on its own. The drop has to be visible to the migration -- otherwise
+    the migration sees a constraint that is on its way out, skips re-adding it, and the
+    row survives because nothing is constraining it rather than because the constraint was
+    added without validating history. That version of this test passed, and quietly left
+    the test database without the constraint it claimed to be checking.
     """
     with db.engine.begin() as connection:
         connection.execute(text("ALTER TABLE confessions DROP CONSTRAINT ck_confessions_body_length"))
@@ -264,8 +270,43 @@ def test_migration_preserves_rows_that_predate_the_limit(db):
             ),
             {"body": "legacy " + "x" * CONFESSION_BODY_MAX},
         )
-        db.apply_check_constraints()
+
+    db.apply_check_constraints()
+
+    with db.engine.begin() as connection:
+        validated = connection.execute(
+            text(
+                "SELECT convalidated FROM pg_constraint "
+                "WHERE conname = 'ck_confessions_body_length'"
+            )
+        ).scalar_one()
         surviving = connection.execute(
             text("SELECT body FROM confessions WHERE recipient_name = 'Sam'")
         ).scalar_one()
+
     assert surviving == "legacy " + "x" * CONFESSION_BODY_MAX
+    # Present, but not enforced against what is already stored.
+    assert validated is False
+
+
+def test_migration_enforces_the_limit_on_new_rows(db):
+    """NOT VALID skips the history check, not the constraint itself.
+
+    An unvalidated constraint still rejects a new over-long write, so migrating a limit
+    in does not leave the table permanently open.
+    """
+    with db.engine.begin() as connection:
+        savepoint = connection.begin_nested()
+        _insert_user(connection, "limits-new")
+        with pytest.raises(IntegrityError) as excinfo:
+            connection.execute(
+                text(
+                    "INSERT INTO confessions (id, body, recipient_name, anonymous, "
+                    "comments_enabled, created_at, author_id) VALUES "
+                    "(gen_random_uuid(), :body, 'Sam', false, false, now(), "
+                    "(SELECT id FROM users WHERE regno = 'limits-new'))"
+                ),
+                {"body": "x" * (CONFESSION_BODY_MAX + 1)},
+            )
+        assert "ck_confessions_body_length" in str(excinfo.value)
+        savepoint.rollback()

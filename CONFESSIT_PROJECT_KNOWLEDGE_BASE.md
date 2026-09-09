@@ -246,6 +246,36 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 
 **Data Lifecycle:** Confessions and messages persist indefinitely unless deleted by admins. Login tokens logically expire and are marked `consumed`.
 
+**Schema Evolution:** There is **no migration framework**. `PostgresClient.initialize()` does exactly two
+things on boot: `create_all()`, then `apply_check_constraints()` (which adds any model-declared
+`CHECK` constraint that is missing, `NOT VALID`, so a tightened length cap does not reject stored
+history).
+
+`create_all()` only creates tables that do not exist — it never looks inside an existing one. So a
+column or index added to a model is **not** applied to a database that already exists, and the failure
+surfaces far from its cause, as a 500 from whichever endpoint happened to select it. This is the trap
+that `matches.pair_key` fell into: the column and its unique index were missing from the dev database,
+so `/conversations/current` and `/conversations/received` returned 500.
+
+**The procedure when a model changes:** drop and recreate the database. With no data to preserve, this
+is the only supported path, and it is deliberate — an automatic column/index reconciler was written
+and then removed, because a home-grown migration engine that is only ever exercised against disposable
+data is a migration engine nobody has tested against real data.
+
+```sql
+DROP DATABASE "ConfessIt";   -- quote it: unquoted folds to lowercase and silently misses
+CREATE DATABASE "ConfessIt" OWNER confessit;
+```
+
+Then start the backend; `initialize()` builds the schema from the models. Note that unquoted
+identifiers fold to lowercase in PostgreSQL, so `DROP DATABASE ConfessIt` targets a *different*
+database than `"ConfessIt"` and fails with a NOTICE rather than an error.
+
+`matches.pair_key` carries a unique index, and that index is a correctness mechanism rather than a
+speed-up: `matchmaking_service` catches the `IntegrityError` from a duplicate key and reports the pair
+as already taken. Without it, two concurrent requests can match the same pair. Covered by
+`backend/tests/test_matchmaking_race.py`.
+
 ---
 
 ## 12. API Documentation
@@ -316,6 +346,11 @@ Managed entirely via `docker-compose.yml`.
 Command: `docker-compose up --build`
 Volumes are mapped locally for hot-reloading in development (`./frontend:/app`, `./backend:/app`).
 
+**CI:** `.github/workflows/ci.yml` runs the backend suite on `postgres:16-alpine`, health-gated before
+the first session so a not-yet-ready server cannot surface as a connection-refused failure. It creates
+`ConfessIt_Test` and exports both `DATABASE_URL` and `TEST_DATABASE_URL`; `conftest.py` refuses to share
+a database between the app and the tests. Python 3.12 matches the `backend/Dockerfile` base image.
+
 ---
 
 ## 17. Infrastructure Analysis
@@ -333,6 +368,18 @@ Volumes are mapped locally for hot-reloading in development (`./frontend:/app`, 
 
 - **Backend:** Uses Pytest (`pytest`, `pytest-asyncio`) with an isolated PostgreSQL test database. Tests are located in `backend/tests/`.
 - **Frontend:** Configured with Vitest and React Testing Library (`vitest`, `@testing-library/react`). Tests like `App.test.tsx` verify UI mounting.
+
+**Route drift guard:** `tests/test_endpoints.py` parses the Axios calls out of
+`frontend/src/services/api.ts` and asserts every one is a `(method, path)` the backend registers, so a
+rename cannot land on one side only. It skips when the frontend is not mounted (backend-only container)
+and runs in CI, where the full checkout is present.
+
+**Test isolation:** `clear_db` truncates every application table before each test. A test that performs
+DDL must commit it in its own transaction before calling `apply_check_constraints()` — that method
+opens a second connection, which cannot see an uncommitted change from the first. `test_text_length_limits.py`
+had this bug: it dropped a constraint inside an open transaction, so the re-add saw a constraint that
+was already on its way out, skipped it, and the test passed because *no* constraint existed rather than
+because of `NOT VALID`. It also left the test database missing that constraint after every green run.
 
 **Coverage Risk:** Test files exist, but end-to-end (E2E) testing with tools like Cypress or Playwright is currently not implemented, presenting a risk for critical user flows.
 
@@ -378,7 +425,12 @@ This is a heavily instrumented project.
 
 1. **High Severity:** No E2E testing.
 2. **Medium Severity:** Storing tokens in localStorage (XSS vulnerability).
-3. **Low Severity:** The `models.py` file is extremely large (350+ lines). It should be refactored into a `schemas/` directory with separate files for User, Confession, Matchmaking, etc.
+3. **Medium Severity:** No schema migration framework. `create_all()` never modifies an existing table,
+   so every schema change requires dropping and recreating the database. That is acceptable while all
+   data is disposable, and unacceptable the moment data must survive — at which point a real framework
+   (Alembic) is needed. Adding one is a bigger job than it looks, because the current schema is only
+   defined in the models with no revision history to anchor a baseline against.
+4. **Low Severity:** The `models.py` file is extremely large (350+ lines). It should be refactored into a `schemas/` directory with separate files for User, Confession, Matchmaking, etc.
 
 ---
 
