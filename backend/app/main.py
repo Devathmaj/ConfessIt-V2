@@ -20,7 +20,7 @@ from .services import asset_delivery_service
 from .models import UserDetails
 import uvicorn
 from .db_models import UserRecord
-from .logger import get_logger
+from .logger import get_logger, otlp_transport
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -44,10 +44,12 @@ def _init_tracing():
     service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
     resource = Resource.create({"service.name": service_name})
 
+    insecure, credentials = otlp_transport()
+
     provider = TracerProvider(resource=resource)
     trace.set_tracer_provider(provider)
 
-    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=insecure, credentials=credentials)
     provider.add_span_processor(BatchSpanProcessor(exporter))
 
 _init_tracing()

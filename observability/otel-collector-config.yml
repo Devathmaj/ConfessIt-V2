@@ -7,11 +7,15 @@ receivers:
 exporters:
   loki:
     endpoint: http://loki:3100/loki/api/v1/push
+    # Required now that loki-config.yml sets auth_enabled: true.
+    headers:
+      X-Scope-OrgID: confessit
   prometheus:
     endpoint: 0.0.0.0:8889
   otlp/tempo:
     endpoint: tempo:4317
     tls:
+      # Inside the Compose network only; tempo's OTLP port is not published to the host.
       insecure: true
 
 service:

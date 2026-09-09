@@ -96,12 +96,17 @@ services:
       - redis_data:/data
 
   otel-collector:
+    # The Docker Hub org is otel/, not opentelemetry/; the latter is not a pullable
+    # repository, so this service could not start at all.
     image: otel/opentelemetry-collector-contrib:0.99.0
     command: ["--config=/etc/otel-collector-config.yml"]
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "8889:8889"
+    # Ingestion and scrape ports are reachable only on the Compose network: the backend
+    # pushes to otel-collector:4317 and Prometheus scrapes otel-collector:8889, neither of
+    # which needs a host socket. Nothing here should be exposed beyond the host.
+    expose:
+      - "4317"
+      - "4318"
+      - "8889"
     volumes:
       - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     depends_on:
@@ -113,27 +118,42 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
+    # Loopback only: the metrics contain request rates, error counts and target topology.
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
 
   grafana:
     image: grafana/grafana:10.4.3
+    # Loopback only: Grafana is the read surface for every log, metric and trace in the
+    # stack, so it must not be reachable from the LAN.
     ports:
-      - "3050:3050"
+      - "127.0.0.1:3050:3050"
     environment:
-      GF_SECURITY_ADMIN_USER: "admin"
-      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      # The image listens on 3000, but the port mapping above targets 3050, so without
+      # this the host port forwards to a port nothing is listening on.
+      GF_SERVER_HTTP_PORT: "3050"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # Required, from the gitignored root .env. Note Grafana applies this only when it
+      # initialises an empty database, so an existing grafana_data volume keeps the old
+      # password until it is reset.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the root .env}
+      # Anonymous read access is off by default; pinned so a future image default cannot
+      # quietly open the dashboards.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: ""
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
 
   loki:
     image: grafana/loki:2.9.8
     command: ["-config.file=/etc/loki/config.yml"]
+    # Loopback only: the log store holds request payloads and user identifiers.
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
@@ -152,9 +172,12 @@ services:
   tempo:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yml"]
+    # 3200 is the query API (loopback only, like Loki); 4317 is ingestion and is reachable
+    # only from the otel-collector, which forwards traces to tempo:4317.
     ports:
-      - "3200:3200"
-      - "4319:4317"
+      - "127.0.0.1:3200:3200"
+    expose:
+      - "4317"
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
       - tempo_data:/var/tempo

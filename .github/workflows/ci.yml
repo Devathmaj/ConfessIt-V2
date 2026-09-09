@@ -89,6 +89,7 @@ jobs:
     env:
       POSTGRES_PASSWORD: ConfessItLocalPassword
       REDIS_PASSWORD: ConfessItLocalRedisPassword
+      GRAFANA_ADMIN_PASSWORD: ConfessItLocalGrafanaPassword
     steps:
       - uses: actions/checkout@v4
       - name: Verify Docker Compose Build

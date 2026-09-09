@@ -333,6 +333,9 @@ Values are loaded via `app/config.py` using `pydantic-settings`.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Tracing endpoint (defaults to `otel-collector:4317`) |
 | `OTEL_SERVICE_NAME` | Tracing service identifier |
 | `POSTGRES_PASSWORD` | PostgreSQL password for Docker Compose, set in the gitignored root `.env` |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password, set in the root `.env`; only applied when Grafana initialises an empty `grafana_data` volume |
+| `CLOUDINARY_SECURE_URLS` | Delivery scheme for generated Cloudinary asset URLs; defaults to HTTPS |
+| `OTEL_EXPORTER_OTLP_INSECURE` | Whether OTLP export is plaintext; defaults to `true` for the local Compose collector |
 
 ---
 
@@ -361,7 +364,8 @@ a database between the app and the tests. Python 3.12 matches the `backend/Docke
   - `backend`: Python container running FastAPI on port 8001.
   - `postgres`: Official PostgreSQL image. Persistent data stored in `postgres_data` volume.
   - `redis`: Redis alpine image for caching. Reachable only on the Compose network and password-protected, since chat traffic rides on its pub/sub channels.
-  - **Observability Stack**: `otel-collector`, `prometheus`, `grafana`, `loki`, `promtail`, `tempo` all running side-by-side to capture logs, metrics, and distributed traces.
+  - **Observability Stack:** `otel-collector`, `prometheus`, `grafana`, `loki`, `promtail`, `tempo` all running side-by-side to capture logs, metrics, and distributed traces. Ingestion ports stay on the Compose network; the query UIs (Grafana 3050, Prometheus 9090, Loki 3100, Tempo 3200) bind to `127.0.0.1` so they are not reachable from the network. Loki runs with `auth_enabled: true` and a 168h retention, and requires an `X-Scope-OrgID` header that promtail and the otel-collector send.
+  - **Visualization:** `grafana` is provisioned on port 3050 to visualize all telemetry data.
 
 ---
 
@@ -448,7 +452,7 @@ docker-compose up --build
 
 **Database Access:** Connect directly via PostgreSQL client to `localhost:5432` using the configured PostgreSQL credentials.
 
-**Telemetry Access:** Grafana available at `http://localhost:3050` (admin/admin).
+**Telemetry Access:** Grafana available at `http://localhost:3050`, using `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from the root `.env`.
 
 ---
 

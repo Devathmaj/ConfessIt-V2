@@ -11,7 +11,7 @@ from urllib.parse import quote, unquote, urlparse
 from dotenv import load_dotenv
 import cloudinary
 from cloudinary.uploader import upload as cloudinary_upload, destroy as cloudinary_destroy
-from cloudinary.utils import cloudinary_url, api_sign_request
+from cloudinary.utils import cloudinary_url, api_sign_request, private_download_url
 from PIL import Image
 import re
 import cloudinary.api as cloudinary_api
@@ -93,6 +93,10 @@ class CloudinaryStorageService:
 
         # Feature toggles / security knobs
         self.use_advanced_transforms = os.getenv("CLOUDINARY_USE_ADVANCED_TRANSFORMS", "true").lower() in {"1", "true", "yes"}
+        # Delivery scheme for every generated asset URL. Defaults to HTTPS: emitting plain
+        # HTTP would hand the browser a downgradeable URL, so a deployment has to opt out
+        # deliberately rather than inherit it from a development default.
+        self.secure_urls = os.getenv("CLOUDINARY_SECURE_URLS", "true").lower() in {"1", "true", "yes"}
         self.default_view_ttl = int(os.getenv("CLOUDINARY_DEFAULT_VIEW_TTL", str(self.DEFAULT_SIGNED_URL_TTL)))
         self.max_view_ttl = int(os.getenv("CLOUDINARY_MAX_VIEW_TTL", "7200"))  # 2 hours cap by default
         # Additional allowed formats override (comma separated) if provided
@@ -106,8 +110,8 @@ class CloudinaryStorageService:
         if not self.enabled:
             print("Cloudinary storage disabled: CLOUDINARY_URL not configured")
         else:
-            # Use public (non-authenticated) delivery with HTTP for development
-            cfg_kwargs = {"secure": False}
+            # Public (non-authenticated) delivery; the scheme comes from CLOUDINARY_SECURE_URLS.
+            cfg_kwargs = {"secure": self.secure_urls}
             self.use_authenticated = False  # Always use public URLs with random strings for security
             if self.cloud_name:
                 cfg_kwargs["cloud_name"] = self.cloud_name
@@ -553,19 +557,23 @@ class CloudinaryStorageService:
         if not bucket_name:
             raise HTTPException(status_code=400, detail="Invalid route key")
         object_path = self.validate_object_path(object_path)
-        # Force a fixed 1 hour (3600s) expiration window regardless of caller input
-        ttl_seconds = self.DEFAULT_SIGNED_URL_TTL
+        # The caller's window is honoured but clamped by _resolve_view_ttl, which makes
+        # CLOUDINARY_DEFAULT_VIEW_TTL the default and CLOUDINARY_MAX_VIEW_TTL the ceiling.
+        # Overriding the caller's value here instead would make both settings inert.
         return self.get_signed_url_for_bucket(bucket_name, object_path, expires_in_seconds=ttl_seconds)
 
     def build_dynamic_transform_url(self, route_key: str, object_path: str, *, width: Optional[int] = None,
                                     height: Optional[int] = None, quality: str = "auto", format_auto: bool = True,
-                                    crop: Optional[str] = None, secure: bool = False) -> str:
+                                    crop: Optional[str] = None, secure: Optional[bool] = None) -> str:
         """Build (optionally transformed) public delivery URL for an image.
 
-        Use for on-demand thumbnails instead of storing multiple variants.
+        Use for on-demand thumbnails instead of storing multiple variants. ``secure``
+        defaults to the configured CLOUDINARY_SECURE_URLS rather than plain HTTP.
         """
         if not self.enabled:
             raise HTTPException(status_code=503, detail="Object storage disabled")
+        if secure is None:
+            secure = self.secure_urls
         bucket_name = self._route_bucket_map.get(route_key)
         if not bucket_name:
             raise HTTPException(status_code=400, detail="Invalid route key")
@@ -669,7 +677,7 @@ class CloudinaryStorageService:
         url, _ = cloudinary_url(
             public_id,
             format=fmt,
-            secure=False,  # Use HTTP for development
+            secure=self.secure_urls,
             resource_type="image",
             type="upload",
         )
@@ -718,14 +726,14 @@ class CloudinaryStorageService:
         return doc_copy
 
     def _build_secure_url(self, bucket_name: str, object_path: str) -> str:
-        """Construct a secure, direct URL to a Cloudinary asset."""
+        """Construct a direct URL to a Cloudinary asset."""
         _, ext = os.path.splitext(object_path)
         fmt = ext.lstrip(".") or None
         public_id = self._build_public_id(bucket_name, object_path)
         url, _ = cloudinary_url(
             public_id,
             format=fmt,
-            secure=False,  # Use HTTP for development
+            secure=self.secure_urls,
             resource_type="image",
             type="upload",
         )
@@ -762,21 +770,46 @@ class CloudinaryStorageService:
         )
         return url
 
+    def _resolve_view_ttl(self, requested: Optional[int]) -> int:
+        """Clamp a requested view lifetime into the configured window.
+
+        CLOUDINARY_DEFAULT_VIEW_TTL supplies the window when a caller does not ask for one
+        and CLOUDINARY_MAX_VIEW_TTL caps it, so a caller cannot mint a link that outlives
+        the policy just by passing a large ttl_seconds.
+        """
+        ttl = self.default_view_ttl if requested is None else int(requested)
+        return max(1, min(ttl, self.max_view_ttl))
+
     def get_signed_url_for_bucket(self, bucket_name: str, object_path: str, expires_in_seconds: Optional[int] = None) -> str:
-        """Generate a public URL for an image in a specific bucket.
-        
-        Since we now use public URLs with random strings for security (preventing URL guessing),
-        we don't need time-based signing. The random string in the path provides the security.
-        
+        """Generate a signed, time-limited delivery URL for an image in a specific bucket.
+
+        The expiry is enforced by Cloudinary against a signature over ``expires_at``, not
+        by this service, so the link really does stop working once the window closes. That
+        enforcement only holds for assets uploaded with ``access_mode="authenticated"``;
+        the upload paths in this service still upload public assets, which stay reachable
+        at their unsigned URL regardless of what this returns. Treat these links as
+        short-lived convenience URLs, not as the access-control boundary for public assets.
+
         Args:
             bucket_name: The name of the bucket containing the object
             object_path: The path to the object within the bucket
-            expires_in_seconds: Ignored (kept for backward compatibility)
+            expires_in_seconds: Requested lifetime; clamped to the configured window
         """
         if not self.enabled:
             raise HTTPException(status_code=503, detail="Object storage is disabled")
+        if not self.can_sign:
+            raise HTTPException(status_code=503, detail="Cloudinary signing credentials are not configured")
 
-        return self._build_public_url(bucket_name, object_path)
+        public_id = self._build_public_id(bucket_name, object_path)
+        _, ext = os.path.splitext(object_path)
+        expires_at = int(time.time()) + self._resolve_view_ttl(expires_in_seconds)
+        return private_download_url(
+            public_id,
+            ext.lstrip(".") or None,
+            resource_type="image",
+            type="authenticated",
+            expires_at=expires_at,
+        )
 
     def _extract_from_cloudinary_url(self, url: str, bucket_name: str) -> Optional[str]:
         """Used to parse an object path from a full Cloudinary URL."""
