@@ -25,7 +25,13 @@ services:
       "8001",
       "--reload",
       "--reload-dir",
-      "app"
+      "app",
+      # Bound how many request bodies can be in flight at once, and how many bytes are
+      # buffered for an unfinished request. Per-body size is capped in app.main.
+      "--limit-concurrency",
+      "${MAX_CONCURRENCY:-100}",
+      "--h11-max-incomplete-event-size",
+      "16384"
     ]
     ports:
       - "8001:8001"
@@ -38,8 +44,14 @@ services:
     environment:
       WATCHFILES_FORCE_POLLING: "true"
       WATCHFILES_POLL_DELAY: "0.5"
+      # Read by both the --limit-concurrency flag above and the app's own settings, so
+      # the ceiling cannot differ between how the server is started and how it is
+      # configured. Raising it widens what one process will hold at once, so the request
+      # body cap is what should move first if this needs raising.
+      MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
       REDIS_URL: "redis://redis:6379"
       DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:-ConfessItLocalPassword}@postgres:5432/ConfessIt"
+
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:-ConfessItLocalPassword}@postgres:5432/ConfessIt_Test"
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"

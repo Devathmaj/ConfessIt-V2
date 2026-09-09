@@ -17,5 +17,10 @@ EXPOSE 8001
 # Copy the rest of the application code
 COPY . .
 
-# Run the FastAPI app with auto-reload enabled
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+# Run the FastAPI app with auto-reload enabled.
+# --limit-concurrency caps how many request bodies can be in flight at once and
+# --h11-max-incomplete-event-size bounds the bytes buffered for an unfinished request.
+# Both are pinned explicitly rather than left to uvicorn's defaults, so a dependency
+# bump cannot silently loosen them. Per-body size is enforced in app.main.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", \
+     "--limit-concurrency", "100", "--h11-max-incomplete-event-size", "16384"]

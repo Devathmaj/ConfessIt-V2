@@ -6,7 +6,11 @@ from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from starlette.datastructures import Headers
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 from sqlalchemy import select, text, update
+from .config import settings
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
 from .services.auth_service import oauth2_scheme, verify_token_service, load_active_user_service
 from .dependencies import get_db 
@@ -99,6 +103,104 @@ async def on_shutdown():
     # Hand the pool's connections back so a reload or restart does not leak them until
     # Postgres itself times them out.
     close_postgres_client()
+
+# ----------------------
+# Request body size limit
+# ----------------------
+# A request body is buffered by the framework, not by the handler, so a per-handler size
+# check runs only after the memory has already been spent. This refuses the body at the
+# edge instead. It is deliberately a raw ASGI middleware rather than BaseHTTPMiddleware:
+# the check is on a single header, and wrapping every request in an extra task and
+# response cycle to read one integer would cost more than it saves.
+#
+# Two bounds, because either one alone is bypassable. The declared Content-Length turns
+# away an oversize body before a byte of it is read, and the receive wrapper counts what
+# actually arrives, which is the only bound a chunked request -- which declares no
+# length at all -- can be caught by. Counting also bounds the multipart spool, which
+# otherwise writes an unbounded body to a temp file before any handler sees it.
+
+
+class RequestBodyTooLarge(Exception):
+    """Raised from the receive channel once more than the cap has actually arrived."""
+
+
+async def _body_too_large_response(request: Request, exc: RequestBodyTooLarge) -> Response:
+    return PlainTextResponse("Request body too large", status_code=413)
+
+
+class RequestBodyLimitMiddleware:
+    """Reject a request whose body exceeds the configured ceiling, declared or not."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        # Non-HTTP scopes (the websocket routes) carry no body and are left alone.
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None:
+            try:
+                length = int(declared)
+            except ValueError:
+                # A malformed length is not something to guess at; let the server's own
+                # parser reject it.
+                pass
+            else:
+                if length > self.max_bytes:
+                    logger.warning(
+                        "Refused declared body of %s bytes (limit %s) for %s %s",
+                        length, self.max_bytes, scope.get("method"), scope.get("path"),
+                    )
+                    response = PlainTextResponse(
+                        "Request body too large", status_code=413
+                    )
+                    await response(scope, receive, send)
+                    return
+
+        received = 0
+
+        async def counted_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    logger.warning(
+                        "Refused undeclared body past %s bytes for %s %s",
+                        self.max_bytes, scope.get("method"), scope.get("path"),
+                    )
+                    raise RequestBodyTooLarge
+            return message
+
+        await self.app(scope, counted_receive, send)
+
+
+def request_body_limit() -> int:
+    """Resolve the body ceiling, defaulting to the largest legitimate body.
+
+    A love note is the biggest request this app accepts: a base64 image plus a JSON
+    envelope. Sizing the default off the image limits rather than hardcoding a number
+    keeps the ceiling correct if MAX_IMAGE_SIZE_MB is raised, and the extra headroom
+    covers multipart boundaries and form fields.
+    """
+    if settings.MAX_REQUEST_BODY_BYTES:
+        return int(settings.MAX_REQUEST_BODY_BYTES)
+    largest_payload = max(
+        storage_service.max_base64_chars,
+        storage_service.max_image_bytes,
+    )
+    return largest_payload + 256 * 1024
+
+
+# Registered before CORS so that CORS ends up outermost: a 413 raised here still has to
+# be readable by the browser, and a response without the CORS headers surfaces as an
+# opaque network error instead of the status the client needs to see.
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=request_body_limit())
+app.add_exception_handler(RequestBodyTooLarge, _body_too_large_response)
 
 # ----------------------
 # CORS Middleware
@@ -262,4 +364,13 @@ if __name__ == "__main__":
     # To run this app correctly, use the command:
     # uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
     # This should be run from the parent directory containing the 'app' package.
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=True)
+    # The same body/concurrency limits the container image sets are applied here, so a
+    # developer running this entrypoint is not testing a less protected configuration.
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8001,
+        reload=True,
+        limit_concurrency=settings.MAX_CONCURRENCY,
+        h11_max_incomplete_event_size=16 * 1024,
+    )

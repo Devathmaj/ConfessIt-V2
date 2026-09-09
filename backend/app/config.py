@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # to decode. Read by storage_service, which falls back to its own defaults.
     MAX_IMAGE_DIMENSION: int | None = None
     MAX_IMAGE_PIXELS: int | None = None
+    # Ceiling on an entire request body, applied before the body is read. Derived from
+    # the largest legitimate body (a base64 love note image) when unset; see
+    # app.main.request_body_limit.
+    MAX_REQUEST_BODY_BYTES: int | None = None
+    # Uvicorn's connection ceiling. Bounds how many request bodies can be in flight at
+    # once, which is the second line of defence if the body cap is being probed.
+    MAX_CONCURRENCY: int = 100
     PUBLIC_BASE_URL: str | None = None
     CLOUDINARY_USE_ADVANCED_TRANSFORMS: str | None = None
     CLOUDINARY_DEFAULT_VIEW_TTL: int | None = None

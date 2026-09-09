@@ -48,6 +48,10 @@ class CloudinaryStorageService:
     OBJECT_PATH_MIN_SEGMENTS = 2   # {folder}/{token}/{timestamp}_{name}.{ext}
     _OBJECT_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+    # Granularity of the bounded upload read. Small enough that the peak buffer stays
+    # close to the cap instead of overshooting it by a whole chunk.
+    UPLOAD_READ_CHUNK_BYTES = 64 * 1024
+
     def __init__(self):
         self.cloudinary_url = os.getenv("CLOUDINARY_URL", "")
         self.api_key = os.getenv("CLOUDINARY_API_KEY")
@@ -162,6 +166,48 @@ class CloudinaryStorageService:
             base = f"/api/files/{bucket_name}/"
         return self._publicize(f"{base}{quote(object_path)}")
 
+    async def read_upload_capped(
+        self, file: UploadFile, max_bytes: Optional[int] = None
+    ) -> bytes:
+        """Read an upload into memory without ever buffering more than ``max_bytes``.
+
+        ``await file.read()`` with no size argument pulls the entire body into the
+        process before any validation has run, so a single request can pin an arbitrary
+        amount of RAM for as long as the client keeps sending. Two guards, because
+        either one alone is bypassable:
+
+        1. the size the multipart parser already read off the part headers, which
+           refuses an oversize upload without touching its body at all;
+        2. a chunked read that stops as soon as the accumulated bytes pass the cap. This
+           is the one that matters, because a chunked request carries no declared
+           length for the first guard to check.
+
+        Defaults to ``max_image_bytes`` so a profile picture and a love note image are
+        held to the same limit.
+        """
+        limit = self.max_image_bytes if max_bytes is None else max_bytes
+
+        # getattr because UploadFile.size only exists on newer Starlette releases; when
+        # it is absent the size is simply unknown and the chunked read below covers it.
+        declared = getattr(file, "size", None)
+        if declared is not None and declared > limit:
+            raise HTTPException(
+                status_code=413, detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB"
+            )
+
+        buffered = bytearray()
+        while True:
+            chunk = await file.read(self.UPLOAD_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            buffered.extend(chunk)
+            if len(buffered) > limit:
+                raise HTTPException(
+                    status_code=413, detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB"
+                )
+
+        return bytes(buffered)
+
     def validate_image_file(self, file: UploadFile, content: bytes, max_size_mb: Optional[int] = None) -> str:
         """Validate image size and content type.
 
@@ -183,6 +229,12 @@ class CloudinaryStorageService:
                 status_code=400,
                 detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed"
             )
+
+        if kind:
+            # A byte cap does not bound decoding: the same few KB can describe a bitmap
+            # that costs gigabytes to materialise, so the header geometry is checked too.
+            width, height = self._get_image_size(content)
+            self._check_image_dimensions(width, height)
 
         return kind or "jpeg"
 
@@ -807,6 +859,17 @@ class CloudinaryStorageService:
             return img.format.lower() if img.format else None
         except Exception:
             return None
+
+    @staticmethod
+    def _get_image_size(content: bytes) -> Tuple[Optional[int], Optional[int]]:
+        """Read (width, height) from the image header, without decoding any pixels."""
+        try:
+            img = Image.open(io.BytesIO(content))
+            width, height = img.size
+            img.close()
+            return width, height
+        except Exception:
+            return None, None
     # ------------------------------------------------------------------
     # Deletion operations
     # ------------------------------------------------------------------

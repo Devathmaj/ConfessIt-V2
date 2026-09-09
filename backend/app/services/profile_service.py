@@ -77,11 +77,14 @@ async def upload_profile_picture_service(
     file: UploadFile = File(...)
 ):
     """Service to upload and set a new profile picture."""
-    contents = await file.read()
+    # Read through the bounded reader rather than ``await file.read()``, which would
+    # buffer the whole body before anything had looked at it.
+    contents = await storage_service.read_upload_capped(file)
 
     try:
         storage_service.validate_image_file(file, contents, max_size_mb=storage_service.max_image_size_mb)
     except HTTPException as exc:
+
         raise exc
     except Exception as exc:
         logger.error(f"Unexpected error while validating profile image: {exc}")
