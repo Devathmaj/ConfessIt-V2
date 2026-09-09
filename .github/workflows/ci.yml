@@ -83,6 +83,12 @@ jobs:
 
   docker-build:
     runs-on: ubuntu-latest
+    # A fresh checkout has no .env, and .env is gitignored so it cannot be committed. The
+    # compose file interpolates these at start-up and fails fast when they are missing, so
+    # the build needs them from here. Dev-only values, matching the local .env.
+    env:
+      POSTGRES_PASSWORD: ConfessItLocalPassword
+      REDIS_PASSWORD: ConfessItLocalRedisPassword
     steps:
       - uses: actions/checkout@v4
       - name: Verify Docker Compose Build

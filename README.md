@@ -34,7 +34,14 @@ Before you begin, ensure you have the following installed:
    cd confessit
    ```
 
-2. **Build and run the application with Docker Compose:**
+2. **Create the local credential files:**
+
+   Both `.env` files are gitignored, so a fresh clone has neither and the stack will refuse to start without them. Copy the values you need into:
+
+   - `.env` (repo root): `POSTGRES_PASSWORD` and `REDIS_PASSWORD`. Docker Compose reads this file to resolve `${VAR}` references in `docker-compose.yml`, injecting them as environment variables when the stack starts. A missing value fails the start-up immediately instead of falling back to a password committed to git.
+   - `backend/.env`: application secrets, plus the `REDIS_URL` template. The backend reads this file from `/app` at run time, and python-dotenv substitutes `${REDIS_PASSWORD}` there from its container environment, so the root `.env` stays the only file the Redis password is written in.
+
+3. **Build and run the application with Docker Compose:**
 
    ```bash
    docker-compose up --build
@@ -42,7 +49,7 @@ Before you begin, ensure you have the following installed:
 
    This command will build the Docker images for the frontend and backend services and start the containers.
 
-3. **Access the application:**
+4. **Access the application:**
 
    - **Frontend:** Open your browser and navigate to `http://localhost:5173`
    - **Backend API:** The API will be running at `http://localhost:8001`. You can access the API documentation at `http://localhost:8001/docs`.
@@ -88,5 +95,7 @@ For more details, see the API documentation at `http://localhost:8001/docs`.
 
 ## Environment Variables
 
-- `POSTGRES_PASSWORD`: Optional PostgreSQL password for the Compose database. The local default is intended for development; set a strong value for deployments.
+- `POSTGRES_PASSWORD`: PostgreSQL password for the Compose database. Set it in the root `.env`; Compose requires it and interpolates it into `DATABASE_URL`. The local value is intended for development, so use a strong one for deployments.
+- `REDIS_PASSWORD`: Redis password for the Compose cache, defined once in the root `.env`. Compose requires it, passes it to the server as `--requirepass`, and injects it into the backend so the `REDIS_URL` template can resolve it. Redis is not published to the host, so reach it with `docker compose exec redis redis-cli` rather than a local client.
+- `REDIS_URL`: Redis connection string template in `backend/.env`, written as `redis://:${REDIS_PASSWORD}@redis:6379` so the password is never duplicated. Use URL-safe characters for `REDIS_PASSWORD`, or percent-encode anything reserved in a URL.
 - `DATABASE_URL`: PostgreSQL connection string used by the backend. Compose configures it automatically.

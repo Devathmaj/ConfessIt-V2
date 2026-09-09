@@ -328,10 +328,11 @@ Values are loaded via `app/config.py` using `pydantic-settings`.
 |----------|---------|
 | `DATABASE_URL` | Connection string for PostgreSQL |
 | `DATABASE_NAME` | Logical database label used by app |
-| `REDIS_URL` | Redis cache connection string |
+| `REDIS_URL` | Redis cache connection string template in `backend/.env`; `${REDIS_PASSWORD}` is resolved at load time by python-dotenv |
+| `REDIS_PASSWORD` | Redis password, defined once in the gitignored root `.env` and interpolated by Compose into `--requirepass` and the backend environment; the port is not published to the host |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Tracing endpoint (defaults to `otel-collector:4317`) |
 | `OTEL_SERVICE_NAME` | Tracing service identifier |
-| `POSTGRES_PASSWORD` | PostgreSQL password in Docker Compose |
+| `POSTGRES_PASSWORD` | PostgreSQL password for Docker Compose, set in the gitignored root `.env` |
 
 ---
 
@@ -359,7 +360,7 @@ a database between the app and the tests. Python 3.12 matches the `backend/Docke
   - `frontend`: Node container running Vite dev server on port 5173.
   - `backend`: Python container running FastAPI on port 8001.
   - `postgres`: Official PostgreSQL image. Persistent data stored in `postgres_data` volume.
-  - `redis`: Redis alpine image for caching.
+  - `redis`: Redis alpine image for caching. Reachable only on the Compose network and password-protected, since chat traffic rides on its pub/sub channels.
   - **Observability Stack**: `otel-collector`, `prometheus`, `grafana`, `loki`, `promtail`, `tempo` all running side-by-side to capture logs, metrics, and distributed traces.
 
 ---
