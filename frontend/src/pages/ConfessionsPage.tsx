@@ -29,6 +29,7 @@ import { getConfessions, createConfession, reactToConfession, createComment, lik
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { COMMENT_BODY_MAX, CONFESSION_BODY_MAX, RECIPIENT_NAME_MAX, REPORT_REASON_MAX } from '@/lib/limits';
 
 // Interface for user information
 interface UserInfo {
@@ -521,11 +522,12 @@ export const ConfessionsPage = () => {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
-                <Textarea placeholder="Share what's in your heart..." value={newConfession} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
+                <Textarea placeholder="Share what's in your heart..." value={newConfession} maxLength={CONFESSION_BODY_MAX} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
                 <div className="space-y-2">
                   <Input
                     placeholder="Who are you confessing to?"
                     value={confessingTo}
+                    maxLength={RECIPIENT_NAME_MAX}
                     onChange={(e) => setConfessingTo(e.target.value)}
                     className="bg-background/80 border-romantic/30 focus:border-romantic"
                     required
@@ -725,6 +727,7 @@ export const ConfessionsPage = () => {
                         <Textarea
                         placeholder="Write a thoughtful comment..."
                         value={newComment}
+                        maxLength={COMMENT_BODY_MAX}
                         onChange={(e) => setNewComment(e.target.value)}
                         className="flex-grow bg-background border-romantic/30 focus:border-romantic"
                         rows={2}
@@ -770,6 +773,7 @@ export const ConfessionsPage = () => {
           <Textarea 
             placeholder="e.g., Harassment, spam, inappropriate content..."
             value={reportReason}
+            maxLength={REPORT_REASON_MAX}
             onChange={(e) => setReportReason(e.target.value)}
             className="my-4"
           />
@@ -806,6 +810,7 @@ export const ConfessionsPage = () => {
           <Textarea 
             placeholder="e.g., Harassment, spam, inappropriate content..."
             value={reportReason}
+            maxLength={REPORT_REASON_MAX}
             onChange={(e) => setReportReason(e.target.value)}
             className="my-4"
           />

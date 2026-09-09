@@ -10,6 +10,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from .limits import COMMENT_BODY_MAX, CONFESSION_BODY_MAX, MESSAGE_BODY_MAX
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -64,6 +66,13 @@ class ConfessionRecord(Base):
     heartbreak_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     comment_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
+    __table_args__ = (
+        CheckConstraint(
+            f"length(body) <= {CONFESSION_BODY_MAX}",
+            name="ck_confessions_body_length",
+        ),
+    )
+
 
 class ConfessionCommentRecord(Base):
     __tablename__ = "confession_comments"
@@ -77,6 +86,13 @@ class ConfessionCommentRecord(Base):
     dislikes: Mapped[list[str]] = mapped_column(ARRAY(Uuid(as_uuid=False)), default=list, server_default=text("'{}'"))
     like_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     dislike_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+    __table_args__ = (
+        CheckConstraint(
+            f"length(body) <= {COMMENT_BODY_MAX}",
+            name="ck_confession_comments_body_length",
+        ),
+    )
     report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
 
@@ -186,7 +202,13 @@ class MessageRecord(Base):
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        CheckConstraint(
+            f"length(body) <= {MESSAGE_BODY_MAX}",
+            name="ck_messages_body_length",
+        ),
+    )
 
 
 class NotificationRecord(Base):

@@ -12,7 +12,9 @@ from ..models import UserDetails
 from ..services.auth_service import get_current_user
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from ..limits import MESSAGE_BODY_MAX, REPORT_REASON_MAX, USER_REGNO_MAX
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +25,13 @@ router = APIRouter(
 
 
 class MessageCreate(BaseModel):
-    conversation_id: str
-    body: str
+    conversation_id: str = Field(max_length=USER_REGNO_MAX)
+    body: str = Field(max_length=MESSAGE_BODY_MAX)
 
 
 class MessageReport(BaseModel):
-    message_id: str
-    reason: str
+    message_id: str = Field(max_length=USER_REGNO_MAX)
+    reason: str = Field(max_length=REPORT_REASON_MAX)
 
 
 @router.post("/send", status_code=status.HTTP_201_CREATED)

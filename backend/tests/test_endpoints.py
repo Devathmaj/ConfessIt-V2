@@ -2,13 +2,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 def test_profile_update_unauthorized(client: TestClient):
-    # Removing the dependency override for this specific test
+    # Remove the dependency override for this specific test, then put it back. Leaving it
+    # removed silently makes every test that runs later an unauthenticated one.
     from app.main import app
     from app.services.auth_service import get_current_user
-    app.dependency_overrides.pop(get_current_user, None)
-    
-    response = client.put("/profile/update", json={"bio": "New bio"})
-    assert response.status_code == 401
+    override = app.dependency_overrides.pop(get_current_user, None)
+    try:
+        response = client.put("/profile/update", json={"bio": "New bio"})
+        assert response.status_code == 401
+    finally:
+        if override is not None:
+            app.dependency_overrides[get_current_user] = override
 
 def test_confessions_get(client: TestClient):
     response = client.get("/confessions/")

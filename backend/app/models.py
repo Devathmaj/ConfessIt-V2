@@ -4,6 +4,20 @@ from pydantic import BaseModel, EmailStr, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
+from .limits import (
+    COMMENT_BODY_MAX,
+    CONFESSION_BODY_MAX,
+    REACTION_MAX,
+    RECIPIENT_NAME_MAX,
+    REPORT_REASON_MAX,
+    USER_BIO_MAX,
+    USER_CLASS_NAME_MAX,
+    USER_EMOJI_MAX,
+    USER_GENDER_MAX,
+    USER_NAME_MAX,
+    USER_REGNO_MAX,
+    USER_ROLE_MAX,
+)
 
 class Token(BaseModel):
     """
@@ -16,10 +30,10 @@ class ConfessionCreate(BaseModel):
     """
     Model for creating a confession (input from the client).
     """
-    body: str
+    body: str = Field(max_length=CONFESSION_BODY_MAX)
     anonymous: bool
     comments_enabled: bool
-    recipient_name: str
+    recipient_name: str = Field(max_length=RECIPIENT_NAME_MAX)
 
     @validator("recipient_name")
     def _validate_recipient_name(cls, value: str) -> str:
@@ -36,16 +50,16 @@ class ConfessionUpdate(BaseModel):
     comments_enabled: Optional[bool] = None
 
 class ReactionCreate(BaseModel):
-    reaction: str
+    reaction: str = Field(max_length=REACTION_MAX)
 
 class CommentCreate(BaseModel):
-    body: str
+    body: str = Field(max_length=COMMENT_BODY_MAX)
 
 class ReportCreate(BaseModel):
     """
     Model for creating a report (input from the client).
     """
-    reason: str
+    reason: str = Field(max_length=REPORT_REASON_MAX)
 
 class UserInfo(BaseModel):
     """
@@ -119,20 +133,20 @@ class AdminUserBase(BaseModel):
     """
     Shared attributes for creating or updating user accounts via the admin APIs.
     """
-    regno: str
-    name: str
+    regno: str = Field(max_length=USER_REGNO_MAX)
+    name: str = Field(max_length=USER_NAME_MAX)
     email: EmailStr
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
-    class_name: str
-    gender: str
+    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
+    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
+    class_name: str = Field(max_length=USER_CLASS_NAME_MAX)
+    gender: str = Field(max_length=USER_GENDER_MAX)
     profile_picture_url: Optional[str] = None
     interests: Optional[List[str]] = None
     matchmaking_enabled: bool = True
     notifications_enabled: bool = True
     love_notes_receive_enabled: bool = True
     love_notes_send_enabled: bool = False
-    role: str = "user"
+    role: str = Field(default="user", max_length=USER_ROLE_MAX)
 
 
 class AdminUserCreate(AdminUserBase):
@@ -145,20 +159,20 @@ class AdminUserUpdate(BaseModel):
     """
     Payload for updating existing user accounts via the admin APIs.
     """
-    regno: Optional[str] = None
-    name: Optional[str] = None
+    regno: Optional[str] = Field(default=None, max_length=USER_REGNO_MAX)
+    name: Optional[str] = Field(default=None, max_length=USER_NAME_MAX)
     email: Optional[EmailStr] = None
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
-    class_name: Optional[str] = None
-    gender: Optional[str] = None
+    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
+    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
+    class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
+    gender: Optional[str] = Field(default=None, max_length=USER_GENDER_MAX)
     profile_picture_url: Optional[str] = None
     interests: Optional[List[str]] = None
     matchmaking_enabled: Optional[bool] = None
     notifications_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
     love_notes_send_enabled: Optional[bool] = None
-    role: Optional[str] = None
+    role: Optional[str] = Field(default=None, max_length=USER_ROLE_MAX)
     is_blocked: Optional[bool] = None
 
 

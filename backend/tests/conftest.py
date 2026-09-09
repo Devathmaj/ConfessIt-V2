@@ -25,6 +25,7 @@ settings.DATABASE_POOL_SIZE = 2
 settings.DATABASE_MAX_OVERFLOW = 2
 
 from app.main import app
+from app.models import UserDetails
 from app.services.auth_service import get_current_user
 
 test_db = get_postgres_client()
@@ -32,22 +33,46 @@ test_db.initialize()
 
 
 def override_get_current_user():
-    return {
-        "regno": "testuser",
-        "name": "Test User",
-        "email": "test@user.com",
-        "role": "user"
-    }
+    """A real UserDetails, not a dict.
+
+    Endpoints are annotated with UserDetails and reach for attributes such as .regno and
+    .id. A dict stub is only ever truthy enough for the dependency to resolve, so it lets
+    a handler fail on an AttributeError instead of exercising the code it is supposed to.
+    """
+    return UserDetails(
+        regno="testuser",
+        name="Test User",
+        email="test@user.com",
+        class_name="Test Class",
+        gender="other",
+        matchmaking_enabled=True,
+        notifications_enabled=True,
+        role="user",
+    )
+
 
 def override_get_admin_user():
-    return {
-        "regno": "adminuser",
-        "name": "Admin User",
-        "email": "admin@user.com",
-        "role": "admin"
-    }
+    """A real UserDetails carrying the admin role."""
+    return override_get_current_user().model_copy(
+        update={"regno": "adminuser", "name": "Admin User", "email": "admin@user.com", "role": "admin"}
+    )
 
 app.dependency_overrides[get_current_user] = override_get_current_user
+
+
+@pytest.fixture(autouse=True)
+def authenticated_user():
+    """Re-install the auth override before every test.
+
+    A test that needs to check the unauthenticated path pops this override itself. That
+    used to leak: once popped it stayed popped, so every test module collected afterwards
+    ran with no auth at all and every authenticated endpoint answered 401. Re-applying it
+    per test makes the authenticated default independent of collection order while still
+    letting an individual test opt out.
+    """
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    yield
+    app.dependency_overrides[get_current_user] = override_get_current_user
 
 
 @pytest.fixture(scope="module")

@@ -1,12 +1,15 @@
 """PostgreSQL engine and SQLAlchemy session lifecycle."""
+import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import create_engine
+from sqlalchemy import CheckConstraint, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 from .db_models import Base
+
+logger = logging.getLogger(__name__)
 
 
 def new_id() -> str:
@@ -53,6 +56,49 @@ class PostgresClient:
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
+        self.apply_check_constraints()
+
+    def apply_check_constraints(self) -> None:
+        """Add CHECK constraints declared in the models but missing from the database.
+
+        ``create_all`` only creates tables that do not exist, so on an already-deployed
+        database a constraint added to a model is silently never applied. Walking the
+        metadata here and adding whatever is absent keeps the running schema in step with
+        the models without needing a migration framework or hand-written DDL that can
+        drift from them.
+
+        Constraints are added ``NOT VALID``: PostgreSQL then enforces them on every new or
+        updated row while leaving already-stored rows alone. That matters for a limit added
+        to a column that was previously unbounded, where existing rows may predate the
+        limit. Validating them is a separate, deliberate step so that tightening a limit
+        cannot take the app down on boot, and so the decision about what to do with
+        over-length history stays explicit rather than silent.
+        """
+        with self.engine.begin() as connection:
+            installed = {
+                name
+                for (name,) in connection.execute(
+                    text("SELECT conname FROM pg_constraint WHERE contype = 'c'")
+                )
+            }
+            for table in Base.metadata.sorted_tables:
+                for constraint in table.constraints:
+                    if not isinstance(constraint, CheckConstraint) or constraint.name in installed:
+                        continue
+                    sqltext = str(constraint.sqltext).strip()
+                    if not sqltext:
+                        continue
+                    connection.execute(
+                        text(
+                            f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
+                            f"CHECK ({sqltext}) NOT VALID"
+                        )
+                    )
+                    logger.info(
+                        "Added CHECK constraint %s on %s (not validated)",
+                        constraint.name,
+                        table.name,
+                    )
 
     def close(self) -> None:
         self.engine.dispose()

@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI, getConversationByMatch } from '@/services/api';
 import { messagingClient, sendMessage, fetchMessages, reportMessage } from '@/lib/messaging';
+import { MESSAGE_BODY_MAX } from '@/lib/limits';
 import { toast } from 'sonner';
 import { resolveProfilePictureUrl } from '@/lib/utils';
 import { ReportMessageDialog } from './ReportMessageDialog';
@@ -953,6 +954,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 <input
                   type="text"
                   value={messageText}
+                  maxLength={MESSAGE_BODY_MAX}
                   onChange={(e) => setMessageText(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                   placeholder="Type a message..."
