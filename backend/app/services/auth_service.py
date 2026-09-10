@@ -24,6 +24,10 @@ logger = get_logger(__name__)
 # travel in <img src> query strings and therefore leak into logs, referrers and history.
 ASSET_TOKEN_TYPE = "asset_delivery"
 
+# Single wording for every blocked-account rejection so the frontend can show
+# one message regardless of which endpoint refused the request.
+ACCOUNT_UNAVAILABLE_DETAIL = "Your account is currently not available. Please contact an administrator."
+
 def _user_payload(user: UserRecord) -> dict:
     return {
         "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
@@ -42,7 +46,7 @@ def _ensure_not_blocked(user: UserRecord) -> None:
     if user.is_blocked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your account has been blocked. Contact an administrator.",
+            detail=ACCOUNT_UNAVAILABLE_DETAIL,
         )
 
 def _reject_asset_token(payload: dict) -> None:
@@ -204,6 +208,10 @@ async def generate_magic_link_service(request: Request, db: Database):
         logger.warning(f"No user found with registration number: {regno}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    # Reject blocked accounts before a token is minted, so no magic link is ever
+    # generated or logged for an account that could not use it.
+    _ensure_not_blocked(user)
+
     # This function is not defined in the provided code, assuming it exists elsewhere
     from ..create_token import create_and_store_magic_token
     token = create_and_store_magic_token(db, str(user.id), request)
@@ -260,11 +268,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         user = session.get(UserRecord, user_id) if login_token_row else None
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User associated with token not found")
-        if user.is_blocked:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account has been blocked. Contact an administrator.",
-            )
+        _ensure_not_blocked(user)
         result = session.execute(
             update(LoginTokenRecord)
             .where(

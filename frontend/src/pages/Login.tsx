@@ -29,7 +29,13 @@ export const Login = () => {
       if (response.ok) {
         toast.success('Magic link sent! Check your backend console.');
       } else {
-        toast.error('Failed to generate magic link. Please try again.');
+        const body = await response.json().catch(() => null);
+        const detail = typeof body?.detail === 'string' ? body.detail : null;
+        if (response.status === 403) {
+          toast.error(detail ?? 'Your account is currently not available.');
+        } else {
+          toast.error(detail ?? 'Failed to generate magic link. Please try again.');
+        }
       }
     } catch (error) {
       toast.error('An error occurred. Please try again.');
