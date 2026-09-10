@@ -1,5 +1,4 @@
 """PostgreSQL engine and SQLAlchemy session lifecycle."""
-import logging
 import uuid
 from typing import Any
 
@@ -8,8 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 from .db_models import Base
+from .logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def new_id() -> str:

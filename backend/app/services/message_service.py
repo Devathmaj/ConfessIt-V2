@@ -1,12 +1,12 @@
 # app/services/message_service.py
 
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy import func, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord, UserRecord
+from ..logger import get_logger
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
@@ -14,7 +14,7 @@ from ..models import UserDetails
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MessageService:

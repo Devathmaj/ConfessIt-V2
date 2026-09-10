@@ -1,11 +1,11 @@
 # app/services/conversation_service.py
 
-import logging
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import ConversationRecord, MatchRecord, UserRecord
+from ..logger import get_logger
 from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
@@ -15,7 +15,7 @@ from ..config import settings
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
 # Logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def _user_data(row):
     if row is None:

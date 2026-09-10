@@ -2,7 +2,6 @@ import os
 import io
 import time
 import secrets
-import logging
 import base64
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -15,12 +14,13 @@ from cloudinary.utils import cloudinary_url, api_sign_request, private_download_
 from PIL import Image
 import re
 import cloudinary.api as cloudinary_api
+from ..logger import get_logger
 
 # Load environment variables from a .env file
 load_dotenv()
 
 # Logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:

@@ -106,8 +106,17 @@ def test_missing_owner_cannot_delete_anything(enabled, destroyed):
 
 
 def test_refusal_is_logged_for_audit(enabled, destroyed, caplog):
-    with caplog.at_level(logging.WARNING, logger="app.services.storage_service"):
-        storage_service.delete_profile_asset(cloudinary_url_for(FOREIGN_PATH), owner_regno=OWNER)
+    # app.logger.get_logger() sets propagate=False so a module's records are not
+    # re-delivered by the root logger, which also means caplog's root handler never
+    # sees them. Attach the capture handler to the module logger itself so the audit
+    # assertion still observes the real record.
+    target = logging.getLogger("app.services.storage_service")
+    target.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.services.storage_service"):
+            storage_service.delete_profile_asset(cloudinary_url_for(FOREIGN_PATH), owner_regno=OWNER)
+    finally:
+        target.removeHandler(caplog.handler)
 
     refusals = [r for r in caplog.records if "Refused profile asset delete" in r.getMessage()]
     assert len(refusals) == 1

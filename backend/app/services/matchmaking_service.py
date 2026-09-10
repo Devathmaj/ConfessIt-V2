@@ -1,12 +1,12 @@
 # app/services/matchmaking_service.py
 
-import logging
 import random
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from ..postgres import Database
 from ..db_models import ConversationRecord, MatchRecord, UserRecord
+from ..logger import get_logger
 from datetime import datetime, timedelta, timezone
 
 from ..models import UserDetails
@@ -14,7 +14,7 @@ from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 
 # Logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Used to define the cooldown period in hours.
 MATCHMAKING_COOLDOWN_HOURS = 4

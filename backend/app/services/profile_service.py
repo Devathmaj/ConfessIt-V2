@@ -1,6 +1,5 @@
 # app/services/profile_service.py
 
-import logging
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
@@ -8,13 +7,14 @@ from ..postgres import Database
 from pydantic import BaseModel
 from sqlalchemy import select
 from ..db_models import UserRecord
+from ..logger import get_logger
 
 from ..models import UserDetails
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 
 # Logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class UserProfileUpdate(BaseModel):
     """Allowed fields for updating profile."""

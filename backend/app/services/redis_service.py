@@ -1,12 +1,12 @@
 # app/services/redis_service.py
 
-import logging
 import redis
 import json
 from typing import Optional, Callable, Any
 from ..config import settings
+from ..logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RedisService:

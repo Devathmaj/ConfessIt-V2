@@ -1,6 +1,5 @@
 # app/services/message_archival_service.py
 
-import logging
 import gzip
 import json
 import os
@@ -11,8 +10,9 @@ from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import MessageRecord
 from ..utils import isoformat_datetime
+from ..logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MessageArchivalService:

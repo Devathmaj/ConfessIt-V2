@@ -3,7 +3,6 @@
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status, Query
 from ..postgres import Database
 from typing import Annotated, Optional
-import logging
 import json
 import asyncio
 
@@ -12,11 +11,12 @@ from ..models import UserDetails
 from ..services.auth_service import get_current_user, ACCOUNT_UNAVAILABLE_DETAIL
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
+from ..logger import get_logger
 from pydantic import BaseModel, Field
 
 from ..limits import MESSAGE_BODY_MAX, REPORT_REASON_MAX, USER_REGNO_MAX
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/messages",

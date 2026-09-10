@@ -1,7 +1,7 @@
-import logging
 from sqlalchemy import select
 from ..postgres import Database
 from ..db_models import LoveNoteRecord, UserRecord
+from ..logger import get_logger
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 from ..postgres import new_id, is_valid_id
@@ -13,7 +13,7 @@ from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 
 # Logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class LoveNoteCreate(BaseModel):
     """
