@@ -21,13 +21,21 @@ from .models import UserDetails
 import uvicorn
 from .db_models import UserRecord
 from .logger import get_logger, otlp_transport
-from .telemetry import redact_query_strings
-from opentelemetry import trace
+from .telemetry import redact_client_url, redact_query_strings
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.semconv.trace import SpanAttributes
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -35,6 +43,32 @@ logger = get_logger(__name__)
 # Diagnostic endpoints are opt-in so raw database/driver internals are never reachable
 # from an unauthenticated request in a deployed environment.
 ENABLE_DEBUG_ENDPOINTS = os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() in {"1", "true", "yes"}
+
+# The dimensions the http.server.* instruments are allowed to keep. The
+# instrumentation's default set includes http.server_name, which is the raw Host
+# request header, and the backend listens on 0.0.0.0:8001, so anything that can
+# reach the port can mint a fresh time series per request by varying that header
+# alone. Measured on this stack, five requests carrying five different Host values
+# took the exported http_server series from 253 to 438 lines. The SDK builds the
+# aggregation key from whichever attributes survive, so bounding them here is what
+# bounds the series count.
+#
+# An allowlist rather than a denylist because SDK 1.25.0's View offers no
+# drop_attribute_keys, which is how "drop exactly this one key" would normally be
+# written. It also fails closed: an attribute a future instrumentation release
+# starts emitting is excluded until someone decides it belongs here.
+#
+# http.target is the route template this instrumentation version emits for metrics
+# (/confessions, not /confessions/12345), because the middleware reads it from
+# route.path_format. It is not the request target the trace carries, so it does not
+# reintroduce the query string that app.telemetry removes from spans.
+BOUNDED_HTTP_METRIC_ATTRIBUTES = {
+    SpanAttributes.HTTP_METHOD,
+    SpanAttributes.HTTP_STATUS_CODE,
+    SpanAttributes.HTTP_TARGET,
+    SpanAttributes.HTTP_SCHEME,
+    SpanAttributes.HTTP_FLAVOR,
+}
 
 
 def _init_tracing():
@@ -54,6 +88,80 @@ def _init_tracing():
     provider.add_span_processor(BatchSpanProcessor(exporter))
 
 _init_tracing()
+
+
+def _init_metrics():
+    """Register the MeterProvider that the HTTP instrumentation records through.
+
+    Without this the SDK leaves a NoOp MeterProvider in place, so the middleware's
+    instruments are created against a provider that discards every measurement. The
+    ASGI middleware already builds the standard http.server.* instruments (duration,
+    request/response size, active requests) and takes a meter when
+    FastAPIInstrumentor runs, so registering the provider is all the HTTP metrics
+    need: there is no counter to add per route and no new dependency.
+
+    Metrics go out over the same OTLP gRPC endpoint and the same resource as the
+    traces, so the collector's existing metrics pipeline carries them to the
+    prometheus exporter on :8889, which prometheus.yml already scrapes. Nothing in
+    the collector configuration had to change.
+
+    This must run before FastAPIInstrumentor.instrument_app below. The instrumentor
+    resolves the global meter provider when it runs, not when a measurement is
+    recorded, so a provider registered afterwards would never be seen and the
+    instruments would stay bound to the NoOp one.
+    """
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint:
+        return
+
+    service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
+    resource = Resource.create({"service.name": service_name})
+
+    insecure, credentials = otlp_transport()
+
+    exporter = OTLPMetricExporter(endpoint=endpoint, insecure=insecure, credentials=credentials)
+    # 15s matches the scrape interval in prometheus.yml and the default datasource
+    # timeInterval. The SDK default of 60s would mean a point is often exported
+    # after the scrape that would have collected it, so a restarted backend looks
+    # empty for a minute.
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=15000)
+    metrics.set_meter_provider(
+        MeterProvider(
+            resource=resource,
+            metric_readers=[reader],
+            views=[
+                View(
+                    instrument_name="http.server.*",
+                    attribute_keys=BOUNDED_HTTP_METRIC_ATTRIBUTES,
+                )
+            ],
+        )
+    )
+
+_init_metrics()
+
+
+def _init_dependency_instrumentation(postgres: Database) -> None:
+    """Instrument the three dependencies the server span used to sit on top of.
+
+    Without these, a request produced a single ``POST /confessions`` span and the
+    time spent in PostgreSQL, Redis and Cloudinary was unattributed, so a slow
+    endpoint could not be told apart from a slow query.
+
+    SQLAlchemy is instrumented against this one shared engine rather than globally,
+    because the engine is created per :class:`~app.postgres.PostgresClient` and the
+    one the process serves traffic from is the one that matters. Redis and urllib3
+    patch their clients globally, which is why they need no arguments; the urllib3
+    hook is what keeps a signed Cloudinary query string out of the span.
+
+    Called from ``on_startup`` rather than at import because it needs a live engine,
+    and after that event's own schema work so that booting the process does not emit
+    a burst of spans that belong to no request.
+    """
+    SQLAlchemyInstrumentor().instrument(engine=postgres.engine)
+    RedisInstrumentor().instrument()
+    URLLib3Instrumentor().instrument(request_hook=redact_client_url)
+
 
 app = FastAPI(
     title="ConfessIt API",
@@ -99,6 +207,9 @@ async def on_startup():
             if not session.scalar(select(UserRecord.id).where(UserRecord.regno == seed["regno"])):
                 session.add(UserRecord(**seed))
     logger.info("PostgreSQL storage initialized.")
+
+    # Last, so the schema work above is not traced against no request.
+    _init_dependency_instrumentation(postgres)
 
 
 @app.on_event("shutdown")

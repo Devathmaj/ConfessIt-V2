@@ -1,0 +1,105 @@
+# Alerting rules for the ConfessIt stack.
+#
+# Loaded by prometheus.yml via rule_files. This is Prometheus's own rule engine, which
+# is already part of this stack, so no Alertmanager was added: these rules evaluate and
+# expose state through the Prometheus API and the "Alerts" page, without inventing any
+# notification destination that does not exist yet.
+#
+# Every expression reads metrics that already flow today, from the application HTTP
+# metrics the backend pushes through the otel-collector, and from Prometheus's own
+# target health. No application code was added for this.
+#
+# Thresholds are set deliberately high. This is a development stack where normal
+# traffic is light and bursty, so a rule that reacts to a single slow or failed
+# request would be permanently firing and would train everyone to ignore it. Each
+# rule therefore pairs its threshold with a minimum traffic volume, and a `for`
+# window, so that it stays quiet until the condition is both real and sustained.
+#
+# The app metrics are labelled exported_job="confessit-backend" by the collector's
+# prometheus exporter; that label is what scopes these rules to the backend, since
+# the collector also exports its own metrics on the same scrape endpoint.
+
+groups:
+  - name: confessit-backend-availability
+    rules:
+      # The backend's application metrics are pushed to the otel-collector rather than
+      # scraped, so there is no `up{}` series that represents the backend process
+      # itself, and the backend exposes no /health or /metrics endpoint to scrape.
+      # The collector is the only existing series that covers this failure: it is the
+      # sole path the backend's metrics travel, so when it is unreachable the
+      # backend's HTTP metrics stop being visible and every rule in this file goes
+      # blind at the same time. This fires on that, which is the availability problem
+      # this stack can actually observe today.
+      #
+      # Note the gap: this does not detect the backend process dying while the
+      # collector stays healthy. Closing that would need a scrape target, which needs
+      # a /metrics endpoint on the backend, which is application code that was out of
+      # scope here.
+      - alert: ConfessItBackendMetricsPipelineDown
+        expr: up{job="otel-collector"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backend metrics pipeline is down
+          description: >-
+            Prometheus cannot scrape the otel-collector, which is the only path the
+            backend's HTTP metrics travel. The backend may be serving traffic fine
+            while being completely invisible here, so treat RED signals as unavailable
+            until this clears. Down for more than 5 minutes.
+
+  - name: confessit-backend-errors
+    rules:
+      # Share of requests answered with a 5xx, over the backend only.
+      #
+      # The ratio is guarded by a traffic floor of 20 requests in the 5 minute window.
+      # Without it, a single failed request against a single request would read as a
+      # 100% error rate, and any error during a quiet spell would page. Below the
+      # floor the rule stays silent, which is the intended behaviour rather than a
+      # gap in coverage.
+      - alert: ConfessItBackendHighErrorRate
+        expr: |
+          (
+            sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend", http_status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m]))
+          ) > 0.05
+          and
+          sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backend 5xx rate above 5%
+          description: >-
+            Over 5 minutes the backend answered more than 5% of its requests with a 5xx
+            status, while serving at least 20 requests, sustained for 10 minutes. A
+            single error against light traffic will not trigger this.
+
+  - name: confessit-backend-latency
+    rules:
+      # p95 of the backend's server-side request duration, in milliseconds. 1000ms is
+      # the first bucket boundary at or above one second in this histogram, so the
+      # quantile is read at a resolution the buckets can actually support.
+      #
+      # Measured p95 in normal development use is around 25ms, so this sits well clear
+      # of ordinary work and only reacts to a genuine slowdown such as a database or
+      # upstream dependency stalling. Same traffic floor and rationale as the error
+      # rate rule: a quantile computed from a handful of requests is noise.
+      - alert: ConfessItBackendHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_server_duration_milliseconds_bucket{exported_job="confessit-backend"}[5m]))
+          ) > 1000
+          and
+          sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backend p95 latency above 1000ms
+          description: >-
+            The 95th percentile of backend request duration has been above 1000ms for
+            15 minutes, while serving at least 20 requests in the window. Typical
+            development traffic measures around 25ms.

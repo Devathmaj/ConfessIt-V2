@@ -93,7 +93,6 @@ Containerized Monolithic Backend (FastAPI) paired with an SPA Frontend (React), 
 │   ├── loki-config.yml
 │   ├── otel-collector-config.yml
 │   ├── prometheus.yml
-│   ├── promtail-config.yml
 │   └── tempo.yml
 ├── .env                  # Root environment variables
 ├── docker-compose.yml    # Orchestration of all services
@@ -125,7 +124,7 @@ Containerized Monolithic Backend (FastAPI) paired with an SPA Frontend (React), 
 - **Containerization:** Docker & Docker Compose.
 - **Tracing:** OpenTelemetry + Grafana Tempo.
 - **Metrics:** Prometheus + Grafana.
-- **Logging:** Grafana Loki + Promtail.
+- **Logging:** Grafana Loki, fed by the OpenTelemetry Collector over OTLP.
 
 ---
 
@@ -364,7 +363,7 @@ a database between the app and the tests. Python 3.12 matches the `backend/Docke
   - `backend`: Python container running FastAPI on port 8001.
   - `postgres`: Official PostgreSQL image. Persistent data stored in `postgres_data` volume.
   - `redis`: Redis alpine image for caching. Reachable only on the Compose network and password-protected, since chat traffic rides on its pub/sub channels.
-  - **Observability Stack:** `otel-collector`, `prometheus`, `grafana`, `loki`, `promtail`, `tempo` all running side-by-side to capture logs, metrics, and distributed traces. Ingestion ports stay on the Compose network; the query UIs (Grafana 3050, Prometheus 9090, Loki 3100, Tempo 3200) bind to `127.0.0.1` so they are not reachable from the network. Loki runs with `auth_enabled: true` and a 168h retention, and requires an `X-Scope-OrgID` header that promtail and the otel-collector send.
+  - **Observability Stack:** `otel-collector`, `prometheus`, `grafana`, `loki`, `tempo` all running side-by-side to capture logs, metrics, and distributed traces. Ingestion ports stay on the Compose network; the query UIs (Grafana 3050, Prometheus 9090, Loki 3100, Tempo 3200) bind to `127.0.0.1` so they are not reachable from the network. Loki runs with `auth_enabled: true` and a 168h retention, and requires an `X-Scope-OrgID` header that the otel-collector sends. `promtail` was removed: the backend already exported logs over OTLP, so its Docker-host and backend-file scraping were a second and third copy of the same records.
   - **Visualization:** `grafana` is provisioned on port 3050 to visualize all telemetry data.
 
 ---
@@ -393,7 +392,7 @@ because of `NOT VALID`. It also left the test database missing that constraint a
 ## 19. Logging, Monitoring & Observability
 
 This is a heavily instrumented project.
-- **Logging:** FastAPI uses standard Python logging mapped to stdout. `promtail` reads Docker container logs and pushes them to `loki`.
+- **Logging:** FastAPI uses standard Python logging with a console handler and an OTel `LoggingHandler`. Logs reach Loki only over OTLP via the `otel-collector`, so there is a single authoritative copy. The console handler is for `docker compose logs`; nothing scrapes Docker stdout or a log file, so the Loki tenant holds only ConfessIt telemetry.
 - **Metrics:** `prometheus` scrapes metrics.
 - **Tracing:** `opentelemetry-instrumentation-fastapi` automatically wraps HTTP requests. Spans are sent to `otel-collector`, which forwards them to `tempo`.
 - **Visualization:** `grafana` is provisioned on port 3050 to visualize all telemetry data.
@@ -490,10 +489,10 @@ graph TD
     Client -->|HTTP:8001| Backend[FastAPI Backend]
     Backend -->|TCP:5432 (internal)| PostgreSQL[(PostgreSQL)]
     Backend -->|TCP:6379 (internal)| Redis[(Redis)]
-    Backend -.->|Logs| Promtail
-    Backend -.->|Traces| Otel[OpenTelemetry Collector]
-    Otel -.-> Tempo
-    Promtail -.-> Loki
+    Backend -.->|Logs (OTLP)| Otel
+    Backend -.->|Traces (OTLP)| Otel
+    Otel --> Tempo
+    Otel -.-> Loki
     Prometheus --> Otel
     Grafana --> Prometheus
     Grafana --> Loki

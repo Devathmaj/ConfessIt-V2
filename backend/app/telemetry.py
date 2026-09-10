@@ -85,3 +85,23 @@ def redact_query_strings(span: Span, scope) -> None:
 
     if redacted:
         span.set_attributes(redacted)
+
+
+def redact_client_url(span: Span, instance=None, headers=None, body=None) -> None:
+    """Strip the query string from an outbound client span's URL attributes.
+
+    Wired in as the urllib3 instrumentation's ``request_hook``, which covers the
+    Cloudinary calls in ``app.services.storage_service`` -- that library issues its
+    requests through a ``urllib3.PoolManager`` rather than httpx or requests. The
+    instrumentor copies the URL it is given onto the span when the span is created
+    and then calls this hook, so this is the last point at which the rewrite
+    sticks, exactly as it is for the server spans above.
+
+    The reason it is needed is the same shape as the server-side one. Cloudinary
+    signs its delivery URLs, so a query string on an outbound request can carry a
+    ``s=`` signature and a ``t=`` timestamp, and the upload and admin APIs accept
+    parameters this application has no control over. Dropping the whole query
+    string keeps a credential from being exported in the first place, and stops a
+    per-request value from becoming a span attribute.
+    """
+    redact_query_strings(span, None)

@@ -1,5 +1,5 @@
 # Multi-tenancy on: every read and write must carry an X-Scope-OrgID header, which
-# promtail and the otel-collector's loki exporter both send. This is tenant isolation, not
+# the otel-collector's loki exporter sends. This is tenant isolation, not
 # authentication -- it stops anonymous queries and keeps tenants apart, but anyone who can
 # reach the port can still claim a tenant. The real control is that the port is not
 # published off the host (see docker-compose.yml).
@@ -29,8 +29,8 @@ schema_config:
         prefix: index_
         period: 24h
 
-# The log store accumulates request paths, user identifiers and, via promtail, the
-# backend's own log files, so retention is bounded rather than open-ended.
+# The log store accumulates request paths and user identifiers, so retention is
+# bounded rather than open-ended.
 limits_config:
   retention_period: 168h
 

@@ -55,9 +55,7 @@ Before you begin, ensure you have the following installed:
    - **Backend API:** The API will be running at `http://localhost:8001`. You can access the API documentation at `http://localhost:8001/docs`.
    - **Grafana:** `http://localhost:3050`, logging in with `GRAFANA_ADMIN_USER` from the root `.env`.
 
-5. **Point Grafana at the telemetry stores** (one-time, after the first start):
-
-   Loki now requires an `X-Scope-OrgID` header on every query, so add a custom header `X-Scope-OrgID = confessit` under the Loki datasource's **Custom HTTP headers**. Promtail and the otel-collector already send it. The other datasources (`http://prometheus:9090`, `http://tempo:3200`) need no header.
+5. **Grafana needs no manual configuration.** Prometheus, Loki and Tempo are provisioned from `observability/grafana/provisioning/datasources/datasources.yml` on every start, so a fresh `docker compose up` yields a Grafana that is already connected. The Loki datasource carries the `X-Scope-OrgID: confessit` header that Loki requires, matching what the otel-collector sends, so Explore returns the same tenant the stack writes to.
 
    The observability UIs are bound to `127.0.0.1`, so they are reachable from the host but not from the network.
 
@@ -108,3 +106,25 @@ For more details, see the API documentation at `http://localhost:8001/docs`.
 - `CLOUDINARY_SECURE_URLS`: Set to `false` only if Cloudinary assets must be delivered over plain HTTP. Defaults to `true`, so asset URLs are HTTPS.
 - `OTEL_EXPORTER_OTLP_INSECURE`: Set to `false` when the OTLP collector is not on the local Compose network, together with `OTEL_EXPORTER_OTLP_CERTIFICATE` pointing at the CA bundle. The backend refuses to export telemetry over TLS without a certificate to verify the collector with. Defaults to `true` for the local collector, which has no certificates.
 - `DATABASE_URL`: PostgreSQL connection string used by the backend. Compose configures it automatically.
+
+## Application metrics
+
+The backend exports HTTP server metrics over the same OTLP pipeline as the traces and logs: FastAPI → OTLP gRPC → `otel-collector` → the collector's Prometheus exporter on `:8889` → Prometheus, which `prometheus.yml` already scrapes. No separate metrics architecture and no Prometheus client library are involved.
+
+The names below are the ones this stack actually produces, which are **not** the `http_server_duration_seconds` spelling in current OpenTelemetry documentation. The pinned instrumentation (`0.46b0`) names the histogram `http.server.duration` in milliseconds, and the collector's Prometheus exporter appends the unit:
+
+| Prometheus name | Meaning |
+| --- | --- |
+| `http_server_duration_milliseconds_bucket` / `_sum` / `_count` | Request latency histogram, and the count behind request rate |
+| `http_server_active_requests` | Requests currently in flight |
+| `http_server_response_size_bytes_*` | Response size (request size appears only for requests with a `Content-Length`) |
+
+The four things the stack is read for come from these:
+
+```promql
+sum by (http_target, http_status_code) (rate(http_server_duration_milliseconds_count[5m]))                       # rate + count
+sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m]))                                  # error rate
+histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket[5m])))                        # p95 latency
+```
+
+Dimensions are `http_method`, `http_status_code`, `http_target`, `http_scheme` and `http_flavor`. `http_target` is the **route template** (`/confessions`, `/confessions/{confession_id}`), not the concrete path, so one series covers every confession id. `http.server_name` — the raw `Host` header — is deliberately excluded by a View in `backend/app/main.py`, because the backend listens on `0.0.0.0:8001` and an unbounded dimension there would let any client mint time series by varying that header. The query string never appears in metrics.

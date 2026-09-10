@@ -130,11 +130,16 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
+      # Tempo 2.5's metrics-generator delivers the RED and service-graph series it
+      # derives from traces by remote write; it has no local scrape endpoint. This
+      # flag is the receiver for that. The endpoint stays bound to loopback.
+      - "--web.enable-remote-write-receiver"
     # Loopback only: the metrics contain request rates, error counts and target topology.
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerting-rules.yml:/etc/prometheus/alerting-rules.yml:ro
       - prometheus_data:/prometheus
 
   grafana:
@@ -159,6 +164,23 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
+      # Provisioned from the repository at every start, so the datasources are
+      # recreated rather than configured once by hand. Read-only: Grafana must not be
+      # able to rewrite the definitions that make the stack reproducible.
+      #
+      # Only the datasources subdirectory is overlaid, not the whole provisioning
+      # path. Grafana also reads plugins/, notifiers/, alerting/ and dashboards/ from
+      # there, and replacing the directory root hides the copies in the image, so it
+      # logs a read error for each of the four. Overlaying the one directory that is
+      # actually provisioned leaves the rest intact.
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    # Grafana health-checks each datasource on start-up, so it must not begin before
+    # the stores it points at are listening, or it logs a connection error per
+    # datasource and shows them red until something restarts it.
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
 
   loki:
     image: grafana/loki:2.9.8
@@ -169,17 +191,6 @@ services:
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
-
-  promtail:
-    image: grafana/promtail:2.9.8
-    command: ["-config.file=/etc/promtail/config.yml"]
-    volumes:
-      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./backend:/var/log/confessit:ro
-      - promtail_positions:/tmp
-    depends_on:
-      - loki
 
   tempo:
     image: grafana/tempo:2.5.0
@@ -201,5 +212,5 @@ volumes:
   prometheus_data:
   grafana_data:
   loki_data:
-  promtail_positions:
   tempo_data:
+

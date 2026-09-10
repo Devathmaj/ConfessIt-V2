@@ -1,0 +1,91 @@
+# Datasources provisioned into Grafana at start-up, so a fresh `docker compose up`
+# yields a Grafana that is already connected to the telemetry stack instead of one
+# that has to be pointed at Prometheus, Loki and Tempo by hand.
+#
+# The URLs are Compose service names, not localhost. Grafana is a container on the
+# same network, so `prometheus:9090` etc. is the address that actually resolves
+# there; `localhost` inside the Grafana container is Grafana itself. These are the
+# same hostnames otel-collector-config.yml and prometheus.yml already use.
+#
+# No credential appears in this file. Prometheus, Loki and Tempo are all reached
+# without authentication over the Compose network: Loki's `auth_enabled` is tenant
+# isolation, not login, and the tenant is a name rather than a secret -- it is
+# already written literally in otel-collector-config.yml and promtail-config.yml.
+# Grafana's own admin login stays in the root .env via GF_SECURITY_ADMIN_*.
+apiVersion: 1
+
+# Applied on every start, so an edit here replaces the previous definition instead
+# of colliding with it or leaving a stale copy behind in grafana_data.
+overwrite: true
+
+datasources:
+  - name: Prometheus
+    uid: confessit-prometheus
+    type: prometheus
+    # prometheus.yml scrapes otel-collector:8889, so the backend's own OTLP metrics
+    # arrive here after passing through the collector's metrics pipeline.
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      # Matches the scrape interval in prometheus.yml, so a panel covers at least one
+      # full scrape and a newly started backend shows a point without a long wait.
+      timeInterval: 15s
+    editable: false
+
+  - name: Loki
+    uid: confessit-loki
+    type: loki
+    url: http://loki:3100
+    access: proxy
+    jsonData:
+      # loki-config.yml sets auth_enabled: true, so every read must carry the tenant
+      # header or the query is rejected. Sent the same way promtail and the
+      # collector's loki exporter send it, which is what keeps Grafana pointed at the
+      # same tenant those two write to -- querying without it returns nothing even
+      # while logs are visibly arriving.
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 1000
+      # Logs -> traces. The otel-collector's loki exporter stores each record as JSON
+      # with the active trace id in a top-level "traceid" field of the log body (for
+      # example {"body":"...","traceid":"cdc67d5f...","spanid":"0a1f70b7..."}). This
+      # derived field pulls that value out of the line at display time and links it to
+      # the matching trace, which is the logs-to-traces half of the correlation. The
+      # reverse direction, trace to logs, is tracesToLogsV2 on the Tempo datasource
+      # below.
+      #
+      # This is deliberately a derived field rather than a Loki label. A trace id is
+      # unique per request, so promoting one to a label would create a new stream per
+      # request and blow up the index; the id stays in the body and is read from there
+      # only when a line is rendered.
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"traceid"\s*:\s*"([a-f0-9]{32})"'
+          # Grafana parses the trace id itself and opens the Tempo datasource with it.
+          # The doubled $$ escapes the provisioning loader's environment variable
+          # expansion, so the placeholder survives into the datasource as a literal.
+          url: '$${__value.raw}'
+          datasourceUid: confessit-tempo
+    secureJsonData:
+      httpHeaderValue1: confessit
+    editable: false
+
+  - name: Tempo
+    uid: confessit-tempo
+    type: tempo
+    # tempo.yml listens on 3200 and that port serves the query API (/ready,
+    # /api/search, /api/traces/<id>), which is the API Grafana's Tempo datasource
+    # calls. 4317 on the same container is OTLP ingestion, not queryable.
+    url: http://tempo:3200
+    access: proxy
+    jsonData:
+      # No search path override: /api/search is Tempo 2.5's default and is what
+      # Grafana uses to turn a trace ID into a trace.
+      tracesToLogsV2:
+        datasourceUid: confessit-loki
+        spanStartTimeShift: -1h
+        spanEndTimeShift: 1h
+        filterByTraceID: true
+        filterBySpanID: false
+    editable: false

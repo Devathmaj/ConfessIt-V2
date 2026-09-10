@@ -16,3 +16,46 @@ storage:
 compactor:
   compaction:
     block_retention: 24h
+
+# Derives RED metrics (rate, errors, duration) and a service graph from the spans
+# the otel-collector already ships to tempo:4317. The ingestion path above is
+# untouched; this only consumes what is already stored.
+#
+# The processor settings are deliberately left at their defaults and span_metrics
+# carries no extra dimensions. Both processors key their output on service name,
+# which is a small bounded set here, so the default produces queryable metrics
+# without inviting per-request values into a metric label.
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+    collection_interval: 15s
+  storage:
+    path: /var/tempo/generator/wal
+    # Tempo 2.5 publishes generated metrics by remote write only, so the
+    # collector in this stack is the same single Prometheus that serves the rest
+    # of the observability data. send_exemplars lets Grafana jump from a RED
+    # metric straight to the trace it came from.
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  processor:
+    service_graphs:
+      # How long to wait for the rest of a trace before drawing its edges, so a
+      # conversation split across spans is joined rather than half-counted.
+      wait: 10s
+      max_items: 10000
+    span_metrics:
+      dimensions: []
+
+# The processors above only describe how to build the series; which of them actually
+# run is a per-tenant decision, and with no overrides section the single tenant has
+# none of them enabled, so the generator starts and then produces nothing. This is
+# what turns them on. local-blocks is deliberately not listed: it backs TraceQL
+# metrics over the query frontend, which this stack does not use.
+overrides:
+  defaults:
+    metrics_generator:
+      processors:
+        - service-graphs
+        - span-metrics

@@ -2,6 +2,13 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Alerting runs in Prometheus's own rule engine, which is already part of this stack.
+# No Alertmanager is configured: the rules evaluate and their state is readable from
+# the /api/v1/rules endpoint and the Alerts page, without adding a notification
+# destination that does not exist.
+rule_files:
+  - /etc/prometheus/alerting-rules.yml
+
 scrape_configs:
   - job_name: "prometheus"
     static_configs:

@@ -21,6 +21,9 @@ opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 opentelemetry-instrumentation-fastapi==0.46b0
 opentelemetry-instrumentation-logging==0.46b0
+opentelemetry-instrumentation-redis==0.46b0
+opentelemetry-instrumentation-sqlalchemy==0.46b0
+opentelemetry-instrumentation-urllib3==0.46b0
 opentelemetry-exporter-otlp-proto-grpc==1.25.0
 setuptools<81
 SQLAlchemy==2.0.36

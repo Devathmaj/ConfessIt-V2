@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-from logging.handlers import TimedRotatingFileHandler
 
 import grpc
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -11,7 +10,6 @@ from opentelemetry.sdk.resources import Resource
 
 # Correctly define the formatter
 FORMATTER = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-LOG_FILE = "my_app.log"
 
 _OTEL_LOG_HANDLER = None
 
@@ -20,10 +18,14 @@ def get_console_handler():
     console_handler.setFormatter(FORMATTER)
     return console_handler
 
-def get_file_handler():
-    file_handler = TimedRotatingFileHandler(LOG_FILE, when='midnight')
-    file_handler.setFormatter(FORMATTER)
-    return file_handler
+# There is deliberately no file handler. This application used to write every record
+# to my_app.log as well as to stdout and to OTLP, and promtail scraped both the file
+# and the Docker host, so one log line reached Loki three times with differing
+# content. The OTLP handler below is now the only path into Loki, and the console
+# handler exists for `docker compose logs` rather than as an ingestion route --
+# nothing scrapes stdout any more. Adding a file handler back would reintroduce the
+# duplicate, so a log-on-disk requirement should be met by the collector's own
+# export rather than by a second copy of the application log.
 
 def otlp_transport():
     """Resolve OTLP transport security from the environment.
@@ -78,7 +80,6 @@ def get_logger(logger_name):
     # Add handlers only if they haven't been added already
     if not logger.handlers:
         logger.addHandler(get_console_handler())
-        logger.addHandler(get_file_handler())
         otel_handler = _get_otel_log_handler()
         if otel_handler:
             logger.addHandler(otel_handler)
