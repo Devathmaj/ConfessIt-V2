@@ -21,6 +21,7 @@ from .models import UserDetails
 import uvicorn
 from .db_models import UserRecord
 from .logger import get_logger, otlp_transport
+from .telemetry import redact_query_strings
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -236,7 +237,11 @@ app.include_router(notifications.router)
 app.include_router(admin.router)
 app.include_router(admin_love_notes.router)
 
-FastAPIInstrumentor.instrument_app(app)
+# The hook drops the query string from the span's URL attributes before the span is
+# exported, because the middleware's http.url otherwise carries the raw query string
+# and the asset delivery routes below authenticate on a scoped token passed as `t`.
+# See app.telemetry for why the hook is used rather than a span processor.
+FastAPIInstrumentor.instrument_app(app, server_request_hook=redact_query_strings)
 
 # ----------------------
 # Asset Delivery Routes

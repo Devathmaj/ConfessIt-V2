@@ -61,8 +61,20 @@ services:
       OTEL_SERVICE_NAME: "confessit-backend"
   postgres:
     image: postgres:16-alpine
+    # Published to the host on loopback only, so a host-side psql/DBeaver can attach
+    # while nothing on the network can reach the database or the application data in
+    # it. This is the same posture as the observability UIs below, which bind
+    # 127.0.0.1 too. The earlier "5432:5432" mapping bound every host interface and
+    # was the LAN exposure.
+    #
+    # The host port is 5433, not 5432, because an installed PostgreSQL 18 Windows
+    # service (postgresql-x64-18) already holds the host's 5432 on 0.0.0.0:5432, and
+    # two listeners cannot share a port. 5433 is free. The container port is still 5432
+    # and every other service reaches it as postgres:5432 over the Compose network.
+    # If that service is ever removed, change the host side back to 5432 to match the
+    # port clients already expect.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: confessit
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}

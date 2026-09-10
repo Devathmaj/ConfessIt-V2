@@ -136,7 +136,7 @@ Containerized Monolithic Backend (FastAPI) paired with an SPA Frontend (React), 
 
 **External Dependency Graph:**
 - **Frontend -> Backend:** The React SPA communicates with the FastAPI backend over REST (`http://localhost:8001`).
-- **Backend -> PostgreSQL:** TCP connection on `5432` to store persistent application state.
+- **Backend -> PostgreSQL:** TCP connection on `5432` over the Compose network to store persistent application state. Published to the host as `127.0.0.1:5433` for local clients only.
 - **Backend -> Redis:** TCP connection on `6379` for caching/sessions.
 - **Backend -> OpenTelemetry Collector:** gRPC connection on `4317` to export spans and metrics.
 
@@ -450,7 +450,22 @@ docker-compose up --build
 # Frontend accessible at: http://localhost:5173
 ```
 
-**Database Access:** Connect directly via PostgreSQL client to `localhost:5432` using the configured PostgreSQL credentials.
+**Database Access:** PostgreSQL is published to the **host on loopback only** — `127.0.0.1:5433`, forwarded to
+the container's `5432`. It is reachable from the host but **not from the network**, matching the observability
+UIs below. Use the `POSTGRES_USER` / `POSTGRES_PASSWORD` from the root `.env`:
+
+```bash
+# ConfessIt is the live database; ConfessIt_Test is used by the test suite.
+psql -h 127.0.0.1 -p 5433 -U confessit -d ConfessIt
+```
+
+The host port is **5433, not 5432**: an installed PostgreSQL 18 Windows service (`postgresql-x64-18`) already
+holds the host's `5432` on `0.0.0.0:5432`, and two listeners cannot share a port. The container port is still
+`5432`, and every other service reaches it as `postgres:5432` over the Compose network.
+
+The original `5432:5432` mapping bound the database and its application data to **every** host interface,
+which is the LAN exposure this closed. Do not replace it with a bare `5432:5432` — keep the `127.0.0.1`
+prefix.
 
 **Telemetry Access:** Grafana available at `http://localhost:3050`, using `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from the root `.env`.
 
@@ -473,8 +488,8 @@ docker-compose up --build
 graph TD
     Client[Web Browser] -->|HTTP:5173| Frontend[Vite/React]
     Client -->|HTTP:8001| Backend[FastAPI Backend]
-    Backend -->|TCP:5432| PostgreSQL[(PostgreSQL)]
-    Backend -->|TCP:6379| Redis[(Redis)]
+    Backend -->|TCP:5432 (internal)| PostgreSQL[(PostgreSQL)]
+    Backend -->|TCP:6379 (internal)| Redis[(Redis)]
     Backend -.->|Logs| Promtail
     Backend -.->|Traces| Otel[OpenTelemetry Collector]
     Otel -.-> Tempo
