@@ -9,7 +9,7 @@ import asyncio
 
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..services.auth_service import get_current_user
+from ..services.auth_service import get_current_user, ACCOUNT_UNAVAILABLE_DETAIL
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
 from pydantic import BaseModel, Field
@@ -147,6 +147,15 @@ async def websocket_endpoint(
             if conversation.get("is_blocked", False):
                 logger.warning(f"WebSocket rejected: conversation {conversation_id} is blocked")
                 await websocket.send_json({"error": "Conversation is blocked"})
+                await websocket.close(code=4003)
+                return
+            # The conversation row says nothing about account state, so a socket opened
+            # after a block would otherwise stream live messages to the blocked side.
+            if message_service.is_partner_blocked(db, conversation, user.regno):
+                logger.warning(
+                    f"WebSocket rejected: partner of {user.regno} in conversation {conversation_id} is blocked"
+                )
+                await websocket.send_json({"error": ACCOUNT_UNAVAILABLE_DETAIL})
                 await websocket.close(code=4003)
                 return
         except Exception as e:

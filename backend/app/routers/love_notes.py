@@ -36,6 +36,9 @@ class UserRecipient(BaseModel):
     gender: str
     interests: Optional[List[str]] = None
     profile_picture_url: Optional[str] = None
+    # Blocked accounts stay in the list on purpose: a note may still be sent to them,
+    # the sender just has to confirm it first. The flag is what lets the client warn.
+    is_blocked: bool = False
 
 @router.get("/users", response_model=List[UserRecipient])
 async def get_all_users(

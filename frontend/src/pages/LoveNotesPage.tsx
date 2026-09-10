@@ -13,6 +13,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
     Mail,
     Palette,
@@ -98,6 +109,8 @@ export const LoveNotesPage = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedClass, setSelectedClass] = useState('All');
     const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
+    const [isUnavailableConfirmOpen, setIsUnavailableConfirmOpen] = useState(false);
+    const [isSending, setIsSending] = useState(false);
 
 
     // Used to fetch templates, users, classes, and inbox count
@@ -293,10 +306,29 @@ export const LoveNotesPage = () => {
         setIsRecipientModalOpen(true);
     };
 
-    // Used to send the note after confirming recipient
+    // Used to send the note after confirming recipient. A recipient an admin has blocked
+    // is still allowed to receive a note, but the sender is asked once to confirm first.
     const handleConfirmAndSend = async () => {
+        if (!selectedRecipient) {
+            toast.error("Please select a recipient.");
+            return;
+        }
+        if (selectedRecipient.is_blocked) {
+            setIsUnavailableConfirmOpen(true);
+            return;
+        }
+        await sendSelectedNote();
+    };
+
+    // Used to perform the actual send, once the recipient (and any warning) is settled
+    const sendSelectedNote = async () => {
         if (!selectedRecipient || !canvasRef.current) {
             toast.error("Please select a recipient.");
+            return;
+        }
+        // The note is sent at most once per season, so a second click while the first
+        // request is still open must not spend it.
+        if (isSending) {
             return;
         }
 
@@ -312,6 +344,7 @@ export const LoveNotesPage = () => {
         }
 
         try {
+            setIsSending(true);
             await sendLoveNote({
                 recipient_id: selectedRecipient.id,
                 image_base64: imageBase64,
@@ -320,6 +353,7 @@ export const LoveNotesPage = () => {
             });
             toast.success('Love note sent for review! 💕');
             setIsRecipientModalOpen(false);
+            setIsUnavailableConfirmOpen(false);
             setNoteMessage('');
             setSelectedEmoji(null);
             setSelectedRecipient(null);
@@ -338,6 +372,8 @@ export const LoveNotesPage = () => {
                 ? detail[0]?.msg
                 : detail;
             toast.error(errorMessage || "Failed to send love note. Please try again.");
+        } finally {
+            setIsSending(false);
         }
     };
 
@@ -701,6 +737,9 @@ export const LoveNotesPage = () => {
                                             <p className="font-semibold">{u.name}</p>
                                             <p className="text-sm text-muted-foreground">{u.class_name}</p>
                                         </div>
+                                        {u.is_blocked && (
+                                            <Badge variant="secondary" className="ml-auto">Not available</Badge>
+                                        )}
                                     </div>
                                 )) : (
                                     <p className="text-center text-muted-foreground py-8">No users found.</p>
@@ -716,7 +755,7 @@ export const LoveNotesPage = () => {
                     <DialogFooter>
                         <Button
                             onClick={handleConfirmAndSend}
-                            disabled={!selectedRecipient}
+                            disabled={!selectedRecipient || isSending}
                             className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3"
                         >
                             <Send className="w-5 h-5 mr-2" />
@@ -725,6 +764,33 @@ export const LoveNotesPage = () => {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Confirmation shown for a recipient an admin has blocked. The note is still
+                allowed through, so the sender decides rather than the client silently
+                dropping it. */}
+            <AlertDialog open={isUnavailableConfirmOpen} onOpenChange={setIsUnavailableConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="font-dancing text-2xl text-romantic">
+                            This profile is currently not available
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {selectedRecipient?.name} is currently not available, so they may not be able
+                            to receive or reply to your note. Do you still want to send it?
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={sendSelectedNote}
+                            disabled={isSending}
+                            className="bg-gradient-romantic hover:opacity-90 text-white"
+                        >
+                            Send anyway
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             {/* Full Screen Image Viewer */}
             {viewingImageUrl && (

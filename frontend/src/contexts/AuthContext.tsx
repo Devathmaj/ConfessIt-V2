@@ -21,6 +21,7 @@ export interface User {
   love_notes_receive_enabled?: boolean;
   love_notes_send_enabled?: boolean; // Used to track if the user has sent a love note
   role?: 'user' | 'admin';
+  is_blocked?: boolean;
 }
 
 interface VerifyTokenResult {

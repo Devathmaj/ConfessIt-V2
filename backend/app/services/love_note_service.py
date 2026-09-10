@@ -36,6 +36,11 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[d
     Service to fetch all users available as love note recipients, excluding the
     active user, any administrator accounts, and users who opted out of
     receiving love notes.
+
+    Accounts an admin has blocked are deliberately still listed: love notes are
+    moderated independently of matchmaking, so a note may still reach a blocked
+    recipient. The ``is_blocked`` flag travels with each row so the sender is asked
+    to confirm before the note is sent.
     """
     with db.sessions() as session:
         rows = session.scalars(select(UserRecord).where(
@@ -60,6 +65,7 @@ def _user_payload(user: UserRecord, *, regno: str) -> dict:
         "profile_picture_url": asset_delivery_service.profile_image_url(
             user.profile_picture_url, regno=regno
         ),
+        "is_blocked": bool(user.is_blocked),
     }
     return payload
 

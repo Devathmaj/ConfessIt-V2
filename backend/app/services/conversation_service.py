@@ -12,6 +12,7 @@ from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 from ..config import settings
+from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -65,6 +66,28 @@ def _get_user_by_regno(db, regno):
     with db.sessions() as session:
         row = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         return _user_data(row)
+
+def _partner_regno(match, regno: str) -> str:
+    """The other participant of a match, which is never the caller themselves."""
+    return match.user_2_regno if regno == match.user_1_regno else match.user_1_regno
+
+def _ensure_partner_available(db, match, regno: str) -> bool:
+    """Refuse a matchmaking surface when the other participant has been blocked.
+
+    A match drawn before the block still sits in the table, so every place that hands a
+    partner back to a client has to ask again: the draw query filters blocked accounts,
+    but an existing match does not disappear when one of them is blocked. Returns True
+    when the partner is blocked, for the callers that hide the row instead of raising.
+    """
+    partner_doc = _get_user_by_regno(db, _partner_regno(match, regno))
+    return bool(partner_doc and partner_doc.get("is_blocked"))
+
+def _reject_if_partner_blocked(db, match, regno: str) -> None:
+    if _ensure_partner_available(db, match, regno):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ACCOUNT_UNAVAILABLE_DETAIL,
+        )
 
 def _save_conversation(db, conversation_id, **changes):
     with db.sessions.begin() as session:
@@ -123,6 +146,9 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
+        # 3b. A partner blocked after the match was drawn is not reachable anymore.
+        _reject_if_partner_blocked(db, match, current_user.regno)
+
         # 4. Get the existing conversation (should exist with status 'pending')
         conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
@@ -157,6 +183,11 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         logger.info(f"Conversation request sent from {current_user.regno} to {conversation.receiver_regno} for match {match_id}")
 
         return {"status": "success", "message": "Message request sent."}
+    except HTTPException:
+        # Deliberate rejections (expired match, blocked partner, wrong participant)
+        # carry a status the client can act on. Letting the blanket handler below
+        # swallow them would report every one of them as a server fault.
+        raise
     except Exception as e: # <--- FIX: This except block is now correctly placed
         logger.error(f"Error creating conversation: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error creating conversation.")
@@ -195,6 +226,9 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
         if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
 
+        # 3b. Do not describe a conversation with a partner who has since been blocked.
+        _reject_if_partner_blocked(db, match, current_user.regno)
+
         # 4. Get conversation status
         conversation_doc = _get_conversation(db, match_id)
         if not conversation_doc:
@@ -210,6 +244,10 @@ def get_conversation_status_service(current_user: UserDetails, match_id_str: str
             "created_at": conversation.created_at,
             "accepted_at": conversation.accepted_at
         }
+    except HTTPException:
+        # Keep deliberate rejections (expired match, blocked partner, wrong participant)
+        # as themselves instead of reporting every one of them as a server fault.
+        raise
     except Exception as e: # <--- FIX: Added missing except block
         logger.error(f"Error in get_conversation_status_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error getting conversation status.")
@@ -247,6 +285,9 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         # 3. Verify the current user is part of the match
         if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
+
+        # 3b. A partner blocked after the match was drawn cannot be accepted by anyone.
+        _reject_if_partner_blocked(db, match, current_user.regno)
 
         # 4. Get the conversation
         conversation_doc = _get_conversation(db, match_id)
@@ -290,6 +331,10 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
             "message": "Conversation accepted successfully.",
             "conversation_id": str(conversation.id)
         }
+    except HTTPException:
+        # Keep deliberate rejections (expired match, blocked partner, wrong participant)
+        # as themselves instead of reporting every one of them as a server fault.
+        raise
     except Exception as e: # <--- FIX: Added missing except block
         logger.error(f"Error in accept_conversation_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error accepting conversation.")
@@ -401,6 +446,15 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     else:
         match = Match(**current_match)
         is_expired = False
+
+    # A partner blocked after the match was drawn is reported as no match at all, so the
+    # profile does not resurface on the matchmaking or inbox screens. Answering with the
+    # existing empty shape keeps the client on its normal "nothing here" path.
+    if _ensure_partner_available(db, match, current_user.regno):
+        logger.info(
+            f"Suppressed current match for {current_user.regno}: partner {match.user_2_regno} is blocked"
+        )
+        return {"status": "no_active_match", "message": "No active match found."}
 
     # Get the conversation for this match (may or may not exist)
     conversation_doc = _get_conversation(db, match.id)
@@ -553,6 +607,14 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
         if not initiator_user_doc:
             continue
         
+        # A request that arrived before the initiator was blocked is dropped rather than
+        # offered: the blocked profile must not appear in the receiver's request list.
+        if initiator_user_doc.get("is_blocked"):
+            logger.info(
+                f"Hid message request for {current_user.regno}: initiator {match.user_1_regno} is blocked"
+            )
+            continue
+        
         initiator_user = UserDetails(**initiator_user_doc)
         profile_picture_url = asset_delivery_service.profile_image_url(
             initiator_user.profile_picture_url, regno=current_user.regno
@@ -618,6 +680,10 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
         # Verify the current user is part of the match
         if current_user.regno not in [match.user_1_regno, match.user_2_regno]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not part of this match.")
+
+        # The match may predate the block, so the other profile is re-checked here rather
+        # than trusting the draw. This is the lookup the chat dialog opens on.
+        _reject_if_partner_blocked(db, match, current_user.regno)
 
         # Get conversation for this match
         conversation_doc = _get_conversation(db, match_id)

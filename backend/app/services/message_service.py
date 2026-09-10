@@ -6,12 +6,13 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy import func, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
-from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord
+from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord, UserRecord
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
 from .redis_service import redis_service
+from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,23 @@ class MessageService:
             "is_blocked": bool(row.blocked_by), "blocked_by": row.blocked_by or [],
             "terminated_at": row.terminated_at,
         }
+
+    def is_partner_blocked(self, db: Database, conversation: Dict[str, Any], regno: str) -> bool:
+        """Whether an admin has blocked the other participant of a conversation.
+
+        The conversation row says nothing about account state, so a chat that was accepted
+        before the block still has to be re-checked. Read on demand rather than cached: the
+        answer decides whether a message may be read or sent at all.
+        """
+        other_regno = (
+            conversation["receiver_regno"]
+            if conversation["initiator_regno"] == regno
+            else conversation["initiator_regno"]
+        )
+        with db.sessions() as session:
+            return bool(
+                session.scalar(select(UserRecord.is_blocked).where(UserRecord.regno == other_regno))
+            )
     
     def send_message(
         self,
@@ -126,6 +144,15 @@ class MessageService:
             else conversation["initiator_regno"]
         )
         
+        # A conversation accepted before the receiver was blocked stops here. The block is
+        # re-read rather than inferred from the conversation row, which knows nothing about
+        # the account state.
+        if self.is_partner_blocked(db, conversation, sender.regno):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ACCOUNT_UNAVAILABLE_DETAIL
+            )
+
         # Create message document
         message_doc = {
             "conversation_id": str(conversation_id),
@@ -198,7 +225,16 @@ class MessageService:
         # Skip validation for admin users - they can view all conversations
         if user.role != "admin":
             # Validate user is participant
-            self.validate_conversation_participant(db, conversation_id, user.regno)
+            conversation = self.validate_conversation_participant(db, conversation_id, user.regno)
+
+            # Reading a thread with a blocked partner is refused for the same reason sending
+            # is: the conversation is not reachable from this account any more. Admins keep
+            # their moderation read, so this stays inside the non-admin branch.
+            if self.is_partner_blocked(db, conversation, user.regno):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=ACCOUNT_UNAVAILABLE_DETAIL
+                )
         
         # Fetch messages
         with db.sessions() as session:
