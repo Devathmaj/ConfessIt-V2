@@ -13,6 +13,14 @@ FORMATTER = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(messag
 
 _OTEL_LOG_HANDLER = None
 
+# SDK 1.45.0 deprecates its own LoggingHandler in favour of the handler from
+# opentelemetry-instrumentation-logging, and warns on import. The SDK handler is kept
+# anyway: instrumentation-logging is deliberately not a dependency here, and the SDK
+# handler is what puts trace_id and span_id on every exported LogRecord, which is the
+# field M1's correlation depends on. Adding the package to silence a warning would
+# trade a known, working log path for a new dependency and a new failure mode. The
+# deprecation is currently a warning only; the handler still populates trace context.
+
 def get_console_handler():
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(FORMATTER)

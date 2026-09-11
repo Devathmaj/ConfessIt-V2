@@ -2,12 +2,15 @@
 
 """Span hygiene applied before any span leaves the process.
 
-The OpenTelemetry ASGI middleware builds ``http.url`` by appending the raw,
-percent-decoded query string to the request path. Two of this application's query
-parameters are therefore credentials in the trace store: the scoped asset
-delivery token ``t`` (see the asset routes in ``app.main``, which accept it as a
-query parameter because an ``<img src>`` cannot send an Authorization header),
-and anything else a client chooses to put there, such as ``password``.
+The OpenTelemetry HTTP instrumentation puts the raw, percent-decoded query string
+on the span: under the current conventions that is the discrete ``url.query``
+attribute the backend emits (``OTEL_SEMCONV_STABILITY_OPT_IN=http``), and on an
+outbound client span it is folded into ``url.full`` as well. Two of this
+application's query parameters are therefore credentials in the trace store: the
+scoped asset delivery token ``t`` (see the asset routes in ``app.main``, which
+accept it as a query parameter because an ``<img src>`` cannot send an
+Authorization header), and anything else a client chooses to put there, such as
+``password``.
 
 The whole query string is dropped rather than only the parameter names known to
 be secret. That is deliberate on two counts. A query value is usually unique per
@@ -30,29 +33,66 @@ the redacted value is what gets serialised to the collector -- the secret is nev
 exported in the first place, rather than being hidden somewhere downstream.
 """
 
-from opentelemetry.semconv.trace import SpanAttributes
+from opentelemetry.semconv.attributes.url_attributes import (
+    URL_FULL,
+    URL_PATH,
+    URL_QUERY,
+)
 from opentelemetry.trace import Span
 
 # The value left in place of a removed query string. Constant, so redacting a
 # query cannot introduce cardinality.
 REDACTED = "[REDACTED]"
 
+# The pre-1.20 names, written out rather than imported.
+#
+# opentelemetry-semantic-conventions 0.66b0 does export HTTP_URL and HTTP_TARGET, but
+# only from opentelemetry.semconv._incubating.attributes.http_attributes -- an
+# underscore-prefixed private path whose contents are explicitly not covered by the
+# package's compatibility guarantees. The current names come from the public
+# opentelemetry.semconv.attributes.* modules, so importing the retired pair from _incubating
+# would make this module -- and therefore the entire application, since main.py imports
+# it at startup -- fail to import on any release that reorganises that tree. A security
+# control is the last thing that should be able to take a service down over a package
+# layout change.
+#
+# The strings themselves do not depend on the package at all. They are the attribute
+# keys as they appear on the wire, fixed by the semantic conventions specification: a
+# span emitted by any version of any instrumentation library carries these exact keys.
+# Reading them as literals is therefore the more correct expression of what the code
+# needs -- a name to match against, not a constant to dereference.
+#
+# test_trace_url_redaction.py cross-checks these two literals against the SDK constants
+# when the _incubating module happens to be importable, so a genuine renumbering of the
+# conventions is still caught. That check lives in the tests on purpose: it is worth
+# breaking a test run over, and not worth breaking an import over.
+_PRE_1_20_URL = "http.url"    # full URL on client spans
+_PRE_1_20_TARGET = "http.target"   # request target, may carry the query
+
 # Attributes whose value is a request target or full URL. Everything from the
 # first "?" onwards is the query string.
 #
-# http.url and http.target are the pre-1.20 semantic conventions emitted by the
-# installed instrumentation; url.full is their current replacement. The current
-# conventions are listed alongside them so the rule keeps holding if the
-# instrumentation is upgraded and starts emitting the new names.
+# The backend emits only the current conventions, so URL_FULL, URL_PATH and
+# URL_QUERY are what this application's own spans actually carry. The two
+# pre-1.20 names are kept anyway, and this is deliberately not compatibility
+# handling for our own emission: the hook is a security control that runs over
+# every span it is handed, and the spans it is handed are not only this
+# application's. Any HTTP instrumentation that has not opted in -- the SQLAlchemy
+# or Redis instrumentors, a third-party library instrumenting its own client
+# calls, or a future release reverting to the default mode -- produces spans on
+# the same tracer under the old names, and a leaked Cloudinary signature on one of
+# those is exactly the leak this module exists to prevent. Dropping two strings
+# from a tuple costs nothing; the query rule is required to hold for whatever
+# emitted the span, not for whatever we happen to configure today.
 _URL_ATTRIBUTES = (
-    SpanAttributes.HTTP_URL,
-    SpanAttributes.HTTP_TARGET,
-    SpanAttributes.URL_FULL,
+    URL_FULL,          # current, client spans; absent on server spans upstream
+    URL_PATH,          # current, the path only, but split on "?" defensively
+    _PRE_1_20_URL,     # pre-1.20, full URL on client spans
+    _PRE_1_20_TARGET,  # pre-1.20, request target, may carry the query
 )
 
-# The current conventions give the query string its own attribute, so there is no
-# "?" to split on: the entire value is the query and is replaced outright.
-_QUERY_ATTRIBUTES = (SpanAttributes.URL_QUERY,)
+# The query string as a discrete attribute. Replaced outright.
+_QUERY_ATTRIBUTES = (URL_QUERY,)
 
 
 def _without_query(url: str) -> str:

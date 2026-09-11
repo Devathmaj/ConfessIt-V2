@@ -5,9 +5,10 @@
 # expose state through the Prometheus API and the "Alerts" page, without inventing any
 # notification destination that does not exist yet.
 #
-# Every expression reads metrics that already flow today, from the application HTTP
-# metrics the backend pushes through the otel-collector, and from Prometheus's own
-# target health. No application code was added for this.
+# Every expression reads metrics that already flow today: the application HTTP
+# metrics the backend pushes through the otel-collector, Prometheus's own target
+# health, and the backend's own liveness endpoint. The only application code involved
+# is that one endpoint.
 #
 # Thresholds are set deliberately high. This is a development stack where normal
 # traffic is light and bursty, so a rule that reacts to a single slow or failed
@@ -16,25 +17,46 @@
 # window, so that it stays quiet until the condition is both real and sustained.
 #
 # The app metrics are labelled exported_job="confessit-backend" by the collector's
-# prometheus exporter; that label is what scopes these rules to the backend, since
-# the collector also exports its own metrics on the same scrape endpoint.
+# prometheus exporter; that label is what scopes the two RED rules to the backend,
+# since the collector also exports its own metrics on the same scrape endpoint. The
+# availability rules deliberately do not use it: they key on Prometheus's own up{}
+# series, which is per scrape job.
 
 groups:
   - name: confessit-backend-availability
     rules:
-      # The backend's application metrics are pushed to the otel-collector rather than
-      # scraped, so there is no `up{}` series that represents the backend process
-      # itself, and the backend exposes no /health or /metrics endpoint to scrape.
-      # The collector is the only existing series that covers this failure: it is the
-      # sole path the backend's metrics travel, so when it is unreachable the
-      # backend's HTTP metrics stop being visible and every rule in this file goes
-      # blind at the same time. This fires on that, which is the availability problem
-      # this stack can actually observe today.
+      # The backend process is not answering.
       #
-      # Note the gap: this does not detect the backend process dying while the
-      # collector stays healthy. Closing that would need a scrape target, which needs
-      # a /metrics endpoint on the backend, which is application code that was out of
-      # scope here.
+      # This is the rule that could not be written before /metrics existed. The
+      # backend's application metrics are pushed over OTLP rather than scraped, so
+      # until Prometheus had a target of its own there was no series anywhere that
+      # represented the backend process: the collector carries the metrics, and the
+      # collector is perfectly healthy when the thing feeding it is dead. A dead
+      # backend and a healthy idle one were the same observation.
+      #
+      # The endpoint it scrapes serves liveness only and never re-exports the OTel
+      # instruments, so this cannot double-count anything the other two rules read.
+      - alert: ConfessItBackendDown
+        expr: up{job="confessit-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backend is not responding to scrapes
+          description: >-
+            Prometheus has been unable to scrape the backend for more than 2 minutes, so
+            the process is not serving. This fires when the application itself is
+            unreachable; ConfessItBackendMetricsPipelineDown covers the separate case of
+            the application running while its metrics are not getting through.
+
+      # The backend's metrics are not getting through, which is a different failure from
+      # the backend being down: the application can be serving traffic perfectly while
+      # being invisible here.
+      #
+      # The collector is the only existing series that covers this, because it is the
+      # sole path the backend's metrics travel. Worth keeping now that
+      # ConfessItBackendDown exists: with a live backend and a dead collector, the
+      # scrape target above stays up and only this rule fires.
       - alert: ConfessItBackendMetricsPipelineDown
         expr: up{job="otel-collector"} == 0
         for: 5m
@@ -57,15 +79,21 @@ groups:
       # 100% error rate, and any error during a quiet spell would page. Below the
       # floor the rule stays silent, which is the intended behaviour rather than a
       # gap in coverage.
+      #
+      # The backend runs OTEL_SEMCONV_STABILITY_OPT_IN=http, so the only HTTP server
+      # histogram is http.server.request.duration and the status dimension is
+      # http.response.status_code. The pre-1.20 http.server.duration /
+      # http_status_code spelling is retired, and matching it here would make this
+      # expression match nothing at all rather than fail loudly.
       - alert: ConfessItBackendHighErrorRate
         expr: |
           (
-            sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend", http_status_code=~"5.."}[5m]))
+            sum(rate(http_server_request_duration_seconds_count{exported_job="confessit-backend", http_response_status_code=~"5.."}[5m]))
             /
-            sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m]))
+            sum(rate(http_server_request_duration_seconds_count{exported_job="confessit-backend"}[5m]))
           ) > 0.05
           and
-          sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
+          sum(rate(http_server_request_duration_seconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
         for: 10m
         labels:
           severity: critical
@@ -78,9 +106,14 @@ groups:
 
   - name: confessit-backend-latency
     rules:
-      # p95 of the backend's server-side request duration, in milliseconds. 1000ms is
-      # the first bucket boundary at or above one second in this histogram, so the
-      # quantile is read at a resolution the buckets can actually support.
+      # p95 of the backend's server-side request duration. The instrument is
+      # http.server.request.duration and its unit is seconds, so both the name and
+      # the threshold changed when the backend moved to the current HTTP semantic
+      # conventions: the pre-1.20 http.server.duration reported milliseconds and the
+      # equivalent threshold was 1000. 1 second is also a real bucket boundary in
+      # the current histogram, whose explicit boundaries run 0.005, 0.01, 0.025,
+      # 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, so the quantile is
+      # read at a resolution the buckets can actually support.
       #
       # Measured p95 in normal development use is around 25ms, so this sits well clear
       # of ordinary work and only reacts to a genuine slowdown such as a database or
@@ -90,16 +123,16 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum by (le) (rate(http_server_duration_milliseconds_bucket{exported_job="confessit-backend"}[5m]))
-          ) > 1000
+            sum by (le) (rate(http_server_request_duration_seconds_bucket{exported_job="confessit-backend"}[5m]))
+          ) > 1
           and
-          sum(rate(http_server_duration_milliseconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
+          sum(rate(http_server_request_duration_seconds_count{exported_job="confessit-backend"}[5m])) * 300 >= 20
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: Backend p95 latency above 1000ms
+          summary: Backend p95 latency above 1s
           description: >-
-            The 95th percentile of backend request duration has been above 1000ms for
+            The 95th percentile of backend request duration has been above 1 second for
             15 minutes, while serving at least 20 requests in the window. Typical
             development traffic measures around 25ms.

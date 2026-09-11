@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +36,17 @@ from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.semconv.trace import SpanAttributes
+from opentelemetry.semconv.attributes.http_attributes import (
+    HTTP_REQUEST_METHOD,
+    HTTP_RESPONSE_STATUS_CODE,
+    HTTP_ROUTE,
+)
+from opentelemetry.semconv.attributes.network_attributes import (
+    NETWORK_PROTOCOL_VERSION,
+)
+from opentelemetry.semconv.attributes.url_attributes import (
+    URL_SCHEME,
+)
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -45,29 +56,42 @@ logger = get_logger(__name__)
 ENABLE_DEBUG_ENDPOINTS = os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() in {"1", "true", "yes"}
 
 # The dimensions the http.server.* instruments are allowed to keep. The
-# instrumentation's default set includes http.server_name, which is the raw Host
-# request header, and the backend listens on 0.0.0.0:8001, so anything that can
-# reach the port can mint a fresh time series per request by varying that header
-# alone. Measured on this stack, five requests carrying five different Host values
-# took the exported http_server series from 253 to 438 lines. The SDK builds the
-# aggregation key from whichever attributes survive, so bounding them here is what
-# bounds the series count.
+# instrumentation's own modern attribute set for the duration histogram is
+# ['error.type', 'http.request.method', 'http.response.status_code', 'http.route',
+# 'network.protocol.version', 'url.scheme']; the body-size histograms and
+# http.server.active_requests use subsets of it.
 #
-# An allowlist rather than a denylist because SDK 1.25.0's View offers no
+# The bound is still worth having even in modern-only mode. The middleware builds
+# its attribute list per stability mode, so http.server_name and the other Host-
+# derived names are not currently among the dimensions it records -- but they were
+# the reason this View exists, and the cost of keeping the allowlist is that it
+# keeps failing closed if a future release puts one of them back. The View is also
+# what guarantees the bound rather than relying on the current default.
+#
+# An allowlist rather than a denylist because the SDK's View offers no
 # drop_attribute_keys, which is how "drop exactly this one key" would normally be
-# written. It also fails closed: an attribute a future instrumentation release
-# starts emitting is excluded until someone decides it belongs here.
+# written. It fails closed: an attribute a future instrumentation release starts
+# emitting is excluded until someone decides it belongs here.
 #
-# http.target is the route template this instrumentation version emits for metrics
-# (/confessions, not /confessions/12345), because the middleware reads it from
-# route.path_format. It is not the request target the trace carries, so it does not
-# reintroduce the query string that app.telemetry removes from spans.
+# Only the current conventions are listed, because the backend runs with
+# OTEL_SEMCONV_STABILITY_OPT_IN=http (see docker-compose.yml) and the pre-1.20
+# names are no longer emitted at all. Listing them would be dead configuration.
+#
+# error.type is left out even though the instrumentation's attribute set includes
+# it: nothing in this stack queries it, and the error-rate rule keys off
+# http.response.status_code. Excluding it keeps the emitted label set to exactly
+# what the derivations in README.md need.
+#
+# The route dimension is http.route, the route *template* the middleware reads from
+# route.path_format, so one series covers every confession id rather than one per
+# id. It is not a request target and cannot reintroduce the query string that
+# app.telemetry removes from spans.
 BOUNDED_HTTP_METRIC_ATTRIBUTES = {
-    SpanAttributes.HTTP_METHOD,
-    SpanAttributes.HTTP_STATUS_CODE,
-    SpanAttributes.HTTP_TARGET,
-    SpanAttributes.HTTP_SCHEME,
-    SpanAttributes.HTTP_FLAVOR,
+    HTTP_REQUEST_METHOD,
+    HTTP_RESPONSE_STATUS_CODE,
+    HTTP_ROUTE,
+    URL_SCHEME,
+    NETWORK_PROTOCOL_VERSION,
 }
 
 
@@ -139,6 +163,59 @@ def _init_metrics():
     )
 
 _init_metrics()
+
+
+# ---------------------------------------------------------------------------
+# Scrape endpoint
+# ---------------------------------------------------------------------------
+# Why this exists. The backend's metrics are *pushed* over OTLP to the collector, and
+# the collector re-exports them on :8889 for Prometheus to scrape. A pushed pipeline has
+# no "is the producer alive?" series anywhere in it: the only thing that observes the
+# backend is the collector, and the collector is perfectly healthy when the backend that
+# feeds it is dead. Until this endpoint existed the availability rule could only watch
+# the collector, so "the backend died" and "the collector died" looked identical, and the
+# comment in alerting-rules.yml had to admit it could not tell them apart.
+#
+# What it deliberately does NOT do is re-export the OTel instruments. Adding a
+# PrometheusMetricReader to the same MeterProvider would serve a second copy of every
+# http_server_* series under a different job label, so the same request would be counted
+# twice by any query that does not pin exported_job. Two sources for one measurement is a
+# worse problem than the one being solved, so the application metrics stay on the OTLP
+# path and this endpoint carries only what that path structurally cannot provide.
+#
+# Three series, written out by hand in the Prometheus text exposition format 0.0.4 rather
+# than by a client library. The format is three lines per series and is stable; pulling
+# in prometheus_client, or the opentelemetry-exporter-prometheus package that would drag
+# the whole MeterProvider along, would add a dependency to produce a payload this small.
+# A test asserts the body parses and that the OTLP-only series are absent, so the
+# hand-written part cannot quietly drift.
+#
+# confessit_backend_up is 1 by construction -- it exists to be *absent* when the process
+# cannot answer, which Prometheus records as up{job="confessit-backend"} == 0. Keeping
+# the explicit gauge as well means the signal is legible from the series itself, and not
+# only from the scrape bookkeeping.
+#
+# confessit_backend_start_time_seconds is what makes a *restart* visible: a series that
+# silently resets to 1 is easy to miss in a dashboard, a start time that jumps is not.
+
+_PROCESS_START_TIME_SECONDS = time.time()
+
+# The exposition content type. The version is part of the media type because that is how
+# a scrape declares the format it is speaking; Prometheus rejects a body it cannot parse,
+# and charset is stated explicitly so Starlette does not append a second one.
+_METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+
+def _metrics_exposition() -> str:
+    """Render this process's liveness in the Prometheus text exposition format."""
+    return (
+        "# HELP confessit_backend_up 1 while this process can serve a request.\n"
+        "# TYPE confessit_backend_up gauge\n"
+        "confessit_backend_up 1\n"
+        "# HELP confessit_backend_start_time_seconds Process start time since the Unix epoch.\n"
+        "# TYPE confessit_backend_start_time_seconds gauge\n"
+        f"confessit_backend_start_time_seconds {_PROCESS_START_TIME_SECONDS:.3f}\n"
+    )
 
 
 def _init_dependency_instrumentation(postgres: Database) -> None:
@@ -458,6 +535,17 @@ def get_love_note_file(
 async def read_root():
     logger.info("Root endpoint accessed")
     return {"message": "Welcome to the ConfessIt API!"}
+
+@app.get("/metrics", include_in_schema=False)
+async def read_metrics():
+    """Expose process liveness for Prometheus to scrape.
+
+    The target of the ``confessit-backend`` job in prometheus.yml, and what makes
+    ``up{job="confessit-backend"}`` a real signal about this process rather than about
+    the collector. See the block comment above ``_metrics_exposition`` for why this
+    carries liveness only and not the OTel instruments.
+    """
+    return PlainTextResponse(_metrics_exposition(), media_type=_METRICS_CONTENT_TYPE)
 
 if ENABLE_DEBUG_ENDPOINTS:
     @app.get("/db-test", include_in_schema=False)

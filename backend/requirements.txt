@@ -16,19 +16,24 @@ cloudinary==1.39.1
 Pillow==10.3.0
 redis==5.0.1
 websockets==12.0
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-exporter-otlp==1.25.0
-opentelemetry-instrumentation-fastapi==0.46b0
+opentelemetry-api==1.45.0
+opentelemetry-sdk==1.45.0
+opentelemetry-exporter-otlp==1.45.0
+# Pinned explicitly rather than left transitive. Both opentelemetry-sdk 1.45.0 and
+# every opentelemetry-instrumentation-* 0.66b0 require this exact version, so the
+# pin matches what the resolver would pick anyway; naming it keeps the semconv set
+# that the rest of this file targets visible in one place.
+opentelemetry-semantic-conventions==0.66b0
+opentelemetry-instrumentation-fastapi==0.66b0
 # opentelemetry-instrumentation-logging was previously pinned here and never
 # imported. Trace context reaches log records without it: the SDK's own
 # LoggingHandler in opentelemetry.sdk._logs._internal sets trace_id and span_id
 # on every OTel LogRecord from the current span, which is what the collector
 # writes out as the traceid field that M1 parses. Dropping the pin therefore
 # removes a package that was never activated rather than any log context.
-opentelemetry-instrumentation-redis==0.46b0
-opentelemetry-instrumentation-sqlalchemy==0.46b0
-opentelemetry-instrumentation-urllib3==0.46b0
-opentelemetry-exporter-otlp-proto-grpc==1.25.0
+opentelemetry-instrumentation-redis==0.66b0
+opentelemetry-instrumentation-sqlalchemy==0.66b0
+opentelemetry-instrumentation-urllib3==0.66b0
+opentelemetry-exporter-otlp-proto-grpc==1.45.0
 setuptools<81
 SQLAlchemy==2.0.36

@@ -59,6 +59,34 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "confessit-backend"
+      # Report only the current (1.21+) HTTP semantic conventions. Unset, or set to
+      # "http/dup", the instrumentation also emits the pre-1.20 names; "http" is the
+      # mode that retires them outright.
+      #
+      # This is a clean break, not a compatibility layer: nothing in this stack needs
+      # to read old telemetry, and carrying both generations only doubled the
+      # attribute count on every span and data point. The consequences were migrated
+      # with it rather than worked around:
+      #   * http.server.duration (ms) is gone, replaced by
+      #     http.server.request.duration (s), so the PromQL in
+      #     observability/alerting-rules.yml and README.md was rewritten and the
+      #     latency threshold moved from 1000ms to 1s to match the new unit and
+      #     bucket boundaries.
+      #   * http_status_code -> http_response_status_code, http_method ->
+      #     http_request_method, http_target -> http.route.
+      #   * BOUNDED_HTTP_METRIC_ATTRIBUTES in main.py now allowlists only the
+      #     current names, so it no longer needs the pre-1.20 ones to keep the
+      #     method/status dimensions alive.
+      # Query-string redaction in app.telemetry deliberately still covers the
+      # pre-1.20 URL attributes; see the note on _URL_ATTRIBUTES for why that is
+      # defence in depth against a span from another source rather than
+      # compatibility handling for our own emission.
+      #
+      # Only the HTTP signal is opted in. database and gen_ai exist too and are
+      # deliberately left off: SQLAlchemy and Redis spans keep the pre-1.20 db.*
+      # names, which is a separate migration and would change the H4 spanmetrics
+      # labels at the same time as this one.
+      OTEL_SEMCONV_STABILITY_OPT_IN: "http"
   postgres:
     image: postgres:16-alpine
     # Published to the host on loopback only, so a host-side psql/DBeaver can attach

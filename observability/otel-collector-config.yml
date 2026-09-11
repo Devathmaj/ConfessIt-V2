@@ -18,10 +18,36 @@ exporters:
       # Inside the Compose network only; tempo's OTLP port is not published to the host.
       insecure: true
 
+processors:
+  # Keep the Loki stream label set bounded to values that do not change per process.
+  #
+  # The loki exporter turns the standard OpenTelemetry service identity attributes into
+  # Loki labels: service.name becomes job and service.instance.id becomes instance. The
+  # SDK generates a fresh service.instance.id for every process, and this container is
+  # recreated on every image rebuild, so every recreation opened a brand new Loki stream
+  # for the same service. That is the classic Loki stream-explosion shape: the label is
+  # unbounded, the old streams are retained until they age out, and a query for recent
+  # logs has to fan out across a stream per restart to find anything.
+  #
+  # service.name is left alone -- that one is stable and is the label worth grouping by.
+  # service.instance.id is deleted, so log streams key on job, exporter and level: a
+  # handful of streams for the life of the volume.
+  #
+  # This is scoped to the logs pipeline on purpose. Traces keep their real
+  # service.instance.id in Tempo, where a per-process attribute is free -- Tempo stores it
+  # as resource metadata on a span, it does not partition storage by it, and telling two
+  # processes apart is genuinely useful when reading a trace. Only the log path is
+  # affected, because only the log path indexes by label.
+  resource/drop_instance_id:
+    attributes:
+      - key: service.instance.id
+        action: delete
+
 service:
   pipelines:
     logs:
       receivers: [otlp]
+      processors: [resource/drop_instance_id]
       exporters: [loki]
     metrics:
       receivers: [otlp]

@@ -111,20 +111,38 @@ For more details, see the API documentation at `http://localhost:8001/docs`.
 
 The backend exports HTTP server metrics over the same OTLP pipeline as the traces and logs: FastAPI → OTLP gRPC → `otel-collector` → the collector's Prometheus exporter on `:8889` → Prometheus, which `prometheus.yml` already scrapes. No separate metrics architecture and no Prometheus client library are involved.
 
-The names below are the ones this stack actually produces, which are **not** the `http_server_duration_seconds` spelling in current OpenTelemetry documentation. The pinned instrumentation (`0.46b0`) names the histogram `http.server.duration` in milliseconds, and the collector's Prometheus exporter appends the unit:
+The names below are the ones this stack actually produces. The backend sets `OTEL_SEMCONV_STABILITY_OPT_IN=http`, so only the current HTTP semantic conventions are reported — the pre-1.20 names are not emitted at all — and the collector's Prometheus exporter appends each instrument's unit:
 
-| Prometheus name | Meaning |
-| --- | --- |
-| `http_server_duration_milliseconds_bucket` / `_sum` / `_count` | Request latency histogram, and the count behind request rate |
-| `http_server_active_requests` | Requests currently in flight |
-| `http_server_response_size_bytes_*` | Response size (request size appears only for requests with a `Content-Length`) |
+| Prometheus name | OTel instrument | Meaning |
+| --- | --- | --- |
+| `http_server_request_duration_seconds_bucket` / `_sum` / `_count` | `http.server.request.duration` | Request latency histogram in **seconds**, and the count behind request rate |
+| `http_server_active_requests` | `http.server.active_requests` | Requests currently in flight |
+| `http_server_request_body_size_bytes_*` | `http.server.request.body.size` | Request size (appears only for requests with a `Content-Length`) |
+| `http_server_response_body_size_bytes_*` | `http.server.response.body.size` | Response size |
 
-The four things the stack is read for come from these:
+Dimensions are `http_request_method`, `http_response_status_code`, `http_route`, `url_scheme` and `network_protocol_version`. The route dimension is the **route template** (`/confessions`, `/confessions/{confession_id}`), not the concrete path, so one series covers every confession id. The histogram's bucket boundaries are `0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10` seconds, so a `histogram_quantile` reading is only meaningful to within a bucket.
+
+Note the unit when writing a latency threshold: this instrument is in **seconds**, not the milliseconds of the retired `http_server_duration_milliseconds_*` histogram, so a "slow" threshold is `1`, not `1000`.
+
+The four things the stack is read for:
 
 ```promql
-sum by (http_target, http_status_code) (rate(http_server_duration_milliseconds_count[5m]))                       # rate + count
-sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m]))                                  # error rate
-histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket[5m])))                        # p95 latency
+sum by (http_route, http_response_status_code) (rate(http_server_request_duration_seconds_count[5m]))                # rate + count
+sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))                           # error rate
+histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket[5m])))                         # p95 latency
 ```
 
-Dimensions are `http_method`, `http_status_code`, `http_target`, `http_scheme` and `http_flavor`. `http_target` is the **route template** (`/confessions`, `/confessions/{confession_id}`), not the concrete path, so one series covers every confession id. `http.server_name` — the raw `Host` header — is deliberately excluded by a View in `backend/app/main.py`, because the backend listens on `0.0.0.0:8001` and an unbounded dimension there would let any client mint time series by varying that header. The query string never appears in metrics.
+`http.server_name` — the raw `Host` header — is excluded by a View in `backend/app/main.py`, which allowlists exactly the five dimensions above. The View fails closed: an attribute a future release starts emitting is excluded until someone decides it belongs, and it is what keeps a Host-derived dimension from becoming a cardinality source on a backend that listens on `0.0.0.0:8001`. The query string never appears in metrics.
+
+## Liveness and the scrape endpoints
+
+A pushed pipeline cannot report on its own producer. The metrics above reach Prometheus by way of the collector, so nothing in that path says whether the backend is alive — the collector is perfectly healthy whether or not anything is feeding it. Two scrape endpoints exist to cover the two things that path cannot:
+
+| Endpoint | Job | Series | Carries |
+| --- | --- | --- | --- |
+| `backend:8001/metrics` | `confessit-backend` | `up`, `confessit_backend_up`, `confessit_backend_start_time_seconds` | Backend process liveness only |
+| `otel-collector:8888` | `otel-collector-internal` | `up`, `otelcol_*` | Collector receiver and exporter counters |
+
+`GET /metrics` on the backend serves a two-series Prometheus exposition and **nothing else**. It deliberately does not re-export the OTel instruments: the application metrics already arrive over OTLP, and a second copy under a different `job` label would double-count every RED query above that does not happen to pin `exported_job`. The series are unlabelled by design — a label on a liveness gauge is a way to mint a stream per value. `confessit_backend_start_time_seconds` is what makes a restart visible: a gauge that silently resets to `1` is easy to miss, a start time that jumps is not.
+
+This is what `ConfessItBackendDown` (`up{job="confessit-backend"} == 0`) watches, and it is distinct from `ConfessItBackendMetricsPipelineDown` (`up{job="otel-collector"} == 0`): the first is the application being down, the second is the application running while its metrics are not getting through.

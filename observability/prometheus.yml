@@ -34,3 +34,26 @@ scrape_configs:
   - job_name: "otel-collector-internal"
     static_configs:
       - targets: ["otel-collector:8888"]
+
+  # The backend itself, for liveness only.
+  #
+  # Every other series here reaches Prometheus indirectly: the application pushes OTLP
+  # to the collector, and the collector is scraped on :8889. A pushed pipeline has no
+  # series that says whether its producer is alive, so a backend that had died was
+  # indistinguishable from a backend that was merely idle -- the collector target would
+  # stay up, and the collector's own receiver counters would simply stop advancing.
+  # Scraping the backend gives up{job="confessit-backend"} something real to measure,
+  # which is what the ConfessItBackendDown rule watches.
+  #
+  # The endpoint deliberately serves only process liveness and start time. It does not
+  # re-export the OTel instruments, because a second copy of every http_server_* series
+  # under a different job label would double-count every RED query that does not pin
+  # exported_job. The application metrics stay on the OTLP path, where they already
+  # arrive via the "otel-collector" job above.
+  #
+  # The scrape reuses the port the server already binds, so no new listener is involved.
+  # Prometheus reaches it over the Compose network; note that 8001 is separately
+  # published to the host, which is finding M7's problem and not fixed here.
+  - job_name: "confessit-backend"
+    static_configs:
+      - targets: ["backend:8001"]
