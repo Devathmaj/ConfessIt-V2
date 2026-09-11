@@ -25,6 +25,7 @@ The exposition is hand-written, so the format assertions here are what keep it h
 """
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.main import _METRICS_CONTENT_TYPE, _metrics_exposition
@@ -139,3 +140,122 @@ def test_metrics_is_absent_from_the_openapi_schema(client: TestClient):
     # the published schema alongside the application's real routes.
     paths = client.get("/openapi.json").json()["paths"]
     assert "/metrics" not in paths
+
+
+# ---------------------------------------------------------------------------
+# The scrape must not instrument itself
+# ---------------------------------------------------------------------------
+#
+# Prometheus scrapes /metrics every 15s. If that request is instrumented like any other,
+# the monitoring system becomes the busiest thing in the application: measured live at
+# 92% of all request rate and ~3,800 spans/day, with Tempo's search results filled
+# entirely with `GET /metrics`. Every "top routes" and "request rate" view on the
+# operator dashboard then describes the scrape rather than the traffic it exists to
+# observe. So the exclusion is asserted here, because a pattern that stops matching
+# leaves the noise behind with nothing to indicate it.
+#
+# These are the tests that would have caught the first attempt, which used the
+# intuitive `^/metrics/?$`. 0.66b0 does not match that argument against the path: it
+# splits on commas, joins the parts into one alternation, and `re.search`es the result
+# against the full `scheme://host:port/path?query` string. Anchored at the start of
+# that string, the pattern can never match anything, and the endpoint looked excluded
+# while still being fully instrumented.
+
+
+def test_excluded_urls_pattern_excludes_the_liveness_path():
+    # Asserted against the SDK's own matcher rather than a local reimplementation, so
+    # this keeps meaning whatever `excluded_urls` does in the installed version.
+    from opentelemetry.instrumentation.asgi import parse_excluded_urls
+
+    from app.main import EXCLUDED_INSTRUMENTED_URLS
+
+    excluded = parse_excluded_urls(EXCLUDED_INSTRUMENTED_URLS)
+    assert excluded.url_disabled("http://backend:8001/metrics")
+    assert excluded.url_disabled("http://backend:8001/metrics/")
+    assert excluded.url_disabled("http://127.0.0.1:8001/metrics")
+    assert excluded.url_disabled("http://backend/metrics")
+    assert excluded.url_disabled("http://backend:8001/metrics?probe=1")
+
+
+def test_excluded_urls_pattern_spares_everything_else():
+    # The over-matching failure is as bad as the under-matching one: swallowing real
+    # application routes would silently delete them from the metrics. These are the
+    # near-misses a looser pattern gets wrong.
+    from opentelemetry.instrumentation.asgi import parse_excluded_urls
+
+    from app.main import EXCLUDED_INSTRUMENTED_URLS
+
+    excluded = parse_excluded_urls(EXCLUDED_INSTRUMENTED_URLS)
+    for url in (
+        "http://backend:8001/api/metrics",
+        "http://backend:8001/metricsomething",
+        "http://backend:8001/confessions",
+        "http://backend:8001/confessions/total_count",
+        "http://backend:8001/api/profile/files/photo.png",
+        "http://backend:8001/",
+    ):
+        assert not excluded.url_disabled(url), "%s must stay instrumented" % url
+
+
+@pytest.fixture
+def scrape_and_traffic_spans():
+    """A throwaway app instrumented exactly as app.main is, with spans kept in memory.
+
+    Built on its own TracerProvider rather than the process-wide one so the assertions
+    read only the spans this app produced. It carries both a /metrics route and an
+    ordinary route, because the two questions are only meaningful together: does the
+    scrape get excluded, and does everything else still get instrumented?
+
+    Reuses app.main's real EXCLUDED_INSTRUMENTED_URLS rather than a copy, so a change to
+    the constant in the application is what these tests actually exercise.
+    """
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from starlette.responses import PlainTextResponse
+
+    from app.main import EXCLUDED_INSTRUMENTED_URLS, _metrics_exposition
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    app = FastAPI()
+
+    @app.get("/metrics", include_in_schema=False)
+    def read_metrics():
+        return PlainTextResponse(
+            _metrics_exposition(), media_type="text/plain; version=0.0.4"
+        )
+
+    @app.get("/confessions")
+    def list_confessions():
+        return {"confessions": []}
+
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=provider, excluded_urls=EXCLUDED_INSTRUMENTED_URLS
+    )
+    with TestClient(app) as test_client:
+        yield test_client, exporter
+
+
+def test_scraping_metrics_emits_no_span(scrape_and_traffic_spans):
+    # The behavioural version of the two pattern tests above: make the request the way
+    # Prometheus does and assert the exporter saw nothing.
+    client, exporter = scrape_and_traffic_spans
+    assert client.get("/metrics").status_code == 200
+    assert exporter.get_finished_spans() == (), (
+        "scraping /metrics produced spans; it is excluded from instrumentation so the "
+        "scrape does not dominate the traffic metrics"
+    )
+
+
+def test_a_real_request_is_still_instrumented(scrape_and_traffic_spans):
+    # The control for the test above. Without it, a pattern that excluded the entire
+    # application would pass both.
+    client, exporter = scrape_and_traffic_spans
+    assert client.get("/confessions").status_code == 200
+    assert exporter.get_finished_spans(), "a normal request must still produce a span"

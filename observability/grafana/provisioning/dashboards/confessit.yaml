@@ -1,0 +1,38 @@
+# Grafana dashboard provisioning for ConfessIt V2.
+#
+# The datasources live in the sibling `datasources/` directory, which docker-compose
+# overlays individually. This file exists so the `dashboards/` directory is a real
+# directory in the repository: Grafana reads a provider from
+# /etc/grafana/provisioning/dashboards/confessit.yaml, and compose has to be able to
+# bind-mount a path that exists on the host. Without a file here the bind mount fails
+# and Grafana starts with no dashboards.
+#
+# The provider is deliberately narrow:
+#
+#   * `allowUiUpdates: false` -- the dashboard is defined in the repository, so an edit
+#     made in the UI would be silently reverted at the next Grafana start. Leaving this
+#     true invites exactly that confusion. Change the JSON, not the saved dashboard.
+#   * `disableDeletion: true` -- stops the UI offering to delete a provisioned
+#     dashboard, which would only appear to work.
+#   * `updateIntervalSeconds: 30` -- picks up a change to the JSON within a minute
+#     without requiring a restart.
+#   * `foldersFromFilesStructure: false` -- one folder, not a tree derived from
+#     filenames, so adding a second dashboard later does not silently nest it.
+#   * `allowUiUpdates` is also why the dashboard's panels use fixed datasource UIDs
+#     rather than names: the UIDs are the contract the datasources file already
+#     establishes, and a rename in one file cannot silently break the other.
+
+apiVersion: 1
+
+providers:
+  - name: confessit
+    orgId: 1
+    folder: ConfessIt
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

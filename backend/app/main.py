@@ -429,7 +429,32 @@ app.include_router(admin_love_notes.router)
 # exported, because the middleware's http.url otherwise carries the raw query string
 # and the asset delivery routes below authenticate on a scoped token passed as `t`.
 # See app.telemetry for why the hook is used rather than a span processor.
-FastAPIInstrumentor.instrument_app(app, server_request_hook=redact_query_strings)
+#
+# excluded_urls keeps /metrics out of both the spans and the HTTP server metrics. That
+# endpoint is Prometheus's own liveness probe and Prometheus scrapes it every 15s, so
+# instrumenting it makes the scrape the loudest thing in the application: measured at
+# 92% of all request rate and ~3,800 spans/day, and it filled Tempo's search results
+# with nothing but `GET /metrics`. Every "top routes" and "request rate" view is then
+# dominated by the monitoring system measuring itself, which is the opposite of useful.
+# The series that matter for liveness are served from that endpoint and scraped
+# directly as the `confessit-backend` job, so nothing is lost by not tracing it.
+#
+# The pattern is anchored to the authority rather than to the start of the string on
+# purpose. 0.66b0 does not match this against the path: it splits the argument on
+# commas, joins the parts into one alternation, and `re.search`es the result against the
+# full `scheme://host:port/path?query` string. So `^/metrics$` matches nothing at all,
+# and an unanchored `/metrics$` is nearly as bad in the other direction -- it also
+# swallows `/api/metrics`. `://[^/]+` consumes the authority and then requires
+# `/metrics` to be the entire remaining path. tests/test_metrics_endpoint.py asserts
+# this against real requests, because a pattern that silently stops matching leaves the
+# scrape noise behind with nothing to indicate it.
+EXCLUDED_INSTRUMENTED_URLS = r"://[^/]+/metrics/?(?:\?.*)?$"
+
+FastAPIInstrumentor.instrument_app(
+    app,
+    server_request_hook=redact_query_strings,
+    excluded_urls=EXCLUDED_INSTRUMENTED_URLS,
+)
 
 # ----------------------
 # Asset Delivery Routes

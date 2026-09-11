@@ -223,6 +223,11 @@ services:
       # logs a read error for each of the four. Overlaying the one directory that is
       # actually provisioned leaves the rest intact.
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      # The operator dashboard, overlaid the same way. Without this a fresh
+      # `docker compose up` yields a connected but blank Grafana and someone has to
+      # rebuild the panels by hand. The directory is empty in the image, so adding a
+      # provider to it costs nothing until a file is actually written.
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     # Grafana health-checks each datasource on start-up, so it must not begin before
     # the stores it points at are listening, or it logs a connection error per
     # datasource and shows them red until something restarts it. Waiting on the

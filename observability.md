@@ -296,6 +296,62 @@ The request that prompted this section was to stop ephemeral container IDs becom
 
 ---
 
-**Bottom line:** the transport layer is genuinely well built and healthy. Ingestion works end to end for traces and logs, retention and compaction run, secrets are correctly kept out of git and out of the image, and the UIs are properly loopback-bound. The log pipeline in particular is now in good shape: one ingestion path, a bounded label set, and no container-ID stream churn (§6.4). Grafana is connected to all three datasources, so the read surface exists.
+## 7. Follow-up - 2026-09-28 (provisioned dashboard, and what rendering it exposed)
 
-What is still missing is everything *above* the transport. No dashboard is provisioned, so nobody has a Golden Signals view without building one by hand. Alerts evaluate but are delivered nowhere — there is no Alertmanager (§6.2). Loki's own `ruler` still points at a port nothing listens on. And the stack is blind to the other eight of its nine services: only the backend's logs, traces and metrics are collected at all.
+The operator dashboard is now provisioned: `observability/grafana/provisioning/dashboards/confessit-service-overview.json` (37 panels, UID `confessit-service-overview`, folder `ConfessIt`), so the "no dashboard" item in the bottom line below is closed. Building it was straightforward; **verifying it by rendering it was where the work went**, and every finding below was found by looking at the rendered page rather than at the query definitions.
+
+### 7.1 Grafana's Loki datasource does not interpolate `$__rate_interval`
+
+The three log-aggregation panels were structurally valid, parsed, and rendered "No data". Loki itself was returning 18-56 points for exactly those expressions when queried directly, so the data was never the problem.
+
+**Cause.** Grafana's Prometheus datasource substitutes `$__rate_interval`; the Loki datasource in this stack does not, and forwards the macro verbatim. Loki rejects it: `parse error at line 0, col 58: not a valid duration string: "$__rate_interval"`. Captured from the browser's own `/api/ds/query` traffic, with the error visible in `grafana` logs as `statusCode=400 ... statusSource=downstream`.
+
+**Fix.** `[$__rate_interval]` → `[$__interval]` in the three `count_over_time` expressions, which *is* substituted (measured: `$__rate_interval` 0 points, `$__interval` 7 points, literals fine, `$__range_s` rejected because it yields a bare number with no unit suffix). Note that `$__range_s` is unusable in a LogQL range selector for this reason.
+
+**Also worth recording:** `verify_grafana2.py` substituted its own `.*` for the route variable before posting, which turned `$__interval` into `.*` and produced a *second*, entirely spurious "not a valid duration string" failure. A hand-rolled interpolator in a verification script is a bug factory; the browser's own request is the only trustworthy witness for what a panel sent.
+
+### 7.2 `labelsToFields` cannot rename the value column, and transformations belong on the panel
+
+The service-graph table and the node-graph panel both needed labels turned into columns, which `format: "table"` does not do on its own — Grafana returns one frame per series with the labels on `schema.fields[].labels`.
+
+**Two mistakes, both now corrected in the dashboard and enforced by the validator:**
+
+1. **The transformations were attached to the targets.** Grafana reads transformations from the panel. Target-level transformations are dead config. They are now panel-level, and `check_dash.py` treats target-level transformations as an error.
+2. **`valueFieldName` on `labelsToFields` is not honoured.** Neither is `valueLabel` — both spellings were rendered side by side and the header stayed `Value` either way. So the table renames the numeric column with an `organize` step (`renameByName: {"Value": "req/s"}`, `excludeByName: {"Time": true}`), which *was* verified to apply: headers went from `Time, callee, caller, link, Value` to `callee, caller, link, req/s`.
+
+Node/edge labels are still produced by `label_replace` in the query rather than by renaming, because `id` / `source` / `target` have to exist as query output for the node graph to build its graph at all.
+
+**Formatting.** With no unit the rate column displayed `0` for values around 0.003, which reads as "no traffic" when traffic exists. It now carries `unit: reqps` and `decimals: 2` via the existing `byName: "req/s"` override.
+
+### 7.3 The traces panel cannot render: Grafana 10.4.3 cannot map Tempo 2.5.0's search response
+
+`Recent traces` renders "No data found in response" while the rest of the Tracing section is fine. **This is a version gap, not a quiet service**, and the evidence is unambiguous:
+
+- Tempo's `/api/search` returns **20 traces** for the panel's exact TraceQL filter over the panel's exact window, fetched through Grafana's own proxy with the browser's own parameters.
+- The same panel, given a **trace ID** instead of a search, renders the trace. So the panel and the datasource's trace rendering are both healthy.
+- `queryType: traceql`, `queryType: search`, TraceQL text with a `search` type, legacy `service.name=` syntax, and a regex filter were all rendered as separate panels; **all** came back empty.
+- Grafana logs show no query error for the panel's own path.
+
+Grafana 10.4.3 predates Tempo 2.5.0, and its Tempo datasource predates the 2.5 search response shape. The direct `/api/ds/query` probe additionally returns `unsupported query type: 'traceql'`, which is how the gap announces itself.
+
+**Not worked around, on purpose.** The tempting fix is to delete the panel, but a traces view is where an operator goes specifically to prove the stack is healthy, and a silently absent panel reads as a broken stack. The query is correct and is kept so the panel starts working on a Grafana upgrade with no dashboard change; its description now states the limitation, the evidence, and the panels to use instead. The fix belongs in the version pair, not in the JSON.
+
+### 7.4 Two "empty" panels that were empty correctly
+
+`Error-status spans by name`, `Warnings and errors` and `Recent warnings and errors` are empty over a one-hour range, and were still reported as defects until the datasources were checked directly: the generated traffic produces 200/400/401/404 and logs only at `INFO`, so there is no error span and no warn-level line to show. Widening the range to six hours fills all three (`increase(...status_code="STATUS_CODE_ERROR"[24h])` = 9.04). **These panels are correct when empty**, which is the distinction worth preserving: an empty panel and a broken panel look identical from outside, and only the datasource can tell them apart.
+
+### 7.5 What a render check must do before its verdict means anything
+
+Three separate "the panel is broken" results turned out to be defects in the checking, not the dashboard, and each would have been shipped as a false finding:
+
+- A missing `Authorization` header rendered the **login page**, and the panel selector matched nothing — which looks identical to "every panel is empty". The check now asserts it is not the login page before reporting.
+- `thead th` / `tbody tr` do not exist in Grafana 10's table; it uses `[role="columnheader"]` / `[role="row"]`. The earlier "table rendered no rows" verdict was the selector, not the table.
+- `&kiosk` hides dashboard variables, so "the Route variable did not render" was the render mode. It renders — `['Route\nAll', 'Route', 'All']`.
+
+Verification for this section: `check_dash.py` 0 structural errors / 7 intentional stat warnings, a rendered-panel pass over all 37 panels (33 of 34 data panels populated; the 34th is §7.3), 318 passed / 1 skipped in the backend suite, `promtool` 4/4 rules and a valid config, and `docker compose config -q` clean.
+
+---
+
+**Bottom line:** the transport layer is genuinely well built and healthy. Ingestion works end to end for traces and logs, retention and compaction run, secrets are correctly kept out of git and out of the image, and the UIs are properly loopback-bound. The log pipeline in particular is now in good shape: one ingestion path, a bounded label set, and no container-ID stream churn (§6.4). Grafana is connected to all three datasources, and a 37-panel operator dashboard is now provisioned and rendered (§7).
+
+What is still missing is everything *above* the transport, apart from the dashboard. Alerts evaluate but are delivered nowhere — there is no Alertmanager (§6.2). Loki's own `ruler` still points at a port nothing listens on. The traces list panel is blocked on a Grafana/Tempo version gap (§7.3). And the stack is still blind to the other eight of its nine services: only the backend's logs, traces and metrics are collected at all.
