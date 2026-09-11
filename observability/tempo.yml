@@ -1,6 +1,15 @@
 server:
   http_listen_port: 3200
 
+# Tempo otherwise ships with usage reporting on, and the destination is baked
+# into the binary rather than configurable: https://stats.grafana.org/tempo-usage-report.
+# The container has working outbound DNS and TLS, so nothing else stops the
+# report leaving the host. Nothing in this stack needs to be counted by Grafana
+# for the traces to be stored, queried or metered, so the report is pure egress
+# of deployment metadata and is turned off here.
+usage_report:
+  reporting_enabled: false
+
 distributor:
   receivers:
     otlp:

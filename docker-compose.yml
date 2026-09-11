@@ -95,10 +95,15 @@ services:
     # the value is injected at start-up and no credential is stored in this tracked file.
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+    # maxmemory is kept as a hard ceiling but the eviction policy is not set. The
+    # application only ever issues PING, PUBLISH and SUBSCRIBE, and never writes a
+    # key, so there is nothing for any policy to evict and allkeys-lru could never
+    # engage; it only implied Redis was a cache. With the policy left at the
+    # noeviction default, a future feature that does start writing keys fails loudly
+    # at the ceiling instead of silently discarding entries.
     command: >
       sh -c 'exec redis-server
       --maxmemory 128mb
-      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --requirepass "$$REDIS_PASSWORD"'
@@ -121,9 +126,15 @@ services:
       - "8889"
     volumes:
       - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    # Ordered on readiness, not merely on start. Both exporters in the config point
+    # at these two services, and a bare depends_on only waits for the container to
+    # be created, so a slow Loki comes up first and the collector spends the first
+    # seconds failing to export until BatchSpanProcessor's retry papers over it.
     depends_on:
-      - loki
-      - tempo
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v2.52.0
@@ -141,6 +152,15 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/alerting-rules.yml:/etc/prometheus/alerting-rules.yml:ro
       - prometheus_data:/prometheus
+    # Grafana health-checks every datasource on start-up, so it needs a readiness
+    # signal of its own to wait on. /-/ready is the endpoint Prometheus exposes for
+    # exactly this; the image ships busybox wget and no curl.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   grafana:
     image: grafana/grafana:10.4.3
@@ -158,9 +178,10 @@ services:
       # password until it is reset.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the root .env}
       # Anonymous read access is off by default; pinned so a future image default cannot
-      # quietly open the dashboards.
+      # quietly open the dashboards. Setting the org role as well was inert: Grafana
+      # never consults it while anonymous access is disabled, and its startup log
+      # reported only the line above as applied.
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: ""
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
@@ -176,11 +197,16 @@ services:
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
     # Grafana health-checks each datasource on start-up, so it must not begin before
     # the stores it points at are listening, or it logs a connection error per
-    # datasource and shows them red until something restarts it.
+    # datasource and shows them red until something restarts it. Waiting on the
+    # health checks rather than on container start is what makes that true after a
+    # restart, not just on a first run when everything happened to be slow.
     depends_on:
-      - prometheus
-      - loki
-      - tempo
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
 
   loki:
     image: grafana/loki:2.9.8
@@ -191,6 +217,18 @@ services:
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
+    # The collector pushes to this, so it has to be answering before the
+    # collector starts. The image ships busybox wget and no curl, and wget exits
+    # non-zero on an HTTP error, so this cannot pass merely because the port is
+    # open while Loki is still initialising.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Checks that fail inside this window do not count towards retries, which is
+      # what absorbs a slow first start without loosening the probe afterwards.
+      start_period: 30s
 
   tempo:
     image: grafana/tempo:2.5.0
@@ -204,6 +242,18 @@ services:
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
       - tempo_data:/var/tempo
+    # Tempo answers /ready only once its ingester has joined its own memberlist
+    # ring, and the startup log shows it logging "auto-joining cluster after
+    # timeout" before settling, so it reports 503 for a stretch after the port is
+    # already open. The longer start_period is what keeps that transient from
+    # being read as a failure, and the retries are what stop a single later 503
+    # from flipping an otherwise working container to unhealthy.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
 volumes:
   postgres_data:

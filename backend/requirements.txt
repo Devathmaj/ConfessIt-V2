@@ -20,7 +20,12 @@ opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 opentelemetry-instrumentation-fastapi==0.46b0
-opentelemetry-instrumentation-logging==0.46b0
+# opentelemetry-instrumentation-logging was previously pinned here and never
+# imported. Trace context reaches log records without it: the SDK's own
+# LoggingHandler in opentelemetry.sdk._logs._internal sets trace_id and span_id
+# on every OTel LogRecord from the current span, which is what the collector
+# writes out as the traceid field that M1 parses. Dropping the pin therefore
+# removes a package that was never activated rather than any log context.
 opentelemetry-instrumentation-redis==0.46b0
 opentelemetry-instrumentation-sqlalchemy==0.46b0
 opentelemetry-instrumentation-urllib3==0.46b0
