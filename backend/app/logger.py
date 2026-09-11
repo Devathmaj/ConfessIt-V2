@@ -73,6 +73,23 @@ def _get_otel_log_handler():
     _OTEL_LOG_HANDLER = LoggingHandler(level=logging.INFO, logger_provider=provider)
     return _OTEL_LOG_HANDLER
 
+def get_console_only_logger(logger_name):
+    """Return a logger that writes to stdout and to nothing else.
+
+    The same logger is used for one purpose: emitting a freshly minted magic-link
+    token to the developer's terminal during local debugging. get_logger() attaches
+    an OTLP handler alongside the console one, so anything it records is exported to
+    the collector and retained in Loki for the full retention period, which is the
+    wrong place for a live bearer credential. This logger has no OTLP handler and
+    never acquires one, so the token exists only for as long as the terminal does.
+    """
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.DEBUG)
+    if not logger.handlers:
+        logger.addHandler(get_console_handler())
+    logger.propagate = False
+    return logger
+
 def get_logger(logger_name):
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.DEBUG)  # Set the lowest logging level

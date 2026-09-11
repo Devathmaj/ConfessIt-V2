@@ -15,9 +15,15 @@ from ..postgres import Database
 from ..config import settings
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..logger import get_logger
+from ..logger import get_console_only_logger, get_logger
 
 logger = get_logger(__name__)
+
+# Deliberately separate from the module logger above. The magic link is a live bearer
+# credential, so it goes to stdout only: `docker compose logs backend` shows it while
+# debugging, but the OTLP handler is never attached, so it is not exported to the
+# collector and never lands in Loki (or any log store with a retention period).
+magic_link_logger = get_console_only_logger(__name__ + ".magic_link")
 
 # Claim set by the asset delivery proxy on its own short-lived tokens. Access tokens must
 # never be minted from one, and asset tokens must not be accepted as access tokens: they
@@ -217,7 +223,7 @@ async def generate_magic_link_service(request: Request, db: Database):
     token = create_and_store_magic_token(db, str(user.id), request)
 
     magic_link = f"http://localhost:5173/verify-login?token={token}"
-    logger.info(f"Magic Link for {user.name}: {magic_link}")
+    magic_link_logger.info(f"Magic Link for {user.name}: {magic_link}")
 
     return {"message": "Magic link generated. Check the backend console."}
 
