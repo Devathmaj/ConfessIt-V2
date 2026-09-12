@@ -242,25 +242,37 @@ class ConfessionService:
         return count
 
     def react_to_confession(self, confession_id: str, reaction: str, user_id: str):
+        """Set, switch or clear one user's reaction, then return the updated confession.
+
+        A reaction is a toggle: sending the same kind twice clears it, sending a different
+        kind moves the user to that one. A user is in at most one kind at a time.
+        """
         if reaction not in self.REACTION_TYPES:
-            return None 
+            return None
 
         with self.sessions.begin() as session:
             row = session.get(ConfessionRecord, str(confession_id))
-            confession = self._confession_payload(row) if row else None
             if not row:
                 return None
-            current_reactions = row.reactions or {r: [] for r in self.REACTION_TYPES}
-            user_previous_reaction = next((kind for kind, ids in current_reactions.items() if user_id in ids), None)
-            for ids in current_reactions.values():
-                if user_id in ids: ids.remove(user_id)
+            # The map has to be built fresh and assigned. Mutating the dict already loaded
+            # on the row in place does not mark the JSONB column dirty, so the flush below
+            # would write only the denormalised counts, leaving the map itself empty in the
+            # database. The next request would then read that empty map, recompute every
+            # count from it, and put them all back to zero, so no confession could ever hold
+            # more than one reaction. Same reason _react_to_comment rebuilds its lists.
+            stored_reactions = row.reactions or {}
+            user_previous_reaction = next(
+                (kind for kind, ids in stored_reactions.items() if user_id in ids), None
+            )
+            updated_reactions = {
+                kind: [reacted_by for reacted_by in stored_reactions.get(kind, []) if reacted_by != user_id]
+                for kind in self.REACTION_TYPES
+            }
             if user_previous_reaction != reaction:
-                current_reactions.setdefault(reaction, []).append(user_id)
-            row.reactions = current_reactions
+                updated_reactions[reaction].append(user_id)
+            row.reactions = updated_reactions
             for kind in self.REACTION_TYPES:
-                setattr(row, f"{kind}_count", len(current_reactions.get(kind, [])))
-        if not confession:
-            return None
+                setattr(row, f"{kind}_count", len(updated_reactions[kind]))
 
         logger.info(f"User {user_id} reacted to confession {confession_id} with {reaction}")
         return self.get_confession(confession_id, user_id)

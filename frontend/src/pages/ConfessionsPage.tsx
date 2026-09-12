@@ -711,7 +711,6 @@ export const ConfessionsPage = () => {
                               >
                                   <Flag className="h-4 w-4" />
                               </Button>
-                              <span className="text-xs font-medium">{comment.report_count}</span>
                           </div>
                       </div>
                     </div>
