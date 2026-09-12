@@ -23,6 +23,8 @@ export default defineConfig(({ mode }) => ({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: './src/setupTests.ts',
+    setupFiles: './tests/setup.ts',
+    // Tests are consolidated in ./tests rather than living beside the code they cover.
+    include: ['tests/**/*.{test,spec}.{ts,tsx}'],
   },
 }));

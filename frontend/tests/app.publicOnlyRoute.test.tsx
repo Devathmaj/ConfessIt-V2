@@ -1,35 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { ContextType } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { PublicOnlyRoute } from './App';
-import { AuthContext } from './contexts/AuthContext';
+import { PublicOnlyRoute } from '@/App';
+import { AuthContext, type User } from '@/contexts/AuthContext';
 
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation(query => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
+type AuthContextValue = ContextType<typeof AuthContext>;
+
+/** A signed-in user. The guard reads only role, but User requires these four fields. */
+const asUser = (overrides: Partial<User> = {}): User => ({
+  id: '1',
+  name: 'Test User',
+  regno: 'TEST001',
+  emoji: '🙂',
+  ...overrides,
 });
 
-const authValue = (user: any, isAuthenticated: boolean) =>
-  ({
-    user,
-    isAuthenticated,
-    isLoading: false,
-    token: 'token',
-    logout: vi.fn(),
-    verifyMagicToken: vi.fn(),
-    fetchAndSetUser: vi.fn(),
-  }) as any;
+const authValue = (user: User | null, isAuthenticated: boolean): AuthContextValue => ({
+  user,
+  isAuthenticated,
+  isLoading: false,
+  token: 'token',
+  logout: vi.fn(),
+  verifyMagicToken: vi.fn(),
+  fetchAndSetUser: vi.fn(),
+});
 
-const renderAtLogin = (value: any) =>
+const renderAtLogin = (value: AuthContextValue) =>
   render(
     <AuthContext.Provider value={value}>
       <MemoryRouter initialEntries={['/login']}>
@@ -51,7 +48,7 @@ const renderAtLogin = (value: any) =>
 
 describe('PublicOnlyRoute', () => {
   it('redirects a signed-in user away from the login screen to their dashboard', async () => {
-    renderAtLogin(authValue({ id: '1', name: 'Test' }, true));
+    renderAtLogin(authValue(asUser(), true));
 
     await waitFor(() => {
       expect(screen.getByText('USER DASHBOARD')).toBeInTheDocument();
@@ -60,7 +57,7 @@ describe('PublicOnlyRoute', () => {
   });
 
   it('sends an admin to the admin dashboard rather than the user one', async () => {
-    renderAtLogin(authValue({ id: '1', name: 'Admin', role: 'admin' }, true));
+    renderAtLogin(authValue(asUser({ name: 'Admin', role: 'admin' }), true));
 
     await waitFor(() => {
       expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();

@@ -146,8 +146,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     // Skip if we don't have conversation data yet
     if (!conversationData) return;
 
+    const isAcceptedConversation = conversationData.conversation.status === 'accepted';
     const shouldInitialize = (
-      conversationData.conversation.status === 'accepted' &&
+      isAcceptedConversation &&
       !conversationData.match.is_expired &&
       !is_blocked
     );
@@ -155,20 +156,22 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     if (shouldInitialize) {
       console.log('🚀 Initializing messaging (not blocked)');
       initializeMessaging();
-    } else if (is_blocked && conversationData.conversation.status === 'accepted') {
-      // If blocked, load messages without WebSocket (only if we don't have messages already)
-      console.log('⚠️ Blocked state - checking if messages need loading', {
+    } else if (isAcceptedConversation) {
+      // Expired or blocked: the conversation is read-only, but its history is still
+      // readable, so load it without a live connection. This branch used to require
+      // `is_blocked`, so an expired conversation fell through both branches and the
+      // history was never fetched at all.
+      console.log('📖 Read-only conversation - loading history without a live connection', {
+        is_expired: conversationData.match.is_expired,
+        is_blocked: is_blocked,
         current_messages: messages.length,
         has_token: !!token
       });
-      
+
       if (token && messages.length === 0) {
-        console.log('📥 Loading messages for blocked conversation');
         loadMessagesFromBackend(token).catch(error => {
-          console.error('Failed to load messages when blocked:', error);
+          console.error('Failed to load messages for read-only conversation:', error);
         });
-      } else if (messages.length > 0) {
-        console.log('✅ Messages already loaded, keeping them visible');
       }
     }
 
@@ -376,6 +379,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
     if (diff <= 0) {
       setTimeLeft('Expired');
+      // The countdown alone doesn't move the rest of the component: is_expired is what
+      // canChat and the read-only notice read, so flip it or the composer stays enabled
+      // while the header says "Expired". Guarded so this only commits once.
+      setConversationData(prev => (
+        prev && !prev.match.is_expired
+          ? { ...prev, match: { ...prev.match, is_expired: true } }
+          : prev
+      ));
       return;
     }
 

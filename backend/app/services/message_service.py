@@ -69,15 +69,9 @@ class MessageService:
         # NOTE: Block check removed from here - reading messages should be allowed even when blocked
         # The block check is only enforced in send_message() to prevent sending new messages
         
-        # Check if expired (4 hours from creation)
-        created_at = conversation.get("created_at")
-        if created_at:
-            expiry_time = created_at + timedelta(hours=4)
-            if datetime.now(timezone.utc) > expiry_time:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Conversation has expired"
-                )
+        # NOTE: Expiry check removed from here for the same reason. An expired conversation is
+        # read-only, not unreadable: get_messages() shares this validator and must still be
+        # able to return the history. Enforced in send_message() instead.
         
         return conversation
 
@@ -136,6 +130,17 @@ class MessageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot send messages: this conversation is blocked"
             )
+
+        # Expiry is a send-only restriction (4 hours from creation). Kept out of
+        # validate_conversation_participant() so an expired conversation stays readable.
+        created_at = conversation.get("created_at")
+        if created_at:
+            expiry_time = created_at + timedelta(hours=4)
+            if datetime.now(timezone.utc) > expiry_time:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Conversation has expired"
+                )
         
         # Determine receiver
         receiver_id = (

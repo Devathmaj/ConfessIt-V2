@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { AUTH_EXPIRED_EVENT, endSessionIfTokenWasRejected } from './authEvents';
+import { AUTH_EXPIRED_EVENT, endSessionIfTokenWasRejected } from '@/lib/authEvents';
 
 describe('endSessionIfTokenWasRejected', () => {
   let fired = 0;

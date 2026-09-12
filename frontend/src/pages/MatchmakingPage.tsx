@@ -47,6 +47,39 @@ const icebreakerCards = [
   "Describe yourself in three emojis!"
 ];
 
+/**
+ * Shown once a match has expired.
+ *
+ * No wait is quoted here on purpose. The matchmaking cooldown runs for
+ * MATCHMAKING_COOLDOWN_HOURS from last_matchmaking_at, which is the same instant the match
+ * was drawn and the same 4 hours it lives for -- so the two end together and an expired
+ * match always means the cooldown has already lifted. An earlier version of this added an
+ * extra hour in the client and announced a wait the server knows nothing about, telling
+ * users to sit out a cooldown that did not exist. If a draw is still genuinely blocked
+ * (an attempt consumed by a failed draw, for instance), the server rejects it with the
+ * real remaining time and that is what the user sees.
+ */
+export const EXPIRED_MATCH_NOTICE = 'Your previous match has expired. You can find a new match now.';
+
+/**
+ * Time left on a live match, which is also when the next draw unlocks.
+ *
+ * The cooldown is anchored to the draw and lasts exactly as long as the match does, so
+ * until the match expires this is genuinely the time until the next match. Once it has
+ * expired the answer is always "now" -- see EXPIRED_MATCH_NOTICE.
+ */
+export const timeUntilNextMatch = (expiresAt: string) => {
+  const parsedExpiry = parseTimestamp(expiresAt);
+  if (!parsedExpiry) return '—';
+
+  const minutes = Math.floor((parsedExpiry.getTime() - Date.now()) / (1000 * 60));
+  if (minutes <= 0) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+};
+
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
     { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', class_name: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
@@ -237,7 +270,7 @@ export const MatchmakingPage = () => {
           // Match is expired, don't show it
           setHasActiveConversation(false);
           setConversationStatus('none');
-          toast.info(`Your previous match has expired. You can find a new match in ${getTimeUntilNextMatch(response.match.expires_at)}`);
+          toast.info(EXPIRED_MATCH_NOTICE);
         }
       } else {
         setHasActiveConversation(false);
@@ -250,37 +283,8 @@ export const MatchmakingPage = () => {
     }
   };
 
-  const getTimeUntilNextMatch = (expiresAt: string) => {
-    const parsedExpiry = parseTimestamp(expiresAt);
-    if (!parsedExpiry) return '—';
-    const expiresUTC = parsedExpiry.getTime();
-    const nowUTC = Date.now();
-    
-    // If match hasn't expired yet, show time until expiry
-    if (nowUTC < expiresUTC) {
-      const timeUntilExpiry = expiresUTC - nowUTC;
-      const minutes = Math.floor(timeUntilExpiry / (1000 * 60));
-      if (minutes < 60) return `${minutes}m`;
-      
-      const hours = Math.floor(minutes / 60);
-      const remainingMinutes = minutes % 60;
-      return `${hours}h ${remainingMinutes}m`;
-    }
-    
-    // If match has expired, add 1 hour cooldown
-    const cooldownEnd = expiresUTC + (60 * 60 * 1000); // 1 hour after expiry
-    const timeUntilCooldown = cooldownEnd - nowUTC;
-    
-    if (timeUntilCooldown <= 0) return 'now';
-    
-    const minutes = Math.floor(timeUntilCooldown / (1000 * 60));
-    if (minutes < 60) return `${minutes}m`;
-    
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ${minutes % 60}m`;
-  };
-
   const refreshConversationStatus = async () => {
+
     if (matchedProfile?.match_id) {
       await checkForExistingConversation(matchedProfile.match_id);
     }
@@ -337,7 +341,7 @@ export const MatchmakingPage = () => {
             // Match is expired, don't show it
             setHasActiveConversation(false);
             setConversationStatus('none');
-            toast.info(`Your previous match has expired. You can find a new match in ${getTimeUntilNextMatch(response.match.expires_at)}`);
+            toast.info(EXPIRED_MATCH_NOTICE);
           }
         }
       } catch (error: any) {
@@ -370,7 +374,7 @@ export const MatchmakingPage = () => {
           if (response.status === 'success' && response.match.is_expired) {
             setHasActiveConversation(false);
             setConversationStatus('none');
-            toast.info(`Your match has expired. You can find a new match in ${getTimeUntilNextMatch(response.match.expires_at)}`);
+            toast.info(EXPIRED_MATCH_NOTICE);
           }
         } catch (error) {
           console.error('Failed to check conversation expiry:', error);
@@ -582,7 +586,7 @@ export const MatchmakingPage = () => {
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
-                      Time until next match: {getTimeUntilNextMatch(expiresAt)}
+                      Time until next match: {timeUntilNextMatch(expiresAt)}
                     </div>
                   )}
                 </div>
@@ -596,7 +600,7 @@ export const MatchmakingPage = () => {
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
-                      Time until next match: {getTimeUntilNextMatch(expiresAt)}
+                      Time until next match: {timeUntilNextMatch(expiresAt)}
                     </div>
                   )}
                 </div>
@@ -610,7 +614,7 @@ export const MatchmakingPage = () => {
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
-                      Time until next match: {getTimeUntilNextMatch(expiresAt)}
+                      Time until next match: {timeUntilNextMatch(expiresAt)}
                     </div>
                   )}
                 </div>
@@ -631,7 +635,7 @@ export const MatchmakingPage = () => {
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
                       <Clock className="w-4 h-4 inline mr-2" />
-                      Time until next match: {getTimeUntilNextMatch(expiresAt)}
+                      Time until next match: {timeUntilNextMatch(expiresAt)}
                     </div>
                   )}
                 </div>
