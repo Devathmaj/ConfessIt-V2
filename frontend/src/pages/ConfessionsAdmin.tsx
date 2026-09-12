@@ -61,6 +61,7 @@ interface AdminComment {
   created_at: string | null;
   user: {
     id?: string | null;
+    name?: string | null;
     avatar?: string | null;
   };
   report_count: number;
@@ -106,7 +107,7 @@ const reactionDisplay = [
 ];
 
 const formatTimestamp = (created_at: string | null) => {
-  return formatDateTimeDDMMYYYY(timestamp);
+  return formatDateTimeDDMMYYYY(created_at);
 };
 
 export const ConfessionsAdmin = () => {

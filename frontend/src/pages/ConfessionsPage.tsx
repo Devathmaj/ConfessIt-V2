@@ -16,7 +16,6 @@ import {
   TrendingUp, 
   Clock, 
   MessageSquare, 
-  Download,
   Send,
   Plus,
   ThumbsUp,
@@ -35,6 +34,8 @@ import { COMMENT_BODY_MAX, CONFESSION_BODY_MAX, RECIPIENT_NAME_MAX, REPORT_REASO
 interface UserInfo {
   id: string;
   name: string;
+  /** Emoji chosen by the user. The API omits it when unset, so it is genuinely optional. */
+  avatar?: string | null;
   user_reaction: 'like' | 'dislike' | null;
   report_count: number;
   reported_by: string[];
@@ -317,10 +318,6 @@ export const ConfessionsPage = () => {
        toast.error('Failed to share confession. Please try again.');
     }
   };
-  
-  const handleDownload = (confession: Confession) => {
-    toast.success('Screenshot saved! 🖼️');
-  };
 
   const handleReportClick = (comment: ConfessionComment) => {
     if (!isAuthenticated) {
@@ -599,9 +596,6 @@ export const ConfessionsPage = () => {
                       disabled={hasReportedConfession}
                     >
                       <Flag className="h-4 w-4" />
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => handleDownload(confession)}>
-                      <Download className="w-4 h-4" />
                     </Button>
                   </div>
                 </div>

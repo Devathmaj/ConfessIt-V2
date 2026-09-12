@@ -962,8 +962,6 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             {/* Message Input */}
             {canChat && !is_blocked && (
               <div className="border-t p-2 sm:p-4 flex gap-2">
-                {/* Debug: Log states */}
-                {console.log('🔍 Message Input States:', { canChat, is_blocked, sending, isConnected })}
                 <input
                   type="text"
                   value={messageText}
