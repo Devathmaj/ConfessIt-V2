@@ -80,6 +80,25 @@ export const timeUntilNextMatch = (expiresAt: string) => {
   return `${hours}h ${minutes % 60}m`;
 };
 
+const EXPIRED_NOTICE_SHOWN_FOR_KEY = 'expired_match_notice_shown_for';
+
+/**
+ * Announce an expired match at most once.
+ *
+ * The page re-reads the current match on every mount, and an expired match stays the
+ * "current" one long after it lapsed, so without this the notice reappeared on every visit.
+ * Remembering the last match id it was shown for suppresses the repeat while still letting
+ * the next match to expire announce itself. One key rather than one per match, so nothing
+ * accumulates as matches come and go.
+ */
+export const notifyExpiredMatch = (matchId?: string) => {
+  if (matchId) {
+    if (localStorage.getItem(EXPIRED_NOTICE_SHOWN_FOR_KEY) === matchId) return;
+    localStorage.setItem(EXPIRED_NOTICE_SHOWN_FOR_KEY, matchId);
+  }
+  toast.info(EXPIRED_MATCH_NOTICE);
+};
+
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
     { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', class_name: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
@@ -270,7 +289,7 @@ export const MatchmakingPage = () => {
           // Match is expired, don't show it
           setHasActiveConversation(false);
           setConversationStatus('none');
-          toast.info(EXPIRED_MATCH_NOTICE);
+          notifyExpiredMatch(response.match.id);
         }
       } else {
         setHasActiveConversation(false);
@@ -341,7 +360,7 @@ export const MatchmakingPage = () => {
             // Match is expired, don't show it
             setHasActiveConversation(false);
             setConversationStatus('none');
-            toast.info(EXPIRED_MATCH_NOTICE);
+            notifyExpiredMatch(response.match.id);
           }
         }
       } catch (error: any) {
@@ -362,7 +381,7 @@ export const MatchmakingPage = () => {
           setExpiresAt(null);
           setConversationStatus('none');
           setHasActiveConversation(false);
-          toast.info("Your match has expired. You can find a new match now!");
+          notifyExpiredMatch(matchedProfile?.match_id);
           return; // No need to check conversation if match expired
         }
       }
@@ -374,7 +393,7 @@ export const MatchmakingPage = () => {
           if (response.status === 'success' && response.match.is_expired) {
             setHasActiveConversation(false);
             setConversationStatus('none');
-            toast.info(EXPIRED_MATCH_NOTICE);
+            notifyExpiredMatch(response.match.id);
           }
         } catch (error) {
           console.error('Failed to check conversation expiry:', error);

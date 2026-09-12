@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EXPIRED_MATCH_NOTICE, timeUntilNextMatch } from '@/pages/MatchmakingPage';
+import { toast } from 'sonner';
+import {
+  EXPIRED_MATCH_NOTICE,
+  timeUntilNextMatch,
+  notifyExpiredMatch,
+} from '@/pages/MatchmakingPage';
+
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn() },
+}));
+
+const infoCalls = () => vi.mocked(toast.info).mock.calls;
 
 /** An ISO timestamp the given number of minutes from now, as the API would send it. */
 const isoInMinutes = (minutes: number) =>
@@ -46,5 +57,56 @@ describe('EXPIRED_MATCH_NOTICE', () => {
       'Your previous match has expired. You can find a new match now.'
     );
     expect(EXPIRED_MATCH_NOTICE).not.toMatch(/\d+\s*(m|h|min|hour)/i);
+  });
+});
+
+describe('notifyExpiredMatch', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(toast.info).mockClear();
+  });
+
+  it('announces the expiry once', () => {
+    notifyExpiredMatch('match-1');
+    expect(infoCalls()).toHaveLength(1);
+    expect(infoCalls()[0][0]).toBe(EXPIRED_MATCH_NOTICE);
+  });
+
+  it('stays quiet on every later visit for the same match', () => {
+    // The regression: the page re-reads the current match on every mount, so an expired
+    // match kept re-announcing itself on each visit.
+    notifyExpiredMatch('match-1');
+    notifyExpiredMatch('match-1');
+    notifyExpiredMatch('match-1');
+    expect(infoCalls()).toHaveLength(1);
+  });
+
+  it('still announces the next match that expires', () => {
+    notifyExpiredMatch('match-1');
+    notifyExpiredMatch('match-2');
+    expect(infoCalls()).toHaveLength(2);
+  });
+
+  it('re-announces a match it has forgotten', () => {
+    // A stale key from an earlier session must not suppress a genuine first notice.
+    localStorage.setItem('expired_match_notice_shown_for', 'some-older-match');
+    notifyExpiredMatch('match-1');
+    expect(infoCalls()).toHaveLength(1);
+  });
+
+  it('keeps announcing when there is no match id to key on', () => {
+    // Without an id there is nothing safe to deduplicate against, and suppressing on an
+    // unknown key would silence every future notice.
+    notifyExpiredMatch(undefined);
+    notifyExpiredMatch(undefined);
+    expect(infoCalls()).toHaveLength(2);
+  });
+
+  it('does not accumulate a key per match', () => {
+    notifyExpiredMatch('match-1');
+    notifyExpiredMatch('match-2');
+    notifyExpiredMatch('match-3');
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('expired_match_notice'));
+    expect(keys).toEqual(['expired_match_notice_shown_for']);
   });
 });
