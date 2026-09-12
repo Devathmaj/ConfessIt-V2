@@ -32,7 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import { ShieldAlert, ShieldCheck, Trash2, ImageIcon, User, X, Download } from 'lucide-react';
 
 interface PersonDetails {
@@ -133,8 +133,8 @@ export const LoveNotesReview = () => {
       approved: [],
     };
     const sorted = [...notes].sort((a, b) => {
-      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      const aTime = timestampMs(a.created_at);
+      const bTime = timestampMs(b.created_at);
       return bTime - aTime;
     });
     sorted.forEach((note) => {

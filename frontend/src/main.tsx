@@ -2,6 +2,13 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
 import { ThemeProvider } from '@/components/theme-provider'
+import { syncServerClock } from '@/lib/serverClock'
+
+// Ask the server what time it is before anything renders a countdown or an expiry badge.
+// Deliberately not awaited: until it lands the offset is zero, so the first paint uses the
+// device clock exactly as before and then corrects itself on the next render that depends
+// on time. Blocking the bundle on a network call would be a worse trade for ~5ms of skew.
+void syncServerClock()
 
 createRoot(document.getElementById("root")!).render(
     <ThemeProvider 

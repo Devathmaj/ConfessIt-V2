@@ -8,10 +8,11 @@ import { getCurrentConversation, acceptConversation, rejectConversation, blockCo
 import { messagingClient, sendMessage, fetchMessages, reportMessage } from '@/lib/messaging';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
 import { toast } from 'sonner';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { resolveProfilePictureUrl, parseTimestamp, timestampMs } from '@/lib/utils';
 import { ReportMessageDialog } from './ReportMessageDialog';
 import { BlockUserDialog } from './BlockUserDialog';
 import { useAuth } from '@/contexts/AuthContext';
+import { serverNow } from '@/lib/serverClock';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -373,9 +374,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       return;
     }
 
-    const now = new Date();
-    const expiresAt = new Date(conversationData.match.expires_at);
-    const diff = expiresAt.getTime() - now.getTime();
+    const now = serverNow();
+    const expiresAt = timestampMs(conversationData.match.expires_at);
+    const diff = expiresAt - now;
 
     if (diff <= 0) {
       setTimeLeft('Expired');
@@ -913,7 +914,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                       >
                         <p className="text-xs sm:text-sm break-words">{message.body}</p>
                         <p className={`text-[10px] sm:text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                          {new Date(message.created_at).toLocaleTimeString()}
+                          {parseTimestamp(message.created_at)?.toLocaleTimeString() ?? ''}
+
                         </p>
                       </div>
                     </div>

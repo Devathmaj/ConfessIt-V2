@@ -3,10 +3,11 @@
 import asyncio
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
@@ -560,6 +561,27 @@ def get_love_note_file(
 async def read_root():
     logger.info("Root endpoint accessed")
     return {"message": "Welcome to the ConfessIt API!"}
+
+@app.get("/api/time", tags=["Root"])
+async def read_server_time():
+    """Report the server's own UTC time so clients need not trust the device clock.
+
+    The application stores and computes everything in UTC, and this is the reference the
+    browser measures itself against. A device with a wrong clock would otherwise decide on
+    its own that a conversation has expired, or that a cooldown has lifted, and no amount
+    of correct timestamps on the wire would stop it.
+
+    Carries an explicit offset and is marked no-store, so an intermediary cannot hand back
+    a stale "now" and have the client believe it.
+    """
+    now = datetime.now(timezone.utc)
+    return JSONResponse(
+        {
+            "now": now.isoformat(),
+            "epoch_ms": int(now.timestamp() * 1000),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 @app.get("/metrics", include_in_schema=False)
 async def read_metrics():

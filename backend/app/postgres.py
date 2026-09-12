@@ -44,6 +44,13 @@ class PostgresClient:
     ):
         # create_engine is lazy: it opens no sockets until a connection is first checked
         # out, so a single shared instance costs nothing until the app actually serves.
+        #
+        # The session timezone is pinned to UTC rather than inherited from whatever the
+        # database image or cluster happens to default to. Every timestamp column is
+        # TIMESTAMPTZ, so a stored instant is always correct, but a non-UTC session changes
+        # how a value is *read back* -- aware, so the instant survives, yet the text in logs
+        # and the values an operator sees in psql would stop matching what the app wrote.
+        # The application is UTC end to end, so the session is told so.
         self.engine = create_engine(
             database_url or settings.DATABASE_URL,
             pool_pre_ping=True,
@@ -51,6 +58,7 @@ class PostgresClient:
             max_overflow=max_overflow if max_overflow is not None else settings.DATABASE_MAX_OVERFLOW,
             pool_timeout=pool_timeout if pool_timeout is not None else settings.DATABASE_POOL_TIMEOUT,
             pool_recycle=pool_recycle if pool_recycle is not None else settings.DATABASE_POOL_RECYCLE,
+            connect_args={"options": "-c timezone=UTC"},
         )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 

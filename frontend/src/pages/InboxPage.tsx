@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp, resolveProfilePictureUrl, formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -21,6 +21,7 @@ import {
 
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { serverNow } from '@/lib/serverClock';
 
 // Defines the structure for conversation data.
 interface ConversationData {
@@ -239,7 +240,7 @@ export const InboxPage = () => {
     const parsed = parseTimestamp(created_at);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
-    const nowUTC = Date.now();
+    const nowUTC = serverNow();
     
     const diffInMinutes = Math.floor((nowUTC - timeUTC) / (1000 * 60));
     
@@ -375,7 +376,7 @@ export const InboxPage = () => {
         ) : (
           <div className="grid gap-4">
             {filteredNotifications
-              .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+              .sort((a, b) => timestampMs(b.created_at) - timestampMs(a.created_at))
               .map((notification) => (
               <Card 
                 key={notification.id} 
@@ -411,7 +412,12 @@ export const InboxPage = () => {
                           </div>
                         </div>
                         <div className="text-sm text-muted-foreground">
-                          {getTimeAgo(notification.created_at)}
+                          {/* The exact moment is rendered here rather than baked into the
+                              notification body by the server, which has no way to know the
+                              reader's timezone. */}
+                          <span title={formatDateTimeDDMMYYYY(notification.created_at)}>
+                            {getTimeAgo(notification.created_at)}
+                          </span>
                         </div>
                       </div>
                       

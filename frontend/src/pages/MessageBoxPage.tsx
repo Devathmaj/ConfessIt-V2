@@ -1,7 +1,7 @@
 // src/pages/MessageBoxPage.tsx
 
 import { useState, useEffect } from 'react';
-import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp, resolveProfilePictureUrl, timestampMs } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { serverNow } from '@/lib/serverClock';
 
 // Defines the structure for conversation data.
 interface ConversationData {
@@ -54,7 +55,7 @@ export type ConversationFilter = 'all' | 'pending' | 'active' | 'expired' | 'rej
 /** Checks if a given expiration timestamp has passed. */
 export const isExpired = (expiresAt: string) => {
   const parsed = parseTimestamp(expiresAt);
-  return parsed ? Date.now() > parsed.getTime() : false;
+  return parsed ? serverNow() > parsed.getTime() : false;
 };
 
 /**
@@ -215,7 +216,7 @@ export const MessageBoxPage = () => {
     const parsed = parseTimestamp(created_at);
     if (!parsed) return '—';
     const timeUTC = parsed.getTime();
-    const nowUTC = Date.now();
+    const nowUTC = serverNow();
     const diff = nowUTC - timeUTC;
 
     const minutes = Math.floor(diff / (1000 * 60));
@@ -241,7 +242,7 @@ export const MessageBoxPage = () => {
     const parsed = parseTimestamp(expiresAt);
     if (!parsed) return '—';
 
-    const diff = parsed.getTime() - Date.now();
+    const diff = parsed.getTime() - serverNow();
     if (diff <= 0) return 'Expired';
 
     const hours = Math.floor(diff / (1000 * 60 * 60));
@@ -259,8 +260,8 @@ export const MessageBoxPage = () => {
   const acceptedConversations = conversations
     .filter((conv) => conv.conversation.status === 'accepted')
     .sort((a, b) => {
-      const dateA = a.conversation.accepted_at ? new Date(a.conversation.accepted_at).getTime() : 0;
-      const dateB = b.conversation.accepted_at ? new Date(b.conversation.accepted_at).getTime() : 0;
+      const dateA = timestampMs(a.conversation.accepted_at);
+      const dateB = timestampMs(b.conversation.accepted_at);
       return dateB - dateA;
     });
 
@@ -276,8 +277,7 @@ export const MessageBoxPage = () => {
       return statusMatches && matchesSearch;
     })
     .sort(
-      (a, b) =>
-        new Date(b.conversation.created_at).getTime() - new Date(a.conversation.created_at).getTime()
+      (a, b) => timestampMs(b.conversation.created_at) - timestampMs(a.conversation.created_at)
     );
 
   if (loading) {

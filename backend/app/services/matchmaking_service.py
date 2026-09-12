@@ -220,12 +220,17 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
 
     # Notify the matched user only after the match is committed, so a notification failure
     # cannot roll back a match the user was already told about.
+    #
+    # No absolute time is written into the body. `now` is UTC and the server does not know
+    # where the recipient is, so a formatted wall-clock string is persisted once and then
+    # reads wrong for everyone outside the server's assumed zone -- a user at UTC+5:30 saw
+    # "12:00 PM" for a match made at 17:31. The row's own created_at is timezone-aware and
+    # already renders in the reader's local time, so the body stays timezone-free.
     from ..services.notification_service import create_notification_service
-    human_readable_time = now.strftime("%B %d, %Y at %I:%M %p")
     create_notification_service(
         recipient_regno=matched_user.regno,
         heading="You appeared in matchmaking",
-        body=f"You were matched with {current_user.name} at {human_readable_time}",
+        body=f"You were matched with {current_user.name}",
         db=db
     )
 

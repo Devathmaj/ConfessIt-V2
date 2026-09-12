@@ -32,10 +32,23 @@ export function parseTimestamp(value?: string | null): Date | null {
   return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
 }
 
+/**
+ * A timestamp as epoch milliseconds, for ordering and arithmetic.
+ *
+ * Every API timestamp must reach the browser through `parseTimestamp` rather than a bare
+ * `new Date(value)`. The two agree on an offset-carrying string, but they diverge on a bare
+ * one: `new Date` reads it as local time, which silently shifts a stored-UTC instant by the
+ * reader's offset. Unparseable input sorts as 0 rather than NaN, so a bad row cannot make
+ * a list sort arbitrarily.
+ */
+export function timestampMs(value?: string | null): number {
+  return parseTimestamp(value)?.getTime() ?? 0;
+}
+
+
 export function formatDateDDMMYYYY(value: string | null | undefined): string {
-  if (!value) return 'Unknown';
-  const date = new Date(value);
-  if (isNaN(date.getTime())) return 'Invalid date';
+  const date = parseTimestamp(value);
+  if (!date) return 'Unknown';
 
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -45,9 +58,8 @@ export function formatDateDDMMYYYY(value: string | null | undefined): string {
 }
 
 export function formatDateTimeDDMMYYYY(value: string | null | undefined): string {
-  if (!value) return 'Unknown';
-  const date = new Date(value);
-  if (isNaN(date.getTime())) return 'Invalid date';
+  const date = parseTimestamp(value);
+  if (!date) return 'Unknown';
 
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');

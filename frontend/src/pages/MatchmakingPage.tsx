@@ -29,6 +29,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { serverNow } from '@/lib/serverClock';
 
 // Pre-written messages for quick chat options
 const prewrittenMessages = [
@@ -72,7 +73,7 @@ export const timeUntilNextMatch = (expiresAt: string) => {
   const parsedExpiry = parseTimestamp(expiresAt);
   if (!parsedExpiry) return '—';
 
-  const minutes = Math.floor((parsedExpiry.getTime() - Date.now()) / (1000 * 60));
+  const minutes = Math.floor((parsedExpiry.getTime() - serverNow()) / (1000 * 60));
   if (minutes <= 0) return 'now';
   if (minutes < 60) return `${minutes}m`;
 
@@ -176,7 +177,7 @@ const GlassHeart = ({ fillPercentage }: { fillPercentage: number }) => {
 const MatchExpiryTimer = ({ expiryTimestamp }: { expiryTimestamp: string }) => {
     const calculateTimeLeft = useCallback(() => {
         const expiry = parseTimestamp(expiryTimestamp);
-        const difference = expiry ? expiry.getTime() - Date.now() : 0;
+        const difference = expiry ? expiry.getTime() - serverNow() : 0;
         let timeLeft = { hours: 0, minutes: 0, seconds: 0 };
 
         if (difference > 0) {
@@ -254,7 +255,7 @@ export const MatchmakingPage = () => {
       const response = await checkMatchmakingStatus();
       console.log("fetchMatchmakingStatus response:", response); // Debug log
       if (response.status === 'matched') {
-        const now = new Date();
+        const now = new Date(serverNow());
         const expiry = parseTimestamp(response.expires_at);
         if (!expiry || now >= expiry) {
           // Match is expired, don't set it
@@ -374,7 +375,7 @@ export const MatchmakingPage = () => {
     const interval = setInterval(async () => {
       // Check for match expiry first
       if (expiresAt) {
-        const now = new Date();
+        const now = new Date(serverNow());
         const expiry = parseTimestamp(expiresAt);
         if (!expiry || now >= expiry) {
           setMatchedProfile(null);
@@ -418,7 +419,7 @@ export const MatchmakingPage = () => {
       if (response.status === 'eligible') {
         setShowConfirmationDialog(true);
       } else if (response.status === 'matched') {
-        const now = new Date();
+        const now = new Date(serverNow());
         const expiry = parseTimestamp(response.expires_at);
         if (!expiry || now >= expiry) {
           // Match is expired, don't set it

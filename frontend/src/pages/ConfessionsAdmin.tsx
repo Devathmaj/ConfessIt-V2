@@ -15,7 +15,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { getAdminConfessions, deleteAdminConfession } from '@/services/api';
 import { toast } from 'sonner';
-import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
   Heart,
   Laugh,
@@ -258,8 +258,8 @@ export const ConfessionsAdmin = () => {
       case 'recent':
       default:
         sorted.sort((a, b) => {
-          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+          const aTime = timestampMs(a.created_at);
+          const bTime = timestampMs(b.created_at);
           return bTime - aTime;
         });
     }
