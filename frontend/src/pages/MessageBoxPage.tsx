@@ -15,6 +15,7 @@ import {
   XCircle,
   Search,
   ArrowRight,
+  ArrowLeft,
   Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -47,6 +48,47 @@ interface ConversationData {
   is_initiator: boolean;
 }
 
+/** The tabs on the full conversation list. */
+export type ConversationFilter = 'all' | 'pending' | 'active' | 'expired' | 'rejected';
+
+/** Checks if a given expiration timestamp has passed. */
+export const isExpired = (expiresAt: string) => {
+  const parsed = parseTimestamp(expiresAt);
+  return parsed ? Date.now() > parsed.getTime() : false;
+};
+
+/**
+ * Whether a conversation is past its match expiry.
+ *
+ * Read off the clock rather than the server's is_expired flag so a page left open past the
+ * four hours reclassifies itself without waiting for a refetch.
+ */
+export const conversationIsExpired = (conv: ConversationData) => isExpired(conv.match.expires_at);
+
+/**
+ * Whether a conversation belongs under the given tab.
+ *
+ * An expired conversation is held by Expired rather than Active: it can no longer be chatted
+ * in. It is moved rather than dropped, so it stays reachable and still appears on the
+ * landing view, which lists every accepted conversation regardless of expiry. Expiry is
+ * checked ahead of the stored status because that is also the order the status badge uses.
+ */
+export const matchesConversationFilter = (
+  conv: ConversationData,
+  filter: ConversationFilter
+) => {
+  switch (filter) {
+    case 'all':
+      return true;
+    case 'expired':
+      return conversationIsExpired(conv);
+    case 'active':
+      return conv.conversation.status === 'accepted' && !conversationIsExpired(conv);
+    default:
+      return conv.conversation.status === filter;
+  }
+};
+
 export const MessageBoxPage = () => {
   const [conversations, setConversations] = useState<ConversationData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,9 +96,9 @@ export const MessageBoxPage = () => {
   const [showConversationDialog, setShowConversationDialog] = useState(false);
 
   // The page lands on accepted conversations. "View Conversations" swaps in the
-  // full list, including pending requests and rejected ones.
+  // full list, including pending requests, expired ones and rejected ones.
   const [showAllConversations, setShowAllConversations] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'pending' | 'active' | 'rejected'>('all');
+  const [filter, setFilter] = useState<ConversationFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -186,10 +228,12 @@ export const MessageBoxPage = () => {
     return 'just now';
   };
 
-  // Checks if a given expiration timestamp has passed.
-  const isExpired = (expiresAt: string) => {
-    const parsed = parseTimestamp(expiresAt);
-    return parsed ? Date.now() > parsed.getTime() : false;
+  // Leaving the full list drops the filters, which mean nothing on the landing view: it
+  // shows accepted conversations only, so a leftover search would silently narrow it.
+  const handleBackToActive = () => {
+    setShowAllConversations(false);
+    setFilter('all');
+    setSearchQuery('');
   };
 
   // Calculates the time remaining until a given expiration timestamp.
@@ -210,7 +254,8 @@ export const MessageBoxPage = () => {
     return `in ${hours}h ${minutes}m`;
   };
 
-  // Accepted conversations only, most recently accepted first.
+  // Accepted conversations only, most recently accepted first. Expired ones stay here:
+  // they are still the user's conversations, and the chat behind them is readable.
   const acceptedConversations = conversations
     .filter((conv) => conv.conversation.status === 'accepted')
     .sort((a, b) => {
@@ -222,12 +267,7 @@ export const MessageBoxPage = () => {
   // Narrows the full list by the selected status and the name search.
   const filteredConversations = conversations
     .filter((conv) => {
-      const statusMatches =
-        filter === 'all'
-          ? true
-          : filter === 'active'
-            ? conv.conversation.status === 'accepted'
-            : conv.conversation.status === filter;
+      const statusMatches = matchesConversationFilter(conv, filter);
 
       const matchesSearch = (conv.other_user?.name || '')
         .toLowerCase()
@@ -273,16 +313,7 @@ export const MessageBoxPage = () => {
                 : 'Your active conversations'}
             </p>
           </div>
-          {showAllConversations ? (
-            <Button
-              variant="outline"
-              onClick={() => setShowAllConversations(false)}
-              className="self-start sm:self-auto"
-            >
-              <Heart className="w-4 h-4 mr-2" />
-              Show Active Only
-            </Button>
-          ) : (
+          {!showAllConversations && (
             <Button
               variant="outline"
               onClick={() => setShowAllConversations(true)}
@@ -299,46 +330,61 @@ export const MessageBoxPage = () => {
         {showAllConversations ? (
           <>
             {/* Search and Filter Bar */}
-            <div className="mb-6 flex flex-col sm:flex-row gap-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <input
-                  type="text"
-                  placeholder="Search by name..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
-                />
+            <div className="mb-6 flex flex-col gap-4">
+              <div>
+                <Button variant="outline" size="sm" onClick={handleBackToActive}>
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back
+                </Button>
               </div>
-              <div className="flex gap-2">
-                <Button
-                  variant={filter === 'all' ? 'default' : 'outline'}
-                  onClick={() => setFilter('all')}
-                  size="sm"
-                >
-                  All
-                </Button>
-                <Button
-                  variant={filter === 'pending' ? 'default' : 'outline'}
-                  onClick={() => setFilter('pending')}
-                  size="sm"
-                >
-                  Pending
-                </Button>
-                <Button
-                  variant={filter === 'active' ? 'default' : 'outline'}
-                  onClick={() => setFilter('active')}
-                  size="sm"
-                >
-                  Active
-                </Button>
-                <Button
-                  variant={filter === 'rejected' ? 'default' : 'outline'}
-                  onClick={() => setFilter('rejected')}
-                  size="sm"
-                >
-                  Rejected
-                </Button>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="Search by name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant={filter === 'all' ? 'default' : 'outline'}
+                    onClick={() => setFilter('all')}
+                    size="sm"
+                  >
+                    All
+                  </Button>
+                  <Button
+                    variant={filter === 'pending' ? 'default' : 'outline'}
+                    onClick={() => setFilter('pending')}
+                    size="sm"
+                  >
+                    Pending
+                  </Button>
+                  <Button
+                    variant={filter === 'active' ? 'default' : 'outline'}
+                    onClick={() => setFilter('active')}
+                    size="sm"
+                  >
+                    Active
+                  </Button>
+                  <Button
+                    variant={filter === 'expired' ? 'default' : 'outline'}
+                    onClick={() => setFilter('expired')}
+                    size="sm"
+                  >
+                    Expired
+                  </Button>
+                  <Button
+                    variant={filter === 'rejected' ? 'default' : 'outline'}
+                    onClick={() => setFilter('rejected')}
+                    size="sm"
+                  >
+                    Rejected
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -514,9 +560,16 @@ export const MessageBoxPage = () => {
                         </p>
                       </div>
                     </div>
-                    <span className="px-3 py-1 bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-full text-xs font-medium">
-                      Active
-                    </span>
+                    {conversationIsExpired(conversation) ? (
+                      <span className="px-3 py-1 bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 rounded-full text-xs font-medium inline-flex items-center">
+                        <Clock className="w-3 h-3 mr-1" />
+                        Expired
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 rounded-full text-xs font-medium">
+                        Active
+                      </span>
+                    )}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
