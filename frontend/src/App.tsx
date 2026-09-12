@@ -48,6 +48,30 @@ const ProtectedRoute = ({ children }: { children: ReactNode }) => {
 };
 
 /**
+ * Used to keep a signed-in user out of the login screen.
+ * Once a session exists there is nothing left to log into, and the form would only bounce
+ * them straight back here, so they are sent to the dashboard their role actually uses --
+ * the same target the root path already resolves to.
+ */
+export const PublicOnlyRoute = ({ children }: { children: ReactNode }) => {
+  const { user, isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading session...</p>
+      </div>
+    );
+  }
+
+  return isAuthenticated ? (
+    <Navigate to={user?.role === 'admin' ? '/admin' : '/dashboard'} replace />
+  ) : (
+    <>{children}</>
+  );
+};
+
+/**
  * Used to protect routes that are only accessible to administrators.
  * It checks for authentication and verifies the user role is 'admin'.
  * Non-admin users are redirected to the user dashboard.
@@ -93,7 +117,14 @@ const AppRoutes = () => {
   return (
     <Routes>
       {/* Public routes that anyone can access */}
-      <Route path="/login" element={<Login />} />
+      <Route
+        path="/login"
+        element={
+          <PublicOnlyRoute>
+            <Login />
+          </PublicOnlyRoute>
+        }
+      />
       <Route path="/verify-login" element={<MagicLinkVerification />} />
 
       {/* Protected Routes */}

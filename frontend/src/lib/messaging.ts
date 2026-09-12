@@ -4,6 +4,11 @@
  * Provides real-time messaging over the application's WebSocket API.
  */
 
+// These three helpers talk to the API with fetch rather than the shared axios instance, so
+// they would otherwise miss the response interceptor that ends an expired session.
+import { endSessionIfTokenWasRejected } from './authEvents';
+
+
 interface Message {
   id: string;
   conversation_id: string;
@@ -231,6 +236,7 @@ export async function sendMessage(
   });
 
   if (!response.ok) {
+    endSessionIfTokenWasRejected(response.status);
     const error = await response.json();
     throw new Error(error.detail || 'Failed to send message');
   }
@@ -260,6 +266,7 @@ export async function fetchMessages(
     console.log('📡 Fetch response status:', response.status, response.statusText);
 
     if (!response.ok) {
+      endSessionIfTokenWasRejected(response.status);
       const error = await response.json();
       console.error('❌ Fetch error response:', error);
       throw new Error(error.detail || 'Failed to fetch messages');
@@ -295,6 +302,7 @@ export async function reportMessage(
   });
 
   if (!response.ok) {
+    endSessionIfTokenWasRejected(response.status);
     const error = await response.json();
     throw new Error(error.detail || 'Failed to report message');
   }

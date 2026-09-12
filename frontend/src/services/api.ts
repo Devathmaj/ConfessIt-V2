@@ -1,6 +1,7 @@
 // src/services/api.ts
 
 import axios from 'axios';
+import { endSessionIfTokenWasRejected } from '@/lib/authEvents';
 
 const API_URL = 'http://localhost:8001';
 
@@ -9,6 +10,17 @@ const getAuthHeaders = () => {
   const token = localStorage.getItem('accessToken');
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
+
+// Registered on the shared instance because every endpoint in this file uses it, so this
+// is the one place an expired token is noticed. Requests that fail for any other reason
+// are passed through untouched for their own caller to handle.
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    endSessionIfTokenWasRejected(error?.response?.status);
+    return Promise.reject(error);
+  }
+);
 
 // --- Confession Endpoints ---
 

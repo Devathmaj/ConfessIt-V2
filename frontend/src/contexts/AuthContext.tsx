@@ -2,7 +2,9 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback } from 'react';
 import { jwtDecode } from 'jwt-decode';
-import { getCurrentUser } from '../services/api'; 
+import { getCurrentUser } from '../services/api';
+import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
+
 
 // Used to define the structure of the User object
 export interface User {
@@ -39,7 +41,9 @@ interface AuthContextType {
   fetchAndSetUser: (token: string) => Promise<void>; // Expose fetchAndSetUser
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// Exported so route guards can be rendered against a supplied session in tests.
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -89,6 +93,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
     initializeAuth();
   }, [fetchAndSetUser]);
+
+  // The access token expires on its own schedule, and the token is already cleared by the
+  // time this fires, so `logout` only has to drop the in-memory user to finish the job.
+  // Protected routes then see an unauthenticated session and redirect to /login on their
+  // own, which is why nothing here needs the router.
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      console.warn('Access token was rejected as expired. Ending session.');
+      logout();
+    };
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+  }, [logout]);
+
 
   const verifyMagicToken = async (magicToken: string): Promise<VerifyTokenResult> => {
     setIsLoading(true);
