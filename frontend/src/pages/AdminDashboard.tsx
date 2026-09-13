@@ -18,6 +18,7 @@ import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AdminNavigation } from '@/components/AdminNavigation';
+import { CAPABILITIES, Capability } from '@/lib/capabilities';
 import { getAdminStats, getAdminActiveSessions } from '@/services/api';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -52,6 +53,8 @@ interface QuickAction {
   description: string;
   icon: LucideIcon;
   to: string;
+  /** The capability a visit to this page needs; the action is hidden without it. */
+  capability: Capability;
 }
 
 const recentActivity = [
@@ -139,7 +142,7 @@ interface ActiveSessionRecord {
 }
 
 export const AdminDashboard = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, can } = useAuth();
   const navigate = useNavigate();
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -147,6 +150,13 @@ export const AdminDashboard = () => {
   const [showActiveSessions, setShowActiveSessions] = useState(false);
   const [activeSessions, setActiveSessions] = useState<ActiveSessionRecord[]>([]);
   const [activeSessionsLoading, setActiveSessionsLoading] = useState(false);
+
+  // The counters on this page are readable by any moderator. The list behind the Active
+  // Sessions card exposes each account's IP and device, so it stays admin-only. The card
+  // still shows its count to everyone -- that number comes from /admin/stats, which a
+  // moderator can read -- but only becomes clickable for an account that could open the
+  // list, so the affordance matches what the server would allow.
+  const canReadSessions = can(CAPABILITIES.SESSIONS_READ);
 
   useEffect(() => {
     setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
@@ -212,7 +222,7 @@ export const AdminDashboard = () => {
       icon: Activity,
       value: stats?.active_sessions ?? '—',
       isLoading: loading,
-      onClick: handleActiveSessionsClick,
+      onClick: canReadSessions ? handleActiveSessionsClick : undefined,
     },
     {
       id: 'confessions',
@@ -260,37 +270,42 @@ export const AdminDashboard = () => {
       title: 'Review Confessions',
       description: 'See reports, reactions and remove harmful content.',
       icon: ShieldAlert,
-      to: '/admin/confessions'
+      to: '/admin/confessions',
+      capability: CAPABILITIES.CONFESSIONS_REVIEW
     },
     {
       id: 'love-notes',
       title: 'Moderate Love Notes',
       description: 'Approve or reject submitted love notes.',
       icon: Mail,
-      to: '/admin/love-notes'
+      to: '/admin/love-notes',
+      capability: CAPABILITIES.LOVE_NOTES_REVIEW
     },
     {
       id: 'matchmaking',
       title: 'Matchmaking Queue',
       description: 'Review recent matchmaking submissions.',
       icon: Heart,
-      to: '/admin/matchmaking'
+      to: '/admin/matchmaking',
+      capability: CAPABILITIES.MATCHMAKING_REVIEW
     },
     {
       id: 'profiles',
       title: 'Profile Review',
       description: 'Inspect user profiles and manage blocks.',
       icon: UsersRound,
-      to: '/admin/profile-review'
+      to: '/admin/profile-review',
+      capability: CAPABILITIES.USERS_REVIEW
     },
     {
       id: 'reports',
       title: 'Reports Inbox',
       description: 'Stay ahead of flagged activity and feedback.',
       icon: ClipboardList,
-      to: '/admin/confessions'
+      to: '/admin/confessions',
+      capability: CAPABILITIES.CONFESSIONS_REVIEW
     }
-  ];
+  ].filter((action) => can(action.capability));
 
   const handleLogout = () => {
     logout();
@@ -426,6 +441,10 @@ export const AdminDashboard = () => {
         </footer>
       </div>
 
+      {/* Not merely hidden by CSS: the panel is never mounted without SESSIONS_READ, so
+          there is no path to it from this page for an account that could not read the data
+          anyway. The route and the endpoint behind it refuse independently. */}
+      {canReadSessions && (
       <Dialog open={showActiveSessions} onOpenChange={setShowActiveSessions}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
@@ -465,8 +484,7 @@ export const AdminDashboard = () => {
                           {user.is_blocked && <Badge variant="destructive">Blocked</Badge>}
                           <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
                             {user.role || 'user'}
-                          </Badge>
-                        </div>
+                          </Badge>                        </div>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">
                         Last seen {lastSeen}
@@ -492,6 +510,7 @@ export const AdminDashboard = () => {
           </div>
         </DialogContent>
       </Dialog>
+      )}
     </div>
   );
 };

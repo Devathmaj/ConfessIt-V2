@@ -44,3 +44,7 @@ mongo_data/
 *.njsproj
 *.sln
 *.sw?
+
+
+# Misc
+admin.md

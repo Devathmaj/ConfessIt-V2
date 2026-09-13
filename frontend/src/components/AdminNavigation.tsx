@@ -2,21 +2,28 @@ import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, MessageSquare } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
+import { useAuth } from "@/contexts/AuthContext";
+import { CAPABILITIES, Capability } from "@/lib/capabilities";
 
 interface NavItem {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   exact?: boolean;
+  /**
+   * The capability a visit to this page needs. Each one is the same capability that gates the
+   * endpoints the page calls, so a link is shown only when opening it would actually work.
+   */
+  capability: Capability;
 }
 
 const navItems: NavItem[] = [
-  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion },
-  { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart },
-  { to: "/admin/matchmaking", label: "Matchmaking Review", icon: Heart },
-  { to: "/admin/conversations", label: "Chat Monitor", icon: MessageSquare },
-  { to: "/admin/profile-review", label: "Profile Review", icon: UsersRound },
+  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true, capability: CAPABILITIES.STATS_READ },
+  { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
+  { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },
+  { to: "/admin/matchmaking", label: "Matchmaking Review", icon: Heart, capability: CAPABILITIES.MATCHMAKING_REVIEW },
+  { to: "/admin/conversations", label: "Chat Monitor", icon: MessageSquare, capability: CAPABILITIES.CONVERSATIONS_REVIEW },
+  { to: "/admin/profile-review", label: "Profile Review", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];
 
 const baseLink = "flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all duration-200";
@@ -25,6 +32,12 @@ const inactiveLink = "text-foreground/70 hover:text-foreground hover:bg-secondar
 
 export const AdminNavigation = () => {
   const [open, setOpen] = useState(false);
+  const { can } = useAuth();
+
+  // Filtered rather than individually hidden so a moderator is simply not offered the
+  // account-management screen. The route guard refuses it either way; omitting the link
+  // means it is never presented as something they can open.
+  const visibleItems = navItems.filter((item) => can(item.capability));
 
   const renderLink = (item: NavItem) => (
     <NavLink
@@ -53,7 +66,7 @@ export const AdminNavigation = () => {
         </NavLink>
 
         <div className="hidden items-center gap-2 md:flex">
-          {navItems.map(renderLink)}
+          {visibleItems.map(renderLink)}
           <ModeToggle />
         </div>
 
@@ -69,7 +82,7 @@ export const AdminNavigation = () => {
       {open && (
         <div className="mt-2 rounded-2xl border border-white/10 bg-background/95 p-4 shadow-xl backdrop-blur-xl md:hidden">
           <div className="flex flex-col gap-2">
-            {navItems.map(renderLink)}
+            {visibleItems.map(renderLink)}
           </div>
           <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 px-3 py-2">
             <span className="text-sm font-medium text-foreground/80">Theme</span>

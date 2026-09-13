@@ -15,6 +15,7 @@ from ..postgres import Database
 from ..config import settings
 from ..dependencies import get_db
 from ..models import UserDetails
+from ..roles import capabilities_for
 from ..logger import get_console_only_logger, get_logger
 
 logger = get_logger(__name__)
@@ -188,17 +189,6 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
         return None
 
 
-def admin_required(current_user: UserDetails = Depends(get_current_user)):
-    """
-    Used to verify that the current user is an admin based on their role.
-    """
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this resource",
-        )
-    return current_user
-
 async def generate_magic_link_service(request: Request, db: Database):
     """
     Used to generate a magic link for a user.
@@ -308,8 +298,13 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         expires_delta=access_token_expires
     )
 
-    # Used to determine the redirect URL based on the user's role.
-    redirect_url = "/admin" if role == "admin" else "/dashboard"
+    # Staff land on the moderation area; participants on their dashboard. Derived from
+    # whether the account holds any moderation capability rather than by naming the admin
+    # role, so a moderator is not bounced to a dashboard it has no business seeing, and so
+    # a role added later does not have to be remembered here. The client re-derives the same
+    # destination from /auth/me once it loads, so this only decides what the browser shows
+    # in the moment between the redirect and that first fetch.
+    redirect_url = "/admin" if capabilities_for(role) else "/dashboard"
 
     return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
 

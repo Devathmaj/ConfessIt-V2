@@ -22,6 +22,7 @@ from .services import asset_delivery_service
 from .models import UserDetails
 import uvicorn
 from .db_models import UserRecord
+from .roles import Role
 from .logger import get_logger, otlp_transport
 from .telemetry import redact_client_url, redact_query_strings
 from opentelemetry import metrics, trace
@@ -271,11 +272,11 @@ async def on_startup():
         {"regno": "user", "name": "Test User", "email": "user@test.com", "bio": "This is a test user.",
          "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
          "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
-         "love_notes_send_enabled": False, "role": "user"},
+         "love_notes_send_enabled": False, "role": Role.USER.value},
         {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "bio": "This is a test admin.",
          "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
          "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
-         "love_notes_send_enabled": False, "role": "admin"},
+         "love_notes_send_enabled": False, "role": Role.ADMIN.value},
     ]
     with postgres.sessions.begin() as session:
         session.execute(update(UserRecord).where(

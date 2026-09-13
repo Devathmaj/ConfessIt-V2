@@ -9,6 +9,7 @@ from ..postgres import new_id, is_valid_id
 from ..postgres import Database
 from ..db_models import (ConfessionCommentRecord, ConfessionRecord, ConversationRecord,
     LoginTokenRecord, LoveNoteRecord, MatchRecord, MessageRecord, ReportRecord, UserRecord)
+from ..roles import STAFF_ROLE_VALUES, is_staff, normalize_role
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -41,7 +42,10 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "gender": doc.get("gender"),
         "profile_picture_url": doc.get("profile_picture_url"),
         "interests": doc.get("interests", []),
-        "role": doc.get("role", "user"),
+        # Normalised rather than passed through: a profile document predating the role
+        # constraint can still hold a value the app no longer accepts, and the admin list
+        # would otherwise render a fourth role that grants nothing.
+        "role": normalize_role(doc.get("role")),
         "matchmaking_enabled": doc.get("matchmaking_enabled", False),
         "notifications_enabled": doc.get("notifications_enabled", True),
         "love_notes_receive_enabled": doc.get("love_notes_receive_enabled", True),
@@ -395,13 +399,19 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
 
 
 def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
-    """Fetch all matches excluding administrators."""
+    """Fetch all matches excluding staff accounts."""
     with db.sessions() as session:
-        admin_regnos = set(session.scalars(select(UserRecord.regno).where(UserRecord.role == "admin")).all())
+        # Staff are excluded from matchmaking as participants, so any match that names one
+        # is not something the moderation queue should offer to approve or reject. The set
+        # is the staff roles rather than the admin role alone, so a moderator cannot appear
+        # in a match list it is being asked to moderate.
+        staff_regnos = set(session.scalars(
+            select(UserRecord.regno).where(UserRecord.role.in_(STAFF_ROLE_VALUES))
+        ).all())
         match_query = select(MatchRecord)
-        if admin_regnos:
+        if staff_regnos:
             match_query = match_query.where(
-                MatchRecord.user_1_regno.not_in(admin_regnos), MatchRecord.user_2_regno.not_in(admin_regnos)
+                MatchRecord.user_1_regno.not_in(staff_regnos), MatchRecord.user_2_regno.not_in(staff_regnos)
             )
         matches = session.scalars(match_query.order_by(MatchRecord.created_at.desc())).all()
         match_ids = [match.id for match in matches]
@@ -455,7 +465,7 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
             if not regno:
                 continue
             user_doc = users_by_regno.get(regno)
-            if user_doc and user_doc.get("role") == "admin":
+            if user_doc and is_staff(user_doc.get("role")):
                 skip_match = True
                 break
             participants.append(serialize_user_doc(user_doc) if user_doc else {"regno": regno})

@@ -12,6 +12,8 @@ from ..models import AdminUserCreate, AdminUserUpdate, UserDetails
 from ..db_models import (ConfessionRecord, ConversationRecord, MatchRecord, MessageRecord,
     MessageReportRecord, UserRecord)
 from ..services.auth_service import get_current_user
+from ..services.authorization import require_capability
+from ..roles import Capability, Role
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
@@ -49,16 +51,6 @@ def _match_payload(row):
         "created_at": row.created_at, "expires_at": row.expires_at}
 
 
-def _require_admin(current_user: UserDetails = Depends(get_current_user)) -> UserDetails:
-    """Ensure the requester has administrator privileges."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator access required."
-        )
-    return current_user
-
-
 class ConversationTerminateRequest(BaseModel):
     reason: Optional[str] = None
 
@@ -66,7 +58,7 @@ class ConversationTerminateRequest(BaseModel):
 @router.get("/confessions", response_model=List[Dict[str, Any]])
 async def get_all_confessions(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every confession with sender information for admin review."""
     return get_all_confessions_data(db)
@@ -76,7 +68,7 @@ async def get_all_confessions(
 async def delete_confession(
     confession_id: str,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE))
 ) -> Dict[str, Any]:
     """Remove a confession permanently."""
     if not is_valid_id(confession_id):
@@ -93,7 +85,7 @@ async def delete_confession(
 @router.get("/users", response_model=List[Dict[str, Any]])
 async def get_all_users(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.USERS_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every user profile for review."""
     with db.sessions() as session:
@@ -105,7 +97,7 @@ async def get_all_users(
 async def create_user(
     payload: AdminUserCreate,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.USERS_CREATE))
 ) -> Dict[str, Any]:
     """Allow admins to create a brand new user or admin account."""
     normalized_regno = payload.regno.strip()
@@ -136,7 +128,7 @@ async def create_user(
             profile_picture_url=payload.profile_picture_url.strip() if payload.profile_picture_url else None,
             interests=interests_value or [], matchmaking_enabled=payload.matchmaking_enabled,
             notifications_enabled=payload.notifications_enabled, love_notes_receive_enabled=payload.love_notes_receive_enabled,
-            love_notes_send_enabled=payload.love_notes_send_enabled, role=payload.role,
+            love_notes_send_enabled=payload.love_notes_send_enabled, role=payload.role.value,
         )
         session.add(user)
         session.flush()
@@ -149,7 +141,7 @@ async def set_user_block_state(
     user_id: str,
     blocked: bool = Query(..., alias="blocked"),
     db: Database = Depends(get_db),
-    current_admin: UserDetails = Depends(_require_admin)
+    current_admin: UserDetails = Depends(require_capability(Capability.USERS_BLOCK))
 ) -> Dict[str, Any]:
     """Allow admins to block or unblock a user."""
     if not is_valid_id(user_id):
@@ -171,13 +163,20 @@ async def update_user_details(
     user_id: str,
     update: AdminUserUpdate,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.USERS_UPDATE))
 ) -> Dict[str, Any]:
     """Allow admins to edit a user's profile details."""
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
-    update_payload = {key: value for key, value in update.dict(exclude_unset=True).items()}
+    # ``role`` is typed as the Role enum, which rejects anything unrecognised at validation
+    # time. It is unwrapped to its string here because the column stores text, and a raw
+    # enum member would be handed to the driver rather than to the database as the value the
+    # CHECK constraint compares against.
+    update_payload = {
+        key: (value.value if isinstance(value, Role) else value)
+        for key, value in update.dict(exclude_unset=True).items()
+    }
 
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
@@ -197,7 +196,7 @@ async def update_user_details(
 @router.get("/conversations", response_model=List[Dict[str, Any]])
 async def list_conversations(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every conversation with participant and latest message metadata."""
     return get_all_conversations_data(db)
@@ -207,7 +206,7 @@ async def list_conversations(
 async def get_conversation_detail(
     conversation_id: str,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_READ_MESSAGES))
 ) -> Dict[str, Any]:
     """Return a single conversation with full participant info and message transcript."""
     if not is_valid_id(conversation_id):
@@ -272,7 +271,7 @@ async def terminate_conversation(
     conversation_id: str,
     payload: ConversationTerminateRequest,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_TERMINATE))
 ) -> Dict[str, Any]:
     """Terminate a conversation."""
     if not is_valid_id(conversation_id):
@@ -306,7 +305,7 @@ async def terminate_conversation(
 @router.get("/matchmaking", response_model=List[Dict[str, Any]])
 async def get_matchmaking_overview(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.MATCHMAKING_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every recorded match excluding administrators."""
     return get_matchmaking_overview_data(db)
@@ -317,7 +316,7 @@ async def update_matchmaking_status(
     match_id: str,
     status_value: str = Query(..., alias="status", regex="^(approved|rejected|pending)$"),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.MATCHMAKING_MODERATE))
 ) -> Dict[str, Any]:
     """Moderate a matchmaking outcome by updating the linked conversation state."""
     if not is_valid_id(match_id):
@@ -378,7 +377,7 @@ async def update_matchmaking_status(
 @router.get("/stats", response_model=Dict[str, Any])
 async def get_admin_statistics(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.STATS_READ))
 ) -> Dict[str, Any]:
     """Provide high-level metrics for the admin dashboard."""
     return get_admin_statistics_data(db)
@@ -387,7 +386,7 @@ async def get_admin_statistics(
 @router.get("/stats/active-sessions", response_model=Dict[str, Any])
 async def list_active_sessions(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.SESSIONS_READ))
 ) -> Dict[str, Any]:
     """Return details about users with recent activity for the active sessions dialog."""
     sessions = collect_active_sessions(db)
@@ -411,7 +410,7 @@ async def list_active_sessions(
 async def archive_old_messages(
     hours_old: int = Query(4, ge=1, le=168, description="Archive messages older than this many hours"),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """
     Archive old messages to compressed JSON files and remove from PostgreSQL
@@ -426,7 +425,7 @@ async def archive_old_messages(
 
 @router.get("/messages/archives")
 async def list_message_archives(
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """List all archived message files"""
     from ..services.message_archival_service import message_archival_service
@@ -448,7 +447,7 @@ async def get_archived_messages(
     date: str,
     user_regno: Optional[str] = Query(None, description="Filter by user regno"),
     conversation_id: Optional[str] = Query(None, description="Filter by conversation ID"),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """
     Get archived messages for a specific date
@@ -476,7 +475,7 @@ async def get_message_reports(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    _: UserDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
     """Get all message reports with optional status filter"""
     
@@ -531,7 +530,7 @@ async def update_message_report_status(
     report_id: str,
     new_status: str = Query(..., regex="^(reviewed|dismissed)$"),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(_require_admin)
+    reviewer: UserDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
 ) -> Dict[str, Any]:
     """Update the status of a message report"""
     
@@ -541,7 +540,7 @@ async def update_message_report_status(
             if report:
                 report.status = new_status
                 report.reviewed_at = datetime.now(timezone.utc)
-                report.reviewed_by_regno = _.regno if _ else None
+                report.reviewed_by_regno = reviewer.regno
         if not report:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -550,6 +549,8 @@ async def update_message_report_status(
         
         return {"message": f"Report status updated to {new_status}"}
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

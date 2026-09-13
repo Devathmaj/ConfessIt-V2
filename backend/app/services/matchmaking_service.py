@@ -10,6 +10,7 @@ from ..logger import get_logger
 from datetime import datetime, timedelta, timezone
 
 from ..models import UserDetails
+from ..roles import STAFF_ROLE_VALUES, is_staff
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 
@@ -72,10 +73,10 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
     Conversation status is handled by the inbox.
     """
-    if current_user.role == "admin":
+    if is_staff(current_user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrators cannot participate in matchmaking."
+            detail="Staff accounts cannot participate in matchmaking."
         )
 
     current_time = datetime.now(timezone.utc)
@@ -122,7 +123,9 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
 
     # Define the query to find a potential match
-    filters = [UserRecord.matchmaking_enabled.is_(True), UserRecord.role != "admin",
+    # Staff are excluded as candidates, so a moderator cannot be paired off as a stranger
+    # while holding a review queue.
+    filters = [UserRecord.matchmaking_enabled.is_(True), UserRecord.role.not_in(STAFF_ROLE_VALUES),
                UserRecord.is_blocked.is_(False), UserRecord.regno != current_user.regno,
                UserRecord.gender == current_user.gender if is_rare_same_gender_match else UserRecord.gender != current_user.gender]
 
@@ -262,10 +265,10 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     Used to find a random user, create a persistent match, update the matchmaking timestamp,
     and automatically create a 'pending' conversation.
     """
-    if current_user.role == "admin":
+    if is_staff(current_user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrators cannot participate in matchmaking."
+            detail="Staff accounts cannot participate in matchmaking."
         )
 
     # Re-check cooldown status for a friendly message before touching the database. This

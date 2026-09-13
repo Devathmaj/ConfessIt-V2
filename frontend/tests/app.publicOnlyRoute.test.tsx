@@ -4,10 +4,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { PublicOnlyRoute } from '@/App';
 import { AuthContext, type User } from '@/contexts/AuthContext';
+import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 
 type AuthContextValue = ContextType<typeof AuthContext>;
 
-/** A signed-in user. The guard reads only role, but User requires these four fields. */
+/** A signed-in user. User requires these four fields; role and capabilities are optional. */
 const asUser = (overrides: Partial<User> = {}): User => ({
   id: '1',
   name: 'Test User',
@@ -16,7 +17,18 @@ const asUser = (overrides: Partial<User> = {}): User => ({
   ...overrides,
 });
 
-const authValue = (user: User | null, isAuthenticated: boolean): AuthContextValue => ({
+/**
+ * The capability list the server would send for each role. Only `STATS_READ` is named
+ * because it is the one this guard keys on, standing in for "holds any moderation
+ * capability" -- the guard asks whether the account is staff at all.
+ */
+const MODERATION_CAPABILITIES = [CAPABILITIES.STATS_READ, CAPABILITIES.CONFESSIONS_REVIEW];
+
+const authValue = (
+  user: User | null,
+  isAuthenticated: boolean,
+  capabilities: string[] = []
+): AuthContextValue => ({
   user,
   isAuthenticated,
   isLoading: false,
@@ -24,6 +36,7 @@ const authValue = (user: User | null, isAuthenticated: boolean): AuthContextValu
   logout: vi.fn(),
   verifyMagicToken: vi.fn(),
   fetchAndSetUser: vi.fn(),
+  can: (capability: Capability) => can(capabilities, capability),
 });
 
 const renderAtLogin = (value: AuthContextValue) =>
@@ -57,10 +70,35 @@ describe('PublicOnlyRoute', () => {
   });
 
   it('sends an admin to the admin dashboard rather than the user one', async () => {
-    renderAtLogin(authValue(asUser({ name: 'Admin', role: 'admin' }), true));
+    const user = asUser({ name: 'Admin', role: 'admin' });
+    renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
 
     await waitFor(() => {
       expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();
+    });
+  });
+
+  it('sends a moderator to the admin dashboard too', async () => {
+    // The destination is decided by the capability list, not by the role string, so a
+    // moderator lands in the moderation area instead of a participant dashboard they have
+    // no use for. A role check would send them to /dashboard.
+    const user = asUser({ name: 'Mod', role: 'moderator' });
+    renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
+
+    await waitFor(() => {
+      expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();
+    });
+  });
+
+  it('does not trust the role string on its own', async () => {
+    // A role claiming admin with no capabilities is not staff as far as this guard is
+    // concerned. Capabilities are what the server decided; a role field that arrived
+    // without them proves nothing.
+    const user = asUser({ name: 'Impostor', role: 'admin' });
+    renderAtLogin(authValue(user, true, []));
+
+    await waitFor(() => {
+      expect(screen.getByText('USER DASHBOARD')).toBeInTheDocument();
     });
   });
 

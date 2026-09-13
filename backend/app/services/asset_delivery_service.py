@@ -25,6 +25,7 @@ from sqlalchemy import or_, select
 from ..config import settings
 from ..db_models import LoveNoteRecord, UserRecord
 from ..models import UserDetails
+from ..roles import Capability, has_capability
 from ..postgres import Database
 from .storage_service import storage_service
 from .auth_service import ASSET_TOKEN_TYPE
@@ -209,9 +210,9 @@ def _profile_asset_is_published(db: Database, object_path: str) -> bool:
 def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str) -> bool:
     """Authorise a love note image for the accounts allowed to see it.
 
-    - the recipient may only view a note once an admin has approved it
+    - the recipient may only view a note once a moderator has approved it
     - the sender may always view the note they sent
-    - an admin may view any note, in any state, in order to moderate it
+    - staff may view any note, in any state, in order to moderate it
     """
     with db.sessions() as session:
         query = select(
@@ -220,7 +221,11 @@ def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str)
             LoveNoteRecord.image_url,
             LoveNoteRecord.status,
         )
-        if user.role != "admin":
+        # Widening the query to every note is what lets a moderator inspect an image on a
+        # note that is still pending, which is the point of the review screen. Keyed on the
+        # capability that guards the love-note review endpoint, so the image proxy and the
+        # review list grant the same people access.
+        if not has_capability(user.role, Capability.LOVE_NOTES_REVIEW):
             query = query.where(
                 or_(
                     LoveNoteRecord.sender_id == user.id,
@@ -232,7 +237,7 @@ def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str)
     for sender_id, recipient_id, image_url, status in rows:
         is_recipient = str(recipient_id or "") == str(user.id)
         # A recipient must never see a note that has not been approved; a rejected or
-        # still-pending note stays visible only to its sender and to admins.
+        # still-pending note stays visible only to its sender and to staff.
         if is_recipient and status != "approved":
             continue
         if _matches_stored_asset(image_url, "love-notes", object_path):

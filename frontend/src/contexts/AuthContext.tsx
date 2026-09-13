@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, ReactNode, useEffect, useCa
 import { jwtDecode } from 'jwt-decode';
 import { getCurrentUser } from '../services/api';
 import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
+import { Capability, can, asRole } from '../lib/capabilities';
 
 
 // Used to define the structure of the User object
@@ -22,7 +23,13 @@ export interface User {
   notifications_enabled?: boolean;
   love_notes_receive_enabled?: boolean;
   love_notes_send_enabled?: boolean; // Used to track if the user has sent a love note
-  role?: 'user' | 'admin';
+  role?: 'user' | 'admin' | 'moderator';
+  /**
+   * What this account may reach, as decided by the server. Screens and menu entries are
+   * gated on these rather than on `role`, so the client holds no privilege table of its
+   * own. See src/lib/capabilities.ts.
+   */
+  capabilities?: string[];
   is_blocked?: boolean;
 }
 
@@ -39,6 +46,8 @@ interface AuthContextType {
   token: string | null;
   verifyMagicToken: (token: string) => Promise<VerifyTokenResult>;
   fetchAndSetUser: (token: string) => Promise<void>; // Expose fetchAndSetUser
+  /** Whether the signed-in account holds `capability`. False whenever nobody is signed in. */
+  can: (capability: Capability) => boolean;
 }
 
 // Exported so route guards can be rendered against a supplied session in tests.
@@ -71,6 +80,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser({
           ...userData,
           id: userId, // Used to ensure the user object always has a consistent 'id' property
+          // Narrowed rather than cast. If the server ever sends a role this build does not
+          // know, the account keeps working as a plain user instead of the client acting on
+          // a value it cannot reason about.
+          role: asRole(userData.role),
+          capabilities: userData.capabilities ?? [],
         });
       } else {
         console.error("User ID is missing from the authentication response.");
@@ -145,8 +159,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const isAuthenticated = !isLoading && !!user;
 
+  // Reads the capability list off the current user rather than closing over `user`, so a
+  // consumer that captured this function still sees the answer for whoever is signed in
+  // now. Recreated only when the list itself changes.
+  const capabilities = user?.capabilities;
+  const hasCapability = useCallback(
+    (capability: Capability) => can(capabilities, capability),
+    [capabilities]
+  );
+
   return (
-    <AuthContext.Provider value={{ user, logout, isAuthenticated, token, isLoading, verifyMagicToken, fetchAndSetUser }}>
+    <AuthContext.Provider value={{ user, logout, isAuthenticated, token, isLoading, verifyMagicToken, fetchAndSetUser, can: hasCapability }}>
       {children}
     </AuthContext.Provider>
   );

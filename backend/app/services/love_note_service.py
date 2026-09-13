@@ -9,6 +9,7 @@ from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
+from ..roles import STAFF_ROLE_VALUES, is_staff
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 
@@ -37,7 +38,7 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[d
     active user, any administrator accounts, and users who opted out of
     receiving love notes.
 
-    Accounts an admin has blocked are deliberately still listed: love notes are
+    Accounts a staff member has blocked are deliberately still listed: love notes are
     moderated independently of matchmaking, so a note may still reach a blocked
     recipient. The ``is_blocked`` flag travels with each row so the sender is asked
     to confirm before the note is sent.
@@ -45,7 +46,11 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[d
     with db.sessions() as session:
         rows = session.scalars(select(UserRecord).where(
             UserRecord.regno != current_user_regno,
-            UserRecord.role != "admin",
+            # Staff are excluded from the participant pool, so a note can neither be
+            # addressed to nor sent by one. Excluded as candidates here and refused as
+            # sender or recipient below, so the rule does not depend on which door it is
+            # reached through.
+            UserRecord.role.not_in(STAFF_ROLE_VALUES),
             UserRecord.love_notes_receive_enabled.is_(True),
         )).all()
         return [_user_payload(row, regno=current_user_regno) for row in rows]
@@ -82,16 +87,16 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
             detail="Recipient not found."
         )
 
-    if recipient.role == "admin":
+    if is_staff(recipient.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrators cannot receive love notes."
+            detail="Staff accounts cannot receive love notes."
         )
 
-    if sender.role == "admin":
+    if is_staff(sender.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrators are not permitted to send love notes."
+            detail="Staff accounts are not permitted to send love notes."
         )
 
     try:

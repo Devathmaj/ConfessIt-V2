@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
 import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, Plus } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { Role } from '@/lib/capabilities';
 
 interface AdminUserProfile {
   id: string;
@@ -65,7 +66,7 @@ type CreateUserForm = {
   notifications_enabled: boolean;
   love_notes_receive_enabled: boolean;
   love_notes_send_enabled: boolean;
-  role: 'user' | 'admin';
+  role: Role;
 };
 
 const formatDate = (value?: string | null) => {
@@ -334,7 +335,7 @@ export const ProfileReview = () => {
       const createdProfile = await createAdminUser(payload);
       setProfiles((prev) => [createdProfile, ...prev]);
       toast.success(
-        `${createForm.role === 'admin' ? 'Administrator' : 'User'} account created successfully.`
+        `${createForm.role.charAt(0).toUpperCase()}${createForm.role.slice(1)} account created successfully.`
       );
       resetCreateDialog();
     } catch (error: unknown) {
@@ -840,10 +841,10 @@ export const ProfileReview = () => {
 
               <div className="grid gap-2">
                 <Label>Account role *</Label>
-                <Select
+                  <Select
                   value={createForm.role}
                   onValueChange={(value) =>
-                    setCreateForm((prev) => ({ ...prev, role: value as 'user' | 'admin' }))
+                    setCreateForm((prev) => ({ ...prev, role: value as Role }))
                   }
                 >
                   <SelectTrigger id="create-role">
@@ -851,6 +852,7 @@ export const ProfileReview = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="user">User</SelectItem>
+                    <SelectItem value="moderator">Moderator</SelectItem>
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>

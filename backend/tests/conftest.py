@@ -26,6 +26,7 @@ settings.DATABASE_MAX_OVERFLOW = 2
 
 from app.main import app
 from app.models import UserDetails
+from app.roles import Role
 from app.services.auth_service import get_current_user
 
 test_db = get_postgres_client()
@@ -47,14 +48,30 @@ def override_get_current_user():
         gender="other",
         matchmaking_enabled=True,
         notifications_enabled=True,
-        role="user",
+        role=Role.USER.value,
     )
 
 
 def override_get_admin_user():
     """A real UserDetails carrying the admin role."""
     return override_get_current_user().model_copy(
-        update={"regno": "adminuser", "name": "Admin User", "email": "admin@user.com", "role": "admin"}
+        update={"regno": "adminuser", "name": "Admin User", "email": "admin@user.com", "role": Role.ADMIN.value}
+    )
+
+
+def override_get_moderator_user():
+    """A real UserDetails carrying the moderator role.
+
+    Built by validating ``Role.MODERATOR`` rather than by writing the literal, so the
+    fixture cannot drift from the enum if the vocabulary ever changes.
+    """
+    return override_get_current_user().model_copy(
+        update={
+            "regno": "moduser",
+            "name": "Moderator User",
+            "email": "mod@user.com",
+            "role": Role.MODERATOR.value,
+        }
     )
 
 app.dependency_overrides[get_current_user] = override_get_current_user
@@ -89,6 +106,21 @@ def admin_client():
     dependency is enough to reach the admin routes.
     """
     app.dependency_overrides[get_current_user] = override_get_admin_user
+    try:
+        yield TestClient(app, follow_redirects=False)
+    finally:
+        app.dependency_overrides[get_current_user] = override_get_current_user
+
+
+@pytest.fixture
+def moderator_client():
+    """A client whose ``get_current_user`` resolves to a moderator.
+
+    Capability dependencies also hang off ``get_current_user``, so overriding that one
+    dependency is enough to reach the moderation routes. This is what makes the
+    admin-only / moderator-only split testable without minting a real admin token.
+    """
+    app.dependency_overrides[get_current_user] = override_get_moderator_user
     try:
         yield TestClient(app, follow_redirects=False)
     finally:

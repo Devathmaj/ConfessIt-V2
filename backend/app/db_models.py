@@ -10,7 +10,19 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .limits import COMMENT_BODY_MAX, CONFESSION_BODY_MAX, MESSAGE_BODY_MAX
+from .limits import (
+    COMMENT_BODY_MAX,
+    CONFESSION_BODY_MAX,
+    MESSAGE_BODY_MAX,
+    USER_ROLE_MAX,
+)
+from .roles import ROLE_VALUES, Role
+
+# Rendered into the CHECK below. The values are literals in trusted source, not user input,
+# and quoting them here rather than passing them as bind parameters keeps the constraint a
+# single self-contained DDL expression that survives the NOT VALID re-add in
+# ``PostgresClient.apply_check_constraints``.
+_ROLE_SQL_LIST = ", ".join(f"'{value}'" for value in ROLE_VALUES)
 
 
 def _uuid() -> str:
@@ -43,8 +55,26 @@ class UserRecord(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_login_ip: Mapped[Optional[str]] = mapped_column(INET)
     last_login_user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(String(20), default="user", server_default=text("'user'"), index=True)
+    # The width is the widest role name plus room to spare rather than a bound the API
+    # advertises. The value set is what is actually constrained, by the CHECK below.
+    role: Mapped[str] = mapped_column(String(USER_ROLE_MAX), default=Role.USER.value, server_default=text("'user'"), index=True)
     last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # The role vocabulary is enforced here as well as in the request models, because the
+    # column is the thing every authorization decision is read from. A role that is not one
+    # of the three cannot be written by any path, so a handler cannot be tricked into
+    # honouring one by a value that reached the row another way.
+    #
+    # NULL is excluded by the IS NOT NULL arm. The column is NOT NULL already, so that arm
+    # only matters for the three-valued logic of a bare ``IN``: if role were ever NULL the
+    # predicate would evaluate to NULL, which a CHECK constraint treats as passing. Making
+    # the rejection explicit means an unset role can never slip through as "unconstrained".
+    __table_args__ = (
+        CheckConstraint(
+            f"role IS NOT NULL AND role IN ({_ROLE_SQL_LIST})",
+            name="users_role_valid",
+        ),
+    )
 
 
 class ConfessionRecord(Base):

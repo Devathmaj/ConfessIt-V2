@@ -11,6 +11,7 @@ from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
+from ..roles import Capability, has_capability
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
@@ -224,17 +225,21 @@ class MessageService:
         Get messages for a conversation
         
         Enforces:
-        - User is participant in conversation (unless admin)
+        - User is participant in conversation (unless a moderator)
         - Conversation is accepted
         """
-        # Skip validation for admin users - they can view all conversations
-        if user.role != "admin":
+        # A caller holding CONVERSATIONS_READ_MESSAGES -- the same capability that guards
+        # GET /admin/conversations/{id} -- may read any thread. Keyed on the capability rather
+        # than on the admin role so the two paths cannot disagree about who may read a
+        # transcript, and so a moderator gets it here too.
+        may_read_any = has_capability(user.role, Capability.CONVERSATIONS_READ_MESSAGES)
+        if not may_read_any:
             # Validate user is participant
             conversation = self.validate_conversation_participant(db, conversation_id, user.regno)
 
             # Reading a thread with a blocked partner is refused for the same reason sending
-            # is: the conversation is not reachable from this account any more. Admins keep
-            # their moderation read, so this stays inside the non-admin branch.
+            # is: the conversation is not reachable from this account any more. Staff keep
+            # their moderation read, so this stays inside the non-staff branch.
             if self.is_partner_blocked(db, conversation, user.regno):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -250,8 +255,9 @@ class MessageService:
                 "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
                 "created_at": row.created_at, "is_read": row.is_read} for row in rows]
         
-        # Mark messages as read for receiver (but not for admin viewers)
-        if user.role != "admin":
+        # Mark messages as read for receiver. A moderator's read must not clear the other
+        # party's unread state, so this is skipped for exactly the readers above.
+        if not may_read_any:
             with db.sessions.begin() as session:
                 rows = session.scalars(select(MessageRecord).where(
                     MessageRecord.conversation_id == str(conversation_id),

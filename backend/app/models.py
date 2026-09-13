@@ -1,6 +1,6 @@
 # app/models.py
 
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
@@ -16,8 +16,8 @@ from .limits import (
     USER_GENDER_MAX,
     USER_NAME_MAX,
     USER_REGNO_MAX,
-    USER_ROLE_MAX,
 )
+from .roles import Role, capabilities_for, normalize_role
 
 class Token(BaseModel):
     """
@@ -146,7 +146,10 @@ class AdminUserBase(BaseModel):
     notifications_enabled: bool = True
     love_notes_receive_enabled: bool = True
     love_notes_send_enabled: bool = False
-    role: str = Field(default="user", max_length=USER_ROLE_MAX)
+    # Typed as the enum, so a payload naming anything else is a 422 naming this field.
+    # A max_length here would have been the weaker check: it would bound the string without
+    # constraining it, and "Admin" is a perfectly valid twenty characters.
+    role: Role = Role.USER
 
 
 class AdminUserCreate(AdminUserBase):
@@ -172,7 +175,7 @@ class AdminUserUpdate(BaseModel):
     notifications_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
     love_notes_send_enabled: Optional[bool] = None
-    role: Optional[str] = Field(default=None, max_length=USER_ROLE_MAX)
+    role: Optional[Role] = None
     is_blocked: Optional[bool] = None
 
 
@@ -199,13 +202,41 @@ class UserDetails(BaseModel):
     last_login_at: Optional[datetime] = None
     last_login_ip: Optional[str] = None
     last_login_user_agent: Optional[str] = None
-    role: str = "user"
+    role: str = Role.USER.value
     last_matchmaking_at: Optional[datetime] = None
 
     class Config:
         arbitrary_types_allowed = True
         
         populate_by_name = True
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_stored_role(cls, value: Any) -> str:
+        """Resolve the role read out of the database to a defined one.
+
+        A row can predate the vocabulary being enforced, or have been written by a script
+        that never went through a request model. Reducing it here means every consumer of
+        UserDetails -- the ``/auth/me`` response, the conversation payloads, the profile
+        response -- sees one of the three roles and cannot be handed a value that matches no
+        branch. Unrecognised values become ``user``: an account keeps working, it just keeps
+        no privileges it was not validly granted.
+        """
+        return normalize_role(value)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def capabilities(self) -> List[str]:
+        """The capabilities the current role carries, as sent to the client.
+
+        Derived on read rather than stored so it cannot drift from ``role``. The frontend
+        uses this to decide which moderation screens to render, which keeps the browser's
+        idea of what is allowed in step with the server's without the client holding a
+        second, separately-maintained copy of the privilege table. It is a display concern
+        only: the server re-checks every one of these against the database on every request.
+        Sorted so the value is stable and diffable.
+        """
+        return sorted(capabilities_for(self.role))
 
 class LoginToken(BaseModel):
     """
