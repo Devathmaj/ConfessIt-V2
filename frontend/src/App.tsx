@@ -69,9 +69,13 @@ const landingPathFor = (can: (capability: Capability) => boolean) =>
  * Used to protect routes that require authentication.
  * It checks if the user is authenticated and redirects to the login page if not.
  * It also shows a loading indicator while the authentication status is being checked.
+ *
+ * The redirect goes to the door this browser signed in through, not always to /login: a
+ * moderator whose session lapses belongs back at the moderator form, where their regno
+ * resolves. See `signInPath` in the auth context for why that survives the logout.
  */
-const ProtectedRoute = ({ children }: { children: ReactNode }) => {
-  const { isAuthenticated, isLoading } = useAuth();
+export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
+  const { isAuthenticated, isLoading, signInPath } = useAuth();
 
   // Used to wait for the authentication check to complete.
   if (isLoading) {
@@ -83,7 +87,7 @@ const ProtectedRoute = ({ children }: { children: ReactNode }) => {
   }
 
   // Used to protect routes by redirecting to login if the user is not authenticated after the check.
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  return isAuthenticated ? <>{children}</> : <Navigate to={signInPath} replace />;
 };
 
 /**
@@ -98,14 +102,14 @@ const ProtectedRoute = ({ children }: { children: ReactNode }) => {
  * This is a convenience, not a boundary. Each of these routes re-checks the same capability
  * on the server, so bypassing this component in a console grants nothing.
  */
-const CapabilityRoute = ({
+export const CapabilityRoute = ({
   capability,
   children,
 }: {
   capability: Capability;
   children: ReactNode;
 }) => {
-  const { isAuthenticated, isLoading, can } = useAuth();
+  const { isAuthenticated, isLoading, can, signInPath } = useAuth();
 
   if (isLoading) {
     return (
@@ -116,7 +120,7 @@ const CapabilityRoute = ({
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to={signInPath} replace />;
   }
 
   if (!can(capability)) {

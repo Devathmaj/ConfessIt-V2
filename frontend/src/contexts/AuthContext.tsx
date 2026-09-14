@@ -1,9 +1,10 @@
 // src/contexts/AuthContext.tsx
 
-import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { getCurrentUser } from '../services/api';
 import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
+import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
 
 
@@ -57,6 +58,15 @@ interface AuthContextType {
   fetchAndSetUser: (token: string) => Promise<void>; // Expose fetchAndSetUser
   /** Whether the signed-in account holds `capability`. False whenever nobody is signed in. */
   can: (capability: Capability) => boolean;
+  /**
+   * The door to send someone to when their session ends.
+   *
+   * Survives the logout that ends the session, which is the entire point: by the time a
+   * logout completes there is no signed-in account left to ask, and this is the only record
+   * of which table the person was in. A moderator returns to the moderator door and a
+   * participant to the participant one.
+   */
+  signInPath: string;
 }
 
 // Exported so route guards can be rendered against a supplied session in tests.
@@ -67,6 +77,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Which door this browser last signed in through, kept as a ref rather than read off `user`.
+  // A logout clears the user, and a route guard that fires afterwards has nothing left to
+  // inspect -- without this it would send every account to /login, and a moderator's regno
+  // typed there would be refused by a table that does not hold it.
+  //
+  // A ref, and not state, for two reasons. It only has to outlive the state change rather than
+  // drive a render, so recording it costs no extra render on every sign-in. And it keeps
+  // `logout` referentially stable: making it depend on `user` would recreate it on every
+  // session change, which cascades into `fetchAndSetUser` and then into the effect that runs
+  // the initial sign-in -- re-running that effect sets a fresh user object, which recreates
+  // `logout` again. The guards re-render on the very logout that clears the user, so a ref is
+  // read at the moment the answer is needed.
+  const lastAccountType = useRef<AccountType | undefined>(undefined);
 
   const logout = useCallback(() => {
     setUser(null);
@@ -86,6 +110,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const userId = userData.id;
 
       if (userId) {
+        const accountType = asAccountType(userData.account_type);
+        // Remembered on the way in as well as on the way out, so the very first logout after
+        // a fresh sign-in already knows the door without depending on the render order.
+        lastAccountType.current = accountType;
         setUser({
           ...userData,
           id: userId, // Used to ensure the user object always has a consistent 'id' property
@@ -94,7 +122,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           // participant instead of the client acting on a value it cannot reason about. The
           // capability list is left exactly as sent; `can` is what treats an absent one as
           // empty.
-          account_type: asAccountType(userData.account_type),
+          account_type: accountType,
           capabilities: userData.capabilities ?? [],
         });
       } else {
@@ -170,6 +198,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const isAuthenticated = !isLoading && !!user;
 
+  // The participant door is the default for a browser that has never signed in, which is the
+  // case for a first visit or a session that lapsed before `/auth/me` ever answered.
+  const signInPath = signInPathFor(lastAccountType.current);
+
   // Reads the capability list off the current user rather than closing over `user`, so a
   // consumer that captured this function still sees the answer for whoever is signed in
   // now. Recreated only when the list itself changes.
@@ -180,7 +212,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   );
 
   return (
-    <AuthContext.Provider value={{ user, logout, isAuthenticated, token, isLoading, verifyMagicToken, fetchAndSetUser, can: hasCapability }}>
+    <AuthContext.Provider value={{ user, logout, isAuthenticated, token, isLoading, verifyMagicToken, fetchAndSetUser, can: hasCapability, signInPath }}>
       {children}
     </AuthContext.Provider>
   );

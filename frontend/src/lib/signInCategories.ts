@@ -20,7 +20,7 @@
  * across tables in the first place.
  */
 
-import type { AccountType } from './capabilities';
+import { ACCOUNT_TYPES, type AccountType } from './capabilities';
 
 const API_URL = 'http://localhost:8001';
 
@@ -89,3 +89,20 @@ export type SignInCategoryKey = keyof typeof SIGN_IN_CATEGORIES;
  */
 export const magicLinkEndpoint = (accountType: AccountType): string =>
   `${API_URL}/auth/login/${accountType}/magic`;
+
+/**
+ * The door an account should be sent back to when its session ends.
+ *
+ * A staff account that has just been logged out -- deliberately, or by expiry -- needs to come
+ * back to the door it came in through. Sending a moderator to the participant form would
+ * answer a valid moderator regno with "no participant account with that registration number",
+ * which is both wrong and confusing: the account is real, it is simply not a participant.
+ *
+ * An unrecognised or absent value returns the participant door. That is a routing decision,
+ * not a privilege one: the worst a wrong guess does is show the wrong form, and the endpoint
+ * behind it still reads only its own table, so the guess cannot become access.
+ */
+export const signInPathFor = (accountType: unknown): string =>
+  (ACCOUNT_TYPES as readonly string[]).includes(accountType as string)
+    ? SIGN_IN_CATEGORIES[accountType as AccountType].path
+    : SIGN_IN_CATEGORIES.users.path;

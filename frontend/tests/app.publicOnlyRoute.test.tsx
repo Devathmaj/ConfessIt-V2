@@ -27,7 +27,8 @@ const MODERATION_CAPABILITIES = [CAPABILITIES.STATS_READ, CAPABILITIES.CONFESSIO
 const authValue = (
   user: User | null,
   isAuthenticated: boolean,
-  capabilities: string[] = []
+  capabilities: string[] = [],
+  signInPath = '/login'
 ): AuthContextValue => ({
   user,
   isAuthenticated,
@@ -37,6 +38,7 @@ const authValue = (
   verifyMagicToken: vi.fn(),
   fetchAndSetUser: vi.fn(),
   can: (capability: Capability) => can(capabilities, capability),
+  signInPath,
 });
 
 const renderAtLogin = (value: AuthContextValue) =>
