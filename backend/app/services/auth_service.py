@@ -52,7 +52,7 @@ ACCOUNT_CATEGORY_LABELS: Dict[str, str] = {
 # The columns every account table shares. Read generically so one serialiser serves all
 # three, and so a field added to the mixin cannot be added to only one of the tables.
 _ACCOUNT_SERIALIZED_FIELDS: Tuple[str, ...] = (
-    "id", "regno", "name", "profile_picture_url", "gender",
+    "id", "regno", "name", "email", "profile_picture_url", "gender",
     "notifications_enabled", "is_blocked", "last_login_at",
     "last_login_ip", "last_login_user_agent", "created_at", "updated_at",
 )
@@ -71,7 +71,6 @@ def _user_payload(row: Any) -> Dict[str, Any]:
     """Build the full participant shape from a ``users`` row."""
     return {
         **_account_payload(row, AccountType.USERS.value),
-        "email": row.email,
         "emoji": row.emoji,
         "bio": row.bio,
         "class_name": row.class_name,
@@ -87,7 +86,7 @@ def account_from_row(account_type: str, row: Any):
     """Build the model an account of this kind is exposed as.
 
     A participant row becomes a ``UserDetails``; a staff row becomes the shared
-    ``AccountDetails``. Both share the same three source columns, so the difference is
+    ``AccountDetails``. Both carry the shared columns, email included, so the difference is
     exactly the participant fields -- which is the same distinction the schema makes.
     """
     if account_type == AccountType.USERS.value:

@@ -74,15 +74,22 @@ def _staff() -> list[tuple[str, dict]]:
 
     They are seeded on every run even when the participants are not, because a moderator
     account is the only way to reach the moderation screens at all.
+
+    Each carries an address, which every account table now has a column for. It is not
+    load-bearing -- sign-in is regno-based and the column is nullable -- but a staff row with
+    no address on it is a row the admin list renders with a blank contact line, which looks
+    like a bug rather than like a column nobody wrote. The addresses are distinct from the
+    participants' and from each other, so this seed does not also become the example of a
+    shared address; that case is covered by tests instead.
     """
     return [
         (AccountType.ADMIN.value, {
-            "regno": "admin", "name": "Test Admin", "gender": "male",
-            "profile_picture_url": None, "notifications_enabled": True,
+            "regno": "admin", "name": "Test Admin", "email": "admin@test.com",
+            "gender": "male", "profile_picture_url": None, "notifications_enabled": True,
         }),
         (AccountType.MODERATOR.value, {
-            "regno": "moderator", "name": "Test Moderator", "gender": "female",
-            "profile_picture_url": None, "notifications_enabled": True,
+            "regno": "moderator", "name": "Test Moderator", "email": "moderator@test.com",
+            "gender": "female", "profile_picture_url": None, "notifications_enabled": True,
         }),
     ]
 

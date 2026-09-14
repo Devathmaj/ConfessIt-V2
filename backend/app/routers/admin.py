@@ -144,18 +144,19 @@ async def create_user(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An account with this registration number already exists for this account type.",
             )
-        if account_type is AccountType.USERS:
-            normalized_email = payload.email.strip().lower()
-            email_conflict = session.scalar(select(UserRecord.id).where(
-                UserRecord.email == normalized_email
+        # An address is unique within one account table and never across the three, for the
+        # same reason regno is: the value identifies a person for contact, not a route into an
+        # account, so nothing has to resolve one. The check is against the target table only.
+        normalized_email = payload.email.strip().lower() if payload.email else None
+        if normalized_email is not None:
+            email_conflict = session.scalar(select(model.id).where(
+                model.email == normalized_email
             ).limit(1))
             if email_conflict:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="A user with this email already exists.",
+                    detail="An account with this email already exists for this account type.",
                 )
-        else:
-            normalized_email = None
 
     interests_value: Optional[List[str]] = None
     if payload.interests:
@@ -170,6 +171,7 @@ async def create_user(
     account_fields: Dict[str, Any] = {
         "regno": normalized_regno,
         "name": payload.name.strip(),
+        "email": normalized_email,
         "profile_picture_url": payload.profile_picture_url.strip() if payload.profile_picture_url else None,
         "gender": payload.gender.strip(),
         "notifications_enabled": payload.notifications_enabled,
@@ -177,7 +179,6 @@ async def create_user(
     }
     if account_type is AccountType.USERS:
         account_fields.update({
-            "email": normalized_email,
             "emoji": payload.emoji.strip() if payload.emoji else None,
             "bio": payload.bio.strip() if payload.bio else None,
             "class_name": payload.class_name.strip(),
@@ -251,8 +252,13 @@ async def update_user_details(
             # moderator's name would also try to write an email onto a table with no email
             # column -- and, more insidiously, would write one if the column were ever added
             # for an unrelated reason.
+            # ``email`` is absent on purpose: it is a shared column, so a moderator's address
+            # is editable the same way a participant's is. The rest still describe a
+            # participant, and without this an edit to a moderator's name would also try to
+            # write a bio onto a table that has no bio column -- and, more insidiously, would
+            # write one if the column were ever added for an unrelated reason.
             participant_only = (
-                "email", "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
+                "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
                 "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
             )
             if account_type != AccountType.USERS.value:

@@ -140,16 +140,19 @@ class AdminUserCreate(BaseModel):
     when ``account_type`` is ``users``. Declaring them conditionally in the type system is
     not something Pydantic can express without a discriminated union, and a union would
     make the OpenAPI schema unreadable for a payload that is, in practice, one form.
+
+    ``email`` sits with the shared fields rather than the participant-only ones, because every
+    account can have one and it is required only of a participant.
     """
     account_type: AccountType = AccountType.USERS
     regno: str = Field(max_length=USER_REGNO_MAX)
     name: str = Field(max_length=USER_NAME_MAX)
+    email: Optional[EmailStr] = None
     profile_picture_url: Optional[str] = None
     gender: str = Field(max_length=USER_GENDER_MAX)
     notifications_enabled: bool = True
     is_blocked: bool = False
     # participants only
-    email: Optional[EmailStr] = None
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
@@ -193,8 +196,8 @@ class AdminUserUpdate(BaseModel):
     gender: Optional[str] = Field(default=None, max_length=USER_GENDER_MAX)
     notifications_enabled: Optional[bool] = None
     is_blocked: Optional[bool] = None
-    # participants only
     email: Optional[EmailStr] = None
+    # participants only
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
@@ -224,10 +227,16 @@ class AccountDetails(BaseModel):
     share exactly these columns and nothing more. Participant-only fields are deliberately
     absent rather than null: an admin has no ``class_name``, and returning ``null`` for it
     would describe a value the row does not have.
+
+    ``email`` is shared and optional rather than participant-only and required. Every account
+    can be contacted, so a staff account that could not hold an address would be an account
+    nobody could reach. It is not required of a staff account, because creating one is a
+    deliberate act by someone who already knows the regno, and nothing in sign-in needs it.
     """
     id: str = Field(default_factory=new_id)
     regno: str
     name: str
+    email: Optional[EmailStr] = None
     profile_picture_url: Optional[str] = None
     gender: str
     notifications_enabled: bool = True
@@ -292,6 +301,9 @@ class UserDetails(AccountDetails):
     account not in the ``users`` table. That is the whole point of the split: a staff
     account cannot reach a participant feature not because a role string said so, but
     because there is no row for it in the table the feature reads.
+
+    ``email`` is narrowed from the shared optional to required: a participant is always
+    reachable, and the create payload enforces it.
     """
     email: EmailStr
     emoji: Optional[str] = None

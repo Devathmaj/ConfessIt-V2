@@ -41,6 +41,7 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
         "id": str(row.id),
         "regno": row.regno,
         "name": row.name,
+        "email": row.email,
         "account_type": account_type,
         "gender": row.gender,
         "profile_picture_url": row.profile_picture_url,
@@ -83,6 +84,8 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "id": str(doc.get("id")),
         "regno": doc.get("regno"),
         "name": doc.get("name"),
+        # Shared, so it sits with the common fields and every account can report one.
+        "email": doc.get("email"),
         "account_type": normalize_account_type(doc.get("account_type")),
         "gender": doc.get("gender"),
         "profile_picture_url": doc.get("profile_picture_url"),
@@ -97,7 +100,6 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
 
     if is_participant:
         payload.update({
-            "email": doc.get("email"),
             "emoji": doc.get("emoji"),
             "bio": doc.get("bio"),
             "class_name": doc.get("class_name"),

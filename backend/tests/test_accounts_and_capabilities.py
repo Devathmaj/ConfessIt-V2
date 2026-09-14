@@ -196,14 +196,49 @@ def test_account_type_capabilities_has_a_row_for_every_table():
 
 
 def test_staff_tables_do_not_hold_participant_columns():
-    """The split is only meaningful if a staff row cannot carry participant fields."""
+    """The split is only meaningful if a staff row cannot carry participant fields.
+
+    ``email`` is deliberately absent from this set. It is how a person is reached, which is
+    true of a moderator as much as a student, so it is a shared column on all three tables --
+    see :func:`test_every_account_table_can_hold_an_email` for what that does and does not
+    imply.
+    """
     participant_only = {
-        "email", "emoji", "bio", "class_name", "interests",
+        "emoji", "bio", "class_name", "interests",
         "matchmaking_enabled", "love_notes_receive_enabled",
         "love_notes_send_enabled", "last_matchmaking_at",
     }
     for model in (AdminRecord, ModeratorRecord):
         assert participant_only.isdisjoint(model.__table__.columns.keys())
+
+
+def test_every_account_table_can_hold_an_email():
+    """All three tables carry an address, and none of them requires one."""
+    for model in (UserRecord, AdminRecord, ModeratorRecord):
+        assert "email" in model.__table__.columns, model.__tablename__
+        # Nullable on every table, including ``users``: a row written by a script or a
+        # migration must not fail on a column that only the API insists is present.
+        assert model.__table__.columns["email"].nullable, model.__tablename__
+
+
+def test_email_uniqueness_is_declared_per_table_not_across_tables():
+    """The constraint lives on each table's own column, so the three never collide.
+
+    Stated as a property of the schema rather than of a test run, because that is what makes
+    an address shared between a participant and a moderator safe: nothing in the database
+    treats it as a conflict, and nothing in the application looks an account up by email.
+    """
+    for model in (UserRecord, AdminRecord, ModeratorRecord):
+        email_column = model.__table__.columns["email"]
+        assert email_column.unique is True, model.__tablename__
+        assert email_column.index is True, model.__tablename__
+
+    # Sanity check on the reasoning above: if any code path resolved an account by email,
+    # a shared address would be an ambiguity there. Sign-in is regno-based and sessions are
+    # pinned by primary key, so it is not.
+    from app.db_models import resolve_account_by_regno, resolve_account
+    assert "email" not in resolve_account_by_regno.__code__.co_varnames
+    assert "email" not in resolve_account.__code__.co_varnames
 
 
 def test_no_account_table_has_a_role_column():
@@ -360,6 +395,164 @@ def test_cross_table_regno_uniqueness_is_not_a_database_constraint(db):
         session.add(ModeratorRecord(regno="cross-table", name="M", gender="other"))
         session.add(AdminRecord(regno="cross-table", name="A", gender="other"))
         session.flush()
+
+
+def test_cross_table_email_uniqueness_is_not_a_database_constraint(db):
+    """The same reasoning as regno, applied to the address.
+
+    An email may exist as a participant and as a moderator at the same time, because nothing
+    resolves an account by it: sign-in is regno-based and a session is pinned to a primary
+    key. A shared address is a display fact, not an ambiguity, and the per-table constraint
+    is what keeps it unambiguous within a table where a duplicate really would be two rows
+    claiming to be the same person.
+    """
+    with db.sessions.begin() as session:
+        session.add(
+            UserRecord(
+                regno="shared-email-user",
+                name="Participant",
+                email="shared-address@example.com",
+                class_name="Test_Class",
+                gender="other",
+            )
+        )
+        session.add(
+            ModeratorRecord(
+                regno="shared-email-mod",
+                name="Moderator",
+                email="shared-address@example.com",
+                gender="other",
+            )
+        )
+        session.add(
+            AdminRecord(
+                regno="shared-email-admin",
+                name="Admin",
+                email="shared-address@example.com",
+                gender="other",
+            )
+        )
+        session.flush()
+
+
+def test_postgresql_still_refuses_a_duplicate_email_within_one_table(db):
+    """Where the per-table guarantee actually lives."""
+    with db.sessions.begin() as session:
+        session.add(
+            ModeratorRecord(
+                regno="dup-email-a", name="A", email="only-once@example.com", gender="other"
+            )
+        )
+        session.flush()
+
+    with db.sessions.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.add(
+                ModeratorRecord(
+                    regno="dup-email-b", name="B", email="only-once@example.com", gender="other"
+                )
+            )
+            session.flush()
+
+
+def test_a_staff_account_can_be_created_with_an_email(admin_client, db):
+    """The end-to-end version: a staff row carries an address through the real endpoint."""
+    response = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "moderator",
+            "regno": "mod-with-email",
+            "name": "Moderator With Email",
+            "email": "mod.contact@example.com",
+            "gender": "other",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["email"] == "mod.contact@example.com"
+
+
+def test_a_staff_account_can_be_created_without_an_email(admin_client, db):
+    """Optional on staff: minting one is deliberate, and sign-in does not need an address."""
+    response = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "admin",
+            "regno": "admin-without-email",
+            "name": "Admin Without Email",
+            "gender": "other",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["email"] is None
+
+
+def test_the_same_email_is_refused_within_one_table_but_allowed_across_tables(admin_client, db):
+    """The per-table rule, through the endpoint that has to implement it."""
+    created = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "admin",
+            "regno": "email-admin-1",
+            "name": "Admin One",
+            "email": "reused@example.com",
+            "gender": "other",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    # Same table, same address: two admin rows claiming one address is a real conflict.
+    same_table = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "admin",
+            "regno": "email-admin-2",
+            "name": "Admin Two",
+            "email": "reused@example.com",
+            "gender": "other",
+        },
+    )
+    assert same_table.status_code == 409, same_table.text
+
+    # Different table, same address: allowed, for the reason above.
+    other_table = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "moderator",
+            "regno": "email-mod-1",
+            "name": "Moderator One",
+            "email": "reused@example.com",
+            "gender": "other",
+        },
+    )
+    assert other_table.status_code == 201, other_table.text
+    assert other_table.json()["email"] == "reused@example.com"
+
+
+def test_a_staff_email_is_editable(admin_client, db):
+    """`email` left the participant-only field list, so an update to staff writes it."""
+    created = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": "moderator",
+            "regno": "mod-email-edit",
+            "name": "Editable",
+            "gender": "other",
+        },
+    )
+    account_id = created.json()["id"]
+    assert created.json()["email"] is None
+
+    # `name` is sent alongside because the update model inherits a required `name`; the
+    # point of the test is the email, and this keeps the payload valid.
+    updated = admin_client.put(
+        f"/admin/users/{account_id}",
+        json={"name": "Editable", "email": "new.address@example.com"},
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["email"] == "new.address@example.com"
 
 
 def test_a_staff_regno_is_absent_from_users(db):

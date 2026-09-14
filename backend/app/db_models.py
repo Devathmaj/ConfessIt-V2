@@ -55,14 +55,28 @@ class AccountColumns:
     absent for staff would be a bug no type checker would catch, and the whole point of
     splitting the tables is that the shared shape stays honest.
 
-    Deliberately *not* here: emoji, bio, class_name, interests, email, matchmaking_enabled
-    and the love-note toggles. Those describe a participant, and a staff account is not a
-    participant, so storing them would only create columns nothing writes and nothing reads.
+    Deliberately *not* here: emoji, bio, class_name, interests, matchmaking_enabled and the
+    love-note toggles. Those describe a participant, and a staff account is not a participant,
+    so storing them would only create columns nothing writes and nothing reads.
+
+    ``email`` *is* here, on all three tables, and it is the one column worth spelling out. It
+    is how a person is reached, and that is true of a moderator as much as a student -- a staff
+    account with no address on it is an account nobody can be contacted about. It is nullable,
+    because a staff account can legitimately be created with only a regno and a name, and
+    because the sign-in flow does not need it.
+
+    Uniqueness is per table, and that is the same rule ``regno`` follows: the constraint is
+    declared on the column, so PostgreSQL enforces it within one table and never across the
+    three. An address may therefore exist as a participant and as a moderator simultaneously.
+    Nothing resolves an account by email -- sign-in is regno-based, and sessions are pinned by
+    primary key -- so a shared address is a display fact rather than an ambiguity, exactly as
+    a shared regno now is.
     """
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
+    email: Mapped[Optional[str]] = mapped_column(String(320), unique=True, index=True)
     profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
     gender: Mapped[str] = mapped_column(String(24))
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
@@ -84,7 +98,6 @@ class AccountColumns:
 class UserRecord(AccountColumns, Base):
     __tablename__ = "users"
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
     class_name: Mapped[str] = mapped_column(String(80), index=True)

@@ -46,6 +46,9 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     "id",
     "regno",
     "name",
+    # Every account table carries an address, so a staff row keeps the one it had as a
+    # ``users`` row rather than having it silently dropped on the way across.
+    "email",
     "profile_picture_url",
     "gender",
     "notifications_enabled",
@@ -61,7 +64,6 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
 # run, and anything holding a value for them in ``login_tokens``-style references is what the
 # pre-flight check below looks for.
 PARTICIPANT_ONLY_COLUMNS: tuple[str, ...] = (
-    "email",
     "emoji",
     "bio",
     "class_name",
@@ -210,6 +212,49 @@ def _create_staff_tables(connection, steps: list[str]) -> None:
         _report(steps, "created staff tables: " + ", ".join(created))
     else:
         _report(steps, "staff tables already present")
+
+    _add_shared_email_column(connection, steps)
+
+
+def _add_shared_email_column(connection, steps: list[str]) -> None:
+    """Give every account table an ``email`` column, and make ``users.email`` nullable.
+
+    An address is how a person is reached, which is true of a moderator as much as a student,
+    so all three tables carry one now. A staff table created by an earlier run of this script
+    predates that and would not have the column at all, so it is added here rather than being
+    left to the boot path.
+
+    Two things this deliberately does not do. It does not deduplicate: a staff table cannot
+    already hold two rows with one address, because the column did not exist. And it does not
+    refuse if ``users`` holds a duplicate -- that cannot happen either, the column has been
+    unique there throughout.
+
+    The NOT NULL is dropped on ``users`` rather than left in place. The model declares the
+    column nullable on all three tables so that a row written by a script, a seed, or this
+    migration itself is not rejected for a field the API only *requires* of a participant.
+    Every existing row has a value, so relaxing the constraint loses nothing and refuses
+    nothing.
+    """
+    for table in ("users", "admin", "moderator"):
+        if not _table_exists(connection, table):
+            continue
+        if "email" not in _columns(connection, table):
+            connection.execute(
+                text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "email" varchar(320)')
+            )
+            _report(steps, f'added email column to {table}')
+
+    if _table_exists(connection, "users"):
+        nullable = connection.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'users' "
+                "AND column_name = 'email'"
+            )
+        ).scalar()
+        if nullable == "NO":
+            connection.execute(text("ALTER TABLE users ALTER COLUMN email DROP NOT NULL"))
+            _report(steps, "users.email is now nullable, as it is on the other two tables")
 
 
 def _move_staff_rows(connection, steps: list[str]) -> None:

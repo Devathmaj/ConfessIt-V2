@@ -90,6 +90,7 @@ class PostgresClient:
         # column is not there yet. Adding the columns first is what lets a partially-migrated
         # database reach a consistent state in one boot.
         self.apply_missing_columns()
+        self.apply_unique_indexes()
         self.apply_check_constraints()
 
     def apply_missing_columns(self) -> None:
@@ -150,6 +151,52 @@ class PostgresClient:
                     )
                     logger.info(
                         "Added column %s.%s", table.name, column.name
+                    )
+
+    def apply_unique_indexes(self) -> None:
+        """Add unique indexes declared in the models but missing from the database.
+
+        The same gap as :meth:`apply_missing_columns`, one level up: ``create_all`` does
+        nothing to a table that already exists, so a ``unique=True`` added to a column on a
+        deployed database is never applied and the constraint the models claim is enforced
+        simply is not. That is not hypothetical here -- ``email`` is declared unique on all
+        three account tables, and ``admin`` and ``moderator`` predate that, so without this
+        two staff rows could claim one address while the model says they cannot.
+
+        Added per index rather than as a table constraint so the failure mode is a named
+        index PostgreSQL will refuse to create over existing duplicates, instead of a
+        constraint that reports the same conflict less legibly. Existing rows are *not*
+        deduplicated first: picking a winner among two rows claiming one address is a
+        decision about data, and this is the wrong place to make it silently.
+        """
+        with self.engine.begin() as connection:
+            installed = {
+                name
+                for (name,) in connection.execute(
+                    text(
+                        "SELECT indexname FROM pg_indexes "
+                        "WHERE schemaname = 'public'"
+                    )
+                )
+            }
+            for table in Base.metadata.sorted_tables:
+                for column in table.columns:
+                    if not column.unique:
+                        continue
+                    index_name = f"ix_{table.name}_{column.name}"
+                    if index_name in installed:
+                        continue
+                    connection.execute(
+                        text(
+                            f'CREATE UNIQUE INDEX IF NOT EXISTS "{index_name}" '
+                            f'ON "{table.name}" ("{column.name}")'
+                        )
+                    )
+                    logger.info(
+                        "Added unique index %s on %s.%s",
+                        index_name,
+                        table.name,
+                        column.name,
                     )
 
     def apply_check_constraints(self) -> None:
