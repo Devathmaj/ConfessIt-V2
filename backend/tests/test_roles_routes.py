@@ -3,7 +3,7 @@
 Rather than hardcoding a list of "moderator may" paths, these tests read the capability each
 route declares from its own dependency graph. That way a route cannot be quietly added without
 a gate, a gate cannot be quietly moved to a different capability, and the moderator split
-cannot drift from :mod:`app.roles` without a failure here.
+cannot drift from :mod:`app.accounts` without a failure here.
 
 The behavioural half then confirms the declared gate is what actually runs: a moderator is
 refused on the admin-only routes and is not refused on the moderation ones, and a plain user
@@ -15,7 +15,7 @@ import re
 import pytest
 
 from app.main import app
-from app.roles import ADMIN_ONLY_CAPABILITIES, MODERATION_CAPABILITIES, Capability
+from app.accounts import ADMIN_ONLY_CAPABILITIES, MODERATION_CAPABILITIES, Capability
 from app.services.authorization import FORBIDDEN_DETAIL
 
 # The dependency is named after the capability by require_capability, which makes the name a

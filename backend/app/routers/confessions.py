@@ -5,7 +5,10 @@ from ..dependencies import get_db
 from ..postgres import Database
 from ..services.confession_service import ConfessionService
 from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate
-from ..services.auth_service import get_current_user, get_current_user_optional
+from ..services.authorization import (
+    get_current_participant_optional,
+    require_participant,
+)
 
 router = APIRouter()
 
@@ -20,11 +23,11 @@ def get_confession_service(db: Database = Depends(get_db)) -> ConfessionService:
 
 
 @router.post("/confessions", response_model=Confession, response_model_by_alias=False)
-def create_confession(confession_data: ConfessionCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def create_confession(confession_data: ConfessionCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     return service.create_confession(confession_data, str(current_user.id))
 
 @router.get("/confessions", response_model=List[Confession], response_model_by_alias=False)
-def get_confessions(sort_by: str = Query('popularity', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_user_optional)):
+def get_confessions(sort_by: str = Query('popularity', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_participant_optional)):
     user_id = str(current_user.id) if current_user else None
     return service.get_confessions(sort_by, user_id)
 
@@ -36,7 +39,7 @@ def get_total_confessions_count(service: ConfessionService = Depends(get_confess
     return service.get_total_confessions_count()
 
 @router.put("/confessions/{confession_id}", response_model=Confession, response_model_by_alias=False)
-def update_confession(confession_id: str, update_data: ConfessionUpdate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def update_confession(confession_id: str, update_data: ConfessionUpdate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     """
     Used to update a confession's settings.
     """
@@ -46,14 +49,14 @@ def update_confession(confession_id: str, update_data: ConfessionUpdate, service
     return updated_confession
 
 @router.post("/confessions/{confession_id}/react", response_model=Confession, response_model_by_alias=False)
-def react_to_confession(confession_id: str, reaction_data: ReactionCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def react_to_confession(confession_id: str, reaction_data: ReactionCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     updated_confession = service.react_to_confession(confession_id, reaction_data.reaction, str(current_user.id))
     if not updated_confession:
         raise HTTPException(status_code=404, detail="Confession not found")
     return updated_confession
 
 @router.post("/confessions/{confession_id}/comment", response_model=ConfessionComment, response_model_by_alias=False)
-def add_comment_to_confession(confession_id: str, comment_data: CommentCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def add_comment_to_confession(confession_id: str, comment_data: CommentCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     result = service.add_comment_to_confession(confession_id, comment_data, current_user)
 
     if isinstance(result, str):
@@ -70,28 +73,28 @@ def add_comment_to_confession(confession_id: str, comment_data: CommentCreate, s
     return result
 
 @router.post("/comments/{comment_id}/like", response_model=ConfessionComment, response_model_by_alias=False)
-def like_comment(comment_id: str, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def like_comment(comment_id: str, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     updated_comment = service.like_comment(comment_id, str(current_user.id))
     if not updated_comment:
         raise HTTPException(status_code=404, detail="Comment not found")
     return updated_comment
 
 @router.post("/comments/{comment_id}/dislike", response_model=ConfessionComment, response_model_by_alias=False)
-def dislike_comment(comment_id: str, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def dislike_comment(comment_id: str, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     updated_comment = service.dislike_comment(comment_id, str(current_user.id))
     if not updated_comment:
         raise HTTPException(status_code=404, detail="Comment not found")
     return updated_comment
 
 @router.post("/comments/{comment_id}/report", response_model=ConfessionComment, response_model_by_alias=False)
-def report_comment(comment_id: str, report_data: ReportCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def report_comment(comment_id: str, report_data: ReportCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     updated_comment = service.report_comment(comment_id, report_data, current_user)
     if not updated_comment:
         raise HTTPException(status_code=400, detail="Failed to report comment. You may have already reported this comment.")
     return updated_comment
 
 @router.post("/confessions/{confession_id}/report", response_model=Confession, response_model_by_alias=False)
-def report_confession(confession_id: str, report_data: ReportCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(get_current_user)):
+def report_confession(confession_id: str, report_data: ReportCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     updated_confession = service.report_confession(confession_id, report_data, current_user)
     if not updated_confession:
         raise HTTPException(status_code=400, detail="Failed to report confession. You may have already reported this confession.")

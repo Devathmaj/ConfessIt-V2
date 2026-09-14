@@ -8,7 +8,7 @@ import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 
 type AuthContextValue = ContextType<typeof AuthContext>;
 
-/** A signed-in user. User requires these four fields; role and capabilities are optional. */
+/** A signed-in account. User requires these four fields; account_type and capabilities are optional. */
 const asUser = (overrides: Partial<User> = {}): User => ({
   id: '1',
   name: 'Test User',
@@ -18,7 +18,7 @@ const asUser = (overrides: Partial<User> = {}): User => ({
 });
 
 /**
- * The capability list the server would send for each role. Only `STATS_READ` is named
+ * The capability list the server would send a staff account. Only `STATS_READ` is named
  * because it is the one this guard keys on, standing in for "holds any moderation
  * capability" -- the guard asks whether the account is staff at all.
  */
@@ -70,7 +70,7 @@ describe('PublicOnlyRoute', () => {
   });
 
   it('sends an admin to the admin dashboard rather than the user one', async () => {
-    const user = asUser({ name: 'Admin', role: 'admin' });
+    const user = asUser({ name: 'Admin', account_type: 'admin' });
     renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
 
     await waitFor(() => {
@@ -79,10 +79,10 @@ describe('PublicOnlyRoute', () => {
   });
 
   it('sends a moderator to the admin dashboard too', async () => {
-    // The destination is decided by the capability list, not by the role string, so a
+    // The destination is decided by the capability list, not by the account's table, so a
     // moderator lands in the moderation area instead of a participant dashboard they have
-    // no use for. A role check would send them to /dashboard.
-    const user = asUser({ name: 'Mod', role: 'moderator' });
+    // no use for. A table check would send them to /dashboard.
+    const user = asUser({ name: 'Mod', account_type: 'moderator' });
     renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
 
     await waitFor(() => {
@@ -90,11 +90,11 @@ describe('PublicOnlyRoute', () => {
     });
   });
 
-  it('does not trust the role string on its own', async () => {
-    // A role claiming admin with no capabilities is not staff as far as this guard is
-    // concerned. Capabilities are what the server decided; a role field that arrived
-    // without them proves nothing.
-    const user = asUser({ name: 'Impostor', role: 'admin' });
+  it('does not treat the account table as a grant', async () => {
+    // An admin account with no capabilities is not staff as far as this guard is concerned.
+    // Capabilities are what the server decided; the table an account is stored in is a fact
+    // about where the row lives, and on its own it grants nothing.
+    const user = asUser({ name: 'Impostor', account_type: 'admin' });
     renderAtLogin(authValue(user, true, []));
 
     await waitFor(() => {

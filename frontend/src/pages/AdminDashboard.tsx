@@ -136,7 +136,8 @@ interface ActiveSessionRecord {
     name?: string | null;
     regno?: string | null;
     email?: string | null;
-    role?: string | null;
+    /** Which account table the session's account lives in. Not a privilege. */
+    account_type?: string | null;
     is_blocked?: boolean;
   };
 }
@@ -482,8 +483,11 @@ export const AdminDashboard = () => {
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">{session.status}</Badge>
                           {user.is_blocked && <Badge variant="destructive">Blocked</Badge>}
-                          <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                            {user.role || 'user'}
+                          {/* The table the account lives in, which is the only thing that
+                              says what kind of account it is. A participant reads as
+                              "users" because that is the account's own name, not a grade. */}
+                          <Badge variant={user.account_type === 'admin' ? 'default' : 'secondary'}>
+                            {user.account_type || 'users'}
                           </Badge>                        </div>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">

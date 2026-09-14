@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import create_token as create_token_module
+from app.accounts import AccountType
 from app.db_models import UserRecord
 from app.services.auth_service import generate_magic_link_service
 
@@ -22,8 +23,8 @@ def make_user_row(regno: str, **overrides) -> UserRecord:
         emoji=None, bio=None, class_name="Test_Class", profile_picture_url=None,
         gender="male", interests=[], matchmaking_enabled=True, notifications_enabled=True,
         love_notes_receive_enabled=True, love_notes_send_enabled=False, is_blocked=False,
-        reported_count=0, last_login_at=None, last_login_ip=None, last_login_user_agent=None,
-        role="user", last_matchmaking_at=None,
+        last_login_at=None, last_login_ip=None, last_login_user_agent=None,
+        last_matchmaking_at=None,
     )
     values.update(overrides)
     return UserRecord(**values)
@@ -92,8 +93,8 @@ def minted_tokens(monkeypatch):
     """Fail loudly if the service gets as far as minting a token."""
     minted = []
 
-    def _record(db, user_id, request):
-        minted.append(user_id)
+    def _record(db, account_id, account_type, request):
+        minted.append((account_id, account_type))
         return "a-token"
 
     monkeypatch.setattr(create_token_module, "create_and_store_magic_token", _record)
@@ -105,7 +106,7 @@ async def test_blocked_account_is_refused_before_a_link_is_minted(minted_tokens)
     db = _FakeDatabase({"blocked": make_user_row("blocked", is_blocked=True)})
 
     with pytest.raises(HTTPException) as excinfo:
-        await generate_magic_link_service(_FakeRequest("blocked"), db)
+        await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
 
     assert excinfo.value.status_code == 403
     assert "not available" in excinfo.value.detail
@@ -117,7 +118,7 @@ async def test_blocked_account_is_refused_before_a_link_is_minted(minted_tokens)
 async def test_active_account_still_gets_a_link(minted_tokens):
     db = _FakeDatabase({"active": make_user_row("active")})
 
-    result = await generate_magic_link_service(_FakeRequest("active"), db)
+    result = await generate_magic_link_service(_FakeRequest("active"), db, AccountType.USERS.value)
 
     assert "message" in result
-    assert minted_tokens == [OWNER_ID]
+    assert minted_tokens == [(OWNER_ID, "users")]

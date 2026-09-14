@@ -24,8 +24,9 @@ from sqlalchemy import or_, select
 
 from ..config import settings
 from ..db_models import LoveNoteRecord, UserRecord
-from ..models import UserDetails
-from ..roles import Capability, has_capability
+from ..models import AccountDetails
+from ..accounts import (AccountRef, Capability, has_capability, is_valid_account_type,
+                        normalize_account_type)
 from ..postgres import Database
 from .storage_service import storage_service
 from .auth_service import ASSET_TOKEN_TYPE
@@ -77,12 +78,19 @@ def _credentials_exception() -> HTTPException:
 # ----------------------------------------------------------------------
 # Token minting / verification
 # ----------------------------------------------------------------------
-def mint_asset_token(*, regno: str, kind: str, object_path: str, ttl_seconds: Optional[int] = None) -> str:
-    """Mint a token that authorises exactly one (kind, object_path) pair for one account."""
+def mint_asset_token(*, account: AccountRef, kind: str, object_path: str, ttl_seconds: Optional[int] = None) -> str:
+    """Mint a token that authorises exactly one (kind, object_path) pair for one account.
+
+    The account travels as a table and a primary key, not as a regno. The proxy re-reads the
+    account on every delivery, and a regno can identify a row in more than one account
+    table, so a regno here would leave the proxy guessing which account the token was for.
+    """
     issued_at = datetime.now(timezone.utc)
     ttl = asset_token_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
     payload: Dict[str, Any] = {
-        "sub": regno,
+        "sub": account.regno,
+        "account_id": account.account_id,
+        "account_type": account.account_type,
         "typ": ASSET_TOKEN_TYPE,
         "kind": kind,
         "path": object_path,
@@ -92,7 +100,7 @@ def mint_asset_token(*, regno: str, kind: str, object_path: str, ttl_seconds: Op
     return jwt.encode(payload, _signing_key(), algorithm=settings.ALGORITHM)
 
 
-def verify_asset_token(token: str, *, kind: str, object_path: str) -> str:
+def verify_asset_token(token: str, *, kind: str, object_path: str) -> AccountRef:
     """Validate a delivery token and return the account it was minted for.
 
     Every failure mode raises the same 401 so a caller cannot use error codes to learn
@@ -111,9 +119,15 @@ def verify_asset_token(token: str, *, kind: str, object_path: str) -> str:
         raise _credentials_exception()
 
     regno = payload.get("sub")
-    if not regno:
+    account_id = payload.get("account_id")
+    account_type = payload.get("account_type")
+    if not regno or not account_id or not is_valid_account_type(account_type):
         raise _credentials_exception()
-    return str(regno)
+    return AccountRef(
+        regno=str(regno),
+        account_id=str(account_id),
+        account_type=normalize_account_type(account_type),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -147,8 +161,8 @@ def _delivery_base() -> str:
     return str(configured).rstrip("/")
 
 
-def build_delivery_url(*, kind: str, stored_identifier: Optional[str], regno: str) -> Optional[str]:
-    """Build the proxy URL an entitled account should use to load an image.
+def build_delivery_url(*, kind: str, stored_identifier: Optional[str], account: AccountRef) -> Optional[str]:
+    """Build the proxy URL the account that owns this object should use to load it.
 
     Returns None when the stored value is not a servable object of this kind, in which
     case the caller should keep whatever value it already had.
@@ -159,11 +173,11 @@ def build_delivery_url(*, kind: str, stored_identifier: Optional[str], regno: st
     if not object_path:
         return None
 
-    token = mint_asset_token(regno=regno, kind=kind, object_path=object_path)
+    token = mint_asset_token(account=account, kind=kind, object_path=object_path)
     return f"{_delivery_base()}{ROUTE_PREFIXES[kind]}{quote(object_path)}?t={quote(token)}"
 
 
-def profile_image_url(stored_identifier: Optional[str], *, regno: str) -> Optional[str]:
+def profile_image_url(stored_identifier: Optional[str], *, account: AccountRef) -> Optional[str]:
     """Proxy URL for a profile image, falling back to the stored value.
 
     Every response that shows a profile picture should call this so there is a single
@@ -171,7 +185,7 @@ def profile_image_url(stored_identifier: Optional[str], *, regno: str) -> Option
     data URL, a placeholder, nothing at all) are passed through untouched.
     """
     proxied = build_delivery_url(
-        kind="profile", stored_identifier=stored_identifier, regno=regno
+        kind="profile", stored_identifier=stored_identifier, account=account
     )
     return proxied or storage_service.get_signed_profile_url(stored_identifier)
 
@@ -207,7 +221,7 @@ def _profile_asset_is_published(db: Database, object_path: str) -> bool:
     return _matches_stored_asset(stored_url, "profile", object_path)
 
 
-def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str) -> bool:
+def _may_view_love_note_asset(db: Database, user: AccountDetails, object_path: str) -> bool:
     """Authorise a love note image for the accounts allowed to see it.
 
     - the recipient may only view a note once a moderator has approved it
@@ -225,7 +239,7 @@ def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str)
         # note that is still pending, which is the point of the review screen. Keyed on the
         # capability that guards the love-note review endpoint, so the image proxy and the
         # review list grant the same people access.
-        if not has_capability(user.role, Capability.LOVE_NOTES_REVIEW):
+        if not has_capability(user.account_type, Capability.LOVE_NOTES_REVIEW):
             query = query.where(
                 or_(
                     LoveNoteRecord.sender_id == user.id,
@@ -245,7 +259,7 @@ def _may_view_love_note_asset(db: Database, user: UserDetails, object_path: str)
     return False
 
 
-def is_entitled_to_asset(db: Database, *, kind: str, object_path: str, user: UserDetails) -> bool:
+def is_entitled_to_asset(db: Database, *, kind: str, object_path: str, user: AccountDetails) -> bool:
     """Authorisation gate applied to every proxy request.
 
     Both kinds require a signed-in account. Profile images are then visible to anyone

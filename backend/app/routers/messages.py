@@ -8,7 +8,8 @@ import asyncio
 
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..services.auth_service import get_current_user, ACCOUNT_UNAVAILABLE_DETAIL
+from ..services.auth_service import ACCOUNT_UNAVAILABLE_DETAIL
+from ..services.authorization import require_participant
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
 from ..logger import get_logger
@@ -37,7 +38,7 @@ class MessageReport(BaseModel):
 @router.post("/send", status_code=status.HTTP_201_CREATED)
 def send_message(
     message_data: MessageCreate,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -60,7 +61,7 @@ def send_message(
 @router.get("/{conversation_id}")
 def get_messages(
     conversation_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
     limit: int = Query(200, ge=1, le=500)
 ):
@@ -88,7 +89,7 @@ def get_messages(
 @router.post("/report", status_code=status.HTTP_201_CREATED)
 def report_message(
     report_data: MessageReport,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """

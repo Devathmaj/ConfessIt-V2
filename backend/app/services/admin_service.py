@@ -7,9 +7,11 @@ from sqlalchemy import func, or_, select, update
 
 from ..postgres import new_id, is_valid_id
 from ..postgres import Database
-from ..db_models import (ConfessionCommentRecord, ConfessionRecord, ConversationRecord,
-    LoginTokenRecord, LoveNoteRecord, MatchRecord, MessageRecord, ReportRecord, UserRecord)
-from ..roles import STAFF_ROLE_VALUES, is_staff, normalize_role
+from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionRecord,
+    ConversationRecord, LoginTokenRecord, LoveNoteRecord, MatchRecord, MessageRecord,
+    ReportRecord, UserRecord, find_account_in_table, resolve_account,
+    resolve_account_by_id)
+from ..accounts import AccountType, normalize_account_type
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -26,61 +28,108 @@ def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
+    """Flatten an account row from any of the three tables into a dict.
+
+    The shared fields are read off whatever table the row came from; the participant fields
+    are read only when the row is a participant, because a staff row does not have them to
+    read. Building the dict this way -- rather than one serialiser per table -- is what lets
+    the admin list render staff and participants through a single code path, and is why
+    there is no ``role`` to fill in: the table is reported as ``account_type``.
+    """
+    payload: Dict[str, Any] = {
+        "id": str(row.id),
+        "regno": row.regno,
+        "name": row.name,
+        "account_type": account_type,
+        "gender": row.gender,
+        "profile_picture_url": row.profile_picture_url,
+        "notifications_enabled": row.notifications_enabled,
+        "is_blocked": row.is_blocked,
+        "last_login_at": serialize_datetime(row.last_login_at),
+        "last_login_ip": str(row.last_login_ip) if row.last_login_ip else None,
+        "last_login_user_agent": row.last_login_user_agent,
+        "created_at": serialize_datetime(row.created_at),
+        "updated_at": serialize_datetime(row.updated_at),
+    }
+    if account_type == AccountType.USERS.value:
+        payload.update({
+            "email": row.email,
+            "emoji": row.emoji,
+            "bio": row.bio,
+            "class_name": row.class_name,
+            "interests": row.interests or [],
+            "matchmaking_enabled": row.matchmaking_enabled,
+            "love_notes_receive_enabled": row.love_notes_receive_enabled,
+            "love_notes_send_enabled": row.love_notes_send_enabled,
+            "last_matchmaking_at": serialize_datetime(row.last_matchmaking_at),
+        })
+    return payload
+
+
 def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize a user document to a JSON-friendly format."""
+    """Serialise an account document to a JSON-friendly format.
+
+    Participant-only keys are present only for participant documents. The admin client
+    reads them with fallbacks, so a staff row simply has nothing to show there -- which is
+    the honest answer, since the column does not exist on that table.
+    """
     if not doc:
         return {}
 
-    return {
+    is_participant = normalize_account_type(doc.get("account_type")) == AccountType.USERS.value
+
+    payload: Dict[str, Any] = {
         "id": str(doc.get("id")),
         "regno": doc.get("regno"),
         "name": doc.get("name"),
-        "email": doc.get("email"),
-        "emoji": doc.get("emoji"),
-        "bio": doc.get("bio"),
-        "class_name": doc.get("class_name"),
+        "account_type": normalize_account_type(doc.get("account_type")),
         "gender": doc.get("gender"),
         "profile_picture_url": doc.get("profile_picture_url"),
-        "interests": doc.get("interests", []),
-        # Normalised rather than passed through: a profile document predating the role
-        # constraint can still hold a value the app no longer accepts, and the admin list
-        # would otherwise render a fourth role that grants nothing.
-        "role": normalize_role(doc.get("role")),
-        "matchmaking_enabled": doc.get("matchmaking_enabled", False),
         "notifications_enabled": doc.get("notifications_enabled", True),
-        "love_notes_receive_enabled": doc.get("love_notes_receive_enabled", True),
-        "love_notes_send_enabled": doc.get("love_notes_send_enabled", False),
-        "reported_count": doc.get("reported_count", 0),
+        "is_blocked": doc.get("is_blocked", False),
         "last_login_at": serialize_datetime(doc.get("last_login_at")),
         "last_login_ip": doc.get("last_login_ip"),
         "last_login_user_agent": doc.get("last_login_user_agent"),
-        "last_matchmaking_at": serialize_datetime(doc.get("last_matchmaking_at")),
-        "is_blocked": doc.get("is_blocked", False),
+        "created_at": serialize_datetime(doc.get("created_at")),
+        "updated_at": serialize_datetime(doc.get("updated_at")),
     }
 
+    if is_participant:
+        payload.update({
+            "email": doc.get("email"),
+            "emoji": doc.get("emoji"),
+            "bio": doc.get("bio"),
+            "class_name": doc.get("class_name"),
+            "interests": doc.get("interests", []),
+            "matchmaking_enabled": doc.get("matchmaking_enabled", False),
+            "love_notes_receive_enabled": doc.get("love_notes_receive_enabled", True),
+            "love_notes_send_enabled": doc.get("love_notes_send_enabled", False),
+            "last_matchmaking_at": serialize_datetime(doc.get("last_matchmaking_at")),
+        })
 
-def serialize_user_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any]:
-    """Fetch and serialize a user by regno."""
+    return payload
+
+
+def serialize_account_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any]:
+    """Fetch and serialise a participant by regno.
+
+    Always reads the ``users`` table, because every caller is naming the initiator or receiver
+    of a conversation and those are participants by construction. Searching all three tables
+    would be ambiguous for no benefit now that a regno may exist in more than one of them.
+
+    Returns a document with a null ``name`` when no row holds the regno, which is what the
+    review screens already expect for an account that no longer exists.
+    """
     if not regno:
         return {"regno": None}
 
     with db.sessions() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
-        doc = None if not user else {
-            "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-            "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name,
-            "gender": user.gender, "profile_picture_url": user.profile_picture_url,
-            "interests": user.interests or [], "role": user.role,
-            "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
-            "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,
-            "reported_count": user.reported_count, "last_login_at": user.last_login_at,
-            "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-            "last_login_user_agent": user.last_login_user_agent,
-            "last_matchmaking_at": user.last_matchmaking_at, "is_blocked": user.is_blocked,
-        }
-    if doc:
-        return serialize_user_doc(doc)
-    return {"regno": regno, "name": None, "email": None, "role": None}
+        found = find_account_in_table(session, AccountType.USERS.value, regno)
+    if found:
+        account_type, row = found
+        return serialize_user_doc(_account_row_payload(account_type, row))
+    return {"regno": regno, "name": None, "account_type": None}
 
 
 def normalize_conversation_status(value: Optional[str]) -> str:
@@ -106,7 +155,9 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
             LoginTokenRecord.consumed_at >= active_threshold,
         )).all()
         active_tokens = [{
-            "id": str(row.id), "user_id": str(row.user_id), "session_status": row.session_status,
+            "id": str(row.id), "account_id": str(row.account_id),
+            "account_type": normalize_account_type(row.account_type),
+            "session_status": row.session_status,
             "last_seen_at": row.last_seen_at, "consumed_at": row.consumed_at,
             "consume_ip": str(row.consume_ip) if row.consume_ip else None,
             "request_ip": str(row.request_ip) if row.request_ip else None,
@@ -117,30 +168,24 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
     if not active_tokens:
         return []
 
-    # Collect user IDs
-    user_ids: List[str] = []
-    for token in active_tokens:
-        raw_user_id = token.get("user_id")
-        if isinstance(raw_user_id, str) and is_valid_id(raw_user_id):
-            user_ids.append(str(raw_user_id))
-
-    # Fetch user documents
-    user_map: Dict[str, Dict[str, Any]] = {}
-    if user_ids:
-        with db.sessions() as session:
-            rows = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()
-            user_map = {str(user.id): {
-                "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-                "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name,
-                "gender": user.gender, "profile_picture_url": user.profile_picture_url,
-                "interests": user.interests or [], "role": user.role,
-                "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
-                "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,
-                "reported_count": user.reported_count, "last_login_at": user.last_login_at,
-                "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-                "last_login_user_agent": user.last_login_user_agent,
-                "last_matchmaking_at": user.last_matchmaking_at, "is_blocked": user.is_blocked,
-            } for user in rows}
+    # Fetch account documents. The token names the table the account was in when the link
+    # was minted, and a session can belong to a participant or to staff, so the lookup is
+    # per-token and cross-table rather than a single query against ``users`` -- which is
+    # exactly what would silently drop every staff session from this list.
+    account_map: Dict[str, Dict[str, Any]] = {}
+    with db.sessions() as session:
+        for token in active_tokens:
+            account_id = token.get("account_id")
+            if not isinstance(account_id, str) or not is_valid_id(account_id):
+                continue
+            # ``resolve_account`` takes the table it should read and returns just the row, so
+            # the account kind here is the one recorded on the token -- not something derived
+            # from the row. That keeps the reported ``account_type`` honest even if a row were
+            # ever reachable through a different table.
+            token_account_type = token["account_type"]
+            row = resolve_account(session, token_account_type, account_id)
+            if row is not None:
+                account_map[account_id] = _account_row_payload(token_account_type, row)
 
     # Build session entries
     session_entries: Dict[str, Dict[str, Any]] = {}
@@ -150,8 +195,8 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
         if status != "active":
             continue
 
-        raw_user_id = token.get("user_id")
-        user_doc = user_map.get(raw_user_id) if raw_user_id else None
+        raw_account_id = token.get("account_id")
+        user_doc = account_map.get(raw_account_id) if raw_account_id else None
 
         last_seen_value = token.get("last_seen_at") or token.get("consumed_at") or datetime.now(timezone.utc)
         
@@ -173,17 +218,16 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
             if token_row:
                 token_row.last_seen_at = parsed_last_seen
 
-        # Serialize user
+        # Serialize account
         serialized_user = serialize_user_doc(user_doc) if user_doc else {
-            "id": raw_user_id,
+            "id": raw_account_id,
             "name": None,
-            "email": None,
             "regno": None,
-            "role": None,
+            "account_type": token.get("account_type"),
             "is_blocked": False,
         }
         if not serialized_user.get("id"):
-            serialized_user["id"] = raw_user_id or str(token.get("id"))
+            serialized_user["id"] = raw_account_id or str(token.get("id"))
 
         iso_last_seen = serialize_datetime(parsed_last_seen.replace(tzinfo=timezone.utc))
 
@@ -378,8 +422,8 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
                 "requested_at": serialize_datetime(doc.requested_at),
                 "accepted_at": serialize_datetime(doc.accepted_at),
                 "terminated_at": serialize_datetime(doc.terminated_at),
-                "initiator": serialize_user_by_regno(db, doc.initiator_regno),
-                "receiver": serialize_user_by_regno(db, doc.receiver_regno),
+                "initiator": serialize_account_by_regno(db, doc.initiator_regno),
+                "receiver": serialize_account_by_regno(db, doc.receiver_regno),
                 "match": None
                 if not match_doc
                 else {
@@ -399,24 +443,21 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
 
 
 def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
-    """Fetch all matches excluding staff accounts."""
+    """Fetch all matches between participant accounts.
+
+    No staff filter is needed here, and that is the point of the split. A match can only
+    name a participant, because a staff account has no row in ``users`` for a match to
+    reference; so instead of querying for staff and excluding them, the exclusion falls out
+    of the schema and this function does not have to know the staff tables exist. A match
+    naming a regno with no participant row is skipped below rather than rendered with a
+    missing side, which covers matches left behind by an account that has since been
+    removed.
+    """
     with db.sessions() as session:
-        # Staff are excluded from matchmaking as participants, so any match that names one
-        # is not something the moderation queue should offer to approve or reject. The set
-        # is the staff roles rather than the admin role alone, so a moderator cannot appear
-        # in a match list it is being asked to moderate.
-        staff_regnos = set(session.scalars(
-            select(UserRecord.regno).where(UserRecord.role.in_(STAFF_ROLE_VALUES))
-        ).all())
-        match_query = select(MatchRecord)
-        if staff_regnos:
-            match_query = match_query.where(
-                MatchRecord.user_1_regno.not_in(staff_regnos), MatchRecord.user_2_regno.not_in(staff_regnos)
-            )
-        matches = session.scalars(match_query.order_by(MatchRecord.created_at.desc())).all()
+        matches = session.scalars(select(MatchRecord).order_by(MatchRecord.created_at.desc())).all()
         match_ids = [match.id for match in matches]
 
-    # Fetch users
+    # Fetch participants
     regnos: set[str] = set()
     for match in matches:
         user_1 = match.user_1_regno
@@ -428,17 +469,10 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
 
     with db.sessions() as session:
         user_rows = session.scalars(select(UserRecord).where(UserRecord.regno.in_(regnos))).all() if regnos else []
-        users_by_regno = {user.regno: {
-            "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-            "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name, "gender": user.gender,
-            "profile_picture_url": user.profile_picture_url, "interests": user.interests or [],
-            "role": user.role, "matchmaking_enabled": user.matchmaking_enabled,
-            "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
-            "love_notes_send_enabled": user.love_notes_send_enabled, "reported_count": user.reported_count,
-            "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-            "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_at": user.last_matchmaking_at,
-            "is_blocked": user.is_blocked,
-        } for user in user_rows}
+        users_by_regno = {
+            user.regno: _account_row_payload(AccountType.USERS.value, user)
+            for user in user_rows
+        }
 
     # Fetch conversations
     with db.sessions() as session:
@@ -465,10 +499,12 @@ def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
             if not regno:
                 continue
             user_doc = users_by_regno.get(regno)
-            if user_doc and is_staff(user_doc.get("role")):
+            # A named regno with no row in ``users`` is not a participant: either a staff
+            # regno or one whose account is gone. Either way there is no match to moderate.
+            if not user_doc:
                 skip_match = True
                 break
-            participants.append(serialize_user_doc(user_doc) if user_doc else {"regno": regno})
+            participants.append(serialize_user_doc(user_doc))
         
         if skip_match:
             continue
@@ -523,15 +559,33 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
         blocked_users = session.scalar(select(func.count()).select_from(UserRecord).where(
             UserRecord.is_blocked.is_(True)
         )) or 0
+        # Staff counted separately rather than folded into ``total_users``: the dashboard's
+        # "users" figure is the participant population, and adding moderators to it would
+        # quietly change what a number the staff reads every day means. Blocked accounts are
+        # summed across all three tables so the count still answers "how many accounts are
+        # blocked", which is a question about accounts and not about participants.
+        blocked_accounts = blocked_users + sum(
+            session.scalar(select(func.count()).select_from(model).where(
+                model.is_blocked.is_(True)
+            )) or 0
+            for account_type, model in ACCOUNT_MODELS.items()
+            if account_type != AccountType.USERS.value
+        )
+        total_staff = sum(
+            session.scalar(select(func.count()).select_from(model)) or 0
+            for account_type, model in ACCOUNT_MODELS.items()
+            if account_type != AccountType.USERS.value
+        )
 
     active_session_entries = collect_active_sessions(db)
     active_sessions = len(active_session_entries)
 
     return {
         "total_users": total_users,
+        "total_staff": total_staff,
         "active_sessions": active_sessions,
         "total_confessions": total_confessions,
         "total_love_notes": total_love_notes,
         "pending_love_notes": pending_love_notes,
-        "blocked_users": blocked_users,
+        "blocked_users": blocked_accounts,
     }

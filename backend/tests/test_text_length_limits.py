@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.db_models import UserRecord
+from app.accounts import AccountType
 from app.limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
@@ -95,11 +96,11 @@ def test_text_field_rejects_one_past_the_limit(factory, limit):
     assert excinfo.value.errors()[0]["type"] == "string_too_long"
 
 
-def test_admin_user_keeps_its_role_default():
+def test_admin_user_keeps_its_account_type_default():
     """The cap must not turn an optional field into a required one."""
     from app.models import AdminUserCreate
 
-    assert AdminUserCreate(**_admin_user()).role == "user"
+    assert AdminUserCreate(**_admin_user()).account_type == AccountType.USERS
 
 
 @pytest.mark.parametrize(

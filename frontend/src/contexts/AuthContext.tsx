@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, ReactNode, useEffect, useCa
 import { jwtDecode } from 'jwt-decode';
 import { getCurrentUser } from '../services/api';
 import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
-import { Capability, can, asRole } from '../lib/capabilities';
+import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
 
 
 // Used to define the structure of the User object
@@ -23,13 +23,22 @@ export interface User {
   notifications_enabled?: boolean;
   love_notes_receive_enabled?: boolean;
   love_notes_send_enabled?: boolean; // Used to track if the user has sent a love note
-  role?: 'user' | 'admin' | 'moderator';
+  /**
+   * Which account table this account lives in, as decided by the server. It is a fact about
+   * storage rather than a privilege: `users` is a participant and the other two are staff.
+   * Nothing here should branch on it to decide what to show -- that is what `capabilities`
+   * is for -- but the admin screens do echo it back, so a staff account is labelled with the
+   * table it came from rather than a stale role name.
+   */
+  account_type?: AccountType;
   /**
    * What this account may reach, as decided by the server. Screens and menu entries are
-   * gated on these rather than on `role`, so the client holds no privilege table of its
-   * own. See src/lib/capabilities.ts.
+   * gated on these rather than on `account_type`, so the client holds no privilege table of
+   * its own. See src/lib/capabilities.ts.
    */
   capabilities?: string[];
+  /** Whether the server reports this account as staff. Informational, for labels only. */
+  is_staff?: boolean;
   is_blocked?: boolean;
 }
 
@@ -80,10 +89,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser({
           ...userData,
           id: userId, // Used to ensure the user object always has a consistent 'id' property
-          // Narrowed rather than cast. If the server ever sends a role this build does not
-          // know, the account keeps working as a plain user instead of the client acting on
-          // a value it cannot reason about.
-          role: asRole(userData.role),
+          // Narrowed rather than cast, and in the fail-closed direction. If the server ever
+          // sends an account table this build does not know, the account keeps working as a
+          // participant instead of the client acting on a value it cannot reason about. The
+          // capability list is left exactly as sent; `can` is what treats an absent one as
+          // empty.
+          account_type: asAccountType(userData.account_type),
           capabilities: userData.capabilities ?? [],
         });
       } else {

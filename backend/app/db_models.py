@@ -1,11 +1,16 @@
-"""Normalized SQLAlchemy schema for PostgreSQL application data."""
+"""Normalized SQLAlchemy schema for PostgreSQL application data.
+
+There are three account tables -- ``users`` for participants, ``admin`` and ``moderator``
+for staff -- and an account's privileges are a function of which one its row is in, not of
+any column it holds. Nothing in this schema stores a role.
+"""
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, SmallInteger,
-    ARRAY, String, Text, UniqueConstraint, Uuid, text,
+    ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -14,15 +19,19 @@ from .limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     MESSAGE_BODY_MAX,
-    USER_ROLE_MAX,
 )
-from .roles import ROLE_VALUES, Role
+from .accounts import (
+    ACCOUNT_TYPE_VALUES,
+    AccountType,
+    is_valid_account_type,
+    normalize_account_type,
+)
 
 # Rendered into the CHECK below. The values are literals in trusted source, not user input,
 # and quoting them here rather than passing them as bind parameters keeps the constraint a
 # single self-contained DDL expression that survives the NOT VALID re-add in
 # ``PostgresClient.apply_check_constraints``.
-_ROLE_SQL_LIST = ", ".join(f"'{value}'" for value in ROLE_VALUES)
+_ACCOUNT_TYPE_SQL_LIST = ", ".join(f"'{value}'" for value in ACCOUNT_TYPE_VALUES)
 
 
 def _uuid() -> str:
@@ -33,48 +42,79 @@ class Base(DeclarativeBase):
     pass
 
 
-class UserRecord(Base):
-    __tablename__ = "users"
+def _now() -> datetime:
+    """An aware UTC default, so a row written outside a request still gets a real instant."""
+    return datetime.now(timezone.utc)
+
+
+class AccountColumns:
+    """The columns every account table shares.
+
+    Kept as one mixin rather than copied three times so a field that is genuinely common
+    cannot drift between the tables -- ``last_login_ip`` being present for participants and
+    absent for staff would be a bug no type checker would catch, and the whole point of
+    splitting the tables is that the shared shape stays honest.
+
+    Deliberately *not* here: emoji, bio, class_name, interests, email, matchmaking_enabled
+    and the love-note toggles. Those describe a participant, and a staff account is not a
+    participant, so storing them would only create columns nothing writes and nothing reads.
+    """
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
+    profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
+    gender: Mapped[str] = mapped_column(String(24))
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_login_ip: Mapped[Optional[str]] = mapped_column(INET)
+    last_login_user_agent: Mapped[Optional[str]] = mapped_column(Text)
+    # ``onupdate`` is applied by SQLAlchemy on the ORM side, and ``server_default`` covers
+    # writes that bypass it. Both are set so ``updated_at`` cannot silently stay at the
+    # creation instant for a row written by a script.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+
+class UserRecord(AccountColumns, Base):
+    __tablename__ = "users"
+
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
     class_name: Mapped[str] = mapped_column(String(80), index=True)
-    profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
-    gender: Mapped[str] = mapped_column(String(24))
     interests: Mapped[list[str]] = mapped_column(ARRAY(String(80)), default=list, server_default=text("'{}'"))
     matchmaking_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
-    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    reported_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_login_ip: Mapped[Optional[str]] = mapped_column(INET)
-    last_login_user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    # The width is the widest role name plus room to spare rather than a bound the API
-    # advertises. The value set is what is actually constrained, by the CHECK below.
-    role: Mapped[str] = mapped_column(String(USER_ROLE_MAX), default=Role.USER.value, server_default=text("'user'"), index=True)
     last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
-    # The role vocabulary is enforced here as well as in the request models, because the
-    # column is the thing every authorization decision is read from. A role that is not one
-    # of the three cannot be written by any path, so a handler cannot be tricked into
-    # honouring one by a value that reached the row another way.
-    #
-    # NULL is excluded by the IS NOT NULL arm. The column is NOT NULL already, so that arm
-    # only matters for the three-valued logic of a bare ``IN``: if role were ever NULL the
-    # predicate would evaluate to NULL, which a CHECK constraint treats as passing. Making
-    # the rejection explicit means an unset role can never slip through as "unconstrained".
-    __table_args__ = (
-        CheckConstraint(
-            f"role IS NOT NULL AND role IN ({_ROLE_SQL_LIST})",
-            name="users_role_valid",
-        ),
-    )
+
+class AdminRecord(AccountColumns, Base):
+    """A staff account with the account-lifecycle capabilities. No participant fields."""
+
+    __tablename__ = "admin"
+
+
+class ModeratorRecord(AccountColumns, Base):
+    """A staff account with the content-moderation capabilities. No participant fields."""
+
+    __tablename__ = "moderator"
+
+
+# The one place a table name becomes a model. ``AccountType`` is a plain string enum with no
+# ORM knowledge, so the join lives here, next to the classes it joins, rather than in
+# ``app.accounts`` (which ``db_models`` imports and so cannot import back).
+ACCOUNT_MODELS: dict[str, type[Base]] = {
+    AccountType.USERS.value: UserRecord,
+    AccountType.ADMIN.value: AdminRecord,
+    AccountType.MODERATOR.value: ModeratorRecord,
+}
 
 
 class ConfessionRecord(Base):
@@ -146,8 +186,28 @@ class ReportRecord(Base):
 class LoginTokenRecord(Base):
     __tablename__ = "login_tokens"
 
+    # A magic link is minted for an account in whichever of the three tables that account
+    # lives in, so there is no single table this id can point at and the old ``users.id``
+    # foreign key had to go. The pair below replaces it: the id identifies the row, and
+    # ``account_type`` says which table to read it from. The CHECK keeps the two in step --
+    # a row id without a resolvable table would be a login that cannot be redeemed.
+    #
+    # NULL is excluded explicitly for the same reason as in a bare ``IN``: NULL would
+    # evaluate to NULL, which a CHECK constraint treats as passing.
+    __table_args__ = (
+        CheckConstraint(
+            f"account_type IS NOT NULL AND account_type IN ({_ACCOUNT_TYPE_SQL_LIST})",
+            name="login_tokens_account_type_valid",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    # The server default exists only so the column can be added to a table that predates the
+    # split, where the identity of the account is genuinely unknown. It backfills ``users``,
+    # the least-privileged reading, so a token that outlives this change is refused rather
+    # than resolved against a table nobody can confirm.
+    account_type: Mapped[str] = mapped_column(String(16), index=True, server_default=text("'users'"))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -263,5 +323,95 @@ class MessageReportRecord(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), ForeignKey("users.regno", ondelete="SET NULL"))
+    # No foreign key. The reviewer is a staff account, so its regno lives in ``admin`` or
+    # ``moderator`` and never in ``users`` -- a FK to ``users.regno`` would reject every
+    # moderator's sign-off. Kept as plain text so the audit trail survives the reviewer's
+    # account being deleted or renamed, which is what ``ON DELETE SET NULL`` was doing.
+    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
+
+
+# ---------------------------------------------------------------------------
+# Cross-table account lookup
+# ---------------------------------------------------------------------------
+# A regno or an id is unique *within* one account table, not across all three. Login says
+# which table it means, so the resolution that matters at request time is
+# :func:`find_account_in_table`, which reads exactly one named table and never has to break
+# a tie.
+#
+# :func:`resolve_account_by_regno` and :func:`resolve_account_by_id` still exist and still
+# search all three, but they are only for the places where no table is known and none is
+# needed to be right: showing an admin which conversations a regno is attached to, and
+# refusing a create that would reuse a regno on a table where it would be ambiguous to a
+# human. Nothing that decides *who is calling* uses them -- a caller is always identified by
+# the table and primary key their credential recorded, never by a search.
+
+def find_account_in_table(session, account_type: Optional[str], regno: Optional[str]) -> Optional[tuple[str, Any]]:
+    """Find the account holding ``regno`` in one named table, as ``(account_type, row)``.
+
+    The lookup behind login. The table is supplied by the caller -- by the page the person
+    chose to sign in through -- so a regno that exists in two tables resolves to the one
+    that page was for, and a regno that exists only in a different table is simply not
+    found rather than quietly resolving to somebody else's account.
+
+    An unrecognised ``account_type`` returns None instead of falling back to a default
+    table. :func:`normalize_account_type` would answer such a value with ``users``, which is
+    the right fail-closed answer for a *stored* discriminator whose privileges are being
+    read, and exactly the wrong one here: a request that named no real account table must
+    not be answered out of the participant table.
+    """
+    if not regno or not is_valid_account_type(account_type):
+        return None
+    model = ACCOUNT_MODELS[normalize_account_type(account_type)]
+    row = session.scalar(select(model).where(model.regno == regno))
+    if row is None:
+        return None
+    return normalize_account_type(account_type), row
+
+
+def resolve_account_by_regno(session, regno: Optional[str]) -> Optional[tuple[str, Any]]:
+    """Find the account holding ``regno``, as ``(account_type, row)`` or None."""
+    if not regno:
+        return None
+    for account_type, model in ACCOUNT_MODELS.items():
+        row = session.scalar(select(model).where(model.regno == regno))
+        if row is not None:
+            return account_type, row
+    return None
+
+
+def resolve_account_by_id(session, account_id: Optional[str]) -> Optional[tuple[str, Any]]:
+    """Find the account with this primary key, as ``(account_type, row)`` or None."""
+    if not _is_account_id(account_id):
+        return None
+    for account_type, model in ACCOUNT_MODELS.items():
+        row = session.get(model, str(account_id))
+        if row is not None:
+            return account_type, row
+    return None
+
+
+def resolve_account(session, account_type: Optional[str], account_id: Optional[str]) -> Optional[Any]:
+    """Fetch one account from one named table, or None if that table has no such row.
+
+    Used wherever the table is already known -- a magic-link token carries the account kind
+    it was minted for, so redemption reads exactly one table instead of searching three.
+    """
+    if not _is_account_id(account_id):
+        return None
+    return session.get(ACCOUNT_MODELS[normalize_account_type(account_type)], str(account_id))
+
+
+def _is_account_id(value: Optional[str]) -> bool:
+    """Whether ``value`` is a well-formed account primary key.
+
+    Duplicated rather than imported from ``app.postgres`` because that module imports this
+    one; the check is four lines and importing it would close the cycle.
+    """
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False

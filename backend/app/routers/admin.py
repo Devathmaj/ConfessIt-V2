@@ -8,16 +8,17 @@ from ..postgres import Database
 from pydantic import BaseModel
 
 from ..dependencies import get_db
-from ..models import AdminUserCreate, AdminUserUpdate, UserDetails
-from ..db_models import (ConfessionRecord, ConversationRecord, MatchRecord, MessageRecord,
-    MessageReportRecord, UserRecord)
-from ..services.auth_service import get_current_user
+from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate
+from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord, MatchRecord,
+    MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
+    resolve_account_by_id)
+from ..accounts import AccountType, Capability, normalize_account_type
 from ..services.authorization import require_capability
-from ..roles import Capability, Role
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
-    serialize_user_by_regno,
+    serialize_account_by_regno,
+    _account_row_payload,
     normalize_conversation_status,
     collect_active_sessions,
     get_all_confessions_data,
@@ -28,17 +29,27 @@ from ..services.admin_service import (
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
+# Every account the list can hold, newest-looking first. Ordered explicitly so the response
+# is stable across calls: three unordered SELECTs concatenated would otherwise reshuffle the
+# page whenever PostgreSQL chose a different plan, and the admin would have to re-find what
+# they were looking at after an unrelated edit to an unrelated account.
+_ACCOUNT_TABLE_ORDER = (AccountType.ADMIN, AccountType.MODERATOR, AccountType.USERS)
+
 def _user_payload(user):
     if user is None: return None
-    return {"id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
+    return {
+        "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
         "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name, "gender": user.gender,
         "profile_picture_url": user.profile_picture_url, "interests": user.interests or [],
-        "role": user.role, "matchmaking_enabled": user.matchmaking_enabled,
+        "account_type": AccountType.USERS.value,
+        "matchmaking_enabled": user.matchmaking_enabled,
         "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
-        "love_notes_send_enabled": user.love_notes_send_enabled, "reported_count": user.reported_count,
+        "love_notes_send_enabled": user.love_notes_send_enabled,
         "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
         "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_at": user.last_matchmaking_at,
-        "is_blocked": user.is_blocked}
+        "created_at": user.created_at, "updated_at": user.updated_at,
+        "is_blocked": user.is_blocked,
+    }
 
 def _conversation_payload(row):
     return {"id": str(row.id), "match_id": str(row.match_id), "initiator_regno": row.initiator_regno,
@@ -58,7 +69,7 @@ class ConversationTerminateRequest(BaseModel):
 @router.get("/confessions", response_model=List[Dict[str, Any]])
 async def get_all_confessions(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
+    _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every confession with sender information for admin review."""
     return get_all_confessions_data(db)
@@ -68,7 +79,7 @@ async def get_all_confessions(
 async def delete_confession(
     confession_id: str,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE))
+    _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE))
 ) -> Dict[str, Any]:
     """Remove a confession permanently."""
     if not is_valid_id(confession_id):
@@ -85,33 +96,66 @@ async def delete_confession(
 @router.get("/users", response_model=List[Dict[str, Any]])
 async def get_all_users(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.USERS_REVIEW))
+    _: AccountDetails = Depends(require_capability(Capability.USERS_REVIEW))
 ) -> List[Dict[str, Any]]:
-    """Return every user profile for review."""
+    """Return every account, from all three tables, for review.
+
+    Staff and participants arrive through one endpoint because they are one population of
+    accounts; the ``account_type`` on each document is which table it came from. Splitting
+    the admin list per table would mean the search box on it would have to know which table
+    to search, which is not a distinction a person administering the app should have to make.
+    """
     with db.sessions() as session:
-        users = session.scalars(select(UserRecord).order_by(UserRecord.name.asc())).all()
-        return [serialize_user_doc(_user_payload(user)) for user in users]
+        docs: List[Dict[str, Any]] = []
+        for account_type in _ACCOUNT_TABLE_ORDER:
+            model = ACCOUNT_MODELS[account_type.value]
+            rows = session.scalars(select(model).order_by(model.name.asc())).all()
+            docs.extend(serialize_user_doc(_account_row_payload(account_type.value, row)) for row in rows)
+        return docs
 
 
 @router.post("/users", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: AdminUserCreate,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.USERS_CREATE))
+    _: AccountDetails = Depends(require_capability(Capability.USERS_CREATE))
 ) -> Dict[str, Any]:
-    """Allow admins to create a brand new user or admin account."""
-    normalized_regno = payload.regno.strip()
-    normalized_email = payload.email.strip().lower()
+    """Create an account in the table named by ``account_type``.
 
+    The table is chosen by the payload, and the same payload shape creates a participant or
+    a staff account: there is no separate admin-creation form or endpoint to fall out of
+    step with this one. Participant-only fields are rejected by the payload validator for a
+    staff account, so a caller cannot smuggle an email onto an admin row.
+    """
+    account_type = payload.account_type
+    model = ACCOUNT_MODELS[account_type.value]
+    normalized_regno = payload.regno.strip()
+
+    # Uniqueness is enforced per table, by PostgreSQL, on the table being written to. It is
+    # deliberately *not* enforced across the three tables any more: sign-in is category
+    # scoped, so a regno is only ever looked up in the one table the person chose on the way
+    # in, and a session is pinned to that row by primary key for its whole life. That means
+    # the same regno can exist as a participant and as staff, and each sign-in page resolves
+    # its own account -- which is a supported state, not corruption. Refusing it here would
+    # have been a workaround for the ambiguity that no longer exists.
     with db.sessions() as session:
-        conflict = session.scalar(select(UserRecord.id).where(
-            (UserRecord.regno == normalized_regno) | (UserRecord.email == normalized_email)
-        ).limit(1))
-    if conflict:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A user with this registration number or email already exists."
-        )
+        if find_account_in_table(session, account_type.value, normalized_regno) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this registration number already exists for this account type.",
+            )
+        if account_type is AccountType.USERS:
+            normalized_email = payload.email.strip().lower()
+            email_conflict = session.scalar(select(UserRecord.id).where(
+                UserRecord.email == normalized_email
+            ).limit(1))
+            if email_conflict:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A user with this email already exists.",
+                )
+        else:
+            normalized_email = None
 
     interests_value: Optional[List[str]] = None
     if payload.interests:
@@ -119,20 +163,35 @@ async def create_user(
         if normalized_interests:
             interests_value = normalized_interests
 
+    # Only the fields the target table actually has are passed to the constructor. Building
+    # the kwargs from the payload with the participant keys removed -- rather than branching
+    # into two constructors -- means a field added to AccountColumns lands in all three
+    # tables at once, and a participant-only field can never reach a staff row.
+    account_fields: Dict[str, Any] = {
+        "regno": normalized_regno,
+        "name": payload.name.strip(),
+        "profile_picture_url": payload.profile_picture_url.strip() if payload.profile_picture_url else None,
+        "gender": payload.gender.strip(),
+        "notifications_enabled": payload.notifications_enabled,
+        "is_blocked": payload.is_blocked,
+    }
+    if account_type is AccountType.USERS:
+        account_fields.update({
+            "email": normalized_email,
+            "emoji": payload.emoji.strip() if payload.emoji else None,
+            "bio": payload.bio.strip() if payload.bio else None,
+            "class_name": payload.class_name.strip(),
+            "interests": interests_value or [],
+            "matchmaking_enabled": payload.matchmaking_enabled,
+            "love_notes_receive_enabled": payload.love_notes_receive_enabled,
+            "love_notes_send_enabled": payload.love_notes_send_enabled,
+        })
+
     with db.sessions.begin() as session:
-        user = UserRecord(
-            regno=normalized_regno, name=payload.name.strip(), email=normalized_email,
-            emoji=payload.emoji.strip() if payload.emoji else None,
-            bio=payload.bio.strip() if payload.bio else None, class_name=payload.class_name.strip(),
-            gender=payload.gender.strip(),
-            profile_picture_url=payload.profile_picture_url.strip() if payload.profile_picture_url else None,
-            interests=interests_value or [], matchmaking_enabled=payload.matchmaking_enabled,
-            notifications_enabled=payload.notifications_enabled, love_notes_receive_enabled=payload.love_notes_receive_enabled,
-            love_notes_send_enabled=payload.love_notes_send_enabled, role=payload.role.value,
-        )
+        user = model(**account_fields)
         session.add(user)
         session.flush()
-        created_doc = _user_payload(user)
+        created_doc = _account_row_payload(account_type.value, user)
     return serialize_user_doc(created_doc)
 
 
@@ -141,9 +200,13 @@ async def set_user_block_state(
     user_id: str,
     blocked: bool = Query(..., alias="blocked"),
     db: Database = Depends(get_db),
-    current_admin: UserDetails = Depends(require_capability(Capability.USERS_BLOCK))
+    current_admin: AccountDetails = Depends(require_capability(Capability.USERS_BLOCK))
 ) -> Dict[str, Any]:
-    """Allow admins to block or unblock a user."""
+    """Block or unblock an account in any of the three tables.
+
+    Resolved by id across all tables rather than against ``users``, because a moderator can
+    be blocked by an admin and the moderator's row is not in ``users``.
+    """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
@@ -151,9 +214,9 @@ async def set_user_block_state(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot change your own block status")
 
     with db.sessions.begin() as session:
-        user = session.get(UserRecord, str(user_id))
-        if user: user.is_blocked = blocked
-    if not user:
+        found = resolve_account_by_id(session, user_id)
+        if found: found[1].is_blocked = blocked
+    if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return {"id": user_id, "is_blocked": blocked}
 
@@ -163,31 +226,44 @@ async def update_user_details(
     user_id: str,
     update: AdminUserUpdate,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.USERS_UPDATE))
+    _: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE))
 ) -> Dict[str, Any]:
-    """Allow admins to edit a user's profile details."""
+    """Edit an account that already exists, in whichever table it lives.
+
+    The account is found by id across all three tables and edited in place. Its table is not
+    editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
+    moderator into a participant and strand the content that references it.
+    """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
-    # ``role`` is typed as the Role enum, which rejects anything unrecognised at validation
-    # time. It is unwrapped to its string here because the column stores text, and a raw
-    # enum member would be handed to the driver rather than to the database as the value the
-    # CHECK constraint compares against.
-    update_payload = {
-        key: (value.value if isinstance(value, Role) else value)
-        for key, value in update.dict(exclude_unset=True).items()
-    }
+    update_payload = update.dict(exclude_unset=True)
 
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
 
     with db.sessions.begin() as session:
-        user = session.get(UserRecord, str(user_id))
-        if user:
+        found = resolve_account_by_id(session, user_id)
+        if found:
+            account_type, account = found
+            # Participant-only keys are dropped for a staff account. The participant-shaped
+            # form submits every field it knows about, and without this an edit to a
+            # moderator's name would also try to write an email onto a table with no email
+            # column -- and, more insidiously, would write one if the column were ever added
+            # for an unrelated reason.
+            participant_only = (
+                "email", "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
+                "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
+            )
+            if account_type != AccountType.USERS.value:
+                update_payload = {
+                    key: value for key, value in update_payload.items()
+                    if key not in participant_only
+                }
             for key, value in update_payload.items():
-                setattr(user, key, value)
-            updated_doc = _user_payload(user)
-    if not user:
+                setattr(account, key, value)
+            updated_doc = _account_row_payload(account_type, account)
+    if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return serialize_user_doc(updated_doc)
@@ -196,7 +272,7 @@ async def update_user_details(
 @router.get("/conversations", response_model=List[Dict[str, Any]])
 async def list_conversations(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_REVIEW))
+    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every conversation with participant and latest message metadata."""
     return get_all_conversations_data(db)
@@ -206,7 +282,7 @@ async def list_conversations(
 async def get_conversation_detail(
     conversation_id: str,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_READ_MESSAGES))
+    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_READ_MESSAGES))
 ) -> Dict[str, Any]:
     """Return a single conversation with full participant info and message transcript."""
     if not is_valid_id(conversation_id):
@@ -249,8 +325,8 @@ async def get_conversation_detail(
         "requested_at": serialize_datetime(conversation_doc.get("requested_at")),
         "accepted_at": serialize_datetime(conversation_doc.get("accepted_at")),
         "terminated_at": serialize_datetime(conversation_doc.get("terminated_at")),
-        "initiator": serialize_user_by_regno(db, conversation_doc.get("initiator_regno")),
-        "receiver": serialize_user_by_regno(db, conversation_doc.get("receiver_regno")),
+        "initiator": serialize_account_by_regno(db, conversation_doc.get("initiator_regno")),
+        "receiver": serialize_account_by_regno(db, conversation_doc.get("receiver_regno")),
         "match": None
         if not match_doc
         else {
@@ -271,7 +347,7 @@ async def terminate_conversation(
     conversation_id: str,
     payload: ConversationTerminateRequest,
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.CONVERSATIONS_TERMINATE))
+    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_TERMINATE))
 ) -> Dict[str, Any]:
     """Terminate a conversation."""
     if not is_valid_id(conversation_id):
@@ -305,7 +381,7 @@ async def terminate_conversation(
 @router.get("/matchmaking", response_model=List[Dict[str, Any]])
 async def get_matchmaking_overview(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.MATCHMAKING_REVIEW))
+    _: AccountDetails = Depends(require_capability(Capability.MATCHMAKING_REVIEW))
 ) -> List[Dict[str, Any]]:
     """Return every recorded match excluding administrators."""
     return get_matchmaking_overview_data(db)
@@ -316,7 +392,7 @@ async def update_matchmaking_status(
     match_id: str,
     status_value: str = Query(..., alias="status", regex="^(approved|rejected|pending)$"),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.MATCHMAKING_MODERATE))
+    _: AccountDetails = Depends(require_capability(Capability.MATCHMAKING_MODERATE))
 ) -> Dict[str, Any]:
     """Moderate a matchmaking outcome by updating the linked conversation state."""
     if not is_valid_id(match_id):
@@ -377,7 +453,7 @@ async def update_matchmaking_status(
 @router.get("/stats", response_model=Dict[str, Any])
 async def get_admin_statistics(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.STATS_READ))
+    _: AccountDetails = Depends(require_capability(Capability.STATS_READ))
 ) -> Dict[str, Any]:
     """Provide high-level metrics for the admin dashboard."""
     return get_admin_statistics_data(db)
@@ -386,7 +462,7 @@ async def get_admin_statistics(
 @router.get("/stats/active-sessions", response_model=Dict[str, Any])
 async def list_active_sessions(
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.SESSIONS_READ))
+    _: AccountDetails = Depends(require_capability(Capability.SESSIONS_READ))
 ) -> Dict[str, Any]:
     """Return details about users with recent activity for the active sessions dialog."""
     sessions = collect_active_sessions(db)
@@ -410,7 +486,7 @@ async def list_active_sessions(
 async def archive_old_messages(
     hours_old: int = Query(4, ge=1, le=168, description="Archive messages older than this many hours"),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
+    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """
     Archive old messages to compressed JSON files and remove from PostgreSQL
@@ -425,7 +501,7 @@ async def archive_old_messages(
 
 @router.get("/messages/archives")
 async def list_message_archives(
-    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
+    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """List all archived message files"""
     from ..services.message_archival_service import message_archival_service
@@ -447,7 +523,7 @@ async def get_archived_messages(
     date: str,
     user_regno: Optional[str] = Query(None, description="Filter by user regno"),
     conversation_id: Optional[str] = Query(None, description="Filter by conversation ID"),
-    _: UserDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
+    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """
     Get archived messages for a specific date
@@ -475,7 +551,7 @@ async def get_message_reports(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Database = Depends(get_db),
-    _: UserDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
+    _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
     """Get all message reports with optional status filter"""
     
@@ -530,7 +606,7 @@ async def update_message_report_status(
     report_id: str,
     new_status: str = Query(..., regex="^(reviewed|dismissed)$"),
     db: Database = Depends(get_db),
-    reviewer: UserDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
+    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
 ) -> Dict[str, Any]:
     """Update the status of a message report"""
     

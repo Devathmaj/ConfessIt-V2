@@ -11,7 +11,7 @@ from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
-from ..roles import Capability, has_capability
+from ..accounts import Capability, has_capability
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
@@ -229,10 +229,12 @@ class MessageService:
         - Conversation is accepted
         """
         # A caller holding CONVERSATIONS_READ_MESSAGES -- the same capability that guards
-        # GET /admin/conversations/{id} -- may read any thread. Keyed on the capability rather
-        # than on the admin role so the two paths cannot disagree about who may read a
-        # transcript, and so a moderator gets it here too.
-        may_read_any = has_capability(user.role, Capability.CONVERSATIONS_READ_MESSAGES)
+        # GET /admin/conversations/{id} -- may read any thread. Keyed on the capability that
+        # the caller's account table grants, rather than on the admin role, so the two paths
+        # cannot disagree about who may read a transcript, and so a moderator gets it here
+        # too. A participant's table grants nothing, so this is False for them without a
+        # second branch naming them.
+        may_read_any = has_capability(user.account_type, Capability.CONVERSATIONS_READ_MESSAGES)
         if not may_read_any:
             # Validate user is participant
             conversation = self.validate_conversation_participant(db, conversation_id, user.regno)

@@ -1,6 +1,6 @@
 # app/models.py
 
-from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, validator
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, model_validator, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
@@ -17,7 +17,7 @@ from .limits import (
     USER_NAME_MAX,
     USER_REGNO_MAX,
 )
-from .roles import Role, capabilities_for, normalize_role
+from .accounts import AccountType, capabilities_for, normalize_account_type
 
 class Token(BaseModel):
     """
@@ -129,121 +129,188 @@ class Confession(BaseModel):
         
         populate_by_name = True
 
-class AdminUserBase(BaseModel):
+class AdminUserCreate(BaseModel):
+    """Payload for creating an account in any of the three account tables.
+
+    ``account_type`` is the table the row is written to, and it is the only way an account
+    becomes staff: there is no ``role`` to set, so a payload cannot half-create a staff
+    account by naming a privilege instead of a table.
+
+    The participant-only fields are optional here and required by the validator below only
+    when ``account_type`` is ``users``. Declaring them conditionally in the type system is
+    not something Pydantic can express without a discriminated union, and a union would
+    make the OpenAPI schema unreadable for a payload that is, in practice, one form.
     """
-    Shared attributes for creating or updating user accounts via the admin APIs.
-    """
+    account_type: AccountType = AccountType.USERS
     regno: str = Field(max_length=USER_REGNO_MAX)
     name: str = Field(max_length=USER_NAME_MAX)
-    email: EmailStr
-    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
-    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
-    class_name: str = Field(max_length=USER_CLASS_NAME_MAX)
-    gender: str = Field(max_length=USER_GENDER_MAX)
     profile_picture_url: Optional[str] = None
-    interests: Optional[List[str]] = None
-    matchmaking_enabled: bool = True
+    gender: str = Field(max_length=USER_GENDER_MAX)
     notifications_enabled: bool = True
-    love_notes_receive_enabled: bool = True
-    love_notes_send_enabled: bool = False
-    # Typed as the enum, so a payload naming anything else is a 422 naming this field.
-    # A max_length here would have been the weaker check: it would bound the string without
-    # constraining it, and "Admin" is a perfectly valid twenty characters.
-    role: Role = Role.USER
-
-
-class AdminUserCreate(AdminUserBase):
-    """
-    Payload for creating a new user or admin account via the admin APIs.
-    """
-
-
-class AdminUserUpdate(BaseModel):
-    """
-    Payload for updating existing user accounts via the admin APIs.
-    """
-    regno: Optional[str] = Field(default=None, max_length=USER_REGNO_MAX)
-    name: Optional[str] = Field(default=None, max_length=USER_NAME_MAX)
+    is_blocked: bool = False
+    # participants only
     email: Optional[EmailStr] = None
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
-    gender: Optional[str] = Field(default=None, max_length=USER_GENDER_MAX)
+    interests: Optional[List[str]] = None
+    matchmaking_enabled: bool = True
+    love_notes_receive_enabled: bool = True
+    love_notes_send_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _require_participant_fields(self) -> "AdminUserCreate":
+        if self.account_type is not AccountType.USERS:
+            return self
+        missing = [
+            name
+            for name in ("email", "class_name")
+            if getattr(self, name) in (None, "")
+        ]
+        if missing:
+            raise ValueError(
+                f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
+                f"required for a participant account."
+            )
+        return self
+
+
+class AdminUserUpdate(BaseModel):
+    """Payload for editing an account that already exists.
+
+    Every field is optional, and the account is found by id across all three tables, so one
+    payload shape edits a participant or a staff account.
+
+    There is deliberately no ``account_type`` here. Moving a row between tables is not a
+    field edit: eleven other tables hold foreign keys into ``users`` by both id and regno, so
+    relocating a row would either orphan them or require rewriting every reference under the
+    hood. Which table an account lives in is therefore fixed when it is created; minting a
+    staff account is a create, and demoting one is a matter of not using it.
+    """
+    regno: Optional[str] = Field(default=None, max_length=USER_REGNO_MAX)
+    name: Optional[str] = Field(max_length=USER_NAME_MAX)
     profile_picture_url: Optional[str] = None
+    gender: Optional[str] = Field(default=None, max_length=USER_GENDER_MAX)
+    notifications_enabled: Optional[bool] = None
+    is_blocked: Optional[bool] = None
+    # participants only
+    email: Optional[EmailStr] = None
+    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
+    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
+    class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
     interests: Optional[List[str]] = None
     matchmaking_enabled: Optional[bool] = None
-    notifications_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
     love_notes_send_enabled: Optional[bool] = None
-    role: Optional[Role] = None
-    is_blocked: Optional[bool] = None
+
+    @field_validator("name", "regno", "profile_picture_url", "gender", "class_name", "email")
+    @classmethod
+    def _blank_is_not_a_value(cls, value):
+        """Treat an empty string as "not supplied" rather than as a value to write.
+
+        A form that submits every field sends ``""`` for the ones the admin left untouched.
+        Without this, editing a staff account's name through the participant-shaped form
+        would blank out fields that were never offered on that form at all.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
-class UserDetails(BaseModel):
-    """
-    Stores detailed information for a user profile.
+class AccountDetails(BaseModel):
+    """The fields every account has, whatever table it lives in.
+
+    This is the shape every authenticated caller is resolved to, because the three tables
+    share exactly these columns and nothing more. Participant-only fields are deliberately
+    absent rather than null: an admin has no ``class_name``, and returning ``null`` for it
+    would describe a value the row does not have.
     """
     id: str = Field(default_factory=new_id)
     regno: str
     name: str
-    email: EmailStr
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
-    class_name: str
     profile_picture_url: Optional[str] = None
     gender: str
-    interests: Optional[List[str]] = Field(default_factory=list)
-    matchmaking_enabled: bool
-    notifications_enabled: bool
-    love_notes_receive_enabled: bool = True
-    love_notes_send_enabled: bool = False
+    notifications_enabled: bool = True
     is_blocked: bool = False
-    reported_count: int = 0
     last_login_at: Optional[datetime] = None
     last_login_ip: Optional[str] = None
     last_login_user_agent: Optional[str] = None
-    role: str = Role.USER.value
-    last_matchmaking_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # The account table this row was read from. Not a privilege and not a label: the
+    # privilege answer is ``capabilities`` below, derived from it.
+    account_type: str = AccountType.USERS.value
 
     class Config:
         arbitrary_types_allowed = True
-        
+
         populate_by_name = True
 
-    @field_validator("role", mode="before")
+    @field_validator("account_type", mode="before")
     @classmethod
-    def _normalize_stored_role(cls, value: Any) -> str:
-        """Resolve the role read out of the database to a defined one.
+    def _normalize_stored_account_type(cls, value: Any) -> str:
+        """Resolve the account table read out of the database to a defined one.
 
-        A row can predate the vocabulary being enforced, or have been written by a script
-        that never went through a request model. Reducing it here means every consumer of
-        UserDetails -- the ``/auth/me`` response, the conversation payloads, the profile
-        response -- sees one of the three roles and cannot be handed a value that matches no
-        branch. Unrecognised values become ``user``: an account keeps working, it just keeps
-        no privileges it was not validly granted.
+        Reduced here so every consumer of an account payload -- the ``/auth/me`` response,
+        the conversation payloads, the profile response -- sees one of the three tables and
+        cannot be handed a value that matches no branch. Unrecognised values become
+        ``users``: an account keeps working, it just keeps no privileges it was never
+        validly granted.
         """
-        return normalize_role(value)
+        return normalize_account_type(value)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def capabilities(self) -> List[str]:
-        """The capabilities the current role carries, as sent to the client.
+        """The capabilities this account's table grants, as sent to the client.
 
-        Derived on read rather than stored so it cannot drift from ``role``. The frontend
-        uses this to decide which moderation screens to render, which keeps the browser's
-        idea of what is allowed in step with the server's without the client holding a
-        second, separately-maintained copy of the privilege table. It is a display concern
-        only: the server re-checks every one of these against the database on every request.
-        Sorted so the value is stable and diffable.
+        Derived on read rather than stored so it cannot drift from ``account_type``. The
+        frontend uses this to decide which moderation screens to render, which keeps the
+        browser's idea of what is allowed in step with the server's without the client
+        holding a second, separately-maintained copy of the privilege table. It is a
+        display concern only: the server re-checks every one of these against the database
+        on every request. Sorted so the value is stable and diffable.
         """
-        return sorted(capabilities_for(self.role))
+        return sorted(capabilities_for(self.account_type))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_staff(self) -> bool:
+        """Whether this account is staff rather than a participant.
+
+        Sent so the client can hide participant-only screens without re-deriving the rule.
+        The server gates those routes on the account table itself; this is the same answer,
+        for display.
+        """
+        return bool(capabilities_for(self.account_type)) and self.account_type != AccountType.USERS.value
+
+
+class UserDetails(AccountDetails):
+    """A participant account: everything in ``AccountDetails`` plus the participant fields.
+
+    Participant routes resolve the caller to *this* model, via a dependency that refuses any
+    account not in the ``users`` table. That is the whole point of the split: a staff
+    account cannot reach a participant feature not because a role string said so, but
+    because there is no row for it in the table the feature reads.
+    """
+    email: EmailStr
+    emoji: Optional[str] = None
+    bio: Optional[str] = None
+    class_name: str
+    interests: Optional[List[str]] = Field(default_factory=list)
+    matchmaking_enabled: bool = True
+    love_notes_receive_enabled: bool = True
+    love_notes_send_enabled: bool = False
+    last_matchmaking_at: Optional[datetime] = None
+
 
 class LoginToken(BaseModel):
     """
     Represents a securely stored authentication token in the database.
     """
     id: str = Field(default_factory=new_id)
-    user_id: str
+    account_id: str
+    account_type: str = AccountType.USERS.value
     token_hash: str
     issued_at: datetime
     expires_at: datetime

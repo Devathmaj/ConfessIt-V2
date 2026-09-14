@@ -16,10 +16,15 @@ def hash_token(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()
 
-def create_and_store_magic_token(db: Database, user_id: str, request: Request) -> str:
+def create_and_store_magic_token(db: Database, account_id: str, account_type: str, request: Request) -> str:
     """
     Used to generate a magic link token, store its hashed version in the database,
     and return the unhashed token.
+
+    ``account_type`` is the account's own table. It is stored on the token because a regno
+    is only unique within a table: without it, a token minted for an admin and a token
+    minted for a participant carrying the same regno would be indistinguishable at
+    redemption, and "which account was this link for" would have no single answer.
     """
     # 1. Generate a new, secure token
     token = secrets.token_urlsafe(32)
@@ -33,7 +38,8 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
     
     # 4. Create the LoginToken document
     login_token_entry = LoginToken(
-        user_id=user_id,
+        account_id=account_id,
+        account_type=account_type,
         token_hash=token_hash,
         issued_at=issued_at,
         expires_at=expires_at,
@@ -54,7 +60,8 @@ def create_and_store_magic_token(db: Database, user_id: str, request: Request) -
     with db.sessions.begin() as session:
         session.add(LoginTokenRecord(
             id=login_token_entry.id,
-            user_id=login_token_entry.user_id,
+            account_id=login_token_entry.account_id,
+            account_type=login_token_entry.account_type,
             token_hash=login_token_entry.token_hash,
             issued_at=login_token_entry.issued_at,
             expires_at=login_token_entry.expires_at,

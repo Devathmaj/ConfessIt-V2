@@ -25,7 +25,7 @@ interface MatchParticipant {
   regno?: string | null;
   class_name?: string | null;
   email?: string | null;
-  role?: string | null;
+  account_type?: string | null;
 }
 
 interface MatchmakingItem {

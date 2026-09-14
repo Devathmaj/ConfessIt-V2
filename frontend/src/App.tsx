@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { CAPABILITIES, Capability } from "./lib/capabilities";
-import { Login } from "./pages/Login";
+import { Login, AdminLogin, ModeratorLogin } from "./pages/Login";
 import { UserDashboard } from "./pages/UserDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { ConfessionsPage } from "./pages/ConfessionsPage";
@@ -30,7 +30,7 @@ const queryClient = new QueryClient();
 /**
  * Used to keep a signed-in user out of the login screen.
  * Once a session exists there is nothing left to log into, and the form would only bounce
- * them straight back here, so they are sent to the dashboard their role actually uses --
+ * them straight back here, so they are sent to the dashboard their account actually uses --
  * the same target the root path already resolves to.
  */
 export const PublicOnlyRoute = ({ children }: { children: ReactNode }) => {
@@ -54,9 +54,9 @@ export const PublicOnlyRoute = ({ children }: { children: ReactNode }) => {
 /**
  * Where a signed-in account belongs after signing in or hitting the root path.
  *
- * Decided by the capability list rather than by the role name, matching the server's own
- * rule for the magic-link redirect: staff land in the moderation area, participants on
- * their dashboard. A role check here would send a moderator to /dashboard, which is a page
+ * Decided by the capability list rather than by the account's table, matching the server's
+ * own rule for the magic-link redirect: staff land in the moderation area, participants on
+ * their dashboard. A table check here would send a moderator to /dashboard, which is a page
  * they have no use for.
  *
  * Takes the context's `can` rather than the user object so the whole app asks the
@@ -140,12 +140,34 @@ const AppRoutes = () => {
 
   return (
     <Routes>
-      {/* Public routes that anyone can access */}
+      {/* Public routes that anyone can access.
+
+          One route per account table. Each renders the same form but posts to the endpoint
+          for its own table, which is what keeps a regno that exists as both a participant and
+          a staff account from resolving to whichever one happened to be found first. All
+          three are guest-only: an account that already has a session is sent to the landing
+          path its capabilities grant, so visiting the wrong door is harmless. */}
       <Route
         path="/login"
         element={
           <PublicOnlyRoute>
             <Login />
+          </PublicOnlyRoute>
+        }
+      />
+      <Route
+        path="/login/admin"
+        element={
+          <PublicOnlyRoute>
+            <AdminLogin />
+          </PublicOnlyRoute>
+        }
+      />
+      <Route
+        path="/login/moderator"
+        element={
+          <PublicOnlyRoute>
+            <ModeratorLogin />
           </PublicOnlyRoute>
         }
       />
@@ -156,7 +178,8 @@ const AppRoutes = () => {
         path="/"
         element={
           <ProtectedRoute>
-            {/* Used to redirect logged-in users from the root path to their respective dashboard based on their role. */}
+            {/* Used to redirect logged-in users from the root path to the dashboard their
+                account's capabilities point at. */}
             <Navigate to={landingPathFor(can)} replace />
           </ProtectedRoute>
         }

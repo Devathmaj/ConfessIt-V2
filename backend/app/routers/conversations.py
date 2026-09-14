@@ -6,7 +6,7 @@ from typing import Annotated
 
 from ..dependencies import get_db
 from ..models import UserDetails, ConversationCreate
-from ..services.auth_service import get_current_user
+from ..services.authorization import require_participant
 from ..services.conversation_service import (
     request_conversation_service,
     get_conversation_status_service,
@@ -27,7 +27,7 @@ router = APIRouter(
 @router.post("/request", status_code=status.HTTP_201_CREATED)
 def request_conversation(
     conversation_data: ConversationCreate,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -38,7 +38,7 @@ def request_conversation(
 @router.get("/{match_id}/status")
 def get_conversation_status(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -49,7 +49,7 @@ def get_conversation_status(
 @router.post("/{match_id}/accept", status_code=status.HTTP_200_OK)
 def accept_conversation(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -60,7 +60,7 @@ def accept_conversation(
 @router.post("/{match_id}/reject", status_code=status.HTTP_200_OK)
 def reject_conversation(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -70,7 +70,7 @@ def reject_conversation(
 
 @router.get("/current")
 def get_current_conversation(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -80,7 +80,7 @@ def get_current_conversation(
 
 @router.get("/received")
 def get_received_conversations(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -91,7 +91,7 @@ def get_received_conversations(
 @router.get("/{match_id}")
 def get_conversation_by_match(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -103,7 +103,7 @@ def get_conversation_by_match(
 @router.post("/{match_id}/block", status_code=status.HTTP_200_OK)
 def block_conversation(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -114,7 +114,7 @@ def block_conversation(
 @router.post("/{match_id}/unblock", status_code=status.HTTP_200_OK)
 def unblock_conversation(
     match_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """

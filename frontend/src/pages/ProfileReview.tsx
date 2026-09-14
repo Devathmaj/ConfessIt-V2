@@ -28,7 +28,7 @@ import { toast } from 'sonner';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
 import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, Plus } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
-import { Role } from '@/lib/capabilities';
+import { AccountType } from '@/lib/capabilities';
 
 interface AdminUserProfile {
   id: string;
@@ -37,7 +37,11 @@ interface AdminUserProfile {
   email?: string | null;
   class_name?: string | null;
   gender?: string | null;
-  role?: string | null;
+  /**
+   * Which account table the row came from. There is no role: a staff account has no row in
+   * ``users`` at all, so the table is the only thing that says what kind of account this is.
+   */
+  account_type?: string | null;
   matchmaking_enabled?: boolean;
   notifications_enabled?: boolean;
   love_notes_receive_enabled?: boolean;
@@ -66,12 +70,28 @@ type CreateUserForm = {
   notifications_enabled: boolean;
   love_notes_receive_enabled: boolean;
   love_notes_send_enabled: boolean;
-  role: Role;
+  /**
+   * Which table to create the account in. Sent as ``account_type`` and used by the server to
+   * choose the table, which is why it is a table name and not a label: a staff account is
+   * created by writing to ``admin`` or ``moderator``, not by setting a flag on a participant.
+   */
+  account_type: AccountType;
 };
 
 const formatDate = (value?: string | null) => {
   if (!value) return 'Never';
   return formatDateTimeDDMMYYYY(value);
+};
+
+/**
+ * How each account table reads in a sentence. The table name is what the API and the
+ * database use, and it stays that way in every request; this is only for text an operator
+ * reads. `users` in particular is a table of participants, not an account called "Users".
+ */
+const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
+  users: 'Participant',
+  admin: 'Admin',
+  moderator: 'Moderator',
 };
 
 const makeInitials = (name?: string | null) => {
@@ -98,7 +118,7 @@ export const ProfileReview = () => {
     notifications_enabled: true,
     love_notes_receive_enabled: true,
     love_notes_send_enabled: false,
-    role: 'user',
+    account_type: 'users',
   });
 
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
@@ -310,7 +330,7 @@ export const ProfileReview = () => {
       email: createForm.email.trim(),
       class_name: createForm.class_name.trim(),
       gender: createForm.gender.trim(),
-      role: createForm.role,
+      account_type: createForm.account_type,
       matchmaking_enabled: createForm.matchmaking_enabled,
       notifications_enabled: createForm.notifications_enabled,
       love_notes_receive_enabled: createForm.love_notes_receive_enabled,
@@ -335,7 +355,7 @@ export const ProfileReview = () => {
       const createdProfile = await createAdminUser(payload);
       setProfiles((prev) => [createdProfile, ...prev]);
       toast.success(
-        `${createForm.role.charAt(0).toUpperCase()}${createForm.role.slice(1)} account created successfully.`
+        `${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`
       );
       resetCreateDialog();
     } catch (error: unknown) {
@@ -430,9 +450,13 @@ export const ProfileReview = () => {
                             <div className="grid gap-1 text-sm">
                               <div className="flex flex-wrap items-center gap-2 text-base font-semibold">
                                 <span>{profile.name ?? 'Unknown user'}</span>
-                                {profile.role && (
-                                  <Badge variant={profile.role === 'admin' ? 'default' : 'secondary'}>
-                                    {profile.role}
+                                {profile.account_type && profile.account_type !== 'users' && (
+                                  // Only staff is badged. A participant badge on every row of a
+                                  // hundred would be noise, and the one thing an operator needs
+                                  // to see at a glance is which rows are not participants.
+                                  <Badge variant={profile.account_type === 'admin' ? 'default' : 'secondary'}>
+                                    {ACCOUNT_TYPE_LABELS[profile.account_type as AccountType] ??
+                                      profile.account_type}
                                   </Badge>
                                 )}
                                 {blocked && <Badge variant="destructive">Blocked</Badge>}
@@ -840,18 +864,23 @@ export const ProfileReview = () => {
               </div>
 
               <div className="grid gap-2">
-                <Label>Account role *</Label>
+                <Label htmlFor="create-account-type">Account type *</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Decides which table the account is created in. A participant can post
+                    confessions and be matched; a staff account cannot, and a moderator sees
+                    fewer moderation screens than an admin.
+                  </p>
                   <Select
-                  value={createForm.role}
+                  value={createForm.account_type}
                   onValueChange={(value) =>
-                    setCreateForm((prev) => ({ ...prev, role: value as Role }))
+                    setCreateForm((prev) => ({ ...prev, account_type: value as AccountType }))
                   }
                 >
-                  <SelectTrigger id="create-role">
-                    <SelectValue placeholder="Choose role" />
+                  <SelectTrigger id="create-account-type">
+                    <SelectValue placeholder="Choose an account type" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="user">User</SelectItem>
+                    <SelectItem value="users">Participant</SelectItem>
                     <SelectItem value="moderator">Moderator</SelectItem>
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>

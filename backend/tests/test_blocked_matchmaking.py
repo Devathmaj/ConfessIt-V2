@@ -16,21 +16,41 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from app.db_models import ConversationRecord, MatchRecord, MessageRecord, UserRecord
-from app.models import UserDetails
+from app.accounts import AccountRef, AccountType
+from app.db_models import (
+    ACCOUNT_MODELS,
+    ConversationRecord,
+    MatchRecord,
+    MessageRecord,
+    UserRecord,
+)
+from app.models import AccountDetails, UserDetails
 from app.postgres import get_postgres_client
 from app.services import conversation_service, love_note_service, matchmaking_service
 from app.services.message_service import message_service
 
 
-def make_user(db, regno, gender, *, is_blocked=False, love_notes_receive_enabled=True, role="user"):
+def make_user(db, regno, gender, *, is_blocked=False, love_notes_receive_enabled=True):
     with db.sessions.begin() as session:
         row = UserRecord(
             regno=regno, name=f"User {regno}", email=f"{regno.lower()}@test.com",
-            class_name="Test_Class", gender=gender, role=role,
+            class_name="Test_Class", gender=gender,
             is_blocked=is_blocked,
             love_notes_receive_enabled=love_notes_receive_enabled,
         )
+        session.add(row)
+        session.flush()
+        return str(row.id)
+
+
+def make_staff(db, regno, account_type, *, gender="other"):
+    """Write a staff account into the table that grants ``account_type``.
+
+    Staff have no ``users`` row, so tests that need a moderator or admin acting on a
+    conversation insert here and resolve through ``as_staff``.
+    """
+    with db.sessions.begin() as session:
+        row = ACCOUNT_MODELS[account_type](regno=regno, name=f"Staff {regno}", gender=gender)
         session.add(row)
         session.flush()
         return str(row.id)
@@ -44,7 +64,19 @@ def as_user(db, regno) -> UserDetails:
         class_name=row.class_name, gender=row.gender,
         matchmaking_enabled=row.matchmaking_enabled,
         notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
-        role=row.role,
+        account_type=AccountType.USERS.value,
+    )
+
+
+def as_staff(db, regno, account_type) -> AccountDetails:
+    with db.sessions() as session:
+        row = session.scalar(
+            select(ACCOUNT_MODELS[account_type]).where(ACCOUNT_MODELS[account_type].regno == regno)
+        )
+    return AccountDetails(
+        id=str(row.id), regno=row.regno, name=row.name, gender=row.gender,
+        notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
+        account_type=account_type,
     )
 
 
@@ -257,12 +289,14 @@ def test_an_admin_can_still_read_a_blocked_conversation(db):
     """Moderation is the one job that has to keep working."""
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_user(db, "mod", "other", role="admin")
+    make_staff(db, "mod", AccountType.ADMIN.value)
     _, conversation_id = make_match_and_conversation(db, "alice", "bob", status="accepted")
     message_service.send_message(db, conversation_id, as_user(db, "alice"), "hello")
     set_blocked(db, "bob", True)
 
-    messages = message_service.get_messages(db, conversation_id, as_user(db, "mod"))
+    messages = message_service.get_messages(
+        db, conversation_id, as_staff(db, "mod", AccountType.ADMIN.value)
+    )
 
     assert [m["body"] for m in messages] == ["hello"]
 
@@ -273,10 +307,12 @@ def test_an_admin_can_still_read_a_blocked_conversation(db):
 @pytest.mark.asyncio
 async def test_a_blocked_profile_is_still_offered_as_a_love_note_recipient(db):
     """The one channel that stays open, and it says so: the client warns before sending."""
-    make_user(db, "sender", "female")
+    sender_id = make_user(db, "sender", "female")
     make_user(db, "blocked", "male", is_blocked=True)
 
-    recipients = await love_note_service.get_all_users_service(db, "sender")
+    recipients = await love_note_service.get_all_users_service(
+        db, AccountRef(regno="sender", account_id=sender_id, account_type="users")
+    )
 
     by_regno_name = {r["name"]: r for r in recipients}
     assert by_regno_name["User blocked"]["is_blocked"] is True
@@ -285,9 +321,11 @@ async def test_a_blocked_profile_is_still_offered_as_a_love_note_recipient(db):
 @pytest.mark.asyncio
 async def test_a_blocked_profile_that_opted_out_is_still_not_offered(db):
     """is_blocked must not become a back door around the opt-out filter."""
-    make_user(db, "sender", "female")
+    sender_id = make_user(db, "sender", "female")
     make_user(db, "optedout", "male", is_blocked=True, love_notes_receive_enabled=False)
 
-    recipients = await love_note_service.get_all_users_service(db, "sender")
+    recipients = await love_note_service.get_all_users_service(
+        db, AccountRef(regno="sender", account_id=sender_id, account_type="users")
+    )
 
     assert [r["name"] for r in recipients] == []

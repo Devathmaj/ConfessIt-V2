@@ -10,9 +10,9 @@ from ..logger import get_logger
 from datetime import datetime, timedelta, timezone
 
 from ..models import UserDetails
-from ..roles import STAFF_ROLE_VALUES, is_staff
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
+from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -72,13 +72,10 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     Used to check if the user is eligible for matchmaking based on the cooldown period.
     The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
     Conversation status is handled by the inbox.
-    """
-    if is_staff(current_user.role):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Staff accounts cannot participate in matchmaking."
-        )
 
+    The caller is a ``UserDetails``, which the router only produces for an account in
+    ``users``, so there is no staff check here: a staff account cannot reach this function.
+    """
     current_time = datetime.now(timezone.utc)
 
     # Check if user has matchmaking time within cooldown period
@@ -122,10 +119,10 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     """One pass: claim the attempt, pick a partner, and write the match atomically."""
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
 
-    # Define the query to find a potential match
-    # Staff are excluded as candidates, so a moderator cannot be paired off as a stranger
-    # while holding a review queue.
-    filters = [UserRecord.matchmaking_enabled.is_(True), UserRecord.role.not_in(STAFF_ROLE_VALUES),
+    # Staff are excluded as candidates by the schema rather than by a filter: they have no
+    # row in ``users``, so a moderator cannot be paired off as a stranger while holding a
+    # review queue.
+    filters = [UserRecord.matchmaking_enabled.is_(True),
                UserRecord.is_blocked.is_(False), UserRecord.regno != current_user.regno,
                UserRecord.gender == current_user.gender if is_rare_same_gender_match else UserRecord.gender != current_user.gender]
 
@@ -166,9 +163,9 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         "gender": matched_user_row.gender, "interests": matched_user_row.interests or [],
         "matchmaking_enabled": matched_user_row.matchmaking_enabled, "notifications_enabled": matched_user_row.notifications_enabled,
         "love_notes_receive_enabled": matched_user_row.love_notes_receive_enabled, "love_notes_send_enabled": matched_user_row.love_notes_send_enabled,
-        "is_blocked": matched_user_row.is_blocked, "reported_count": matched_user_row.reported_count,
+        "is_blocked": matched_user_row.is_blocked,
         "last_login_at": matched_user_row.last_login_at, "last_login_ip": str(matched_user_row.last_login_ip) if matched_user_row.last_login_ip else None,
-        "last_login_user_agent": matched_user_row.last_login_user_agent, "role": matched_user_row.role,
+        "last_login_user_agent": matched_user_row.last_login_user_agent,
         "last_matchmaking_at": matched_user_row.last_matchmaking_at,
     })
 
@@ -239,7 +236,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
 
     # Return match details immediately with full user information
     matched_user_picture_url = asset_delivery_service.profile_image_url(
-        matched_user.profile_picture_url, regno=current_user.regno
+        matched_user.profile_picture_url, account=AccountRef.of(current_user)
     )
 
     matched_user_details = {
@@ -264,13 +261,10 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     """
     Used to find a random user, create a persistent match, update the matchmaking timestamp,
     and automatically create a 'pending' conversation.
-    """
-    if is_staff(current_user.role):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Staff accounts cannot participate in matchmaking."
-        )
 
+    As with the cooldown check, the participant-only caller is guaranteed by the route's
+    dependency, so no staff check remains here.
+    """
     # Re-check cooldown status for a friendly message before touching the database. This
     # is only a fast-fail: _consume_matchmaking_attempt is the authoritative check,
     # because this one runs in a different transaction than the write.

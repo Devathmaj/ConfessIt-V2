@@ -20,11 +20,11 @@ from app.postgres import get_postgres_client
 from app.services import matchmaking_service
 
 
-def make_user(db, regno, gender, *, matchmaking_enabled=True, last_matchmaking_at=None, role="user"):
+def make_user(db, regno, gender, *, matchmaking_enabled=True, last_matchmaking_at=None):
     with db.sessions.begin() as session:
         row = UserRecord(
             regno=regno, name=f"User {regno}", email=f"{regno.lower()}@test.com",
-            class_name="Test_Class", gender=gender, role=role,
+            class_name="Test_Class", gender=gender,
             matchmaking_enabled=matchmaking_enabled,
             last_matchmaking_at=last_matchmaking_at,
         )
@@ -41,7 +41,7 @@ def as_user(db, regno) -> UserDetails:
         class_name=row.class_name, gender=row.gender,
         matchmaking_enabled=row.matchmaking_enabled,
         notifications_enabled=row.notifications_enabled,
-        role=row.role, last_matchmaking_at=row.last_matchmaking_at,
+        account_type="users", last_matchmaking_at=row.last_matchmaking_at,
     )
 
 

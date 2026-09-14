@@ -17,8 +17,15 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from app.db_models import ConversationRecord, MatchRecord, MessageRecord, UserRecord
-from app.models import UserDetails
+from app.accounts import AccountType
+from app.db_models import (
+    ACCOUNT_MODELS,
+    ConversationRecord,
+    MatchRecord,
+    MessageRecord,
+    UserRecord,
+)
+from app.models import AccountDetails, UserDetails
 from app.postgres import get_postgres_client
 from app.services.message_service import message_service
 
@@ -26,12 +33,20 @@ from app.services.message_service import message_service
 WINDOW = timedelta(hours=4)
 
 
-def make_user(db, regno, gender, *, role="user"):
+def make_user(db, regno, gender):
     with db.sessions.begin() as session:
         row = UserRecord(
             regno=regno, name=f"User {regno}", email=f"{regno.lower()}@test.com",
-            class_name="Test_Class", gender=gender, role=role,
+            class_name="Test_Class", gender=gender,
         )
+        session.add(row)
+        session.flush()
+        return str(row.id)
+
+
+def make_staff(db, regno, account_type, *, gender="other"):
+    with db.sessions.begin() as session:
+        row = ACCOUNT_MODELS[account_type](regno=regno, name=f"Staff {regno}", gender=gender)
         session.add(row)
         session.flush()
         return str(row.id)
@@ -45,7 +60,19 @@ def as_user(db, regno) -> UserDetails:
         class_name=row.class_name, gender=row.gender,
         matchmaking_enabled=row.matchmaking_enabled,
         notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
-        role=row.role,
+        account_type=AccountType.USERS.value,
+    )
+
+
+def as_staff(db, regno, account_type) -> AccountDetails:
+    with db.sessions() as session:
+        row = session.scalar(
+            select(ACCOUNT_MODELS[account_type]).where(ACCOUNT_MODELS[account_type].regno == regno)
+        )
+    return AccountDetails(
+        id=str(row.id), regno=row.regno, name=row.name, gender=row.gender,
+        notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
+        account_type=account_type,
     )
 
 
@@ -145,7 +172,7 @@ def test_an_expired_thread_already_open_is_readable_without_a_reload(db):
 def test_an_admin_can_still_moderate_an_expired_conversation(db):
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_user(db, "mod", "other", role="admin")
+    make_staff(db, "mod", AccountType.ADMIN.value)
     _, conversation_id = make_accepted_conversation(db, "alice", "bob")
     message_service.send_message(db, conversation_id, as_user(db, "alice"), "hello")
 
@@ -154,7 +181,9 @@ def test_an_admin_can_still_moderate_an_expired_conversation(db):
             datetime.now(timezone.utc) - WINDOW - timedelta(minutes=1)
         )
 
-    messages = message_service.get_messages(db, conversation_id, as_user(db, "mod"))
+    messages = message_service.get_messages(
+        db, conversation_id, as_staff(db, "mod", AccountType.ADMIN.value)
+    )
 
     assert [m["body"] for m in messages] == ["hello"]
 

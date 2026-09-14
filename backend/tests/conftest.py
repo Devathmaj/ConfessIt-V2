@@ -25,8 +25,8 @@ settings.DATABASE_POOL_SIZE = 2
 settings.DATABASE_MAX_OVERFLOW = 2
 
 from app.main import app
-from app.models import UserDetails
-from app.roles import Role
+from app.accounts import AccountType
+from app.models import AccountDetails, UserDetails
 from app.services.auth_service import get_current_user
 
 test_db = get_postgres_client()
@@ -34,11 +34,16 @@ test_db.initialize()
 
 
 def override_get_current_user():
-    """A real UserDetails, not a dict.
+    """A real UserDetails for an account in the ``users`` table.
 
-    Endpoints are annotated with UserDetails and reach for attributes such as .regno and
-    .id. A dict stub is only ever truthy enough for the dependency to resolve, so it lets
-    a handler fail on an AttributeError instead of exercising the code it is supposed to.
+    A real model, not a dict. Endpoints are annotated with UserDetails and reach for
+    attributes such as .regno and .id. A dict stub is only ever truthy enough for the
+    dependency to resolve, so it lets a handler fail on an AttributeError instead of
+    exercising the code it is supposed to.
+
+    ``account_type`` defaults to ``users``, but the participant gate reads it, so it is
+    named here rather than left implicit: this fixture has to keep resolving to a
+    participant no matter what default the model picks up later.
     """
     return UserDetails(
         regno="testuser",
@@ -48,30 +53,38 @@ def override_get_current_user():
         gender="other",
         matchmaking_enabled=True,
         notifications_enabled=True,
-        role=Role.USER.value,
+        account_type=AccountType.USERS.value,
     )
 
 
 def override_get_admin_user():
-    """A real UserDetails carrying the admin role."""
-    return override_get_current_user().model_copy(
-        update={"regno": "adminuser", "name": "Admin User", "email": "admin@user.com", "role": Role.ADMIN.value}
+    """A real AccountDetails for an account in the ``admin`` table.
+
+    Staff are the shared model, not the participant one: an admin has no participant
+    fields, and handing the routes a UserDetails carrying an ``account_type`` of ``admin``
+    would describe a row that cannot exist in the schema.
+    """
+    return AccountDetails(
+        regno="adminuser",
+        name="Admin User",
+        gender="other",
+        notifications_enabled=True,
+        account_type=AccountType.ADMIN.value,
     )
 
 
 def override_get_moderator_user():
-    """A real UserDetails carrying the moderator role.
+    """A real AccountDetails for an account in the ``moderator`` table.
 
-    Built by validating ``Role.MODERATOR`` rather than by writing the literal, so the
-    fixture cannot drift from the enum if the vocabulary ever changes.
+    Built from ``AccountType.MODERATOR`` rather than a literal, so the fixture cannot drift
+    from the vocabulary if the table names ever change.
     """
-    return override_get_current_user().model_copy(
-        update={
-            "regno": "moduser",
-            "name": "Moderator User",
-            "email": "mod@user.com",
-            "role": Role.MODERATOR.value,
-        }
+    return AccountDetails(
+        regno="moduser",
+        name="Moderator User",
+        gender="other",
+        notifications_enabled=True,
+        account_type=AccountType.MODERATOR.value,
     )
 
 app.dependency_overrides[get_current_user] = override_get_current_user

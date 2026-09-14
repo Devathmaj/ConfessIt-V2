@@ -13,10 +13,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.db_models import UserRecord
+from app.accounts import AccountRef, AccountType
+from app.db_models import AdminRecord, ModeratorRecord, UserRecord
 from app.dependencies import get_db
 from app.main import app
-from app.models import UserDetails
+from app.models import AccountDetails, UserDetails
 from app.services import asset_delivery_service
 from app.services.asset_delivery_service import (
     asset_token_ttl_seconds,
@@ -66,6 +67,28 @@ OWNER_ID = "11111111-1111-1111-1111-111111111111"
 RECIPIENT_ID = "22222222-2222-2222-2222-222222222222"
 STRANGER_ID = "33333333-3333-3333-3333-333333333333"
 
+# Ids used when a delivery token is minted for a regno whose row id does not matter to the
+# assertion -- which is most of the token-shape tests below.
+_REGNO_IDS = {
+    "testuser": OWNER_ID,
+    "stranger": STRANGER_ID,
+    "recipient": RECIPIENT_ID,
+}
+
+
+def _REF(regno: str, *, account_type: str = AccountType.USERS.value) -> AccountRef:
+    """The account reference a delivery token for ``regno`` now carries.
+
+    A token identifies its account by table and primary key, not by regno alone, because a
+    regno can exist in more than one account table. These tests are mostly about token
+    *shape* rather than about which row is loaded, so the id is a fixed stand-in.
+    """
+    return AccountRef(
+        regno=regno,
+        account_id=_REGNO_IDS.get(regno, OWNER_ID),
+        account_type=account_type,
+    )
+
 
 def stored_url(kind: str, object_path: str) -> str:
     """Build a stored Cloudinary URL for the bucket this app is actually configured with."""
@@ -77,24 +100,31 @@ def stored_url(kind: str, object_path: str) -> str:
     )
 
 
-def make_user_row(regno: str, user_id: str, role: str = "user", **overrides) -> UserRecord:
+def make_user_row(regno: str, user_id: str, **overrides) -> UserRecord:
     values = dict(
         id=user_id, regno=regno, name=regno.title(), email=f"{regno}@example.com",
         emoji=None, bio=None, class_name="Test_Class", profile_picture_url=None,
         gender="male", interests=[], matchmaking_enabled=True, notifications_enabled=True,
         love_notes_receive_enabled=True, love_notes_send_enabled=False, is_blocked=False,
-        reported_count=0, last_login_at=None, last_login_ip=None, last_login_user_agent=None,
-        role=role, last_matchmaking_at=None,
+        last_login_at=None, last_login_ip=None, last_login_user_agent=None,
+        last_matchmaking_at=None,
     )
     values.update(overrides)
     return UserRecord(**values)
 
 
-def user_details(regno: str, user_id: str, role: str = "user") -> UserDetails:
+def user_details(regno: str, user_id: str) -> UserDetails:
     return UserDetails(
         id=user_id, regno=regno, name=regno.title(), email=f"{regno}@e.com",
         class_name="C", gender="male", matchmaking_enabled=True,
-        notifications_enabled=True, role=role,
+        notifications_enabled=True, account_type=AccountType.USERS.value,
+    )
+
+
+def staff_details(regno: str, account_id: str, account_type: str) -> AccountDetails:
+    return AccountDetails(
+        id=account_id, regno=regno, name=regno.title(), gender="male",
+        notifications_enabled=True, account_type=account_type,
     )
 
 
@@ -119,6 +149,16 @@ class _FakeSession:
     def scalar(self, query):
         return self._db.resolve(query)
 
+    def get(self, model, account_id):
+        """Primary-key read, which is how an account is resolved from a delivery token.
+
+        The token names the table and the row's own id, so this is a lookup by id rather
+        than a search by regno. Scoping the fake by id is what keeps "the token must resolve
+        to a live account" from passing vacuously: an id that is not the account's returns
+        None even when the same regno exists in another table.
+        """
+        return self._db.get_account(model, account_id)
+
     def execute(self, query):
         return _FakeResult(self._db.filter_love_notes(query))
 
@@ -131,13 +171,25 @@ class _FakeDatabase:
     this" would pass even if the query ignored the account entirely.
     """
 
-    def __init__(self, *, users=None, profile_pictures=None, love_note_rows=()):
+    def __init__(self, *, users=None, profile_pictures=None, love_note_rows=(), staff=None):
         self.users = dict(users or {})
+        self.staff = dict(staff or {})
         self.profile_pictures = dict(profile_pictures or {})
         self.love_note_rows = list(love_note_rows)
 
     def sessions(self):
         return _FakeSession(self)
+
+    def get_account(self, model, account_id):
+        """Resolve a primary key in whichever table it was asked about."""
+        if not account_id:
+            return None
+        table = getattr(model, "__tablename__", None)
+        if table == UserRecord.__tablename__:
+            return next((row for row in self.users.values() if row.id == account_id), None)
+        if table in (AdminRecord.__tablename__, ModeratorRecord.__tablename__):
+            return next((row for row in self.staff.values() if row.id == account_id), None)
+        return None
 
     def resolve(self, query):
         sql = str(query)
@@ -256,22 +308,22 @@ def test_validate_object_path_accepts_love_note_path():
 # Delivery token scoping
 # ----------------------------------------------------------------------
 def test_token_is_scoped_to_one_path():
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
-    assert verify_asset_token(token, kind="profile", object_path=OWNED_PATH) == "testuser"
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
+    assert verify_asset_token(token, kind="profile", object_path=OWNED_PATH) == _REF("testuser")
     with pytest.raises(HTTPException) as exc_info:
         verify_asset_token(token, kind="profile", object_path=OTHER_PATH)
     assert exc_info.value.status_code == 401
 
 
 def test_token_is_scoped_to_one_kind():
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
     with pytest.raises(HTTPException) as exc_info:
         verify_asset_token(token, kind="love-notes", object_path=OWNED_PATH)
     assert exc_info.value.status_code == 401
 
 
 def test_expired_token_is_rejected():
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH, ttl_seconds=-10)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH, ttl_seconds=-10)
     with pytest.raises(HTTPException) as exc_info:
         verify_asset_token(token, kind="profile", object_path=OWNED_PATH)
     assert exc_info.value.status_code == 401
@@ -310,7 +362,7 @@ def test_token_ttl_does_not_outlive_access_token():
 # ----------------------------------------------------------------------
 def test_asset_token_is_rejected_as_an_access_token():
     """Token confusion guard: a delivery token must not authenticate the REST API."""
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
     with pytest.raises(HTTPException) as exc_info:
         get_current_user(token=token, db=profile_db())
     assert exc_info.value.status_code == 401
@@ -318,14 +370,14 @@ def test_asset_token_is_rejected_as_an_access_token():
 
 def test_load_active_user_rejects_unknown_account():
     with pytest.raises(HTTPException) as exc_info:
-        load_active_user_service(_FakeDatabase(), "ghost")
+        load_active_user_service(_FakeDatabase(), _REF("ghost"))
     assert exc_info.value.status_code == 401
 
 
 def test_load_active_user_rejects_blocked_account():
     db = _FakeDatabase(users={"blocked": make_user_row("blocked", OWNER_ID, is_blocked=True)})
     with pytest.raises(HTTPException) as exc_info:
-        load_active_user_service(db, "blocked")
+        load_active_user_service(db, _REF("blocked"))
     assert exc_info.value.status_code == 403
 
 
@@ -408,7 +460,8 @@ def test_sender_always_allowed(status):
 def test_admin_allowed_to_moderate_unapproved_note(status):
     db = love_note_db(status, "admin", STRANGER_ID)
     assert is_entitled_to_asset(
-        db, kind="love-notes", object_path=NOTE_PATH, user=user_details("admin", STRANGER_ID, role="admin")
+        db, kind="love-notes", object_path=NOTE_PATH,
+        user=staff_details("admin", STRANGER_ID, AccountType.ADMIN.value),
     ) is True
 
 
@@ -437,7 +490,7 @@ def test_unknown_kind_is_never_entitled():
 # ----------------------------------------------------------------------
 def test_build_delivery_url_points_at_proxy_and_hides_origin():
     url = build_delivery_url(
-        kind="profile", stored_identifier=stored_url("profile", OWNED_PATH), regno="testuser"
+        kind="profile", stored_identifier=stored_url("profile", OWNED_PATH), account=_REF("testuser")
     )
     assert "/api/profile/files/" in url
     assert "?t=" in url
@@ -446,7 +499,7 @@ def test_build_delivery_url_points_at_proxy_and_hides_origin():
 
 def test_build_delivery_url_for_love_notes():
     url = build_delivery_url(
-        kind="love-notes", stored_identifier=stored_url("love-notes", NOTE_PATH), regno="recipient"
+        kind="love-notes", stored_identifier=stored_url("love-notes", NOTE_PATH), account=_REF("recipient")
     )
     assert "/api/love-notes/files/" in url
     assert "res.cloudinary.com" not in url
@@ -455,7 +508,7 @@ def test_build_delivery_url_for_love_notes():
 @pytest.mark.parametrize("stored", [None, "", "https://placehold.co/128x128", "data:image/png;base64,AAAA"])
 def test_build_delivery_url_declines_non_asset_values(stored):
     """Admin-entered and placeholder values are not servable, so callers keep them as-is."""
-    assert build_delivery_url(kind="profile", stored_identifier=stored, regno="testuser") is None
+    assert build_delivery_url(kind="profile", stored_identifier=stored, account=_REF("testuser")) is None
 
 
 # ----------------------------------------------------------------------
@@ -463,7 +516,7 @@ def test_build_delivery_url_declines_non_asset_values(stored):
 # ----------------------------------------------------------------------
 def test_profile_image_url_rewrites_a_servable_profile_object():
     url = asset_delivery_service.profile_image_url(
-        stored_url("profile", OWNED_PATH), regno="testuser"
+        stored_url("profile", OWNED_PATH), account=_REF("testuser")
     )
     assert "/api/profile/files/" in url
     assert "res.cloudinary.com" not in url
@@ -472,12 +525,12 @@ def test_profile_image_url_rewrites_a_servable_profile_object():
 @pytest.mark.parametrize("stored", [None, "https://placehold.co/128x128", "data:image/png;base64,AAAA"])
 def test_profile_image_url_passes_through_non_asset_values(stored):
     """Placeholders and data URLs are not proxyable, so the stored value is kept."""
-    assert asset_delivery_service.profile_image_url(stored, regno="testuser") == stored
+    assert asset_delivery_service.profile_image_url(stored, account=_REF("testuser")) == stored
 
 
 def test_profile_image_url_normalises_empty_to_none():
     """Matches the helper this replaced, which treats any falsy value as no picture."""
-    assert asset_delivery_service.profile_image_url("", regno="testuser") is None
+    assert asset_delivery_service.profile_image_url("", account=_REF("testuser")) is None
 
 
 def test_profile_delivery_token_is_bound_to_the_requester_not_the_owner():
@@ -488,10 +541,10 @@ def test_profile_delivery_token_is_bound_to_the_requester_not_the_owner():
     requester's identity, otherwise anyone could reuse a link copied out of a payload.
     """
     url = asset_delivery_service.profile_image_url(
-        stored_url("profile", OWNED_PATH), regno="stranger"
+        stored_url("profile", OWNED_PATH), account=_REF("stranger")
     )
     token = url.split("?t=", 1)[1]
-    assert verify_asset_token(token, kind="profile", object_path=OWNED_PATH) == "stranger"
+    assert verify_asset_token(token, kind="profile", object_path=OWNED_PATH) == _REF("stranger")
 
 
 def test_viewer_can_load_a_profile_picture_minted_for_them(serve):
@@ -502,7 +555,7 @@ def test_viewer_can_load_a_profile_picture_minted_for_them(serve):
     )
     client = serve(db)
     url = asset_delivery_service.profile_image_url(
-        stored_url("profile", OWNED_PATH), regno="stranger"
+        stored_url("profile", OWNED_PATH), account=_REF("stranger")
     )
     response = client.get(url)
     assert response.status_code == 200
@@ -520,7 +573,7 @@ def test_asset_routes_require_credentials(anonymous_client, route):
 
 def test_profile_route_streams_owned_asset(serve):
     client = serve(profile_db())
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
     response = client.get(f"/api/profile/files/{OWNED_PATH}?t={token}")
     assert response.status_code == 200
     assert response.content == b"\x89PNG\r\n\x1a\nfake"
@@ -531,7 +584,7 @@ def test_profile_route_streams_owned_asset(serve):
 def test_profile_route_serves_another_account(serve):
     """A signed-in account may load a profile image it does not own."""
     client = serve(profile_db(actor_regno="stranger", actor_id=STRANGER_ID))
-    token = mint_asset_token(regno="stranger", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("stranger"), kind="profile", object_path=OWNED_PATH)
     assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 200
 
 
@@ -541,39 +594,39 @@ def test_profile_route_still_rejects_an_unpublished_object(serve):
         users={"stranger": make_user_row("stranger", STRANGER_ID)}, profile_pictures={}
     )
     client = serve(db)
-    token = mint_asset_token(regno="stranger", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("stranger"), kind="profile", object_path=OWNED_PATH)
     assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 404
 
 
 def test_profile_route_rejects_token_minted_for_another_path(serve):
     client = serve(profile_db())
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OTHER_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OTHER_PATH)
     assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 401
 
 
 def test_profile_route_rejects_double_encoded_traversal(serve):
     """The client normalises "../", so the double-encoded form is the one that reaches us."""
     client = serve(profile_db())
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
     response = client.get(f"/api/profile/files/%252e%252e%252f%252e%252e%252fsecret%252fphoto.jpg?t={token}")
     assert response.status_code in (400, 404)
 
 
 def test_love_note_route_blocks_recipient_before_approval(serve):
     client = serve(love_note_db("pending_review", "recipient", RECIPIENT_ID))
-    token = mint_asset_token(regno="recipient", kind="love-notes", object_path=NOTE_PATH)
+    token = mint_asset_token(account=_REF("recipient"), kind="love-notes", object_path=NOTE_PATH)
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 404
 
 
 def test_love_note_route_serves_recipient_after_approval(serve):
     client = serve(love_note_db("approved", "recipient", RECIPIENT_ID))
-    token = mint_asset_token(regno="recipient", kind="love-notes", object_path=NOTE_PATH)
+    token = mint_asset_token(account=_REF("recipient"), kind="love-notes", object_path=NOTE_PATH)
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 200
 
 
 def test_love_note_route_blocks_unrelated_user(serve):
     client = serve(love_note_db("approved", "stranger", STRANGER_ID))
-    token = mint_asset_token(regno="stranger", kind="love-notes", object_path=NOTE_PATH)
+    token = mint_asset_token(account=_REF("stranger"), kind="love-notes", object_path=NOTE_PATH)
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 404
 
 
@@ -581,7 +634,7 @@ def test_revoking_a_note_stops_an_already_issued_token(serve):
     """Entitlement is re-checked per request, so a status flip takes effect immediately."""
     db = love_note_db("approved", "recipient", RECIPIENT_ID)
     client = serve(db)
-    token = mint_asset_token(regno="recipient", kind="love-notes", object_path=NOTE_PATH)
+    token = mint_asset_token(account=_REF("recipient"), kind="love-notes", object_path=NOTE_PATH)
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 200
 
     db.love_note_rows = [(OWNER_ID, RECIPIENT_ID, stored_url("love-notes", NOTE_PATH), "rejected")]
@@ -594,7 +647,7 @@ def test_origin_failure_is_reported_as_404(serve, monkeypatch):
 
     monkeypatch.setattr(asset_delivery_service, "fetch_asset_bytes", _boom)
     client = serve(profile_db())
-    token = mint_asset_token(regno="testuser", kind="profile", object_path=OWNED_PATH)
+    token = mint_asset_token(account=_REF("testuser"), kind="profile", object_path=OWNED_PATH)
     assert client.get(f"/api/profile/files/{OWNED_PATH}?t={token}").status_code == 404
 
 

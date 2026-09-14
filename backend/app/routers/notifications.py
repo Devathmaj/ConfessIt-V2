@@ -6,7 +6,7 @@ from typing import Annotated
 
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..services.auth_service import get_current_user
+from ..services.authorization import require_participant
 from ..services.notification_service import (
     get_user_notifications_service,
     mark_notification_read_service,
@@ -20,7 +20,7 @@ router = APIRouter(
 
 @router.get("")
 def get_notifications(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -32,7 +32,7 @@ def get_notifications(
 @router.put("/{notification_id}/read")
 def mark_notification_read(
     notification_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -44,7 +44,7 @@ def mark_notification_read(
 @router.delete("/{notification_id}")
 def delete_notification(
     notification_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """

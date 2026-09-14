@@ -9,9 +9,9 @@ from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
-from ..roles import STAFF_ROLE_VALUES, is_staff
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
+from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -32,7 +32,7 @@ class LoveNoteCreate(BaseModel):
     body: str = Field(max_length=2000)
     anonymous: bool
 
-async def get_all_users_service(db: Database, current_user_regno: str) -> List[dict]:
+async def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
     """
     Service to fetch all users available as love note recipients, excluding the
     active user, any administrator accounts, and users who opted out of
@@ -45,15 +45,13 @@ async def get_all_users_service(db: Database, current_user_regno: str) -> List[d
     """
     with db.sessions() as session:
         rows = session.scalars(select(UserRecord).where(
-            UserRecord.regno != current_user_regno,
-            # Staff are excluded from the participant pool, so a note can neither be
-            # addressed to nor sent by one. Excluded as candidates here and refused as
-            # sender or recipient below, so the rule does not depend on which door it is
-            # reached through.
-            UserRecord.role.not_in(STAFF_ROLE_VALUES),
+            UserRecord.regno != viewer.regno,
+            # No staff exclusion filter is needed: staff have no row in ``users``, so they
+            # cannot appear as candidates in the first place. The rule is now a property of
+            # the schema rather than a clause that has to be remembered here.
             UserRecord.love_notes_receive_enabled.is_(True),
         )).all()
-        return [_user_payload(row, regno=current_user_regno) for row in rows]
+        return [_user_payload(row, account=viewer) for row in rows]
 
 async def get_all_classes_service(db: Database) -> List[str]:
     """
@@ -62,13 +60,13 @@ async def get_all_classes_service(db: Database) -> List[str]:
     with db.sessions() as session:
         return list(session.scalars(select(UserRecord.class_name).distinct().where(UserRecord.class_name.is_not(None))))
 
-def _user_payload(user: UserRecord, *, regno: str) -> dict:
+def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
     payload = {
         "id": str(user.id), "name": user.name, "emoji": user.emoji,
         "class_name": user.class_name, "gender": user.gender,
         "interests": user.interests or [],
         "profile_picture_url": asset_delivery_service.profile_image_url(
-            user.profile_picture_url, regno=regno
+            user.profile_picture_url, account=account
         ),
         "is_blocked": bool(user.is_blocked),
     }
@@ -87,18 +85,9 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
             detail="Recipient not found."
         )
 
-    if is_staff(recipient.role):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Staff accounts cannot receive love notes."
-        )
-
-    if is_staff(sender.role):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Staff accounts are not permitted to send love notes."
-        )
-
+    # Both parties are participants by construction: the recipient is read from ``users``
+    # and the sender arrives through ``require_participant``. The role checks that used to
+    # stand here are gone because there is no longer a value they could reject.
     try:
         # Upload the love note image to Cloudinary
         upload_result = storage_service.upload_love_note_image(
@@ -149,7 +138,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
             "note_id": note_id,
             # The sender is always entitled to their own note, in any review state.
             "image_url": asset_delivery_service.build_delivery_url(
-                kind="love-notes", stored_identifier=cloudinary_url, regno=sender.regno
+                kind="love-notes", stored_identifier=cloudinary_url, account=AccountRef.of(sender)
             ) or cloudinary_url
         }
     
@@ -164,7 +153,7 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
 # Admin-only Love Note Functions
 # ============================================================================
 
-async def get_all_love_notes_for_admin(db: Database, admin_regno: str) -> List[Dict[str, Any]]:
+async def get_all_love_notes_for_admin(db: Database, viewer: AccountRef) -> List[Dict[str, Any]]:
     """
     Fetch all love notes with full sender and recipient details for admin review.
     """
@@ -193,7 +182,7 @@ async def get_all_love_notes_for_admin(db: Database, admin_regno: str) -> List[D
             },
             # Admins moderate notes in every state, so the proxy serves them the image.
             "image_url": asset_delivery_service.build_delivery_url(
-                kind="love-notes", stored_identifier=doc.image_url, regno=admin_regno
+                kind="love-notes", stored_identifier=doc.image_url, account=viewer
             ) or doc.image_url,
             "body": doc.body,
             "anonymous": doc.anonymous,

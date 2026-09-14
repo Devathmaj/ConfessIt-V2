@@ -10,9 +10,10 @@ from ..utils import isoformat_datetime
 from datetime import datetime, timezone
 
 from ..dependencies import get_db
+from ..accounts import AccountRef
 from ..models import UserDetails
 from ..services import asset_delivery_service
-from ..services.auth_service import get_current_user
+from ..services.authorization import require_participant
 from ..services.love_note_service import (
     LoveNoteCreate,
     get_all_users_service,
@@ -42,17 +43,17 @@ class UserRecipient(BaseModel):
 
 @router.get("/users", response_model=List[UserRecipient])
 async def get_all_users(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
     Used to fetch all users from the database, excluding the current user.
     """
-    return await get_all_users_service(db, current_user.regno)
+    return await get_all_users_service(db, AccountRef.of(current_user))
 
 @router.get("/classes", response_model=List[str])
 async def get_all_classes(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -63,7 +64,7 @@ async def get_all_classes(
 @router.post("/send", status_code=status.HTTP_201_CREATED)
 async def send_love_note(
     note_data: LoveNoteCreate,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -100,7 +101,7 @@ async def send_love_note(
 
 @router.get("/inbox", response_model=List[Dict[str, Any]])
 async def get_received_love_notes(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -125,7 +126,7 @@ async def get_received_love_notes(
                 "image_url": asset_delivery_service.build_delivery_url(
                     kind="love-notes",
                     stored_identifier=note.image_url,
-                    regno=current_user.regno,
+                    account=AccountRef.of(current_user),
                 ) or note.image_url,
                 "anonymous": note.anonymous,
                 "created_at": isoformat_datetime(note.created_at),
@@ -138,7 +139,7 @@ async def get_received_love_notes(
 @router.post("/inbox/{note_id}/mark-read", status_code=status.HTTP_200_OK)
 async def mark_love_note_read(
     note_id: str,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """

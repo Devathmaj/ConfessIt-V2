@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
-from sqlalchemy import select, text, update
+from sqlalchemy import text
 from .config import settings
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
 from .services.auth_service import oauth2_scheme, verify_token_service, load_active_user_service
@@ -19,10 +19,8 @@ from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
 from .services import asset_delivery_service
-from .models import UserDetails
+from .models import AccountDetails
 import uvicorn
-from .db_models import UserRecord
-from .roles import Role
 from .logger import get_logger, otlp_transport
 from .telemetry import redact_client_url, redact_query_strings
 from opentelemetry import metrics, trace
@@ -267,24 +265,11 @@ async def on_startup():
             await asyncio.sleep(2)
 
     postgres.initialize()
-
-    seeds = [
-        {"regno": "user", "name": "Test User", "email": "user@test.com", "bio": "This is a test user.",
-         "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
-         "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
-         "love_notes_send_enabled": False, "role": Role.USER.value},
-        {"regno": "admin", "name": "Test Admin", "email": "admin@test.com", "bio": "This is a test admin.",
-         "class_name": "Test_Class", "profile_picture_url": None, "gender": "male", "interests": [],
-         "matchmaking_enabled": True, "notifications_enabled": True, "love_notes_receive_enabled": True,
-         "love_notes_send_enabled": False, "role": Role.ADMIN.value},
-    ]
-    with postgres.sessions.begin() as session:
-        session.execute(update(UserRecord).where(
-            UserRecord.profile_picture_url.in_(["random_string_1", "random_string_2"])
-        ).values(profile_picture_url=None))
-        for seed in seeds:
-            if not session.scalar(select(UserRecord.id).where(UserRecord.regno == seed["regno"])):
-                session.add(UserRecord(**seed))
+    # No accounts are created here. Booting the application used to seed a test participant
+    # and a test admin, which meant a fresh deployment -- or a dropped-and-recreated
+    # development database -- came up holding a ``Test Admin`` account whose regno is
+    # guessable, and it fought the seed script for the same regnos. Seeding is a deliberate
+    # act with a deliberate owner, so it lives in app/test.py and runs when asked for.
     logger.info("PostgreSQL storage initialized.")
 
     # Last, so the schema work above is not traced against no request.
@@ -470,17 +455,22 @@ def _resolve_asset_requester(
     object_path: str,
     query_token: Optional[str],
     bearer_token: Optional[str],
-) -> UserDetails:
+) -> AccountDetails:
     """Identify the caller of an asset route.
 
     A scoped query token is preferred because ``<img src>`` cannot send an Authorization
     header; a normal bearer token is still accepted for programmatic callers.
+
+    Returns the shared account model, because the asset proxy authorises staff as well as
+    participants -- a moderator must be able to open a love note image it is reviewing --
+    and the caller's capabilities are carried on ``capabilities`` rather than assumed from
+    a participant profile type.
     """
     if query_token:
-        regno = asset_delivery_service.verify_asset_token(
+        account = asset_delivery_service.verify_asset_token(
             query_token, kind=kind, object_path=object_path
         )
-        return load_active_user_service(db, regno)
+        return load_active_user_service(db, account)
     if bearer_token:
         return verify_token_service(bearer_token, db)
     raise HTTPException(

@@ -47,7 +47,7 @@ interface AdminConversationParticipant {
   regno?: string | null;
   name?: string | null;
   email?: string | null;
-  role?: string | null;
+  account_type?: string | null;
 }
 
 interface AdminConversationMatch {

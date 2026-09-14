@@ -4,9 +4,10 @@
  * The client's view of what the signed-in account may reach.
  *
  * The server sends the caller's capabilities with `/auth/me` rather than making the browser
- * re-derive them from a role name. Two reasons: the privilege table then exists in exactly
- * one place, on the server, instead of being restated here and drifting; and a role added
- * or moved server-side starts working in the UI without a matching release of the client.
+ * re-derive them from the account's table. Two reasons: the privilege table then exists in
+ * exactly one place, on the server, instead of being restated here and drifting; and a
+ * capability added or moved server-side starts working in the UI without a matching release
+ * of the client.
  *
  * This is a rendering concern only. Every capability below guards a screen or a menu entry
  * that the server independently refuses, so getting one of these checks wrong shows a
@@ -41,16 +42,29 @@ export const CAPABILITIES = {
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 
-export const ALL_ROLES = ['user', 'admin', 'moderator'] as const;
-export type Role = (typeof ALL_ROLES)[number];
+/**
+ * The account tables, as the server names them.
+ *
+ * The value *is* the table name, exactly as on the server, so the discriminator a component
+ * carries, the row a lookup resolved and the table a write went to are the same string. Note
+ * that a participant account is `"users"` and not `"user"`: the singular is the participant
+ * side of the vocabulary and the plural is the table, and guessing wrong there fails a
+ * create.
+ */
+export const ACCOUNT_TYPES = ['users', 'admin', 'moderator'] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 /**
- * Narrow an arbitrary value to a role, defaulting to `user`.
+ * Narrow an arbitrary value to an account table, defaulting to `users`.
  *
- * Mirrors the server: anything unrecognised loses every privilege rather than gaining one.
+ * Mirrors the server's `normalize_account_type`, including its direction: anything
+ * unrecognised loses every privilege rather than gaining one. This is for *reading* a value
+ * the server sent. A value a user is choosing from a form is not narrowed this way -- that
+ * one is rejected server-side, so a typo is an error the operator sees rather than an
+ * account quietly created as a participant.
  */
-export const asRole = (value: unknown): Role =>
-  (ALL_ROLES as readonly string[]).includes(value as string) ? (value as Role) : 'user';
+export const asAccountType = (value: unknown): AccountType =>
+  (ACCOUNT_TYPES as readonly string[]).includes(value as string) ? (value as AccountType) : 'users';
 
 /** Whether `capabilities` carries `required`. An absent list carries nothing. */
 export const can = (capabilities: readonly string[] | undefined, required: Capability): boolean =>

@@ -2,14 +2,27 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Heart, Mail } from 'lucide-react';
+import { Heart, Mail, ShieldCheck } from 'lucide-react';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { toast } from 'sonner';
 import ConfessItWebP from '@/assets/ConfessIt.webp';
 import ConfessItWebM from '@/assets/ConfessIt.webm';
 import ConfessItMP4 from '@/assets/ConfessIt.mp4';
+import { magicLinkEndpoint, SIGN_IN_CATEGORIES, type SignInCategory } from '@/lib/signInCategories';
 
-export const Login = () => {
+/**
+ * One sign-in form, rendered three times.
+ *
+ * Which account table a person is signing in to is decided by the door they came through, not
+ * by anything they type. A regno is unique only within a table, so the same registration
+ * number can be a participant and a moderator at once; posting to this page's own endpoint is
+ * what makes the server read the right one, and it hands back a link for exactly that account
+ * or no link at all. It never searches the other two tables and never falls back to one.
+ *
+ * The page is a convenience, not the enforcement: the category lives in the URL the browser
+ * called, so editing this component cannot make one door serve another's accounts.
+ */
+const SignInPage = ({ category }: { category: SignInCategory }) => {
   const [regno, setRegno] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -18,7 +31,7 @@ export const Login = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8001/auth/login/magic', {
+      const response = await fetch(magicLinkEndpoint(category.accountType), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -44,6 +57,58 @@ export const Login = () => {
     }
   };
 
+  const form = (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-2">
+        <div className="relative">
+          <Mail className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder={category.regnoPlaceholder}
+            value={regno}
+            onChange={(e) => setRegno(e.target.value)}
+            className={
+              category.themed
+                ? 'pl-10 bg-background/80 border-romantic/30 focus:border-romantic'
+                : 'pl-10'
+            }
+            required
+          />
+        </div>
+      </div>
+
+      <Button
+        type="submit"
+        className={category.themed ? 'w-full btn-romantic text-lg font-semibold' : 'w-full'}
+        disabled={isLoading}
+      >
+        {isLoading ? category.pendingCta : category.cta}
+      </Button>
+    </form>
+  );
+
+  // The participant door keeps the full Valentine's treatment. Staff doors are plain on
+  // purpose: a moderator reaching for the moderation console should not be looking at the
+  // same screen a student sees, and there is no reason for a staff door to be pretty.
+  if (!category.themed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/30">
+        <div className="w-full max-w-md z-10">
+          <Card>
+            <CardHeader className="text-center space-y-3">
+              <div className="mx-auto w-16 h-16 bg-muted rounded-full flex items-center justify-center">
+                <ShieldCheck className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <CardTitle className="text-2xl">{category.title}</CardTitle>
+              <CardDescription>{category.tagline}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">{form}</CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
       <div className="absolute top-0 left-0 w-full h-full z-0">
@@ -61,9 +126,9 @@ export const Login = () => {
         </video>
         <div className="absolute top-0 left-0 w-full h-full bg-black/50"></div>
       </div>
-      
+
       <FloatingHearts />
-      
+
       <div className="w-full max-w-md z-10">
         <Card className="confession-card border-2 border-romantic/20 bg-background/80 backdrop-blur-sm">
           <CardHeader className="text-center space-y-4">
@@ -71,37 +136,15 @@ export const Login = () => {
               <Heart className="w-10 h-10 text-white animate-pulse-heart" fill="currentColor" />
             </div>
             <CardTitle className="text-4xl font-dancing text-romantic">
-              ConfessIt
+              {category.title}
             </CardTitle>
             <CardDescription className="text-lg text-muted-foreground">
-              Share your heart in our Valentine's Day celebration 💕
+              {category.tagline}
             </CardDescription>
           </CardHeader>
 
           <CardContent className="space-y-6">
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
-                  <Input
-                    type="text"
-                    placeholder="Registration Number"
-                    value={regno}
-                    onChange={(e) => setRegno(e.target.value)}
-                    className="pl-10 bg-background/80 border-romantic/30 focus:border-romantic"
-                    required
-                  />
-                </div>
-              </div>
-
-              <Button 
-                type="submit" 
-                className="w-full btn-romantic text-lg font-semibold"
-                disabled={isLoading}
-              >
-                {isLoading ? 'Generating Link...' : 'Enter ConfessIt 💕'}
-              </Button>
-            </form>
+            {form}
 
             <div className="text-center mt-6 text-sm text-muted-foreground">
               <p className="sparkles">Made with love for Valentine's Day 2026</p>
@@ -112,3 +155,12 @@ export const Login = () => {
     </div>
   );
 };
+
+/** Participant door. A regno here is looked up in the `users` table and nowhere else. */
+export const Login = () => <SignInPage category={SIGN_IN_CATEGORIES.users} />;
+
+/** Admin door. Looks the regno up in the `admin` table and nowhere else. */
+export const AdminLogin = () => <SignInPage category={SIGN_IN_CATEGORIES.admin} />;
+
+/** Moderator door. Looks the regno up in the `moderator` table and nowhere else. */
+export const ModeratorLogin = () => <SignInPage category={SIGN_IN_CATEGORIES.moderator} />;

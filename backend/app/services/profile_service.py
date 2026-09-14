@@ -12,6 +12,7 @@ from ..logger import get_logger
 from ..models import UserDetails
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
+from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -58,15 +59,16 @@ async def update_user_profile_service(
             "gender": user.gender, "interests": user.interests or [],
             "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
             "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,
-            "is_blocked": user.is_blocked, "reported_count": user.reported_count,
+            "is_blocked": user.is_blocked,
             "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
-            "last_login_user_agent": user.last_login_user_agent, "role": user.role,
+            "last_login_user_agent": user.last_login_user_agent,
             "last_matchmaking_at": user.last_matchmaking_at,
+            "account_type": "users",
         }
 
     # Profile images are delivered through the asset proxy.
     updated_user_doc["profile_picture_url"] = asset_delivery_service.profile_image_url(
-        updated_user_doc.get("profile_picture_url"), regno=current_user.regno
+        updated_user_doc.get("profile_picture_url"), account=AccountRef.of(current_user)
     )
     return UserDetails(**updated_user_doc)
 
@@ -116,7 +118,7 @@ async def upload_profile_picture_service(
     # Hand back the proxy URL rather than the raw Cloudinary URL, so the frontend never
     # learns an address it could reuse outside the proxy's authorisation check.
     delivery_url = asset_delivery_service.build_delivery_url(
-        kind="profile", stored_identifier=cloudinary_url, regno=current_user.regno
+        kind="profile", stored_identifier=cloudinary_url, account=AccountRef.of(current_user)
     )
 
     # Only now that the replacement is stored do we retire the old object. Deleting it

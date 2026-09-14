@@ -25,6 +25,27 @@ def is_valid_id(value: Any) -> bool:
         return False
 
 
+def _server_default_sql(column, dialect) -> str | None:
+    """Render a column's server default as a SQL fragment, or None if it has none.
+
+    Needed because ``ALTER TABLE ... ADD COLUMN`` has to repeat the default inline. The
+    three shapes a model can declare -- a bare string, a ``text()`` clause, and a SQL
+    function such as ``func.now()`` -- render differently, and each is handled here rather
+    than by string-formatting whatever ``.arg`` happens to hold.
+    """
+    default = column.server_default
+    if default is None:
+        return None
+    arg = default.arg
+    if isinstance(arg, str):
+        escaped = arg.replace("'", "''")
+        return f"'{escaped}'"
+    compile_ = getattr(arg, "compile", None)
+    if compile_ is not None:
+        return str(compile_(dialect=dialect))
+    return None
+
+
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
 
@@ -64,7 +85,72 @@ class PostgresClient:
 
     def initialize(self) -> None:
         Base.metadata.create_all(self.engine)
+        # Columns before constraints: a CHECK added to an already-created table can name a
+        # column that only exists in the models, and PostgreSQL refuses the constraint if the
+        # column is not there yet. Adding the columns first is what lets a partially-migrated
+        # database reach a consistent state in one boot.
+        self.apply_missing_columns()
         self.apply_check_constraints()
+
+    def apply_missing_columns(self) -> None:
+        """Add columns declared in the models but missing from an already-created table.
+
+        ``create_all`` is ``CREATE TABLE IF NOT EXISTS``: on a database that already has
+        ``users``, it does nothing at all, so a column added to a model is never applied to
+        a deployed database. The account split depends on this -- ``created_at`` and
+        ``updated_at`` are new on all three account tables, and without them an existing
+        deployment would fail every insert with a column that the model writes and the table
+        does not have.
+
+        Each column is added on its own with ``IF NOT EXISTS``, so a partially-migrated
+        database converges rather than aborting the boot. What this deliberately does *not*
+        do is drop anything: a column the models no longer declare is left in place, because
+        removing one is a decision about data rather than about schema shape. The
+        one-off removal of the retired ``users.role`` and ``users.reported_count`` columns
+        is in ``scripts/migrate_account_tables.py``.
+        """
+        with self.engine.begin() as connection:
+            for table in Base.metadata.sorted_tables:
+                existing = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": table.name},
+                    )
+                }
+                if not existing:
+                    # Table itself is absent; create_all already created it in full.
+                    continue
+                for column in table.columns:
+                    if column.name in existing:
+                        continue
+                    ddl = column.type.compile(dialect=connection.dialect)
+                    extra = ""
+                    default_sql = _server_default_sql(column, connection.dialect)
+                    if not column.nullable and default_sql is None:
+                        # A NOT NULL column with no default cannot be added to a table that
+                        # has rows. Refuse to guess a value: skipping it leaves a clear
+                        # error on first write, where inventing one would fabricate data.
+                        logger.warning(
+                            "Not adding NOT NULL column %s.%s: it has no server default",
+                            table.name,
+                            column.name,
+                        )
+                        continue
+                    if default_sql is not None:
+                        extra = f" DEFAULT {default_sql}"
+                    connection.execute(
+                        text(
+                            f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS '
+                            f'"{column.name}" {ddl}{extra}'
+                        )
+                    )
+                    logger.info(
+                        "Added column %s.%s", table.name, column.name
+                    )
 
     def apply_check_constraints(self) -> None:
         """Add CHECK constraints declared in the models but missing from the database.

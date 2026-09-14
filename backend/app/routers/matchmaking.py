@@ -6,7 +6,7 @@ from typing import Annotated
 
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..services.auth_service import get_current_user
+from ..services.authorization import require_participant
 from ..services.matchmaking_service import find_match_service, check_matchmaking_cooldown_service
 
 router = APIRouter(
@@ -16,7 +16,7 @@ router = APIRouter(
 
 @router.get("/check")
 def check_matchmaking_status(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
@@ -27,7 +27,7 @@ def check_matchmaking_status(
 
 @router.post("/find", status_code=status.HTTP_200_OK)
 def find_match(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """

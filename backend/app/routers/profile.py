@@ -6,7 +6,7 @@ from typing import Annotated
 
 from ..dependencies import get_db
 from ..models import UserDetails
-from ..services.auth_service import get_current_user
+from ..services.authorization import require_participant
 from ..services.profile_service import (
     UserProfileUpdate,
     update_user_profile_service,
@@ -21,7 +21,7 @@ router = APIRouter(
 @router.put("/update", response_model=UserDetails)
 async def update_user_profile(
     profile_data: UserProfileUpdate,
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """Update the profile of the currently authenticated user."""
@@ -30,7 +30,7 @@ async def update_user_profile(
 
 @router.post("/upload-picture")
 async def upload_profile_picture(
-    current_user: Annotated[UserDetails, Depends(get_current_user)],
+    current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
     file: UploadFile = File(...)
 ):

@@ -13,6 +13,7 @@ from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 from ..config import settings
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
+from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -27,11 +28,16 @@ def _user_data(row):
         "gender": row.gender, "interests": row.interests or [],
         "matchmaking_enabled": row.matchmaking_enabled, "notifications_enabled": row.notifications_enabled,
         "love_notes_receive_enabled": row.love_notes_receive_enabled, "love_notes_send_enabled": row.love_notes_send_enabled,
-        "is_blocked": row.is_blocked, "reported_count": row.reported_count,
+        "is_blocked": row.is_blocked,
         "last_login_at": row.last_login_at,
         "last_login_ip": str(row.last_login_ip) if row.last_login_ip else None,
-        "last_login_user_agent": row.last_login_user_agent, "role": row.role,
+        "last_login_user_agent": row.last_login_user_agent,
         "last_matchmaking_at": row.last_matchmaking_at,
+        # Rows here come from ``users`` and only from ``users``, so the table is fixed. It is
+        # stated rather than left to the model default so that if a caller ever feeds this a
+        # row from another table it fails validation instead of being silently relabelled as
+        # a participant.
+        "account_type": "users",
     }
 
 def _match_data(row):
@@ -466,7 +472,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
         profile_picture_url = asset_delivery_service.profile_image_url(
-            other_user.profile_picture_url if other_user else None, regno=current_user.regno
+            other_user.profile_picture_url if other_user else None, account=AccountRef.of(current_user)
         )
 
         return {
@@ -504,7 +510,7 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
     profile_picture_url = asset_delivery_service.profile_image_url(
-        other_user.profile_picture_url if other_user else None, regno=current_user.regno
+        other_user.profile_picture_url if other_user else None, account=AccountRef.of(current_user)
     )
 
     response_data = {
@@ -617,7 +623,7 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
         
         initiator_user = UserDetails(**initiator_user_doc)
         profile_picture_url = asset_delivery_service.profile_image_url(
-            initiator_user.profile_picture_url, regno=current_user.regno
+            initiator_user.profile_picture_url, account=AccountRef.of(current_user)
         )
         
         match_expires_at = match.expires_at
@@ -703,7 +709,7 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
         
         other_user = UserDetails(**other_user_doc)
         profile_picture_url = asset_delivery_service.profile_image_url(
-            other_user.profile_picture_url, regno=current_user.regno
+            other_user.profile_picture_url, account=AccountRef.of(current_user)
         )
         
         # Check if match is expired
