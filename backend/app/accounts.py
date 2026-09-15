@@ -77,8 +77,6 @@ class Capability(str, Enum):
     CONVERSATIONS_REVIEW = "conversations:review"
     CONVERSATIONS_READ_MESSAGES = "conversations:read_messages"
     CONVERSATIONS_TERMINATE = "conversations:terminate"
-    MATCHMAKING_REVIEW = "matchmaking:review"
-    MATCHMAKING_MODERATE = "matchmaking:moderate"
     REPORTS_REVIEW = "reports:review"
     REPORTS_MODERATE = "reports:moderate"
     STATS_READ = "stats:read"
@@ -106,8 +104,6 @@ MODERATION_CAPABILITIES: frozenset[str] = frozenset(
         Capability.CONVERSATIONS_REVIEW,
         Capability.CONVERSATIONS_READ_MESSAGES,
         Capability.CONVERSATIONS_TERMINATE,
-        Capability.MATCHMAKING_REVIEW,
-        Capability.MATCHMAKING_MODERATE,
         Capability.REPORTS_REVIEW,
         Capability.REPORTS_MODERATE,
         Capability.STATS_READ,

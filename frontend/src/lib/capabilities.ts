@@ -27,8 +27,6 @@ export const CAPABILITIES = {
   CONVERSATIONS_REVIEW: 'conversations:review',
   CONVERSATIONS_READ_MESSAGES: 'conversations:read_messages',
   CONVERSATIONS_TERMINATE: 'conversations:terminate',
-  MATCHMAKING_REVIEW: 'matchmaking:review',
-  MATCHMAKING_MODERATE: 'matchmaking:moderate',
   REPORTS_REVIEW: 'reports:review',
   REPORTS_MODERATE: 'reports:moderate',
   STATS_READ: 'stats:read',

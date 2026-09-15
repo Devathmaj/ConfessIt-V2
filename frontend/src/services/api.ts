@@ -377,22 +377,3 @@ export const terminateAdminConversation = async (
     return response.data;
 };
 
-export const getAdminMatchmaking = async () => {
-    const response = await axios.get(`${API_URL}/admin/matchmaking`, { headers: getAuthHeaders() });
-    return response.data;
-};
-
-export const updateAdminMatchmakingStatus = async (
-    match_id: string,
-    status: 'approved' | 'rejected' | 'pending'
-) => {
-    const response = await axios.put(
-        `${API_URL}/admin/matchmaking/${match_id}/status`,
-        {},
-        {
-            headers: getAuthHeaders(),
-            params: { status },
-        }
-    );
-    return response.data;
-};

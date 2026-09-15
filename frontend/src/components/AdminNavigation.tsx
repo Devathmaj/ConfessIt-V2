@@ -21,7 +21,6 @@ const navItems: NavItem[] = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true, capability: CAPABILITIES.STATS_READ },
   { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
   { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },
-  { to: "/admin/matchmaking", label: "Matchmaking Review", icon: Heart, capability: CAPABILITIES.MATCHMAKING_REVIEW },
   { to: "/admin/conversations", label: "Chat Monitor", icon: MessageSquare, capability: CAPABILITIES.CONVERSATIONS_REVIEW },
   { to: "/admin/profile-review", label: "Profile Review", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];

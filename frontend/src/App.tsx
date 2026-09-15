@@ -20,7 +20,6 @@ import { About } from "./pages/About";
 import NotFound from "./pages/NotFound";
 import { MagicLinkVerification } from "./services/MagicLinkVerification";
 import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
-import { MatchmakingReview } from "./pages/MatchmakingReview";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ProfileReview } from "./pages/ProfileReview";
 import ChatMonitor from "./pages/ChatMonitor";
@@ -216,14 +215,6 @@ const AppRoutes = () => {
         }
       />
        <Route
-        path="/admin/matchmaking"
-        element={
-          <CapabilityRoute capability={CAPABILITIES.MATCHMAKING_REVIEW}>
-            <MatchmakingReview />
-          </CapabilityRoute>
-        }
-      />
-      <Route
         path="/admin/conversations"
         element={
           <CapabilityRoute capability={CAPABILITIES.CONVERSATIONS_REVIEW}>

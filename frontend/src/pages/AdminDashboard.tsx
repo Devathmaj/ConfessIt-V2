@@ -283,14 +283,6 @@ export const AdminDashboard = () => {
       capability: CAPABILITIES.LOVE_NOTES_REVIEW
     },
     {
-      id: 'matchmaking',
-      title: 'Matchmaking Queue',
-      description: 'Review recent matchmaking submissions.',
-      icon: Heart,
-      to: '/admin/matchmaking',
-      capability: CAPABILITIES.MATCHMAKING_REVIEW
-    },
-    {
       id: 'profiles',
       title: 'Profile Review',
       description: 'Inspect user profiles and manage blocks.',

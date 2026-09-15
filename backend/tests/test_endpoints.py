@@ -46,7 +46,6 @@ SIGNED_IN_READ_ROUTES = [
 ADMIN_READ_ROUTES = [
     "/admin/users",
     "/admin/confessions",
-    "/admin/matchmaking",
     "/admin/conversations",
     "/admin/love-notes",
     "/admin/messages/reports",

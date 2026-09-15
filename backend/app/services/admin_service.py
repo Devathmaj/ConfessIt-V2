@@ -134,15 +134,6 @@ def serialize_account_by_regno(db: Database, regno: Optional[str]) -> Dict[str, 
     return {"regno": regno, "name": None, "account_type": None}
 
 
-def normalize_conversation_status(value: Optional[str]) -> str:
-    """Normalize conversation status values."""
-    if value == "accepted":
-        return "approved"
-    if value == "rejected":
-        return "rejected"
-    return "pending"
-
-
 def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[str, Any]]:
     """Collect and return active user sessions within the specified time window."""
     now = datetime.now(timezone.utc)
@@ -455,111 +446,6 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
                 "latest_message": latest_message,
                 "is_blocked": bool(doc.blocked_by),
                 "blocked_by": (doc.blocked_by or [None])[0],
-            }
-        )
-
-    return results
-
-
-def get_matchmaking_overview_data(db: Database) -> List[Dict[str, Any]]:
-    """Fetch all matches between participant accounts.
-
-    No staff filter is needed here, and that is the point of the split. A match can only
-    name a participant, because a staff account has no row in ``users`` for a match to
-    reference; so instead of querying for staff and excluding them, the exclusion falls out
-    of the schema and this function does not have to know the staff tables exist. A match
-    naming a regno with no participant row is skipped below rather than rendered with a
-    missing side, which covers matches left behind by an account that has since been
-    removed.
-    """
-    with db.sessions() as session:
-        matches = session.scalars(select(MatchRecord).order_by(MatchRecord.created_at.desc())).all()
-        match_ids = [match.id for match in matches]
-
-    # Fetch participants
-    regnos: set[str] = set()
-    for match in matches:
-        user_1 = match.user_1_regno
-        user_2 = match.user_2_regno
-        if user_1:
-            regnos.add(user_1)
-        if user_2:
-            regnos.add(user_2)
-
-    with db.sessions() as session:
-        user_rows = session.scalars(select(UserRecord).where(UserRecord.regno.in_(regnos))).all() if regnos else []
-        users_by_regno = {
-            user.regno: _account_row_payload(AccountType.USERS.value, user)
-            for user in user_rows
-        }
-
-    # Fetch conversations
-    with db.sessions() as session:
-        conversation_rows = session.scalars(select(ConversationRecord).where(
-            ConversationRecord.match_id.in_(match_ids)
-        ).order_by(ConversationRecord.created_at.desc())).all() if match_ids else []
-    conversations_by_match = {}
-    for convo in conversation_rows:
-        conversations_by_match.setdefault(str(convo.match_id), {
-            "id": str(convo.id), "match_id": str(convo.match_id), "status": convo.status,
-            "requested_at": convo.requested_at, "accepted_at": convo.accepted_at,
-            "initiator_regno": convo.initiator_regno, "receiver_regno": convo.receiver_regno,
-        })
-
-    results: List[Dict[str, Any]] = []
-    now = datetime.now(timezone.utc)
-
-    for match in matches:
-        match_id = str(match.id)
-
-        participants: List[Dict[str, Any]] = []
-        skip_match = False
-        for regno in [match.user_1_regno, match.user_2_regno]:
-            if not regno:
-                continue
-            user_doc = users_by_regno.get(regno)
-            # A named regno with no row in ``users`` is not a participant: either a staff
-            # regno or one whose account is gone. Either way there is no match to moderate.
-            if not user_doc:
-                skip_match = True
-                break
-            participants.append(serialize_user_doc(user_doc))
-        
-        if skip_match:
-            continue
-
-        expires_at_value = match.expires_at
-        expired = False
-        if isinstance(expires_at_value, datetime):
-            expires_at_value = expires_at_value.astimezone(timezone.utc)
-            expired = expires_at_value <= now
-
-        conversation_doc = conversations_by_match.get(str(match_id))
-        raw_status = conversation_doc.get("status") if conversation_doc else None
-        normalized_status = normalize_conversation_status(raw_status)
-        if expired:
-            normalized_status = "expired"
-
-        conversation_payload: Optional[Dict[str, Any]] = None
-        if conversation_doc:
-            conversation_payload = {
-                "id": str(conversation_doc.get("id")),
-                "status": conversation_doc.get("status"),
-                "requested_at": serialize_datetime(conversation_doc.get("requested_at")),
-                "accepted_at": serialize_datetime(conversation_doc.get("accepted_at")),
-                "initiator": conversation_doc.get("initiator_regno"),
-                "receiver": conversation_doc.get("receiver_regno"),
-            }
-
-        results.append(
-            {
-                "id": match_id,
-                "created_at": serialize_datetime(match.created_at),
-                "expires_at": serialize_datetime(match.expires_at),
-                "expired": expired,
-                "status": normalized_status,
-                "participants": participants,
-                "conversation": conversation_payload,
             }
         )
 

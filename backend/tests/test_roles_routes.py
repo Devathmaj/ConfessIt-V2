@@ -39,7 +39,7 @@ def _admin_routes():
 
 ADMIN_ROUTES = _admin_routes()
 
-# A representative method and path template for each of the 21 gated operations. These are
+# A representative method and path template for each of the 19 gated operations. These are
 # the templates as declared, so a renamed route cannot slip past unnoticed.
 SAMPLE_ROUTES = [
     ("GET", "/admin/confessions"),
@@ -51,8 +51,6 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/conversations"),
     ("GET", "/admin/conversations/{conversation_id}"),
     ("POST", "/admin/conversations/{conversation_id}/terminate"),
-    ("GET", "/admin/matchmaking"),
-    ("PUT", "/admin/matchmaking/{match_id}/status"),
     ("GET", "/admin/stats"),
     ("GET", "/admin/stats/active-sessions"),
     ("POST", "/admin/messages/archive"),

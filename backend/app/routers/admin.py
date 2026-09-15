@@ -19,11 +19,9 @@ from ..services.admin_service import (
     serialize_user_doc,
     serialize_account_by_regno,
     _account_row_payload,
-    normalize_conversation_status,
     collect_active_sessions,
     get_all_confessions_data,
     get_all_conversations_data,
-    get_matchmaking_overview_data,
     get_admin_statistics_data,
 )
 
@@ -387,78 +385,6 @@ async def terminate_conversation(
         "id": conversation_id,
         "status": "terminated",
         "terminated_at": serialize_datetime(now),
-    }
-
-
-@router.get("/matchmaking", response_model=List[Dict[str, Any]])
-async def get_matchmaking_overview(
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.MATCHMAKING_REVIEW))
-) -> List[Dict[str, Any]]:
-    """Return every recorded match excluding administrators."""
-    return get_matchmaking_overview_data(db)
-
-
-@router.put("/matchmaking/{match_id}/status")
-async def update_matchmaking_status(
-    match_id: str,
-    status_value: str = Query(..., alias="status", regex="^(approved|rejected|pending)$"),
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.MATCHMAKING_MODERATE))
-) -> Dict[str, Any]:
-    """Moderate a matchmaking outcome by updating the linked conversation state."""
-    if not is_valid_id(match_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid match id")
-
-    with db.sessions() as session:
-        match_row = session.get(MatchRecord, str(match_id))
-        match_obj = _match_payload(match_row) if match_row else None
-    if not match_obj:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
-
-    with db.sessions() as session:
-        conversation_row = session.scalar(select(ConversationRecord).where(ConversationRecord.match_id == str(match_id)))
-        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
-    if not conversation_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found for match")
-
-    status_mapping = {
-        "approved": "accepted",
-        "rejected": "rejected",
-        "pending": "pending",
-    }
-    new_status = status_mapping[status_value]
-
-    update_payload: Dict[str, Any] = {"status": new_status}
-    if new_status == "accepted":
-        update_payload["accepted_at"] = datetime.now(timezone.utc)
-    else:
-        update_payload["accepted_at"] = None
-
-    with db.sessions.begin() as session:
-        updated_conversation_row = session.get(ConversationRecord, conversation_doc["id"])
-        if updated_conversation_row:
-            updated_conversation_row.status = new_status
-            updated_conversation_row.accepted_at = update_payload["accepted_at"]
-            updated_conversation = _conversation_payload(updated_conversation_row)
-        else:
-            updated_conversation = None
-    if not updated_conversation:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found for match")
-
-    response_status = normalize_conversation_status(updated_conversation.get("status"))
-
-    return {
-        "match_id": match_id,
-        "status": response_status,
-        "conversation": {
-            "id": str(updated_conversation.get("id")),
-            "status": updated_conversation.get("status"),
-            "requested_at": serialize_datetime(updated_conversation.get("requested_at")),
-            "accepted_at": serialize_datetime(updated_conversation.get("accepted_at")),
-            "initiator": updated_conversation.get("initiator_regno"),
-            "receiver": updated_conversation.get("receiver_regno"),
-        },
     }
 
 
