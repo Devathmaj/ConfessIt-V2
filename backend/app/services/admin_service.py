@@ -3,6 +3,8 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select, update
 
 from ..postgres import new_id, is_valid_id
@@ -392,6 +394,181 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         )
 
     return items
+
+
+def get_confession_reports_data(
+    db: Database,
+    status_filter: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """Every report filed against a confession or a comment, newest first.
+
+    One queue rather than two. The two targets live in the same table and are reviewed with
+    the same judgement, so splitting them would only mean a reviewer reading half the queue on
+    one screen and the other half somewhere they were not looking. Each row carries a
+    ``target_type`` of ``"confession"`` or ``"comment"`` and, for a comment, the confession it
+    was written under, because a comment reported out of context is not something anybody can
+    act on.
+
+    The content is carried, not referenced. The question a reviewer opens this screen to answer
+    is "what did this actually say", and a row holding only an id sends them to a second screen
+    to find out.
+
+    The author of an anonymous confession is not resolved here, for the same reason
+    ``get_all_confessions_data`` does not resolve it: an anonymous confession is anonymous to
+    staff, and a report queue is another reader of the same promise. ``author`` comes back
+    with its fields null and ``author_hidden`` set, so the client can say so rather than guess
+    from the ``anonymous`` flag. Commenters are a different population and are always named.
+    """
+    filters = []
+    if status_filter:
+        filters.append(ReportRecord.status == status_filter)
+
+    with db.sessions() as session:
+        reports = session.execute(
+            select(ReportRecord)
+            .where(*filters)
+            .order_by(ReportRecord.created_at.desc())
+            .offset(skip).limit(limit)
+        ).scalars().all()
+        total = session.scalar(
+            select(func.count()).select_from(ReportRecord).where(*filters)
+        ) or 0
+
+        confession_ids = {report.confession_id for report in reports if report.confession_id}
+        comment_ids = {report.comment_id for report in reports if report.comment_id}
+        # One bulk read per target table rather than a query per row: this is the N+1 mistake
+        # the confession admin list is called out for, and a queue grows with every report
+        # filed rather than with the page being read.
+        confessions = {
+            str(row.id): row for row in session.scalars(
+                select(ConfessionRecord).where(ConfessionRecord.id.in_(confession_ids))
+            ).all()
+        } if confession_ids else {}
+        comments = {
+            str(row.id): row for row in session.scalars(
+                select(ConfessionCommentRecord).where(ConfessionCommentRecord.id.in_(comment_ids))
+            ).all()
+        } if comment_ids else {}
+
+        # A comment's parent confession is needed for the context line even when the comment
+        # itself is not reported, so these ids are collected before the author lookup.
+        parent_ids = {comment.confession_id for comment in comments.values()}
+        parents = {
+            str(row.id): row for row in session.scalars(
+                select(ConfessionRecord).where(ConfessionRecord.id.in_(parent_ids))
+            ).all()
+        } if parent_ids else {}
+
+        # The author of an anonymous confession is deliberately absent from this set: the row
+        # is never loaded, so the identity is not in this process to be filtered out later.
+        author_ids = {row.author_id for row in confessions.values() if not row.anonymous}
+        author_ids |= {row.user_id for row in comments.values()}
+        authors = {
+            user.id: user for user in session.scalars(
+                select(UserRecord).where(UserRecord.id.in_(author_ids))
+            ).all()
+        } if author_ids else {}
+
+        # The reporter's name is snapshotted on the report row, but the live row wins: a
+        # participant who has since changed their name should appear under the name they have
+        # now, not the one they filed under. The snapshot is the fallback for a reporter whose
+        # row cannot be read at all.
+        reporter_ids = {report.reported_by_id for report in reports}
+        reporters = {
+            user.id: user for user in session.scalars(
+                select(UserRecord).where(UserRecord.id.in_(reporter_ids))
+            ).all()
+        } if reporter_ids else {}
+
+    items: List[Dict[str, Any]] = []
+    for report in reports:
+        reporter = reporters.get(report.reported_by_id)
+        is_comment = report.comment_id is not None
+        if is_comment:
+            comment = comments.get(str(report.comment_id))
+            confession = parents.get(str(comment.confession_id)) if comment else None
+            content = comment.body if comment else None
+            content_created_at = comment.created_at if comment else None
+            # A commenter is always named. The parent confession's anonymity governs the post,
+            # not the people replying to it in the open.
+            author_hidden = False
+            author = authors.get(comment.user_id) if comment else None
+            target_id = str(report.comment_id)
+            confession_id = str(comment.confession_id) if comment else None
+        else:
+            confession = confessions.get(str(report.confession_id))
+            comment = None
+            content = confession.body if confession else None
+            content_created_at = confession.created_at if confession else None
+            author_hidden = bool(confession.anonymous) if confession else False
+            author = None if author_hidden else authors.get(confession.author_id) if confession else None
+            target_id = str(report.confession_id)
+            confession_id = target_id
+
+        items.append({
+            "id": str(report.id),
+            "target_type": "comment" if is_comment else "confession",
+            "target_id": target_id,
+            "confession_id": confession_id,
+            "parent_recipient_name": confession.recipient_name if confession else None,
+            "anonymous": bool(confession.anonymous) if confession else False,
+            "content": content,
+            "content_created_at": serialize_datetime(content_created_at),
+            "author": None if author_hidden else {
+                "id": str(author.id) if author else None,
+                "name": author.name if author else None,
+                "regno": author.regno if author else None,
+            },
+            "author_hidden": author_hidden,
+            "reporter": {
+                "id": str(report.reported_by_id),
+                # Prefer the live row: a participant who has since changed their name should
+                # appear under the name they have now, not the one they filed under.
+                "name": reporter.name if reporter else report.reported_by_name,
+                "regno": reporter.regno if reporter else None,
+            },
+            "reason": report.reason,
+            "reported_at": serialize_datetime(report.created_at),
+            "status": report.status,
+            "reviewed_at": serialize_datetime(report.reviewed_at),
+            "reviewed_by_regno": report.reviewed_by_regno,
+        })
+
+    return {"reports": items, "total": total, "skip": skip, "limit": limit}
+
+
+def update_confession_report_status(
+    db: Database,
+    report_id: str,
+    new_status: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Close out one confession or comment report as ``reviewed`` or ``dismissed``.
+
+    This moves the report only. Deleting the reported confession is still a separate decision
+    through ``DELETE /admin/confessions/{id}``, so the queue records that a human looked and
+    the confession review screen remains the single place a post's fate is decided.
+    """
+    if not is_valid_id(report_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid report id",
+        )
+
+    with db.sessions.begin() as session:
+        report = session.get(ReportRecord, str(report_id))
+        if report is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Report not found",
+            )
+        report.status = new_status
+        report.reviewed_at = datetime.now(timezone.utc)
+        report.reviewed_by_regno = reviewer_regno
+
+    return {"id": str(report_id), "status": new_status}
 
 
 def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:

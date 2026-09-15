@@ -349,6 +349,48 @@ export const updateAdminLoveNoteReportStatus = async (reportId: string, status: 
     return response.data;
 };
 
+// The three report queues, read together on the Reports Review screen. They are three
+// endpoints rather than one aggregate call because they answer three different questions --
+// what did someone report a post for, a love note for, or a chat message for -- and a single
+// endpoint over three tables would have to invent one row shape for three payloads that have
+// nothing in common but a reason and a status. Every one of them takes the same `status`
+// filter and answers with the same { reports, total, skip, limit } envelope, so the screen can
+// treat them uniformly without the server pretending they are the same data.
+
+export const getAdminConfessionReports = async (status?: string) => {
+    const response = await axios.get(`${API_URL}/admin/confessions/reports`, {
+        headers: getAuthHeaders(),
+        params: status ? { status } : undefined,
+    });
+    return response.data;
+};
+
+export const updateAdminConfessionReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+    const response = await axios.patch(
+        `${API_URL}/admin/confessions/reports/${reportId}`,
+        {},
+        { headers: getAuthHeaders(), params: { status } }
+    );
+    return response.data;
+};
+
+export const getAdminMessageReports = async (status?: string) => {
+    const response = await axios.get(`${API_URL}/admin/messages/reports`, {
+        headers: getAuthHeaders(),
+        params: status ? { status } : undefined,
+    });
+    return response.data;
+};
+
+export const updateAdminMessageReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+    const response = await axios.patch(
+        `${API_URL}/admin/messages/reports/${reportId}`,
+        {},
+        { headers: getAuthHeaders(), params: { status } }
+    );
+    return response.data;
+};
+
 export const getAdminUsers = async () => {
     const response = await axios.get(`${API_URL}/admin/users`, { headers: getAuthHeaders() });
     return response.data;

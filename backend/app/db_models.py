@@ -181,6 +181,24 @@ class ConfessionCommentRecord(Base):
 
 
 class ReportRecord(Base):
+    """A participant's report that a confession, or a comment on one, breaks the rules.
+
+    One table for both targets, discriminated by which of the two nullable foreign keys is
+    set; ``ck_reports_one_target`` makes "both" and "neither" impossible at the database
+    level rather than in application code.
+
+    The three lifecycle columns exist so this queue can be closed out the same way the
+    message-report and love-note-report queues are. They were added when the unified Reports
+    Review screen was built, and every pre-existing row backfills to ``'pending'``: a report
+    nobody had looked at is pending, which is what it was being treated as before the
+    lifecycle was recorded at all.
+
+    The reported party is not stored. For a confession it is ``confessions.author_id`` and
+    for a comment it is ``confession_comments.user_id`` -- both foreign keys that cascade, and
+    both one join away in a table the queue already reads to show the content. A denormalised
+    column could only ever disagree with its source.
+    """
+
     __tablename__ = "reports"
     __table_args__ = (
         CheckConstraint("(confession_id IS NOT NULL) <> (comment_id IS NOT NULL)", name="ck_reports_one_target"),
@@ -195,6 +213,11 @@ class ReportRecord(Base):
     reported_by_name: Mapped[str] = mapped_column(String(160))
     reason: Mapped[str] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # No foreign key: the value names an account in ``moderator`` or ``admin``, which a
+    # foreign key to ``users`` could never point at.
+    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
 
 
 class LoginTokenRecord(Base):

@@ -267,9 +267,17 @@ export const AdminDashboard = () => {
 
   const quickActions: QuickAction[] = [
     {
+      id: 'reports',
+      title: 'Reports Review',
+      description: 'Everything reported, whether a post, a love note or a chat message.',
+      icon: ClipboardList,
+      to: '/admin/reports',
+      capability: CAPABILITIES.REPORTS_REVIEW
+    },
+    {
       id: 'confessions',
       title: 'Review Confessions',
-      description: 'See reports, reactions and remove harmful content.',
+      description: 'Read reactions and remove harmful content.',
       icon: ShieldAlert,
       to: '/admin/confessions',
       capability: CAPABILITIES.CONFESSIONS_REVIEW
@@ -289,14 +297,6 @@ export const AdminDashboard = () => {
       icon: UsersRound,
       to: '/admin/profile-review',
       capability: CAPABILITIES.USERS_REVIEW
-    },
-    {
-      id: 'reports',
-      title: 'Reports Inbox',
-      description: 'Stay ahead of flagged activity and feedback.',
-      icon: ClipboardList,
-      to: '/admin/confessions',
-      capability: CAPABILITIES.CONFESSIONS_REVIEW
     }
   ].filter((action) => can(action.capability));
 

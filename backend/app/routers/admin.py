@@ -21,6 +21,8 @@ from ..services.admin_service import (
     _account_row_payload,
     collect_active_sessions,
     get_all_confessions_data,
+    get_confession_reports_data,
+    update_confession_report_status,
     get_all_conversations_data,
     get_admin_statistics_data,
 )
@@ -95,6 +97,49 @@ async def delete_confession(
     if not confession:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
     return {"deleted": confession_id}
+
+
+# The report queue is declared after ``/confessions/{confession_id}`` on purpose. FastAPI
+# matches on method first, and the only sibling is a DELETE, so nothing here is shadowed
+# today; keeping the literal path last means adding a ``GET /{confession_id}`` later cannot
+# swallow it. These two carry the reporting capabilities rather than the confession ones, so
+# that ruling on reports stays separately grantable from reviewing the posts themselves.
+
+
+@router.get("/confessions/reports")
+async def get_confession_reports(
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by status: pending, reviewed, dismissed"
+    ),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW)),
+) -> Dict[str, Any]:
+    """Every report filed against a confession or one of its comments, newest first.
+
+    Carries the reported content itself rather than an id, so the question a reviewer opens
+    this screen to answer -- what did this actually say -- is answerable here. The author of
+    an anonymous confession is withheld, as it is from the confession review screen: an
+    anonymous post stays anonymous to staff through every door.
+    """
+    return get_confession_reports_data(db, status_filter=status_filter, skip=skip, limit=limit)
+
+
+@router.patch("/confessions/reports/{report_id}")
+async def update_confession_report(
+    report_id: str,
+    new_status: str = Query(..., alias="status", regex="^(reviewed|dismissed)$"),
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
+) -> Dict[str, Any]:
+    """Close out a confession or comment report as reviewed or dismissed.
+
+    Deliberately does not delete anything. Removing the reported post stays with
+    ``DELETE /admin/confessions/{id}``, so this records that a human looked and the
+    confession review screen remains the single place a post's fate is decided.
+    """
+    return update_confession_report_status(db, report_id, new_status, reviewer.regno)
 
 
 @router.get("/users", response_model=List[Dict[str, Any]])
@@ -485,14 +530,28 @@ async def get_archived_messages(
 
 @router.get("/messages/reports")
 async def get_message_reports(
-    status_filter: Optional[str] = Query(None, description="Filter by status: pending, reviewed, dismissed"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by status: pending, reviewed, dismissed"
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
-    """Get all message reports with optional status filter"""
-    
+    """Every reported chat message, newest first, with the message and both parties.
+
+    Shares its ``{reports, total, skip, limit}`` envelope and its status/audit fields with the
+    confession and love-note queues, because the three are rendered by one screen. The rows
+    themselves stay their own shapes -- ``message_id`` and ``body`` here, ``confession_id`` and
+    ``content`` there -- because a message is not a confession and flattening the difference
+    would mean the payload lied about one of them.
+
+    The wire name is ``status``, aliased onto ``status_filter`` so the parameter does not
+    shadow the ``fastapi.status`` module used for HTTP codes in this router. It used to arrive
+    as ``status_filter``, which was the odd one out among the queues; nothing called this
+    endpoint before the unified Reports Review screen, so renaming it cost nothing and leaves
+    all three queues speaking the same word for the same filter.
+    """
     filters = []
     if status_filter:
         filters.append(MessageReportRecord.status == status_filter)
@@ -500,19 +559,20 @@ async def get_message_reports(
         reports = session.scalars(select(MessageReportRecord).where(*filters)
             .order_by(MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
         total = session.scalar(select(func.count()).select_from(MessageReportRecord).where(*filters)) or 0
-    
-    # Enrich with user and message details
-    enriched_reports = []
-    with db.sessions() as session:
+
+        # Two bulk reads rather than two per row: a queue grows with every report filed, so
+        # the per-row lookup would be a cost paid on every page a moderator opens.
         regnos = {report.reporter_regno for report in reports} | {report.reported_user_regno for report in reports}
         users = {user.regno: user for user in session.scalars(select(UserRecord).where(UserRecord.regno.in_(regnos))).all()} if regnos else {}
         message_ids = {report.message_id for report in reports}
         messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
+
+    enriched_reports = []
     for report in reports:
         reporter = users.get(report.reporter_regno)
         reported_user = users.get(report.reported_user_regno)
         message = messages.get(str(report.message_id))
-        
+
         enriched_reports.append({
             "id": str(report.id),
             "message_id": str(report.message_id),
@@ -528,9 +588,13 @@ async def get_message_reports(
             },
             "reason": report.reason,
             "reported_at": serialize_datetime(report.reported_at),
-            "status": report.status
+            "status": report.status,
+            # Carried so the unified screen can show who closed a report and when without
+            # a second request, matching the other two queues.
+            "reviewed_at": serialize_datetime(report.reviewed_at),
+            "reviewed_by_regno": report.reviewed_by_regno,
         })
-    
+
     return {
         "reports": enriched_reports,
         "total": total,
@@ -542,31 +606,26 @@ async def get_message_reports(
 @router.patch("/messages/reports/{report_id}")
 async def update_message_report_status(
     report_id: str,
-    new_status: str = Query(..., regex="^(reviewed|dismissed)$"),
+    new_status: str = Query(..., alias="status", regex="^(reviewed|dismissed)$"),
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
 ) -> Dict[str, Any]:
-    """Update the status of a message report"""
-    
-    try:
-        with db.sessions.begin() as session:
-            report = session.get(MessageReportRecord, str(report_id))
-            if report:
-                report.status = new_status
-                report.reviewed_at = datetime.now(timezone.utc)
-                report.reviewed_by_regno = reviewer.regno
-        if not report:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Report not found"
-            )
-        
-        return {"message": f"Report status updated to {new_status}"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid report ID: {str(e)}"
-        )
+    """Close out a chat-message report as reviewed or dismissed.
+
+    Returns ``{id, status}`` rather than a sentence, to match the other two close-out
+    endpoints. Nothing is deleted here: a reported message is removed through the ordinary
+    conversation endpoints, so the queue records that a human looked and does not become a
+    second way to destroy history.
+    """
+    if not is_valid_id(report_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report id")
+
+    with db.sessions.begin() as session:
+        report = session.get(MessageReportRecord, str(report_id))
+        if report is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+        report.status = new_status
+        report.reviewed_at = datetime.now(timezone.utc)
+        report.reviewed_by_regno = reviewer.regno
+
+    return {"id": str(report_id), "status": new_status}
