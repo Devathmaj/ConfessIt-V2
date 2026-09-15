@@ -259,7 +259,18 @@ def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[s
 
 
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
-    """Fetch all confessions with comments and reports."""
+    """Fetch all confessions with comments and reports.
+
+    An anonymous confession is anonymous to staff too: the author row is never loaded, the
+    sender fields are emitted empty, and ``sender_hidden`` is set so the client can render
+    "no sender to show" instead of guessing from ``anonymous``. Review is still fully possible
+    on such a post -- body, timestamps, reports, comments and engagement all come back -- it
+    is only the identity that is withheld, and it is withheld here rather than in the client so
+    it cannot be recovered by reading the response.
+
+    A confession that was never anonymous is unaffected: it still names its author, and the
+    review screen still decides for itself when to show that name.
+    """
     reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
     items: List[Dict[str, Any]] = []
     with db.sessions() as session:
@@ -275,7 +286,11 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         if comment_ids:
             report_targets.append(ReportRecord.comment_id.in_(comment_ids))
         reports = session.scalars(select(ReportRecord).where(or_(*report_targets))).all() if report_targets else []
-        user_ids = {row.author_id for row in confessions} | {row.user_id for row in comments}
+        # The author of an anonymous confession is not loaded at all, so the identity is
+        # absent from this process rather than filtered out of the payload later. Commenters
+        # are a different population and are always resolved.
+        user_ids = {row.author_id for row in confessions if not row.anonymous}
+        user_ids |= {row.user_id for row in comments}
         users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all() if user_ids else []
     users_by_id = {user.id: user for user in users}
     comments_by_confession: Dict[str, List[ConfessionCommentRecord]] = defaultdict(list)
@@ -289,7 +304,8 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
 
     # Build confession items
     for doc in confessions:
-        sender_doc = users_by_id.get(doc.author_id)
+        sender_hidden = bool(doc.anonymous)
+        sender_doc = None if sender_hidden else users_by_id.get(doc.author_id)
 
         sender_info = {
             "id": str(sender_doc.id) if sender_doc else None,
@@ -367,6 +383,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                 "body": doc.body,
                 "recipient_name": doc.recipient_name,
                 "anonymous": doc.anonymous,
+                "sender_hidden": sender_hidden,
                 "comments_enabled": doc.comments_enabled,
                 "created_at": serialize_datetime(doc.created_at),
                 "sender": sender_info,

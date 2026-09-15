@@ -24,6 +24,7 @@ import {
   Flag,
   Trash2,
   User,
+  UserX,
   Eye,
   EyeOff,
   MessageSquare,
@@ -76,6 +77,9 @@ interface AdminConfession {
   body: string;
   recipient_name?: string | null;
   anonymous: boolean;
+  // Set by the server, not derived here: an anonymous confession has no sender to show, to
+  // anyone. The fallback keeps the screen closed if the field is ever absent.
+  sender_hidden?: boolean;
   comments_enabled: boolean;
   created_at: string | null;
   sender: {
@@ -131,6 +135,7 @@ export const ConfessionsAdmin = () => {
               body: item.body ?? '',
               recipient_name: item.recipient_name ?? null,
               anonymous: item.anonymous ?? true,
+              sender_hidden: item.sender_hidden ?? item.anonymous ?? true,
               comments_enabled: item.comments_enabled ?? true,
               created_at: item.created_at ?? null,
               sender: {
@@ -303,7 +308,8 @@ export const ConfessionsAdmin = () => {
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold">Confession Review</h1>
           <p className="text-sm text-muted-foreground">
-            Review every confession, see who sent it even if anonymous, and remove harmful submissions.
+            Review every confession, act on its reports and comments, and remove harmful submissions.
+            An anonymous confession is anonymous here too, so action it on what was written.
           </p>
           <p className="text-xs text-muted-foreground/80">
             Total confessions: {confessions.length} · Reports in queue: {totalReports}
@@ -376,6 +382,7 @@ export const ConfessionsAdmin = () => {
           ) : (
             processedConfessions.map((confession) => {
               const senderVisible = visibleSenders[confession.id];
+              const senderHidden = confession.sender_hidden ?? confession.anonymous;
               const anonymityVariant: 'default' | 'secondary' = confession.anonymous ? 'secondary' : 'default';
               const commentTotal = Math.max(confession.comment_count, confession.comments.length);
               return (
@@ -395,7 +402,7 @@ export const ConfessionsAdmin = () => {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={anonymityVariant}>
-                          {confession.anonymous ? 'Anonymous to users' : 'Public confession'}
+                          {confession.anonymous ? 'Anonymous' : 'Public confession'}
                         </Badge>
                         {!confession.comments_enabled && <Badge variant="outline">Comments disabled</Badge>}
                         {confession.report_count > 0 && (
@@ -418,21 +425,33 @@ export const ConfessionsAdmin = () => {
                       <div className="rounded-2xl border border-border bg-muted/30 p-4">
                         <div className="mb-2 flex items-center justify-between">
                           <div className="flex items-center gap-2 text-sm font-medium">
-                            <User className="h-4 w-4 text-muted-foreground" />
+                            {senderHidden ? (
+                              <UserX className="h-4 w-4 text-muted-foreground" />
+                            ) : (
+                              <User className="h-4 w-4 text-muted-foreground" />
+                            )}
                             Sender details
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="flex items-center gap-1"
-                            onClick={() => toggleSenderVisibility(confession.id)}
-                          >
-                            {senderVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                            {senderVisible ? 'Hide' : 'Reveal'}
-                          </Button>
+                          {!senderHidden && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex items-center gap-1"
+                              onClick={() => toggleSenderVisibility(confession.id)}
+                            >
+                              {senderVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                              {senderVisible ? 'Hide' : 'Reveal'}
+                            </Button>
+                          )}
                         </div>
 
-                        {senderVisible ? (
+                        {senderHidden ? (
+                          <p className="flex items-start gap-2 text-xs text-muted-foreground">
+                            <UserX className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            Submitted anonymously. The sender is withheld from staff too, so
+                            judge this one on its content, reports and comments.
+                          </p>
+                        ) : senderVisible ? (
                           <div className="grid gap-1 text-sm">
                             <p>
                               <span className="text-muted-foreground">name:</span> {confession.sender.name ?? 'Unknown'}

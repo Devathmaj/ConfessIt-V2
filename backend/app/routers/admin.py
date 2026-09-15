@@ -71,7 +71,13 @@ async def get_all_confessions(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
 ) -> List[Dict[str, Any]]:
-    """Return every confession with sender information for admin review."""
+    """Return every confession for admin review.
+
+    Everything a reviewer acts on is here -- body, timestamps, reports, comments, engagement --
+    with one exception: the sender of an anonymous confession. That identity is withheld for
+    staff exactly as it is for users, and the redaction happens in the service so it is not
+    merely absent from the screen but absent from the response.
+    """
     return get_all_confessions_data(db)
 
 
