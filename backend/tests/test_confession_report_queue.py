@@ -851,6 +851,267 @@ def test_hiding_a_confession_that_is_not_a_uuid_is_refused(moderator_client):
     assert moderator_client.patch("/admin/confessions/not-a-uuid/hide").status_code == 400
 
 
+# --------------------------------- what a direct hide tells the author, versus what a ruling does
+
+
+def test_hiding_a_confession_does_not_tell_the_author_it_violated_the_policies(
+    moderator_client, db
+):
+    """The policy wording belongs to a ruling on a report, and only to a ruling.
+
+    Nothing was cited against this post: no participant complained about it and no moderator
+    named a rule. Telling the author it "violated our community policies" would be the
+    application asserting a decision nobody made, and it is not something the author can act on
+    when they cannot ask which rule.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    to_author = notices_for(db, "author")
+    assert len(to_author) == 1
+    assert "policies" not in to_author[0].body.lower()
+    assert to_author[0].body == "We removed your confession from ConfessIt."
+
+
+def test_removing_a_confession_through_a_report_still_cites_the_policies(moderator_client, db):
+    """The other half of the split, on the same content and through the other door.
+
+    A report was filed, a moderator read the post and ruled that it broke a rule, and the author
+    is owed the reason. If the wording moved to the neutral copy this test fails, because the
+    two paths are the only thing distinguishing them.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    to_author = notices_for(db, "author")
+    assert len(to_author) == 1
+    assert "policies" in to_author[0].body.lower()
+
+
+def test_a_hide_on_a_reported_confession_is_still_neutral(moderator_client, db):
+    """The split is by **path**, not by whether reports happen to exist.
+
+    This is the case that would otherwise be argued about: the post has reports on it, so it
+    would be easy to read the hide as a shortcut to the same outcome. But no report was ruled
+    on, so no rule was cited, and the author gets the copy that does not claim one. Deciding
+    this on the report count rather than the path would make the wording mean two different
+    things depending on a moderator's route through the app.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    make_report(db, confession_id, make_user(db, "reporter"))
+
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    to_author = notices_for(db, "author")
+    assert len(to_author) == 1
+    assert "policies" not in to_author[0].body.lower()
+
+
+# --------------------------------------------------- hiding a single comment from the review screen
+
+
+def test_hiding_a_comment_keeps_the_row_and_the_reports(admin_client, db, moderator_client):
+    """The same soft write as hiding a confession, for one comment.
+
+    Asserted on the reports specifically because that is the whole reason this is not a delete:
+    a hard delete of the comment would cascade the reports filed against it, destroying the
+    record that it was reported.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"), body="rude but kept")
+    report_id = make_report(db, comment_id, make_user(db, "reporter"), kind="comment")
+
+    response = moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == comment_id
+    assert body["confession_id"] == confession_id
+    assert body["content_removed"] is True
+    assert body["already_hidden"] is False
+    with db.sessions() as session:
+        comment = session.get(ConfessionCommentRecord, comment_id)
+        assert comment is not None
+        assert comment.body == "rude but kept"
+        assert comment.removed_at is not None
+        assert comment.removed_by_regno == "moduser"
+        assert session.get(ReportRecord, report_id) is not None
+
+
+def test_hiding_a_comment_leaves_the_confession_up(db, moderator_client):
+    """One bad comment in a hundred is not a reason to take the whole post down."""
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    with db.sessions() as session:
+        confession = session.get(ConfessionRecord, confession_id)
+        assert confession is not None
+        assert confession.removed_at is None
+
+
+def test_hiding_a_comment_takes_it_out_of_the_confession_but_not_the_review_screen(
+    admin_client, db, client, moderator_client
+):
+    """The two doors disagree on purpose: gone for participants, flagged for staff."""
+    confession_id = make_confession(db, make_user(db, "author"))
+    keep_id = make_comment(db, confession_id, make_user(db, "quiet"), body="stays")
+    hide_id = make_comment(db, confession_id, make_user(db, "noisy"), body="goes")
+
+    moderator_client.patch(f"/admin/comments/{hide_id}/hide")
+
+    participant = [
+        row for row in client.get("/confessions").json() if row["id"] == confession_id
+    ]
+    assert len(participant) == 1
+    assert [c["id"] for c in participant[0]["comments"]] == [keep_id]
+    staff = find_confession(admin_client.get("/admin/confessions").json(), confession_id)
+    hidden = {c["id"]: c for c in staff["comments"]}[hide_id]
+    assert hidden["content_removed"] is True
+    assert hidden["removed_at"] is not None
+    assert hidden["removed_by_regno"] == "moduser"
+
+
+def test_hiding_a_comment_decrements_the_parents_comment_count(db, moderator_client):
+    """The feed must stop advertising a comment nobody can open.
+
+    ``comment_count`` is denormalised, so it is the one thing a comment removal has to write
+    beyond the comment row itself. Left stale, the confession still claims N comments and shows
+    fewer, on every read, for as long as the row survives -- and there is no unhide to correct it.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+    with db.sessions.begin() as session:
+        session.get(ConfessionRecord, confession_id).comment_count = 1
+
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    with db.sessions() as session:
+        assert session.get(ConfessionRecord, confession_id).comment_count == 0
+
+
+def test_hiding_the_same_comment_twice_does_not_double_decrement(db, moderator_client):
+    """The decrement belongs to the removal, not to the request.
+
+    Gated on the transition for the same reason ``removed_at`` is not re-stamped: a second click
+    is a double click, and subtracting again would take the count below the number of comments
+    that are actually visible.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+    with db.sessions.begin() as session:
+        session.get(ConfessionRecord, confession_id).comment_count = 1
+
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+    second = moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    assert second.status_code == 200, "a double click must not be answered with an error"
+    assert second.json()["already_hidden"] is True
+    assert second.json()["content_removed"] is False
+    with db.sessions() as session:
+        assert session.get(ConfessionRecord, confession_id).comment_count == 0
+    # Told once. A second notice for one removal reads as two events.
+    assert [notice.heading for notice in notices_for(db, "commenter")] == ["Comment removed"]
+
+
+def test_hiding_a_comment_leaves_its_siblings_untouched(db, moderator_client):
+    """Hiding one comment does not rewrite the removal state of the ones beside it.
+
+    Those may each be the subject of their own report, ruled on their own evidence. A moderator
+    acting on one comment has no business restamping the others.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    hide_id = make_comment(db, confession_id, make_user(db, "noisy"))
+    keep_id = make_comment(db, confession_id, make_user(db, "quiet"))
+
+    moderator_client.patch(f"/admin/comments/{hide_id}/hide")
+
+    with db.sessions() as session:
+        kept = session.get(ConfessionCommentRecord, keep_id)
+        assert kept is not None
+        assert kept.removed_at is None
+
+
+def test_hiding_a_comment_tells_its_author_it_was_removed(moderator_client, db):
+    """Neutral wording, for the same reason a hidden confession gets it.
+
+    No report was ruled on, so there is no policy to cite -- only the fact that the comment is
+    gone.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+    bystander = make_user(db, "bystander")
+
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    to_author = notices_for(db, "commenter")
+    assert [notice.heading for notice in to_author] == ["Comment removed"]
+    assert "policies" not in to_author[0].body.lower()
+    assert to_author[0].body == "We removed your comment from ConfessIt."
+    assert notices_for(db, "bystander") == [], "nobody else is dragged into it"
+    assert notices_for(db, "author") == [], "the confession's author is not a party to this"
+
+
+def test_there_is_no_way_to_unhide_a_hidden_comment(moderator_client, db):
+    """The confirmation dialog promises there is no bringing a comment back, so it must hold.
+
+    Same property as the confession equivalent, asserted on the other content type: a future
+    ``unhide`` endpoint would make the warning a lie on this route.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    for method, path in (
+        ("post", f"/admin/comments/{comment_id}/unhide"),
+        ("patch", f"/admin/comments/{comment_id}/unhide"),
+        ("put", f"/admin/comments/{comment_id}/unhide"),
+        ("patch", f"/admin/comments/{comment_id}/show"),
+    ):
+        response = moderator_client.request(method, path)
+        assert response.status_code == 404, f"{method.upper()} {path} unexpectedly exists"
+
+    with db.sessions() as session:
+        assert session.get(ConfessionCommentRecord, comment_id).removed_at is not None
+
+
+def test_hiding_an_unknown_comment_is_a_404(moderator_client):
+    """A well-formed id for a row that is not there, as against a malformed id below."""
+    response = moderator_client.patch(
+        "/admin/comments/00000000-0000-4000-8000-000000000000/hide"
+    )
+
+    assert response.status_code == 404
+
+
+def test_hiding_a_comment_that_is_not_a_uuid_is_refused(moderator_client):
+    assert moderator_client.patch("/admin/comments/not-a-uuid/hide").status_code == 400
+
+
+def test_hiding_a_comment_keeps_the_confession_and_every_other_comment(db, moderator_client):
+    """Hiding a comment must not become a way to remove a discussion wholesale.
+
+    There is no hard delete for a comment, and the two rows surviving is the observable form of
+    that: a route that deleted would leave ``comment_count`` stale on the parent and destroy the
+    reports filed against the comment, which is exactly the pair of problems the soft write exists
+    to avoid.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+    other_id = make_comment(db, confession_id, make_user(db, "quiet"))
+
+    moderator_client.patch(f"/admin/comments/{comment_id}/hide")
+
+    with db.sessions() as session:
+        assert session.get(ConfessionRecord, confession_id) is not None
+        assert session.get(ConfessionCommentRecord, comment_id) is not None
+        assert session.get(ConfessionCommentRecord, other_id) is not None
+
+
 @pytest.mark.parametrize("kind", ["confession", "comment"])
 def test_a_report_carries_its_reason_verbatim(admin_client, db, kind):
     """A reason that has been reworded in transit is not the reason somebody complained about."""

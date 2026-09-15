@@ -327,6 +327,24 @@ export const hideAdminConfession = async (confessionId: string) => {
     return response.data;
 };
 
+/**
+ * Hide one comment from its confession. The comment-level counterpart to
+ * `hideAdminConfession`: same soft write, same one-way warning, same `already_hidden`
+ * distinction between "this click took it down" and "it was already down".
+ *
+ * The parent confession is untouched, and its comment count moves with the removal, so the
+ * feed stops advertising a comment nobody can open. The response carries `confession_id`
+ * so the caller can re-sort or collapse the card it came from without a refetch.
+ */
+export const hideAdminComment = async (commentId: string) => {
+    const response = await axios.patch(
+        `${API_URL}/admin/comments/${commentId}/hide`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export const getAdminLoveNotes = async () => {
     const response = await axios.get(`${API_URL}/admin/love-notes`, { headers: getAuthHeaders() });
     return response.data;

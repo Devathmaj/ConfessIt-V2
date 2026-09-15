@@ -31,6 +31,7 @@ from ..services.report_resolution_service import (
     resolve_status_filter,
 )
 from ..services.report_resolution_service import hide_confession as hide_confession_service
+from ..services.report_resolution_service import hide_comment as hide_comment_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -137,6 +138,35 @@ async def hide_confession(
     confirmation dialog says so rather than offering a promise the API does not keep.
     """
     return hide_confession_service(db, confession_id, reviewer.regno)
+
+
+@router.patch("/comments/{comment_id}/hide")
+async def hide_comment(
+    comment_id: str,
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
+) -> Dict[str, Any]:
+    """Hide one comment from its confession, keeping the row and everything attached to it.
+
+    The comment-level counterpart to ``PATCH /confessions/{confession_id}/hide``: the same soft
+    write, the same ``removed_at`` every participant-facing comment read filters on, and the same
+    one-way warning in the confirmation dialog. A confession with one bad comment in a hundred
+    should not have to be hidden wholesale to deal with it.
+
+    Declared under ``/admin/comments`` rather than nested under ``/admin/confessions/{id}/``
+    for the same routing reason as the report queue below: a literal segment beside a path
+    parameter can be read as that parameter's value, and a comment id being interpreted as a
+    confession id is a 404 that looks like a missing row.
+
+    Gated on ``confessions:delete``, the capability ``hide_confession`` already uses, because
+    this is the same job -- taking content out of public view without destroying the record --
+    and moderators already hold it. A separate capability would mean granting moderators a
+    second name for a privilege they already have, and then keeping the two in step.
+
+    Unlike ``DELETE /confessions/{confession_id}``, this does not cascade the reports filed
+    against the comment: hiding is a visibility change, so the record of it has to survive.
+    """
+    return hide_comment_service(db, comment_id, reviewer.regno)
 
 
 # The report queue is declared after ``/confessions/{confession_id}`` on purpose. FastAPI

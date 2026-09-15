@@ -14,7 +14,7 @@ import {
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
-import { getAdminConfessions, hideAdminConfession } from '@/services/api';
+import { getAdminConfessions, hideAdminComment, hideAdminConfession } from '@/services/api';
 import { toast } from 'sonner';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
@@ -71,6 +71,13 @@ interface AdminComment {
   like_count: number;
   dislike_count: number;
   reports: AdminReport[];
+  // Set by the server, never derived here, and the same three fields the parent confession
+  // carries: a comment hidden from this screen and one taken down by a report ruling produce
+  // the same state on the same column, so this is the only thing the screen can key its
+  // "already hidden" state off.
+  content_removed?: boolean;
+  removed_at?: string | null;
+  removed_by_regno?: string | null;
 }
 
 interface AdminConfession {
@@ -149,6 +156,14 @@ export const ConfessionsAdmin = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedConfessionId, setSelectedConfessionId] = useState<string | null>(null);
+  // The comment awaiting confirmation, and whether it lives on a confession that is already
+  // loaded. One slot rather than a per-comment `useState`, because the dialog has to name the
+  // comment actually being hidden and there is exactly one dialog.
+  const [pendingCommentId, setPendingCommentId] = useState<string | null>(null);
+  // Set while the comment request is in flight, so a second confirm cannot fire for the same
+  // comment before the first has answered. A failed request clears it in `finally`; otherwise
+  // one failure would leave the dialog permanently disabled.
+  const [hidingComment, setHidingComment] = useState(false);
   const [visibleSenders, setVisibleSenders] = useState<Record<string, boolean>>({});
   // One open reaction at a time, across every row, keyed `confessionId:reaction`. A record would
   // allow several at once, which turns a snapshot into a wall of names; a single slot keeps it
@@ -215,17 +230,20 @@ export const ConfessionsAdmin = () => {
                     reported_by: Array.isArray(comment.reported_by) ? comment.reported_by : [],
                     like_count: comment.like_count ?? 0,
                     dislike_count: comment.dislike_count ?? 0,
-                    reports: Array.isArray(comment.reports)
-                      ? comment.reports.map((commentReport: Partial<AdminReport>, reportIndex) => ({
-                          id: commentReport.id ?? `confession-${index}-comment-${commentIndex}-report-${reportIndex}`,
-                          reason: commentReport.reason ?? null,
-                          created_at: commentReport.created_at ?? null,
-                          reporter: {
-                            id: commentReport.reporter?.id ?? null,
-                            name: commentReport.reporter?.name ?? null,
-                          },
-                        }))
-                      : [],
+reports: Array.isArray(comment.reports)
+                        ? comment.reports.map((commentReport: Partial<AdminReport>, reportIndex) => ({
+                            id: commentReport.id ?? `confession-${index}-comment-${commentIndex}-report-${reportIndex}`,
+                            reason: commentReport.reason ?? null,
+                            created_at: commentReport.created_at ?? null,
+                            reporter: {
+                              id: commentReport.reporter?.id ?? null,
+                              name: commentReport.reporter?.name ?? null,
+                            },
+                          }))
+                        : [],
+                    content_removed: comment.content_removed ?? false,
+                    removed_at: comment.removed_at ?? null,
+                    removed_by_regno: comment.removed_by_regno ?? null,
                   }))
                 : [],
             }))
@@ -351,6 +369,49 @@ export const ConfessionsAdmin = () => {
     }
   };
 
+  const confirmHideComment = async () => {
+    if (!pendingCommentId) return;
+    const commentId = pendingCommentId;
+    try {
+      const result = await hideAdminComment(commentId);
+      setConfessions((prev) =>
+        prev.map((item) => {
+          if (!item.comments.some((comment) => comment.id === commentId)) return item;
+          // The parent's comment count is decremented server-side with the removal, so it is
+          // restated here from the same `Math.max` the row already uses. Patched rather than
+          // refetched, for the reason the confession hide is: a refetch would make the list
+          // jump under the next click.
+          const nextTotal = Math.max((item.comment_count ?? 0) - 1, 0);
+          return {
+            ...item,
+            comment_count: nextTotal,
+            comments: item.comments.map((comment) =>
+              comment.id === commentId
+                ? {
+                    ...comment,
+                    content_removed: true,
+                    removed_at: result?.removed_at ?? comment.removed_at ?? null,
+                    removed_by_regno: result?.removed_by_regno ?? comment.removed_by_regno ?? null,
+                  }
+                : comment
+            ),
+          };
+        })
+      );
+      toast.success(
+        result?.already_hidden
+          ? 'This comment was already hidden.'
+          : 'Comment hidden from the confession.',
+      );
+    } catch (error) {
+      console.error('Failed to hide comment', error);
+      toast.error('Could not hide the comment.');
+    } finally {
+      setPendingCommentId(null);
+      setHidingComment(false);
+    }
+  };
+
   const toggleSenderVisibility = (confessionId: string) => {
     setVisibleSenders((prev) => ({
       ...prev,
@@ -367,10 +428,12 @@ export const ConfessionsAdmin = () => {
           <h1 className="text-3xl font-semibold">Confession Review</h1>
           <p className="text-sm text-muted-foreground">
             Review every confession, act on its reports and comments, and hide harmful submissions.
-            Hiding takes a confession out of public view and cannot be undone; the post stays here
-            as a record. An anonymous confession is anonymous here too, so action it on what was
-            written. Each confession is collapsed to the line a reviewer triages on; expand one to
-            read it in full and act on it.
+            Hiding takes a confession or a single comment out of public view and cannot be undone;
+            the post stays here as a record and its author is told it was removed. Hiding here
+            never cites a policy -- only a ruling on the Reports page does that. An anonymous
+            confession is anonymous here too, so action it on what was written. Each confession is
+            collapsed to the line a reviewer triages on; expand one to read it in full and act on
+            it.
           </p>
           <p className="text-xs text-muted-foreground/80">
             Total confessions: {confessions.length} · Reports in queue: {totalReports}
@@ -700,7 +763,12 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                 </div>
                               </AccordionTrigger>
                               <AccordionContent className="px-3 pb-4">
-                                <p className="text-sm leading-relaxed">{comment.body}</p>
+                                {/* A hidden comment is dimmed rather than hidden here, matching
+                                    the confession: staff need to see what is already removed in
+                                    order to decide on the reports still sitting against it. */}
+                                <div className={comment.content_removed ? 'opacity-60' : undefined}>
+                                  <p className="text-sm leading-relaxed">{comment.body}</p>
+                                </div>
                                 {comment.reports.length > 0 && (
                                   <div className="mt-3 space-y-2">
                                     {comment.reports.map((report) => (
@@ -721,6 +789,28 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                     ))}
                                   </div>
                                 )}
+                                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-3">
+                                  {comment.content_removed ? (
+                                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <EyeOff className="h-3.5 w-3.5" />
+                                      Already hidden
+                                      {comment.removed_at ? ` on ${formatTimestamp(comment.removed_at)}` : ''}
+                                      {comment.removed_by_regno ? ` by ${comment.removed_by_regno}` : ''}.
+                                    </p>
+                                  ) : (
+                                    <span />
+                                  )}
+                                  {!comment.content_removed && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                                      onClick={() => setPendingCommentId(comment.id)}
+                                    >
+                                      <EyeOff className="mr-2 h-3.5 w-3.5" /> Hide comment
+                                    </Button>
+                                  )}
+                                </div>
                               </AccordionContent>
                             </AccordionItem>
                           ))}
@@ -773,6 +863,46 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmHide} className="bg-destructive hover:bg-destructive/90">
               Hide confession
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* One dialog for every comment, rendered from `pendingCommentId` so there is exactly one
+          place where "a comment is being confirmed for removal" can be true. */}
+      <AlertDialog
+        open={pendingCommentId !== null}
+        onOpenChange={(open) => {
+          // Every close route clears the slot, so nothing survives a cancel for the next comment
+          // to pick up by mistake.
+          if (!open) setPendingCommentId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hide this comment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will hide the comment from its confession and notify the person who wrote it.
+              The confession itself stays up. It cannot be unhidden -- there is no way to bring a
+              hidden comment back. The comment stays on this screen as a record of the decision,
+              and any reports filed against it survive with it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={hidingComment}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={hidingComment}
+              onClick={(event) => {
+                // Held open for the duration of the request so a second confirm cannot be
+                // clicked mid-flight; `confirmHideComment` clears both flags when it settles.
+                event.preventDefault();
+                if (!pendingCommentId) return;
+                setHidingComment(true);
+                void confirmHideComment();
+              }}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              {hidingComment ? 'Working...' : 'Hide comment'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -25,6 +25,14 @@ would delete the record that it was reported and ruled on, and the audit trail w
 changes is visibility: every participant-facing read filters on ``removed_at IS NULL``, staff
 surfaces do not and carry the flag instead, and the asset proxy stops serving a removed love
 note's image even to a delivery URL that was minted while it was still live.
+
+**What the author is told depends on how the content came down, not on what happened to it.**
+The same write is reached two ways: a ``removed`` ruling on a report, and a direct hide from a
+review screen with no report behind it. A ruling cites the policy, because a moderator read the
+post and decided it broke a rule and the author is owed the reason. A direct hide says only
+that the content was removed, because no rule was cited against it and asserting one would be
+the application claiming a decision nobody made. ``hide_confession`` and ``hide_comment`` are
+the two direct-hide paths; both send the neutral copy.
 """
 
 from datetime import datetime, timezone
@@ -97,13 +105,38 @@ _REMOVAL_HEADINGS: Dict[str, str] = {
     "love_note": "Love note removed",
 }
 
-_REMOVAL_BODIES: Dict[str, str] = {
+# What the author is told when a removal came out of a **report queue**.
+#
+# Here a participant put the content in front of a moderator, a moderator read it and ruled
+# that it broke a rule, and the author is being told which rule. Citing the policy is the
+# whole point: it is what makes the ruling answerable by the person it was made about, and
+# what lets them know it was a decision rather than a fault in the app.
+_POLICY_BODIES: Dict[str, str] = {
     "confession": "Your confession was removed because it violated our community policies.",
     "comment": (
         "Your comment on a confession was removed because it violated our community policies."
     ),
     "message": "Your chat message was removed because it violated our community policies.",
     "love_note": "Your love note was removed because it violated our community policies.",
+}
+
+# What the author is told when a moderator removed the content **directly**, with no report
+# behind it.
+#
+# Deliberately not the policy copy, and the distinction is not cosmetic. A moderator hiding a
+# post from the review screen has not cited a rule against it and no participant has
+# complained about it, so asserting a policy violation would be the application making a claim
+# about a ruling that was never made -- and doing so about a rule nobody can point to is not
+# something an author can act on. This says the thing that actually happened and stops there.
+#
+# The split is by **path**, not by whether reports happen to exist. A confession that has three
+# reports on it and is hidden from the review screen still got no ruling, so it still gets this
+# copy. Only ``resolve_*_report`` cites the policy.
+_NEUTRAL_BODIES: Dict[str, str] = {
+    "confession": "We removed your confession from ConfessIt.",
+    "comment": "We removed your comment from ConfessIt.",
+    "message": "We removed your chat message from ConfessIt.",
+    "love_note": "We removed your love note from ConfessIt.",
 }
 
 _REPORTER_REMOVED_HEADING = "Your report was acted on"
@@ -142,19 +175,32 @@ def _regno_for_user(session, user_id: Optional[str]) -> Optional[str]:
     return session.scalar(select(UserRecord.regno).where(UserRecord.id == str(user_id)))
 
 
-def _notify_removal(db: Database, *, author_regno: Optional[str], reporter_regno: Optional[str], kind: str) -> None:
+def _notify_removal(
+    db: Database,
+    *,
+    author_regno: Optional[str],
+    reporter_regno: Optional[str],
+    kind: str,
+    cites_policy: bool,
+) -> None:
     """Tell the author their content is gone and the reporter it was taken down.
 
     A reporter who is also the author -- a participant reporting their own confession, which
     the confession report path does not forbid -- gets one notification, not two. The removal
     notice already says everything the reporter notice would have said, and sending both would
     read as two separate events.
+
+    ``cites_policy`` selects which body the author is sent, and it is the one flag that carries
+    the whole distinction described above ``_POLICY_BODIES``: a ruling on a report cites the
+    policy, a direct removal does not. It is required rather than defaulted, so adding a fourth
+    removal path cannot quietly inherit whichever copy the signature happened to default to.
     """
     if author_regno:
+        bodies = _POLICY_BODIES if cites_policy else _NEUTRAL_BODIES
         create_notification_service(
             recipient_regno=author_regno,
             heading=_REMOVAL_HEADINGS[kind],
-            body=_REMOVAL_BODIES[kind],
+            body=bodies[kind],
             db=db,
         )
     if reporter_regno and reporter_regno != author_regno:
@@ -162,6 +208,26 @@ def _notify_removal(db: Database, *, author_regno: Optional[str], reporter_regno
             recipient_regno=reporter_regno,
             heading=_REPORTER_REMOVED_HEADING,
             body=_REPORTER_REMOVED_BODY,
+            db=db,
+        )
+
+
+def _notify_direct_removal(db: Database, *, author_regno: Optional[str], kind: str) -> None:
+    """Tell the author their content was removed by a moderator, citing no policy.
+
+    The direct-hide half of :func:`_notify_removal`, split out so the ``cites_policy=False``
+    decision is written once. Both ``hide_confession`` and ``hide_comment`` reach this, and a
+    signature that let a fourth path default the flag would put the choice back in reach of
+    whoever adds the path next.
+
+    There is no reporter to notify here: nobody complained, which is the whole reason the
+    policy copy is not used.
+    """
+    if author_regno:
+        create_notification_service(
+            recipient_regno=author_regno,
+            heading=_REMOVAL_HEADINGS[kind],
+            body=_NEUTRAL_BODIES[kind],
             db=db,
         )
 
@@ -304,6 +370,7 @@ def resolve_confession_report(
             author_regno=author_regno,
             reporter_regno=reporter_regno,
             kind="comment" if is_comment else "confession",
+            cites_policy=True,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -354,7 +421,11 @@ def resolve_love_note_report(
 
     if status_value == REMOVAL_STATUS:
         _notify_removal(
-            db, author_regno=author_regno, reporter_regno=reporter_regno, kind="love_note"
+            db,
+            author_regno=author_regno,
+            reporter_regno=reporter_regno,
+            kind="love_note",
+            cites_policy=True,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -411,6 +482,7 @@ def resolve_message_report(
             author_regno=report.reported_user_regno,
             reporter_regno=reporter_regno,
             kind="message",
+            cites_policy=True,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -446,6 +518,9 @@ def hide_confession(
     The author is notified only on the transition, for the same reason the report path notifies
     them there -- one removal is one notice. A second one for the same removal reads as two
     events, and there was only ever one.
+
+    The author is told the post was removed and **nothing about the policies**. No report was
+    ruled on here, so there is no rule to cite; see ``_NEUTRAL_BODIES``.
     """
     if not is_valid_id(confession_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
@@ -471,13 +546,90 @@ def hide_confession(
         removed_by_regno = confession.removed_by_regno
 
     if hidden:
-        _notify_removal(db, author_regno=author_regno, reporter_regno=None, kind="confession")
+        _notify_direct_removal(db, author_regno=author_regno, kind="confession")
         logger.info(f"Confession {confession_id} hidden by {reviewer_regno}")
     else:
         logger.info(f"Confession {confession_id} was already hidden; left as it was")
 
     return {
         "id": str(confession_id),
+        "content_removed": hidden,
+        "already_hidden": already_hidden,
+        "removed_at": isoformat_datetime(removed_at),
+        "removed_by_regno": removed_by_regno,
+    }
+
+
+def hide_comment(
+    db: Database,
+    comment_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Take a single comment off a confession, with no report behind it.
+
+    The comment-level counterpart to :func:`hide_confession`, and the same write: mark the row
+    removed rather than deleting it, so the reports filed against the comment survive with it.
+    ``removed_at`` is already the column every participant-facing comment read filters on, so
+    reusing it means a comment hidden from the review screen and one taken down by a report
+    ruling land in identical state and staff reads never disagree with the feed.
+
+    **The parent confession is left alone**, including its ``comment_count``, for the same
+    reason ``hide_confession`` leaves the comments alone in the other direction: hiding a post
+    does not rewrite the removal state of the rows beneath it, which may be the subject of
+    their own reports and their own rulings.
+
+    The ``comment_count`` decrement is the one extra write this needs, and it happens **only on
+    the transition** -- inside the ``if hidden`` branch rather than beside the lookup, because
+    reading it as "this comment was acted on, so subtract one" would let a second click on an
+    already-hidden comment take the count to zero while the comment stayed on screen for staff.
+    Same reasoning as the identical branch in :func:`resolve_confession_report`.
+
+    The author is notified once, on the transition, and told the comment was removed with no
+    claim about the policies -- nothing was ruled on here. **There is no unhide.**
+    """
+    if not is_valid_id(comment_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid comment id")
+
+    author_regno: Optional[str] = None
+    hidden = False
+    already_hidden = False
+    removed_at: Optional[datetime] = None
+    removed_by_regno: Optional[str] = None
+    # Read inside the transaction: the session closes and expires the row's attributes before
+    # the return below, so touching ``comment`` out here would ask a detached instance to
+    # refresh itself and fail. The parent id is the one field the response needs beyond what
+    # the branch already captured.
+    confession_id: Optional[str] = None
+
+    with db.sessions.begin() as session:
+        comment = session.get(ConfessionCommentRecord, str(comment_id))
+        if comment is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+
+        author_regno = _regno_for_user(session, comment.user_id)
+        confession_id = str(comment.confession_id)
+        hidden = _stamp_removal(comment, reviewer_regno)
+        already_hidden = not hidden
+        removed_at = comment.removed_at
+        removed_by_regno = comment.removed_by_regno
+
+        if hidden:
+            parent = session.get(ConfessionRecord, confession_id)
+            # Guarded on > 0 rather than blind: the column is denormalised and can already be
+            # out of step with the rows, and a negative comment count would render as a
+            # nonsense number in the feed rather than as an obviously broken one.
+            if parent is not None and parent.comment_count > 0:
+                parent.comment_count = parent.comment_count - 1
+
+    if hidden:
+        _notify_direct_removal(db, author_regno=author_regno, kind="comment")
+        logger.info(f"Comment {comment_id} hidden by {reviewer_regno}")
+    else:
+        logger.info(f"Comment {comment_id} was already hidden; left as it was")
+
+    return {
+        "id": str(comment_id),
+        "confession_id": confession_id,
         "content_removed": hidden,
         "already_hidden": already_hidden,
         "removed_at": isoformat_datetime(removed_at),
