@@ -24,10 +24,21 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
       "@typescript-eslint/no-unused-vars": "off",
+      "no-control-regex": "error",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-empty-object-type": "warn",
       "prefer-const": "warn",
       "@typescript-eslint/no-require-imports": "warn"
+    },
+  },
+  {
+    // Turned off for one file, and only that file. src/lib/limits.ts exists to say which
+    // characters are not allowed, so a rule that objects to control characters inside a regular
+    // expression there is objecting to the point of the module. Everywhere else the rule stays on,
+    // because a stray control character in some unrelated regex is a real bug.
+    files: ["src/lib/limits.ts"],
+    rules: {
+      "no-control-regex": "off",
     },
   }
 );

@@ -2,7 +2,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import CheckConstraint, create_engine, text
+from sqlalchemy import CheckConstraint, Table, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
@@ -200,13 +200,13 @@ class PostgresClient:
                     )
 
     def apply_check_constraints(self) -> None:
-        """Add CHECK constraints declared in the models but missing from the database.
+        """Bring the database's CHECK constraints in line with the models.
 
         ``create_all`` only creates tables that do not exist, so on an already-deployed
         database a constraint added to a model is silently never applied. Walking the
-        metadata here and adding whatever is absent keeps the running schema in step with
-        the models without needing a migration framework or hand-written DDL that can
-        drift from them.
+        metadata here and adding whatever is absent keeps the running schema in step with the
+        models without needing a migration framework or hand-written DDL that can drift
+        from them.
 
         Constraints are added ``NOT VALID``: PostgreSQL then enforces them on every new or
         updated row while leaving already-stored rows alone. That matters for a limit added
@@ -214,17 +214,31 @@ class PostgresClient:
         limit. Validating them is a separate, deliberate step so that tightening a limit
         cannot take the app down on boot, and so the decision about what to do with
         over-length history stays explicit rather than silent.
+
+        Superseded constraints are dropped, which is the other half of the job. Adding only
+        means a limit that changes value leaves its predecessor behind holding the same
+        column to the old number. That is worse than looking untidy: the two constraints are
+        independent, so a direct write that skips the model has to satisfy both, and the
+        *looser* ceiling stops being a limit on anything. Dropping the old name is what makes
+        the new number the only rule in force. Dropping is safe to do at boot precisely
+        because the replacement is added in the same transaction -- there is no window in
+        which the column is unguarded.
         """
         with self.engine.begin() as connection:
             installed = {
-                name
-                for (name,) in connection.execute(
-                    text("SELECT conname FROM pg_constraint WHERE contype = 'c'")
+                (name, table_name)
+                for name, table_name in connection.execute(
+                    text(
+                        "SELECT conname, conrelid::regclass::text FROM pg_constraint "
+                        "WHERE contype = 'c'"
+                    )
                 )
             }
             for table in Base.metadata.sorted_tables:
                 for constraint in table.constraints:
-                    if not isinstance(constraint, CheckConstraint) or constraint.name in installed:
+                    if not isinstance(constraint, CheckConstraint):
+                        continue
+                    if (constraint.name, table.name) in installed:
                         continue
                     sqltext = str(constraint.sqltext).strip()
                     if not sqltext:
@@ -240,6 +254,54 @@ class PostgresClient:
                         constraint.name,
                         table.name,
                     )
+                for superseded in self._superseded_constraints(table, installed):
+                    connection.execute(
+                        text(
+                            f'ALTER TABLE "{table.name}" DROP CONSTRAINT "{superseded}"'
+                        )
+                    )
+                    logger.info(
+                        "Dropped superseded CHECK constraint %s on %s",
+                        superseded,
+                        table.name,
+                    )
+
+    @staticmethod
+    def _superseded_constraints(
+        table: Table, installed: set[tuple[str, str]]
+    ) -> list[str]:
+        """Names of installed CHECK constraints on ``table`` that a model has replaced.
+
+        A constraint counts as superseded when the models declare a constraint on the same
+        table whose name is the same string with a different numeric suffix. That is what
+        makes a limit encode its own value -- ``ck_confessions_body_length_500`` supersedes
+        ``ck_confessions_body_length_2000`` -- and it needs no registry of old names to
+        forget: tightening the constant and restarting is the whole migration.
+
+        Only a *numeric* suffix qualifies. A rule that changes its SQL without changing its
+        name cannot be detected this way, which is why rules that grow are written under a
+        new name instead. Matching on arbitrary prefixes would be worse than not cleaning up
+        at all, since it would eventually drop an unrelated constraint.
+        """
+        families: dict[str, set[str]] = {}
+        for constraint in table.constraints:
+            if not isinstance(constraint, CheckConstraint) or not constraint.name:
+                continue
+            prefix, _, suffix = constraint.name.rpartition("_")
+            # Only a clean numeric suffix makes this a value-bearing family. "ck_a_b" has an
+            # empty prefix and is skipped; "ck_abc_1" is treated as family "ck_abc".
+            if prefix and suffix.isdigit():
+                families.setdefault(prefix, set()).add(constraint.name)
+
+        superseded = []
+        for name, table_name in installed:
+            if table_name != table.name:
+                continue
+            prefix, _, suffix = name.rpartition("_")
+            known = families.get(prefix)
+            if known and suffix.isdigit() and name not in known:
+                superseded.append(name)
+        return superseded
 
     def close(self) -> None:
         self.engine.dispose()

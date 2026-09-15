@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import Headers
@@ -306,6 +308,40 @@ async def _body_too_large_response(request: Request, exc: RequestBodyTooLarge) -
     return PlainTextResponse("Request body too large", status_code=413)
 
 
+# ----------------------
+# Unencodable input in a 422
+# ----------------------
+# A validation error quotes the offending value back to the caller, and that value is
+# arbitrary user input. If it is not valid UTF-8 -- an unpaired surrogate, which a JSON
+# ``\udXXX`` escape can produce and which ``str.encode('utf-8')`` refuses -- then rendering
+# the 422 itself raises UnicodeEncodeError and the client gets a 500 for a request the
+# server had already correctly rejected. The rejection was right; only the way it was
+# reported was broken.
+#
+# So the 422 is rendered with backslashreplace, which is already the escape these
+# characters use on the wire. The response keeps FastAPI's usual shape and the message is
+# still legible; only the unencodable bytes change representation. This is not a place to
+# sanitize the request itself -- by the time this runs the value has been refused.
+
+
+def _make_encodable(value):
+    """Return ``value`` with any un-encodable string repaired, recursively."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "backslashreplace").decode("utf-8")
+    if isinstance(value, dict):
+        return {key: _make_encodable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_make_encodable(item) for item in value]
+    return value
+
+
+async def _request_validation_response(request: Request, exc: RequestValidationError) -> Response:
+    return JSONResponse(
+        {"detail": _make_encodable(jsonable_encoder(exc.errors()))},
+        status_code=422,
+    )
+
+
 class RequestBodyLimitMiddleware:
     """Reject a request whose body exceeds the configured ceiling, declared or not."""
 
@@ -379,6 +415,7 @@ def request_body_limit() -> int:
 # opaque network error instead of the status the client needs to see.
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=request_body_limit())
 app.add_exception_handler(RequestBodyTooLarge, _body_too_large_response)
+app.add_exception_handler(RequestValidationError, _request_validation_response)
 
 # ----------------------
 # CORS Middleware

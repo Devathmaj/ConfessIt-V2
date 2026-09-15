@@ -34,6 +34,37 @@ from .accounts import (
 # ``PostgresClient.apply_check_constraints``.
 _ACCOUNT_TYPE_SQL_LIST = ", ".join(f"'{value}'" for value in ACCOUNT_TYPE_VALUES)
 
+def _non_character_code_points() -> list[int]:
+    """Every code point Unicode reserves forever, in ascending order.
+
+    Two families, and the second is the one that gets forgotten. Sixty-six of them sit in one
+    contiguous block at U+FDD0-U+FDEF; the rest are the last two code points of every plane, so
+    U+FFFE and U+FFFF in the BMP but also U+1FFFE, U+2FFFE and so on up to U+10FFFE and U+10FFFF.
+    Testing only the BMP pair accepts text that a strict reader is entitled to replace with
+    U+FFFD, silently.
+
+    Generated rather than written out because the plane-end entries are exactly the kind of long
+    list that gets one entry dropped by accident, and a missing entry fails by accepting text
+    rather than by erroring.
+    """
+    return (
+        list(range(0xFDD0, 0xFDEF + 1))
+        + [code_point for plane in range(17) for code_point in (plane << 16 | 0xFFFE, plane << 16 | 0xFFFF)]
+    )
+
+
+# The same set, as a PostgreSQL regular expression character class, built from the code points
+# rather than written as escapes. That is deliberate and it is the whole reason this is a
+# function call instead of a string literal: PostgreSQL's ``\u`` escape takes exactly four hex
+# digits, so ``\u1FFFE`` is U+1FFF followed by a literal ``E`` rather than U+1FFFE, and a pattern
+# written with escapes looks correct while matching the wrong characters. Interpolating real
+# characters sidesteps the escape width entirely.
+#
+# The constraint text therefore carries invisible code points. That is why it is generated here
+# rather than written by hand -- there is nothing readable to write, and a hand-written version
+# would be the version that quietly does not match.
+_NON_CHARACTERS_PATTERN = "[" + "".join(chr(code_point) for code_point in _non_character_code_points()) + "]"
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -153,7 +184,35 @@ class ConfessionRecord(Base):
     __table_args__ = (
         CheckConstraint(
             f"length(body) <= {CONFESSION_BODY_MAX}",
-            name="ck_confessions_body_length",
+            # Named for the limit, not just "the length". apply_check_constraints only adds
+            # what is missing, so tightening CONFESSION_BODY_MAX while keeping this name would
+            # leave every deployed database enforcing the old number forever, with nothing
+            # anywhere reporting that the constraint and the model now disagree. The suffix is
+            # the new ceiling; dropping a limit means adding a third name beside this one.
+            name=f"ck_confessions_body_length_{CONFESSION_BODY_MAX}",
+        ),
+        # The database half of "only storable characters", covering the half the model cannot:
+        # these still hold for writes that never pass through the API.
+        #
+        # Two characters the model rejects are not this constraint's problem to solve. A NUL byte
+        # cannot be inside a row at all, and a lone surrogate has no UTF-8 encoding, so both fail
+        # before a CHECK is ever consulted. Control characters, DEL, the C1 block and the Unicode
+        # non-characters are the opposite case -- PostgreSQL stores every one of them without
+        # complaint, which is exactly why they need to be forbidden explicitly.
+        CheckConstraint(
+            "body !~ '[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]'",
+            name="ck_confessions_body_characters",
+        ),
+        # Its own constraint rather than a second arm on the one above, because
+        # ``apply_check_constraints`` only adds what is missing. Editing the SQL of an
+        # installed constraint would leave the running database on the old text forever with no
+        # error anywhere, so a rule that grows has to arrive under a new name.
+        CheckConstraint(
+            f"body !~ '{_NON_CHARACTERS_PATTERN}'",
+            # Named for the rule rather than for the first attempt at it, so that any database
+            # which already installed an earlier version adds this one instead of keeping a
+            # constraint whose pattern no longer matches what this module generates.
+            name="ck_confessions_body_unicode_noncharacters",
         ),
     )
 

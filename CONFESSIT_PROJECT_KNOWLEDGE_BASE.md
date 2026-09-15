@@ -248,7 +248,8 @@ Application records use typed relational PostgreSQL tables defined in `backend/a
 **Schema Evolution:** There is **no migration framework**. `PostgresClient.initialize()` does exactly two
 things on boot: `create_all()`, then `apply_check_constraints()` (which adds any model-declared
 `CHECK` constraint that is missing, `NOT VALID`, so a tightened length cap does not reject stored
-history).
+history, and drops the constraint a renamed one supersedes — see `ck_confessions_body_length_500`
+below).
 
 `create_all()` only creates tables that do not exist — it never looks inside an existing one. So a
 column or index added to a model is **not** applied to a database that already exists, and the failure

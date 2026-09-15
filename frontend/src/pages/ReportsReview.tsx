@@ -82,19 +82,25 @@ interface MessageReport {
   reviewed_by_regno: string | null;
 }
 
+/** The three id spaces the server owns, named once so the queue keys cannot drift apart. */
+type QueueKey = 'confessions' | 'loveNotes' | 'messages';
+
 /** The one thing the three queues share, which is also the one thing they are all for.
  *
- * `openReport` and `closeReport` are passed in per queue rather than switching on a kind,
+ * `openReport` is passed in per queue rather than switching on a kind inside the renderer,
  * because the server owns the mapping: a report id means nothing until you know which table
  * it came from, and a component that guessed would be guessing about an id space.
+ *
+ * There is no `fetch` on here. Each queue's loader owns its own state slot, so a shared
+ * signature would have to be a cast of one loader to another; the queues are uniform in what
+ * they render, not in what they fetch.
  */
 interface Queue {
-  key: string;
+  key: QueueKey;
   label: string;
   icon: typeof Flag;
   /** Human sentence for the tab and the empty state. */
   describe: (count: number) => string;
-  fetch: (status?: ReportStatus) => Promise<{ reports?: unknown[] }>;
   openReport: (reportId: string, status: 'reviewed' | 'dismissed') => Promise<unknown>;
 }
 
@@ -188,7 +194,7 @@ export const ReportsReview = () => {
 
   const handleClose = async (
     reportId: string,
-    queue: 'confessions' | 'loveNotes' | 'messages',
+    queue: QueueKey,
     status: 'reviewed' | 'dismissed'
   ) => {
     const close = {
@@ -227,7 +233,6 @@ export const ReportsReview = () => {
       icon: ShieldQuestion,
       describe: (count) =>
         count === 1 ? '1 reported confession or comment' : `${count} reported confessions or comments`,
-      fetch: loadConfessions as Queue['fetch'],
       openReport: (reportId, status) => updateAdminConfessionReportStatus(reportId, status),
     },
     {
@@ -235,7 +240,6 @@ export const ReportsReview = () => {
       label: 'Love notes',
       icon: MessageCircleHeart,
       describe: (count) => (count === 1 ? '1 reported love note' : `${count} reported love notes`),
-      fetch: loadLoveNotes as Queue['fetch'],
       openReport: (reportId, status) => updateAdminLoveNoteReportStatus(reportId, status),
     },
     {
@@ -243,7 +247,6 @@ export const ReportsReview = () => {
       label: 'Chat messages',
       icon: MessageSquare,
       describe: (count) => (count === 1 ? '1 reported message' : `${count} reported messages`),
-      fetch: loadMessages as Queue['fetch'],
       openReport: (reportId, status) => updateAdminMessageReportStatus(reportId, status),
     },
   ];

@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.config import settings
 from app.db_models import Base
@@ -109,6 +110,42 @@ def authenticated_user():
 def client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def _confession_author_client(db):
+    """A client whose participant resolves to a row that actually exists.
+
+    The shared ``client`` fixture resolves ``get_current_user`` to a fresh ``UserDetails``
+    on every call, and ``AccountDetails.id`` defaults to a new uuid, so the author id it
+    hands the handler is not in ``users``. That is fine for the 422 paths -- they are
+    refused before the insert -- but a test that needs a row to land in the database has
+    to name the id up front and put that row there first.
+    """
+    author_id = "33333333-3333-3333-3333-333333333333"
+    with test_db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (id, regno, name, email, class_name, gender) "
+                "VALUES (:id, 'authoruser', 'Author', 'author@user.com', 'Class', 'other') "
+                "ON CONFLICT (regno) DO NOTHING"
+            ),
+            {"id": author_id},
+        )
+    author = UserDetails(
+        id=author_id,
+        regno="authoruser",
+        name="Author",
+        email="author@user.com",
+        class_name="Class",
+        gender="other",
+        account_type=AccountType.USERS.value,
+    )
+    app.dependency_overrides[get_current_user] = lambda: author
+    try:
+        yield TestClient(app, follow_redirects=False)
+    finally:
+        app.dependency_overrides[get_current_user] = override_get_current_user
 
 
 @pytest.fixture

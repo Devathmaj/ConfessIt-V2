@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { AdminNavigation } from '@/components/AdminNavigation';
+import { ConfessionBody } from '@/components/ConfessionBody';
 import { getAdminConfessions, deleteAdminConfession } from '@/services/api';
 import { toast } from 'sonner';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
@@ -394,13 +395,15 @@ export const ConfessionsAdmin = () => {
                     value={confession.id}
                     className="overflow-hidden rounded-2xl border border-border bg-muted/20"
                   >
-                    <AccordionTrigger className="flex w-full flex-wrap items-start justify-between gap-3 px-4 py-3 text-left hover:no-underline">
+                    <AccordionTrigger className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:no-underline">
                       <div className="flex min-w-0 flex-1 flex-col gap-1">
 {/* The confession is what a reviewer judges, so it leads the row and the recipient
                           trails it as context. A confession without a recipient is a normal
                           confession, not a missing field, so it says nothing rather than
                           announcing the absence. */}
-                      <span className="line-clamp-2 text-sm leading-relaxed">{confession.body}</span>
+                      <ConfessionBody clamp={2} className="text-sm leading-relaxed">
+                        {confession.body}
+                      </ConfessionBody>
                       <span className="text-xs text-muted-foreground">
                         {confession.recipient_name && (
                           <span>
@@ -411,7 +414,11 @@ export const ConfessionsAdmin = () => {
 Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTotal}
                       </span>
                     </div>
-                      <div className="flex flex-wrap items-center gap-2">
+                      {/* shrink-0 rather than flex-wrap: these badges are the reviewer's
+                          state at a glance and wrapping them to a second line makes a long
+                          confession row taller than the badges, which reads as the row being
+                          about the badges. */}
+                      <div className="flex shrink-0 items-center gap-2">
                         <Badge variant={anonymityVariant}>
                           {confession.anonymous ? 'Anonymous' : 'Public confession'}
                         </Badge>
@@ -427,9 +434,9 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-6 bg-background/40 px-4 pb-5 pt-2">
-                      <p className="rounded-2xl border border-border bg-muted/40 p-4 leading-relaxed">
+                      <ConfessionBody className="rounded-2xl border border-border bg-muted/40 p-4 leading-relaxed">
                         {confession.body}
-                      </p>
+                      </ConfessionBody>
 
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div className="rounded-2xl border border-border bg-muted/30 p-4">

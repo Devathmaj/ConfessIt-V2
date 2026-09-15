@@ -27,8 +27,15 @@ import { toast } from 'sonner';
 import { getConfessions, createConfession, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
+import { ConfessionBody } from '@/components/ConfessionBody';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
-import { COMMENT_BODY_MAX, CONFESSION_BODY_MAX, RECIPIENT_NAME_MAX, REPORT_REASON_MAX } from '@/lib/limits';
+import {
+  COMMENT_BODY_MAX,
+  CONFESSION_BODY_MAX,
+  RECIPIENT_NAME_MAX,
+  REPORT_REASON_MAX,
+  containsUnstorableCharacter,
+} from '@/lib/limits';
 
 // Interface for user information
 interface UserInfo {
@@ -292,6 +299,13 @@ export const ConfessionsPage = () => {
       toast.error('Please write your confession first! 💌');
       return;
     }
+    // Checked here as well as on the server so the message lands while the text is still
+    // on screen. These characters usually arrive by pasting from a terminal or a document
+    // with hidden formatting, and a 422 with no explanation reads as the app being broken.
+    if (containsUnstorableCharacter(newConfession)) {
+      toast.error('Your confession contains a character that cannot be saved. Try pasting it as plain text.');
+      return;
+    }
     if (!isAuthenticated) {
       toast.error('You must be logged in to post a confession.');
       return;
@@ -518,6 +532,9 @@ export const ConfessionsPage = () => {
               </DialogHeader>
               <div className="space-y-4">
                 <Textarea placeholder="Share what's in your heart..." value={newConfession} maxLength={CONFESSION_BODY_MAX} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
+                <p className="text-xs text-muted-foreground">
+                  {newConfession.length} / {CONFESSION_BODY_MAX} characters
+                </p>
                 <div className="space-y-2">
                   <label htmlFor="confessing-to" className="text-sm text-muted-foreground">
                     Who are you confessing to? <span className="text-xs">(optional)</span>
@@ -557,25 +574,28 @@ export const ConfessionsPage = () => {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-4xl mx-auto space-y-6 min-w-0">
         {confessions.map((confession, index) => {
           const hasReportedConfession = user && confession.reported_by.includes(user.id);
           return (
-            <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300" style={{ animationDelay: `${index * 0.1}s` }}>
+            <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300 min-w-0 overflow-hidden" style={{ animationDelay: `${index * 0.1}s` }}>
               <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle className="text-lg font-dancing text-romantic">
+                <div className="flex justify-between items-start gap-3">
+                  {/* min-w-0 so this column is allowed to shrink. Without it the flex item
+                      keeps min-width:auto, refuses to get narrower than its longest word, and
+                      a long recipient name pushes the action buttons off the card. */}
+                  <div className="min-w-0">
+                    <CardTitle className="text-lg font-dancing text-romantic break-words [overflow-wrap:anywhere]">
                       {confession.anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
                     </CardTitle>
                     <CardDescription>{formatDateTimeDDMMYYYY(confession.created_at)}</CardDescription>
                     {confession.recipient_name && (
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p className="mt-1 text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">
                         Confessing to: <span className="font-medium text-foreground">{confession.recipient_name}</span>
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     {isAuthenticated && user?.id === confession.author_id && (
                         <Button
                         size="icon"
@@ -603,7 +623,31 @@ export const ConfessionsPage = () => {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-foreground leading-relaxed">{confession.body}</p>
+                {/* The body is the primary way in, so it is a real button rather than a
+                    click handler on a paragraph: that gets Enter/Space activation and a
+                    focus ring for free, and a div with onClick announces as nothing at all.
+                    The <span> element inside is required -- a <p> is flow content and is
+                    not valid inside a button. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    // A click that ends a text selection is a copy, not a request to open
+                    // the confession. Without this, dragging across a confession to select
+                    // a line of it opens the dialog instead.
+                    const selection = window.getSelection();
+                    if (selection && !selection.isCollapsed) return;
+                    handleCommentClick(confession);
+                  }}
+                  className="group block w-full cursor-pointer rounded-lg text-left transition-colors hover:bg-romantic/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-romantic focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                >
+                  <ConfessionBody element="span" clamp={6} className="text-foreground leading-relaxed">
+                    {confession.body}
+                  </ConfessionBody>
+                  <span className="sr-only">
+                    Open to read in full and see {confession.comment_count}{' '}
+                    {confession.comment_count === 1 ? 'comment' : 'comments'}
+                  </span>
+                </button>
                 <div className="flex items-center justify-between pt-4 border-t border-border">
                   <div className="flex items-center gap-2 md:gap-4">
                     {reactionTypes.map(reaction => {
@@ -639,18 +683,20 @@ export const ConfessionsPage = () => {
           {selectedConfession && (
             <>
               <DialogHeader className="p-6 pb-4">
-                <DialogTitle className="font-dancing text-2xl text-romantic">
+                <DialogTitle className="font-dancing text-2xl text-romantic break-words [overflow-wrap:anywhere]">
                   {selectedConfession.anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
                 </DialogTitle>
                 <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.created_at)}</DialogDescription>
                 {selectedConfession.recipient_name && (
-                  <p className="mt-2 text-sm text-muted-foreground">
+                  <p className="mt-2 text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
                     Confessing to: <span className="font-semibold text-foreground">{selectedConfession.recipient_name}</span>
                   </p>
                 )}
               </DialogHeader>
               <div className="px-6 pb-4 border-b">
-                <p className="text-foreground leading-relaxed">{selectedConfession.body}</p>
+                <ConfessionBody className="text-foreground leading-relaxed">
+                  {selectedConfession.body}
+                </ConfessionBody>
               </div>
 
               <div className="flex-grow overflow-y-auto p-6 space-y-4">

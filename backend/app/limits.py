@@ -13,9 +13,18 @@ each field actually holds: a confession is a short personal note, a comment is a
 one, and a chat message is a conversational turn.
 """
 
-# A confession is the app's own long-form text and the most-read content, so it gets the
-# most room. Matches the existing love note body limit.
-CONFESSION_BODY_MAX = 2000
+# A confession is a short personal note, not an essay. 500 characters is roughly a paragraph
+# -- enough for the thing someone actually wants to say and short enough that a feed of them
+# stays scannable, which is the entire reason the feed exists.
+#
+# Lowered from 2000, which was sized as if a confession were a diary entry. The cost of the old
+# number was not storage; it was that the card rendering one confession could push everything
+# below it off the screen.
+#
+# Longer feelings have a home already: a love note is a message to one person and is bounded
+# separately at 2000. A public anonymous feed is the wrong place for a paragraph nobody chose
+# to read.
+CONFESSION_BODY_MAX = 500
 
 # A comment replies to a confession, so it is deliberately much shorter.
 COMMENT_BODY_MAX = 500

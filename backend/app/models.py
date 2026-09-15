@@ -26,6 +26,56 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+
+def _is_non_character(codepoint: int) -> bool:
+    """Unicode non-characters: reserved forever, guaranteed never to be assigned a meaning.
+
+    There are two families and the second is the one that gets forgotten. Sixty-six of them sit
+    in a contiguous block at U+FDD0-U+FDEF; the rest are the last two code points of every
+    plane, so U+FFFE and U+FFFF in the BMP but also U+1FFFE, U+2FFFE and so on up to
+    U+10FFFE and U+10FFFF. Testing only the BMP pair would accept a text that a reader on a
+    strict implementation is entitled to replace with U+FFFD.
+    """
+    if 0xFDD0 <= codepoint <= 0xFDEF:
+        return True
+    return (codepoint & 0xFFFF) >= 0xFFFE
+
+
+def _reject_unchangeable_characters(value: Optional[str], field_name: str) -> Optional[str]:
+    """Reject text that cannot survive the trip to the database.
+
+    The length cap is only half of "is this storable". A string can be well within the limit
+    and still be impossible to persist:
+
+    * a NUL byte is rejected by PostgreSQL outright -- ``text`` cannot hold 0x00, and the
+      failure surfaces as an unhandled driver error rather than a validation message;
+    * an unpaired surrogate (U+D800-U+DFFF) cannot be encoded to UTF-8 at all, so the
+      driver raises ``UnicodeEncodeError`` while binding the parameter;
+    * the remaining C0 controls, DEL and the C1 block are storable but have no meaning in a
+      confession, and they are what terminal-escape and log-injection payloads are built from.
+
+    Everything else is allowed on purpose. Emoji, Devanagari, right-to-left text and its
+    directional marks are ordinary content, and a filter that rejected them would be
+    rejecting the people most likely to be confessing in a language that is not English.
+
+    Only *unchangeable* characters are refused here. Content that is merely unwelcome is a
+    moderation question, and moderation already has a screen for it.
+    """
+    if value is None:
+        return None
+    for character in value:
+        codepoint = ord(character)
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError(f"{field_name} contains an unpaired surrogate character.")
+        if codepoint == 0 or (codepoint < 0x20 and character not in "\t\n\r"):
+            raise ValueError(f"{field_name} contains a control character.")
+        if codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            raise ValueError(f"{field_name} contains a control character.")
+        if _is_non_character(codepoint):
+            raise ValueError(f"{field_name} contains a non-character code point.")
+    return value
+
+
 class ConfessionCreate(BaseModel):
     """
     Model for creating a confession (input from the client).
@@ -44,10 +94,15 @@ class ConfessionCreate(BaseModel):
     def _validate_recipient_name(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
+        _reject_unchangeable_characters(value, "recipient_name")
         # A field the client left blank and a field it left absent mean the same thing,
         # so both land in the column as NULL rather than as "".
         normalized = value.strip()
         return normalized or None
+
+    @validator("body")
+    def _validate_body_characters(cls, value: str) -> str:
+        return _reject_unchangeable_characters(value, "body")
 
 class ConfessionUpdate(BaseModel):
     """
