@@ -50,10 +50,9 @@ class ConfessionService:
             "dislike_count": row.dislike_count, "report_count": row.report_count}
 
     def create_confession(self, confession_data: ConfessionCreate, user_id: str):
+        # recipient_name arrives already normalized: trimmed, or None when the confession
+        # is not addressed to anyone. Both spellings mean the same thing, so both are NULL.
         confession_dict = confession_data.dict()
-        recipient_name = confession_dict.get("recipient_name")
-        if isinstance(recipient_name, str):
-            confession_dict["recipient_name"] = recipient_name.strip()
         created_at = datetime.datetime.now(datetime.timezone.utc)
         with self.sessions.begin() as session:
             row = ConfessionRecord(

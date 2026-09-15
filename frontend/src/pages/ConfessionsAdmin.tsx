@@ -1,7 +1,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
@@ -310,6 +310,8 @@ export const ConfessionsAdmin = () => {
           <p className="text-sm text-muted-foreground">
             Review every confession, act on its reports and comments, and remove harmful submissions.
             An anonymous confession is anonymous here too, so action it on what was written.
+            Each confession is collapsed to the line a reviewer triages on; expand one to read it
+            in full and act on it.
           </p>
           <p className="text-xs text-muted-foreground/80">
             Total confessions: {confessions.length} · Reports in queue: {totalReports}
@@ -380,26 +382,35 @@ export const ConfessionsAdmin = () => {
               </CardContent>
             </Card>
           ) : (
-            processedConfessions.map((confession) => {
-              const senderVisible = visibleSenders[confession.id];
-              const senderHidden = confession.sender_hidden ?? confession.anonymous;
-              const anonymityVariant: 'default' | 'secondary' = confession.anonymous ? 'secondary' : 'default';
-              const commentTotal = Math.max(confession.comment_count, confession.comments.length);
-              return (
-                <Card key={confession.id} className="border border-border">
-                  <CardHeader>
-                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <CardTitle className="text-lg">Confession</CardTitle>
-                        <CardDescription>
-                          Submitted {formatTimestamp(confession.created_at)} · Comments {commentTotal}
-                        </CardDescription>
+            <Accordion type="single" collapsible className="space-y-3">
+              {processedConfessions.map((confession) => {
+                const senderVisible = visibleSenders[confession.id];
+                const senderHidden = confession.sender_hidden ?? confession.anonymous;
+                const anonymityVariant: 'default' | 'secondary' = confession.anonymous ? 'secondary' : 'default';
+                const commentTotal = Math.max(confession.comment_count, confession.comments.length);
+                return (
+                  <AccordionItem
+                    key={confession.id}
+                    value={confession.id}
+                    className="overflow-hidden rounded-2xl border border-border bg-muted/20"
+                  >
+                    <AccordionTrigger className="flex w-full flex-wrap items-start justify-between gap-3 px-4 py-3 text-left hover:no-underline">
+                      <div className="flex min-w-0 flex-1 flex-col gap-1">
+{/* The confession is what a reviewer judges, so it leads the row and the recipient
+                          trails it as context. A confession without a recipient is a normal
+                          confession, not a missing field, so it says nothing rather than
+                          announcing the absence. */}
+                      <span className="line-clamp-2 text-sm leading-relaxed">{confession.body}</span>
+                      <span className="text-xs text-muted-foreground">
                         {confession.recipient_name && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Confessing to: <span className="font-semibold text-foreground">{confession.recipient_name}</span>
-                          </p>
+                          <span>
+                            To <span className="font-medium text-foreground">{confession.recipient_name}</span>{' '}
+                            &middot;{' '}
+                          </span>
                         )}
-                      </div>
+Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTotal}
+                      </span>
+                    </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={anonymityVariant}>
                           {confession.anonymous ? 'Anonymous' : 'Public confession'}
@@ -414,12 +425,11 @@ export const ConfessionsAdmin = () => {
                           </Badge>
                         )}
                       </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    <p className="rounded-2xl border border-border bg-muted/40 p-4 leading-relaxed">
-                      {confession.body}
-                    </p>
+                    </AccordionTrigger>
+                    <AccordionContent className="space-y-6 bg-background/40 px-4 pb-5 pt-2">
+                      <p className="rounded-2xl border border-border bg-muted/40 p-4 leading-relaxed">
+                        {confession.body}
+                      </p>
 
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div className="rounded-2xl border border-border bg-muted/30 p-4">
@@ -622,10 +632,11 @@ export const ConfessionsAdmin = () => {
                         <Trash2 className="mr-2 h-4 w-4" /> Delete confession
                       </Button>
                     </div>
-                  </CardContent>
-                </Card>
+                  </AccordionContent>
+                </AccordionItem>
               );
-            })
+            })}
+            </Accordion>
           )}
         </div>
       </div>

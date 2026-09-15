@@ -292,10 +292,6 @@ export const ConfessionsPage = () => {
       toast.error('Please write your confession first! 💌');
       return;
     }
-    if (!confessingTo.trim()) {
-      toast.error('Please add the name of the person you are confessing to.');
-      return;
-    }
     if (!isAuthenticated) {
       toast.error('You must be logged in to post a confession.');
       return;
@@ -304,7 +300,9 @@ export const ConfessionsPage = () => {
     try {
       const confessionData = {
         body: newConfession,
-        recipient_name: confessingTo.trim(),
+        // Sent as null rather than "" when left blank: a confession does not have to be
+        // about anyone, and the server stores an absent recipient as NULL.
+        recipient_name: confessingTo.trim() || null,
         anonymous: isAnonymous,
         comments_enabled: allowComments,
       };
@@ -515,22 +513,26 @@ export const ConfessionsPage = () => {
                   Share Your Confession 💌
                 </DialogTitle>
                 <DialogDescription>
-                  Express your feelings safely and anonymously
+                  Express your feelings safely and anonymously. To someone, or just to get it out.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <Textarea placeholder="Share what's in your heart..." value={newConfession} maxLength={CONFESSION_BODY_MAX} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
                 <div className="space-y-2">
+                  <label htmlFor="confessing-to" className="text-sm text-muted-foreground">
+                    Who are you confessing to? <span className="text-xs">(optional)</span>
+                  </label>
                   <Input
-                    placeholder="Who are you confessing to?"
+                    id="confessing-to"
+                    placeholder="Leave blank if this isn't about anyone in particular"
                     value={confessingTo}
                     maxLength={RECIPIENT_NAME_MAX}
                     onChange={(e) => setConfessingTo(e.target.value)}
                     className="bg-background/80 border-romantic/30 focus:border-romantic"
-                    required
                   />
                   <p className="text-xs text-muted-foreground">
-                    Moderators will review the name to ensure your confession reaches the right person.
+                    Add a name if this is for someone. Moderators use it to check the confession
+                    reaches the right person; a confession you just want to share does not need one.
                   </p>
                 </div>
                 <div className="space-y-3">

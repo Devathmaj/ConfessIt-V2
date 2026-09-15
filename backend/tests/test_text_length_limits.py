@@ -38,6 +38,22 @@ def _confession(body, recipient_name="Sam"):
     )
 
 
+def _string_cap(schema):
+    """The maxLength of a field, however the schema wraps it.
+
+    A required ``str`` publishes ``maxLength`` directly. An optional one publishes it inside
+    ``anyOf`` next to a ``null`` branch, because the value can be absent as well as long.
+    Reading the cap off the field directly would break the moment a field became optional,
+    which is the wrong moment to discover the limit stopped being discoverable.
+    """
+    if "maxLength" in schema:
+        return schema["maxLength"]
+    for branch in schema.get("anyOf", []):
+        if "maxLength" in branch:
+            return branch["maxLength"]
+    raise AssertionError(f"no string cap published: {schema}")
+
+
 def _admin_user(**overrides):
     payload = {
         "regno": "r1",
@@ -103,6 +119,28 @@ def test_admin_user_keeps_its_account_type_default():
     assert AdminUserCreate(**_admin_user()).account_type == AccountType.USERS
 
 
+def test_confession_recipient_is_optional_and_normalized_to_none():
+    """A confession is not always about someone.
+
+    Three spellings of "no recipient" have to land the same way, because the client can send
+    any of them: the field absent, null, or a string of whitespace. All three store NULL
+    rather than an empty string, so a later filter on "has a recipient" has one condition
+    instead of two.
+    """
+    absent = ConfessionCreate(body="just venting", anonymous=False, comments_enabled=True)
+    nulled = ConfessionCreate(
+        body="just venting", anonymous=False, comments_enabled=True, recipient_name=None
+    )
+    blank = _confession("just venting", recipient_name="   ")
+
+    assert absent.recipient_name is None
+    assert nulled.recipient_name is None
+    assert blank.recipient_name is None
+
+    named = _confession("for you", recipient_name="  Sam  ")
+    assert named.recipient_name == "Sam"
+
+
 @pytest.mark.parametrize(
     "field, limit",
     [
@@ -132,7 +170,7 @@ def test_openapi_publishes_the_limits(client: TestClient):
 
     confession = components["ConfessionCreate"]["properties"]
     assert confession["body"]["maxLength"] == CONFESSION_BODY_MAX
-    assert confession["recipient_name"]["maxLength"] == RECIPIENT_NAME_MAX
+    assert _string_cap(confession["recipient_name"]) == RECIPIENT_NAME_MAX
     assert components["CommentCreate"]["properties"]["body"]["maxLength"] == COMMENT_BODY_MAX
     assert components["ReportCreate"]["properties"]["reason"]["maxLength"] == REPORT_REASON_MAX
     assert components["MessageCreate"]["properties"]["body"]["maxLength"] == MESSAGE_BODY_MAX

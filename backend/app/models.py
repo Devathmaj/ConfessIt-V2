@@ -29,18 +29,25 @@ class Token(BaseModel):
 class ConfessionCreate(BaseModel):
     """
     Model for creating a confession (input from the client).
+
+    ``recipient_name`` is optional: most confessions are addressed to someone, but a
+    confession is also something a user simply wants to put down. So a blank or absent
+    recipient is stored as NULL rather than rejected -- the client is not asked to invent
+    a name to satisfy a constraint that has no product meaning.
     """
     body: str = Field(max_length=CONFESSION_BODY_MAX)
     anonymous: bool
     comments_enabled: bool
-    recipient_name: str = Field(max_length=RECIPIENT_NAME_MAX)
+    recipient_name: Optional[str] = Field(default=None, max_length=RECIPIENT_NAME_MAX)
 
     @validator("recipient_name")
-    def _validate_recipient_name(cls, value: str) -> str:
+    def _validate_recipient_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        # A field the client left blank and a field it left absent mean the same thing,
+        # so both land in the column as NULL rather than as "".
         normalized = value.strip()
-        if not normalized:
-            raise ValueError("The name of the person you are confessing to cannot be empty.")
-        return normalized
+        return normalized or None
 
 class ConfessionUpdate(BaseModel):
     """
