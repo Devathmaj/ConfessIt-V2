@@ -464,7 +464,7 @@ class Conversation(BaseModel):
     match_id: str
     initiator_regno: str
     receiver_regno: str
-    status: str = "pending"  # Can be 'pending' (not requested yet), 'requested' (waiting for response), 'accepted', 'rejected'
+    status: str = "pending"  # Can be 'pending' (not requested yet), 'requested' (waiting for response), 'accepted', 'rejected', or 'terminated' (closed by a moderator; readable, not writable)
     requested_at: Optional[datetime] = None  # When initiator clicked "Send Message Request"
     accepted_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

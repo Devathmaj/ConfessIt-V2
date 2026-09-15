@@ -145,6 +145,14 @@ async def websocket_endpoint(
             conversation = message_service.validate_conversation_participant(
                 db, conversation_id, user.regno
             )
+            # A terminated conversation is readable but finished, so no live stream is
+            # opened into it. Refusing here rather than only on send keeps a socket from
+            # staying connected and receiving anything a later change might publish.
+            if conversation.get("status") == "terminated":
+                logger.info(f"WebSocket rejected: conversation {conversation_id} is terminated")
+                await websocket.send_json({"error": "This conversation has been terminated"})
+                await websocket.close(code=4003)
+                return
             if conversation.get("is_blocked", False):
                 logger.warning(f"WebSocket rejected: conversation {conversation_id} is blocked")
                 await websocket.send_json({"error": "Conversation is blocked"})

@@ -1,6 +1,6 @@
 // src/pages/MatchmakingPage.tsx
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,25 +49,91 @@ const icebreakerCards = [
 ];
 
 /**
- * Shown once a match has expired.
+ * Shown once a match has expired and the cooldown has lifted with it.
  *
- * No wait is quoted here on purpose. The matchmaking cooldown runs for
- * MATCHMAKING_COOLDOWN_HOURS from last_matchmaking_at, which is the same instant the match
- * was drawn and the same 4 hours it lives for -- so the two end together and an expired
- * match always means the cooldown has already lifted. An earlier version of this added an
- * extra hour in the client and announced a wait the server knows nothing about, telling
- * users to sit out a cooldown that did not exist. If a draw is still genuinely blocked
- * (an attempt consumed by a failed draw, for instance), the server rejects it with the
- * real remaining time and that is what the user sees.
+ * No wait is quoted here on purpose, and nothing here assumes the cooldown ends when the
+ * match does. The two are separate clocks: the match lives for MATCH_EXPIRY_HOURS from the
+ * draw while the cooldown runs MATCHMAKING_COOLDOWN_HOURS from `last_matchmaking_at`, and a
+ * moderator can close a conversation at any point in between -- which used to be the case
+ * this page could not tell apart from an ordinary expiry, so it told a terminated user they
+ * could go and match again while the server was still refusing them. The authority for that
+ * question is GET /matchmaking/check, so `describeExpiredMatch` asks it instead of assuming.
  */
 export const EXPIRED_MATCH_NOTICE = 'Your previous match has expired. You can find a new match now.';
 
+/** What the server says about a cooldown that is still running, if one is. */
+export type CooldownRemaining = {
+  hours: number;
+  minutes: number;
+  message: string;
+};
+
 /**
- * Time left on a live match, which is also when the next draw unlocks.
+ * What a check for a cooldown came back with.
  *
- * The cooldown is anchored to the draw and lasts exactly as long as the match does, so
- * until the match expires this is genuinely the time until the next match. Once it has
- * expired the answer is always "now" -- see EXPIRED_MATCH_NOTICE.
+ * `known: false` is deliberately not the same as `remaining: null`. One means "go ahead", the
+ * other means "nobody answered", and the page must not offer to match on the strength of a
+ * request that never came back -- that is how a real cooldown turns into an invitation.
+ */
+export type CooldownCheck = { known: true; remaining: CooldownRemaining | null } | { known: false };
+
+/** A check that could not be made. Carries no verdict about the user. */
+export const UNANSWERED_COOLDOWN: CooldownCheck = { known: false };
+
+/**
+ * Reads the server's answer to "may I match?".
+ *
+ * GET /matchmaking/check answers with `cooldown` while a wait is running and `eligible`
+ * otherwise, so a successful response that does not say `cooldown` is an answer, not a
+ * mystery. A request that never came back is the unknown case, and that is what
+ * {@link UNANSWERED_COOLDOWN} is for.
+ */
+export const readCooldown = (response: unknown): CooldownRemaining | null => {
+  const body = response as {
+    status?: string;
+    remaining_hours?: number;
+    remaining_minutes?: number;
+    message?: string;
+  } | null;
+  if (!body || body.status !== 'cooldown') return null;
+
+  return {
+    hours: Number(body.remaining_hours ?? 0),
+    minutes: Number(body.remaining_minutes ?? 0),
+    message:
+      body.message ?? 'You are on a cooldown. Please try again in a few hours.',
+  };
+};
+
+/**
+ * Whether a check permits a draw.
+ *
+ * The single place that decides it, so that no caller can quietly treat an unanswered check
+ * as a yes.
+ */
+export const cooldownPermitsMatch = (check: CooldownCheck) =>
+  check.known && check.remaining === null;
+
+/**
+ * What to say about a match that has lapsed.
+ *
+ * With a cooldown still running, the server's own message is the answer and the notice that
+ * promises a new match is a lie. Without one, the match really has run out and the notice is
+ * correct.
+ */
+export const describeExpiredMatch = (cooldown: CooldownRemaining | null) =>
+  cooldown ? cooldown.message : EXPIRED_MATCH_NOTICE;
+
+/** The remaining wait, for the page's own copy. */
+export const formatRemaining = ({ hours, minutes }: CooldownRemaining) =>
+  hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+
+/**
+ * Time left on a live match.
+ *
+ * This is the match's own remaining life, nothing more. Whether that is also the wait until
+ * the next draw is a question for GET /matchmaking/check -- the two can disagree whenever a
+ * conversation was terminated or an attempt was spent without a match being drawn.
  */
 export const timeUntilNextMatch = (expiresAt: string) => {
   const parsedExpiry = parseTimestamp(expiresAt);
@@ -84,20 +150,23 @@ export const timeUntilNextMatch = (expiresAt: string) => {
 const EXPIRED_NOTICE_SHOWN_FOR_KEY = 'expired_match_notice_shown_for';
 
 /**
- * Announce an expired match at most once.
+ * Announce a lapsed match at most once.
  *
- * The page re-reads the current match on every mount, and an expired match stays the
- * "current" one long after it lapsed, so without this the notice reappeared on every visit.
- * Remembering the last match id it was shown for suppresses the repeat while still letting
- * the next match to expire announce itself. One key rather than one per match, so nothing
- * accumulates as matches come and go.
+ * The page re-reads the current match on every mount, and a lapsed match stays the "current"
+ * one long after it ended, so without this the notice reappeared on every visit. Remembering
+ * the last match id it was shown for suppresses the repeat while still letting the next match
+ * to lapse announce itself. One key rather than one per match, so nothing accumulates as
+ * matches come and go.
  */
-export const notifyExpiredMatch = (matchId?: string) => {
+export const notifyExpiredMatch = (
+  matchId?: string,
+  cooldown: CooldownRemaining | null = null
+) => {
   if (matchId) {
     if (localStorage.getItem(EXPIRED_NOTICE_SHOWN_FOR_KEY) === matchId) return;
     localStorage.setItem(EXPIRED_NOTICE_SHOWN_FOR_KEY, matchId);
   }
-  toast.info(EXPIRED_MATCH_NOTICE);
+  toast.info(describeExpiredMatch(cooldown));
 };
 
 // Mock data for the "slot machine" animation while matching
@@ -216,6 +285,15 @@ const MatchExpiryTimer = ({ expiryTimestamp }: { expiryTimestamp: string }) => {
     );
 };
 
+/** What the matchmaking screen knows about a conversation it has found. */
+export type ConversationStatus =
+  | 'none'
+  | 'pending'
+  | 'requested'
+  | 'accepted'
+  | 'rejected'
+  | 'terminated';
+
 /**
  * The main component for the matchmaking page.
  * Handles matchmaking logic, UI state, and chat functionality.
@@ -229,15 +307,32 @@ export const MatchmakingPage = () => {
   const [heartFill, setHeartFill] = useState(0);
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState<string[]>([]);
-  const [conversationStatus, setConversationStatus] = useState<'none' | 'pending' | 'requested' | 'accepted' | 'rejected'>('none');
+  const [conversationStatus, setConversationStatus] = useState<ConversationStatus>('none');
   const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [hasActiveConversation, setHasActiveConversation] = useState(false);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  
+  const [cooldown, setCooldown] = useState<CooldownRemaining | null>(null);
+  /**
+   * Whether `cooldown` is the server's answer rather than the absence of one.
+   *
+   * Tracked apart from the value because the two are easy to conflate and only one of them is
+   * worth announcing: a lapse noticed by the sweep can only be described honestly if the wait
+   * is actually known.
+   */
+  const [cooldownKnown, setCooldownKnown] = useState(false);
+
   const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
   const [showCooldownDialog, setShowCooldownDialog] = useState(false);
   const [cooldownMessage, setCooldownMessage] = useState("");
   const [showRareMatchDialog, setShowRareMatchDialog] = useState(false);
+
+  // The periodic sweep and the callbacks below run against the newest render's values, but
+  // they are created once and must not restart when those change. A ref is what keeps the
+  // read current without turning the interval into a dependency.
+  const latest = useRef({ cooldown: null as CooldownRemaining | null, cooldownKnown: false, expiresAt, matchId: undefined as string | undefined });
+  useEffect(() => {
+    latest.current = { cooldown, cooldownKnown, expiresAt, matchId: matchedProfile?.match_id };
+  });
 
   /**
    * Constructs the full URL for a user's profile picture.
@@ -246,69 +341,91 @@ export const MatchmakingPage = () => {
    */
   const getProfilePictureUrl = (pictureId?: string | null) => resolveProfilePictureUrl(pictureId ?? null);
 
-  /**
-   * Fetches the user's current matchmaking status from the server.
-   * Used to check if the user already has a match upon loading the page.
-   */
-  const fetchMatchmakingStatus = useCallback(async () => {
-    try {
-      const response = await checkMatchmakingStatus();
-      console.log("fetchMatchmakingStatus response:", response); // Debug log
-      if (response.status === 'matched') {
-        const now = new Date(serverNow());
-        const expiry = parseTimestamp(response.expires_at);
-        if (!expiry || now >= expiry) {
-          // Match is expired, don't set it
-          return;
-        }
-        console.log("Setting matched profile with:", { ...response.matched_with, match_id: response.match_id }); // Debug log
-        setMatchedProfile({ ...response.matched_with, match_id: response.match_id });
-        setExpiresAt(response.expires_at);
-        
-        // Check if there's already a conversation for this match
-        checkForExistingConversation(response.match_id);
-      }
-    } catch (error: any) {
-      console.error("Failed to check matchmaking status on load:", error.response?.data?.detail || error.message);
-    }
-  }, []);
+/**
+ * Asks the server whether a draw is allowed right now, and keeps the answer on the page.
+ *
+ * The server is the only authority here. `last_matchmaking_at` is what it counts, and a
+ * match's expiry is a different clock entirely -- which is why nothing on this page infers
+ * eligibility from `is_expired` any more.
+ *
+ * A check that could not be made is reported as `known: false` rather than folded into
+ * `remaining: null`. The two are different answers -- one means "go ahead", the other means
+ * "nobody said" -- and a failed request must not read to the user as permission to match.
+ */
+const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
+  try {
+    const response = await checkMatchmakingStatus();
+    const remaining = readCooldown(response);
+    setCooldown(remaining);
+    setCooldownKnown(true);
+    return { known: true, remaining };
+  } catch (error: any) {
+    // The previous state stands and the draw endpoint still refuses a real cooldown with the
+    // real remaining time, so nothing is lost by reporting the failure instead of guessing.
+    console.error("Failed to check matchmaking status:", error.response?.data?.detail || error.message);
+    setCooldownKnown(false);
+    return UNANSWERED_COOLDOWN;
+  }
+}, []);
 
-    const checkForExistingConversation = async (match_id?: string) => {
+
+  /**
+   * Reads the current conversation and puts it on the page.
+   *
+   * A match that has lapsed is not shown as a match: the empty state is the honest one, and
+   * the notice says whether the cooldown has lifted with it. A moderator-closed conversation
+   * is the opposite case -- it is not a live match and cannot be written to, but it is still
+   * this user's conversation and they need to be able to read it, so it stays on the page.
+   *
+   * `knownCooldown` is the answer the caller already has, passed in rather than read back out
+   * of state: on mount the check has only just returned and the notice must be written against
+   * it, not against whatever the last render happened to hold.
+   */
+  const checkForExistingConversation = useCallback(async (
+    knownCooldown = latest.current.cooldown
+  ) => {
     try {
       const response = await getCurrentConversation();
-      if (response.status === 'success') {
-        if (!response.match.is_expired) {
-          // Only show the matched profile if not expired
-          setMatchedProfile({
-            ...response.other_user,
-            match_id: response.match.id
-          });
-          setExpiresAt(response.match.expires_at);
-          setConversationStatus(response.conversation.status);
-          setHasActiveConversation(response.conversation.status === 'accepted');
-        } else {
-          // Match is expired, don't show it
-          setHasActiveConversation(false);
-          setConversationStatus('none');
-          notifyExpiredMatch(response.match.id);
-        }
-      } else {
+      if (response.status !== 'success') {
         setHasActiveConversation(false);
         setConversationStatus('none');
+        return;
+      }
+
+      const status = response.conversation.status as ConversationStatus;
+      setExpiresAt(response.match.expires_at);
+      setConversationStatus(status);
+      setHasActiveConversation(status === 'accepted');
+
+      if (status === 'terminated') {
+        setMatchedProfile({ ...response.other_user, match_id: response.match.id });
+        return;
+      }
+
+      if (!response.match.is_expired) {
+        // Only show the matched profile if not expired
+        setMatchedProfile({
+          ...response.other_user,
+          match_id: response.match.id
+        });
+      } else {
+        // The match is gone but its conversation is still readable, so the page falls back
+        // to the empty state and says what the real situation is.
+        setMatchedProfile(null);
+        setExpiresAt(null);
+        setConversationStatus('none');
+        notifyExpiredMatch(response.match.id, knownCooldown);
       }
     } catch (error: any) {
       console.error('Failed to check for existing conversation:', error);
       setHasActiveConversation(false);
       setConversationStatus('none');
     }
-  };
+  }, []);
 
-  const refreshConversationStatus = async () => {
-
-    if (matchedProfile?.match_id) {
-      await checkForExistingConversation(matchedProfile.match_id);
-    }
-  };
+  const refreshConversationStatus = useCallback(async () => {
+    await checkForExistingConversation();
+  }, [checkForExistingConversation]);
 
   const handleConversationAccepted = () => {
     setConversationStatus('accepted');
@@ -337,73 +454,62 @@ export const MatchmakingPage = () => {
     }
   };
 
+  // On mount: settle the cooldown first, then read the conversation against it.
+  //
+  // The order is the fix. These two used to be fired in parallel, so a conversation check
+  // that found a lapsed match announced "you can find a new match now" before -- or instead
+  // of -- the answer to whether a cooldown was still running.
   useEffect(() => {
-    fetchMatchmakingStatus();
-    // Don't show toast notifications on page load - users will see them in inbox
-  }, [fetchMatchmakingStatus]);
+    let cancelled = false;
 
-  // Check for existing conversations on component mount
-  useEffect(() => {
-    const checkForExistingConversations = async () => {
-      try {
-        const response = await getCurrentConversation();
-        if (response.status === 'success') {
-          if (!response.match.is_expired) {
-            // Only show the matched profile if not expired
-            setMatchedProfile({
-              ...response.other_user,
-              match_id: response.match.id
-            });
-            setExpiresAt(response.match.expires_at);
-            setConversationStatus(response.conversation.status);
-            setHasActiveConversation(response.conversation.status === 'accepted');
-          } else {
-            // Match is expired, don't show it
-            setHasActiveConversation(false);
-            setConversationStatus('none');
-            notifyExpiredMatch(response.match.id);
-          }
-        }
-      } catch (error: any) {
-        setHasActiveConversation(false);
+    const load = async () => {
+      const check = await fetchCooldown();
+      if (cancelled) return;
+      // Nothing truthful can be said about the wait, so nothing is said: no dialog, and no
+      // conversation notice either, since that notice would have to promise a new match.
+      if (!check.known) return;
+      if (check.remaining) {
+        setCooldownMessage(check.remaining.message);
+        setShowCooldownDialog(true);
       }
+      await checkForExistingConversation(check.remaining);
     };
 
-    checkForExistingConversations();
+    load();
 
-    // Set up periodic check for expired conversations (every minute)
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchCooldown, checkForExistingConversation]);
+
+  // Periodic sweep for a match that lapsed while the page was open.
+  useEffect(() => {
     const interval = setInterval(async () => {
-      // Check for match expiry first
-      if (expiresAt) {
+      const {
+        expiresAt: currentExpiry,
+        matchId,
+        cooldown: currentCooldown,
+        cooldownKnown,
+      } = latest.current;
+
+      if (currentExpiry) {
         const now = new Date(serverNow());
-        const expiry = parseTimestamp(expiresAt);
+        const expiry = parseTimestamp(currentExpiry);
         if (!expiry || now >= expiry) {
           setMatchedProfile(null);
           setExpiresAt(null);
           setConversationStatus('none');
           setHasActiveConversation(false);
-          notifyExpiredMatch(matchedProfile?.match_id);
-          return; // No need to check conversation if match expired
-        }
-      }
-
-      // Check for conversation expiry if active
-      if (hasActiveConversation && matchedProfile?.match_id) {
-        try {
-          const response = await getCurrentConversation();
-          if (response.status === 'success' && response.match.is_expired) {
-            setHasActiveConversation(false);
-            setConversationStatus('none');
-            notifyExpiredMatch(response.match.id);
-          }
-        } catch (error) {
-          console.error('Failed to check conversation expiry:', error);
+          // The match is gone either way, but what to say about it depends on a wait that only
+          // the server knows. With no answer in hand the notice is skipped rather than guessed
+          // at, so a cooldown still running is never announced as a fresh chance to match.
+          if (cooldownKnown) notifyExpiredMatch(matchId, currentCooldown);
         }
       }
     }, 60000); // Check every minute
 
     return () => clearInterval(interval);
-  }, [hasActiveConversation, matchedProfile?.match_id]);
+  }, []);
 
   /**
    * Handles the click event on the main heart icon.
@@ -414,22 +520,22 @@ export const MatchmakingPage = () => {
     if (isMatching || matchedProfile) return;
 
     try {
-      const response = await checkMatchmakingStatus();
-      console.log("handleHeartClick response:", response); // Debug log
-      if (response.status === 'eligible') {
-        setShowConfirmationDialog(true);
-      } else if (response.status === 'matched') {
-        const now = new Date(serverNow());
-        const expiry = parseTimestamp(response.expires_at);
-        if (!expiry || now >= expiry) {
-          // Match is expired, don't set it
-          return;
-        }
-        console.log("Setting matched profile from handleHeartClick:", { ...response.matched_with, match_id: response.match_id }); // Debug log
-        setMatchedProfile({ ...response.matched_with, match_id: response.match_id });
-        setExpiresAt(response.expires_at);
-        toast.info("You already have a match!");
+      // Asked at the click rather than trusted from mount: the page may have been left open
+      // for hours, and a confirmation dialog that opens on a lapsed cooldown only becomes a
+      // failed draw at the far end of the matching animation.
+      const check = await fetchCooldown();
+      if (check.known && check.remaining) {
+        setCooldownMessage(check.remaining.message);
+        setShowCooldownDialog(true);
+        return;
       }
+      if (!check.known) {
+        // Opening the dialog here is what sends the user through the whole animation to be
+        // refused at the end, so an unanswered check closes this click with nothing.
+        toast.error("Could not confirm you are eligible to match. Please try again.");
+        return;
+      }
+      setShowConfirmationDialog(true);
     } catch (error: any) {
       if (error.response?.status === 429) {
         setCooldownMessage(error.response.data.detail);
@@ -439,6 +545,7 @@ export const MatchmakingPage = () => {
       }
     }
   };
+
 
   /**
    * Initiates the matchmaking process after user confirmation.
@@ -452,6 +559,7 @@ export const MatchmakingPage = () => {
     setShowChat(false);
     setChatMessages([]);
     setExpiresAt(null);
+    setCooldown(null);
 
     const slotInterval = setInterval(() => {
       const randomIndex = Math.floor(Math.random() * mockMatches.length);
@@ -495,8 +603,13 @@ export const MatchmakingPage = () => {
               // Immediately show the matched profile
               console.log('Setting matched profile:', newMatchedProfile);
             })
-            .catch(error => {
+            .catch(async error => {
               toast.error(error.response?.data?.detail || 'Could not find a match.');
+              // A failed draw still spends the attempt, so the server is now on a cooldown
+              // even though nothing was matched. Ask it what the wait is rather than leaving
+              // the page offering a heart that cannot do anything.
+              const check = await fetchCooldown();
+              if (check.known && check.remaining) setCooldownMessage(check.remaining.message);
             })
             .finally(() => {
               setSlotMachineUser(null);
@@ -585,9 +698,45 @@ export const MatchmakingPage = () => {
               )}
 
               {!isMatching && !matchedProfile && (
+                cooldown ? (
+                  // The invite to click the heart is withdrawn while the server is still
+                  // counting a cooldown down. It used to show regardless, which is what left a
+                  // terminated user reading "Click the heart to find your match!" next to a
+                  // toast promising them a match they could not have.
+                  <div className="text-center space-y-4">
+                    <div className="text-4xl">⏳</div>
+                    <h2 className="text-2xl font-dancing text-romantic">Matchmaking on Cooldown</h2>
+                    <p className="text-muted-foreground">{cooldown.message}</p>
+                  </div>
+                ) : (
+                  <div className="text-center space-y-4">
+                    <h2 className="text-2xl font-dancing text-romantic">Click the heart to find your match! 💕</h2>
+                    <p className="text-muted-foreground">Find someone special to connect with!</p>
+                  </div>
+                )
+              )}
+
+              {matchedProfile && conversationStatus === 'terminated' && (
                 <div className="text-center space-y-4">
-                  <h2 className="text-2xl font-dancing text-romantic">Click the heart to find your match! 💕</h2>
-                  <p className="text-muted-foreground">Find someone special to connect with!</p>
+                  <div className="text-4xl">🚫</div>
+                  <h2 className="text-2xl font-dancing text-romantic">Conversation Terminated</h2>
+                  <p className="text-muted-foreground">
+                    A moderator closed this conversation. You can still read it, but it can no
+                    longer be used.
+                  </p>
+                  <Button
+                    onClick={() => setShowConversationDialog(true)}
+                    className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+                    size="lg"
+                  >
+                    View Conversation
+                  </Button>
+                  {cooldown && (
+                    <div className="text-sm text-muted-foreground">
+                      <Clock className="w-4 h-4 inline mr-2" />
+                      Time until your next match: {formatRemaining(cooldown)}
+                    </div>
+                  )}
                 </div>
               )}
 

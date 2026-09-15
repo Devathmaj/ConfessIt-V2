@@ -404,7 +404,19 @@ async def terminate_conversation(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_TERMINATE))
 ) -> Dict[str, Any]:
-    """Terminate a conversation."""
+    """Terminate a conversation.
+
+    Two clocks are deliberately left alone here. The match keeps its own four-hour expiry,
+    because a moderator closing a thread early is not the same event as the window running
+    out, and rewriting ``expires_at`` made every client read the termination as an ordinary
+    expiry -- which is how a terminated pair was told it could rematch while both of them
+    were still inside the cooldown that ``last_matchmaking_at`` is counting down. The
+    participants' ``last_matchmaking_at`` is likewise untouched: the cooldown is theirs to
+    serve out, not something a moderator action shortens.
+
+    What termination does change is the conversation's status, which every participant-facing
+    query reads, so the thread stays listed and readable to both of them.
+    """
     if not is_valid_id(conversation_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
 
@@ -414,7 +426,6 @@ async def terminate_conversation(
     if not conversation_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
-    match_id = conversation_doc.get("match_id")
     now = datetime.now(timezone.utc)
 
     with db.sessions.begin() as session:
@@ -422,9 +433,25 @@ async def terminate_conversation(
         if conversation:
             conversation.status = "terminated"
             conversation.terminated_at = now
-        if match_id is not None:
-            match = session.get(MatchRecord, match_id)
-            if match: match.expires_at = now
+
+    # Written after the commit, as everywhere else in the app: a notification failure must
+    # not undo a termination an admin has already been told succeeded. No wall-clock time is
+    # put in the body -- the row's own created_at renders in the reader's local time.
+    from ..services.notification_service import create_notification_service
+
+    _TERMINATION_HEADING = "Conversation terminated by a moderator"
+    _TERMINATION_BODY = (
+        "This conversation was closed by a moderator. You can still read it, but it can no "
+        "longer be used."
+    )
+    for participant in (conversation_doc.get("initiator_regno"), conversation_doc.get("receiver_regno")):
+        if participant:
+            create_notification_service(
+                recipient_regno=participant,
+                heading=_TERMINATION_HEADING,
+                body=_TERMINATION_BODY,
+                db=db,
+            )
 
     return {
         "id": conversation_id,

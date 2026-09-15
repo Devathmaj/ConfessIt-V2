@@ -27,6 +27,15 @@ interface ConversationDialogProps {
   conversationData?: ConversationData; // Optional initial data
 }
 
+/**
+ * Every status the API can report.
+ *
+ * `terminated` is a moderator closing the thread. It is not a stage the conversation can
+ * move on from, so it is treated as finished everywhere below: the history is still loaded
+ * and shown, and nothing about it is live.
+ */
+type ConversationStatus = 'pending' | 'requested' | 'accepted' | 'rejected' | 'terminated';
+
 interface ConversationData {
   match: {
     id: string;
@@ -36,7 +45,7 @@ interface ConversationData {
   };
   conversation: {
     id: string;
-    status: 'pending' | 'requested' | 'accepted' | 'rejected';
+    status: ConversationStatus;
     initiator_regno: string;
     receiver_regno: string;
     created_at: string;
@@ -148,8 +157,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     if (!conversationData) return;
 
     const isAcceptedConversation = conversationData.conversation.status === 'accepted';
+    const isTerminatedConversation = conversationData.conversation.status === 'terminated';
+    // A terminated conversation is finished like an expired one, whatever the clock says:
+    // no live socket is opened into it, but its history is still loaded and readable. The
+    // status rather than the expiry is what decides, because a moderator can close a thread
+    // while its match is still well inside the four hours.
     const shouldInitialize = (
       isAcceptedConversation &&
+      !isTerminatedConversation &&
       !conversationData.match.is_expired &&
       !is_blocked
     );
@@ -157,9 +172,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     if (shouldInitialize) {
       console.log('🚀 Initializing messaging (not blocked)');
       initializeMessaging();
-    } else if (isAcceptedConversation) {
-      // Expired or blocked: the conversation is read-only, but its history is still
-      // readable, so load it without a live connection. This branch used to require
+    } else if (isAcceptedConversation || isTerminatedConversation) {
+      // Expired, blocked or terminated: the conversation is read-only, but its history is
+      // still readable, so load it without a live connection. This branch used to require
       // `is_blocked`, so an expired conversation fell through both branches and the
       // history was never fetched at all.
       console.log('📖 Read-only conversation - loading history without a live connection', {
@@ -664,6 +679,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
 
   const getStatusBadge = (status: string, isExpired: boolean) => {
+    // Termination outranks expiry: a thread a moderator closed is reported as terminated
+    // even when its match is also past due, so the reason it is closed stays visible.
+    if (status === 'terminated') {
+      return <Badge variant="secondary">Terminated</Badge>;
+    }
+
     if (isExpired) {
       return <Badge variant="destructive">Expired</Badge>;
     }
@@ -701,8 +722,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const isRequested = conversationData.conversation.status === 'requested';
   const isAccepted = conversationData.conversation.status === 'accepted';
   const isRejected = conversationData.conversation.status === 'rejected';
+  const isTerminated = conversationData.conversation.status === 'terminated';
   const isReceiver = !conversationData.is_initiator;
-  const canChat = isAccepted && !isExpired;
+  // A terminated thread is read-only like an expired one. `isAccepted` already excludes it,
+  // and it is spelled out because the whole point of the terminated state is that it must
+  // not read as a live conversation.
+  const canChat = isAccepted && !isExpired && !isTerminated;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4 touch-none">
@@ -735,7 +760,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                   <Clock className="h-3 w-3 sm:h-4 sm:w-4" />
                   <span className="whitespace-nowrap">{timeLeft}</span>
                 </div>
-                {isAccepted && (
+                {(isAccepted || isTerminated) && (
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <MessageCircle className="h-3 w-3 sm:h-4 sm:w-4" />
                     <span className="whitespace-nowrap">{messages.length} msgs</span>
@@ -754,8 +779,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 )}
               </div>
 
-              {/* Block/Unblock Actions */}
-              {isAccepted && !isExpired && (
+              {/* Block/Unblock Actions. Not offered on a terminated thread: there is nothing left to
+                protect anyone from, and the server refuses the send regardless. */}
+              {isAccepted && !isExpired && !isTerminated && (
                 <div className="flex flex-wrap gap-2 mt-3">
                   {!is_blocked ? (
                     <Button
@@ -893,13 +919,21 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 </div>
               )}
 
+              {isTerminated && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 sm:p-4 mb-4 text-center">
+                  <p className="text-xs sm:text-sm text-gray-900">
+                    This conversation was terminated by a moderator. Messages are read-only.
+                  </p>
+                </div>
+              )}
+
               {loadingMessages && (
                 <div className="flex justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               )}
 
-              {isAccepted && !messagesHidden && messages.map((message) => (
+              {(isAccepted || isTerminated) && !messagesHidden && messages.map((message) => (
                 <ContextMenu key={message.id}>
                   <ContextMenuTrigger>
                     <div

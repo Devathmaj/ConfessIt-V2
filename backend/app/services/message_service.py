@@ -17,6 +17,14 @@ from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 
 logger = get_logger(__name__)
 
+# Statuses whose transcript a participant may read. ``accepted`` is a live thread and
+# ``terminated`` is a closed one; both are read-only-or-live and both were real conversations
+# that people wrote in. Anything earlier in the lifecycle has no transcript to speak of.
+READABLE_CONVERSATION_STATUSES = frozenset({"accepted", "terminated"})
+
+# Statuses a message may be sent into. A terminated conversation is not one of them.
+WRITABLE_CONVERSATION_STATUS = "accepted"
+
 
 class MessageService:
     """Service for handling message operations"""
@@ -60,8 +68,11 @@ class MessageService:
                 detail="You are not a participant in this conversation"
             )
         
-        # Check conversation status
-        if conversation.get("status") != "accepted":
+        # Check conversation status. ``terminated`` is accepted here for the same reason
+        # expiry is: a thread a moderator closed is finished, not unreadable, and the two
+        # people in it still need to read what they said before it was shut. Writing is
+        # refused separately in send_message().
+        if conversation.get("status") not in READABLE_CONVERSATION_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Conversation must be accepted before sending messages"
@@ -124,7 +135,21 @@ class MessageService:
         conversation = self.validate_conversation_participant(
             db, conversation_id, sender.regno
         )
-        
+
+        # A thread a moderator closed takes no new messages. Checked here rather than in the
+        # shared validator because that one is also on the read path, where a terminated
+        # conversation is deliberately still open.
+        if conversation.get("status") == "terminated":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This conversation has been terminated"
+            )
+        if conversation.get("status") != WRITABLE_CONVERSATION_STATUS:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Conversation must be accepted before sending messages"
+            )
+
         # IMPORTANT: Check if conversation is blocked (prevents sending, but reading is OK)
         if conversation.get("is_blocked", False):
             raise HTTPException(
@@ -325,15 +350,17 @@ class MessageService:
                 detail="You can only report messages sent to you"
             )
         
-        # Check conversation is accepted
+        # The thread has to be one whose transcript the reader can see at all. Reporting is
+        # a note to a moderator about something already written, so a terminated thread
+        # qualifies: the report menu is offered on exactly the messages the reader can open.
         with db.sessions() as session:
             row = session.get(ConversationRecord, message["conversation_id"])
             conversation = self._conversation_payload(row) if row else None
         
-        if not conversation or conversation.get("status") != "accepted":
+        if not conversation or conversation.get("status") not in READABLE_CONVERSATION_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Can only report messages in accepted conversations"
+                detail="Can only report messages in an accepted or terminated conversation"
             )
         
         # Check for duplicate report

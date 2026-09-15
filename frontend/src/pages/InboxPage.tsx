@@ -17,6 +17,7 @@ import {
   UserPlus,
   UserCheck,
   UserX,
+  Ban,
 } from 'lucide-react';
 
 import { toast } from 'sonner';
@@ -24,6 +25,8 @@ import { Navigation } from '@/components/Navigation';
 import { serverNow } from '@/lib/serverClock';
 
 // Defines the structure for conversation data.
+type ConversationStatus = 'pending' | 'requested' | 'accepted' | 'rejected' | 'terminated';
+
 interface ConversationData {
   match: {
     id: string;
@@ -33,7 +36,7 @@ interface ConversationData {
   };
   conversation: {
     id: string;
-    status: 'pending' | 'requested' | 'accepted' | 'rejected';
+    status: ConversationStatus;
     initiator_regno: string;
     receiver_regno: string;
     created_at: string;
@@ -53,7 +56,7 @@ interface ConversationData {
 // Defines the structure for notification items.
 interface NotificationItem {
   id: string;
-  type: 'matchmaking' | 'message_request_sent' | 'message_request_received' | 'message_accepted' | 'message_rejected';
+  type: 'matchmaking' | 'message_request_sent' | 'message_request_received' | 'message_accepted' | 'message_rejected' | 'message_terminated';
   title: string;
   body: string;
   created_at: string;
@@ -61,8 +64,28 @@ interface NotificationItem {
   user_profile_picture?: string;
   match_id?: string;
   conversation_id?: string;
-  status?: 'pending' | 'requested' | 'accepted' | 'rejected';
+  status?: ConversationStatus;
 }
+
+/**
+ * Headings whose notification rows describe a conversation rather than standing on their own.
+ *
+ * The row written when a request is sent, accepted or rejected is a frozen copy of a fact the
+ * conversation itself already carries, which is why the feed below is derived from
+ * conversation state. Termination joins that family: it has to, or the row the server writes
+ * for both participants appears here as a second card alongside the derived one.
+ */
+const CONVERSATION_NOTIFICATION_HEADINGS = [
+  'Message request from',
+  'accepted your message request',
+  'rejected your message request',
+  'Conversation terminated by a moderator',
+];
+
+/** The card wording, per role, for a conversation a moderator has closed. */
+const TERMINATION_TITLE = 'Conversation terminated by a moderator';
+const TERMINATION_BODY =
+  'This conversation was closed by a moderator. You can still read it, but it can no longer be used.';
 
 export const InboxPage = () => {
   const { user } = useAuth();
@@ -104,17 +127,18 @@ export const InboxPage = () => {
       // 1. System notifications (match found, love notes, etc.)
       if (notificationsResponse.notifications) {
         notificationsResponse.notifications.forEach((notification: any) => {
-          // A message request is represented by the conversation itself, which carries a
-          // single status that advances requested -> accepted/rejected. The row written to
-          // the notifications table when the request is sent is a second, frozen copy of
-          // the same fact: it can never show the accept/reject outcome, and rendering it
-          // alongside the derived one is what put two cards for one request in the inbox.
-          // So the whole conversation family is filtered out here and the alerts below are
-          // derived from conversation state instead.
-          const isConversationNotification =
-            notification.heading.includes('Message request from') ||
-            notification.heading.includes('accepted your message request') ||
-            notification.heading.includes('rejected your message request');
+          // A conversation is represented by the conversation itself, which carries a single
+          // status that advances requested -> accepted/rejected and can then be terminated by
+          // a moderator. The row written to the notifications table when that happens is a
+          // second, frozen copy of the same fact: it can never show the current outcome, and
+          // rendering it alongside the derived one is what put two cards for one conversation
+          // in the inbox. So the whole conversation family is filtered out here and the alerts
+          // below are derived from conversation state instead -- which is also how a
+          // terminated conversation keeps a card at all, since both of these reads used to
+          // drop it.
+          const isConversationNotification = CONVERSATION_NOTIFICATION_HEADINGS.some(
+            heading => notification.heading?.includes(heading)
+          );
 
           if (!isConversationNotification) {
             notifications.push({
@@ -128,7 +152,7 @@ export const InboxPage = () => {
         });
       }
 
-      // 2. For INITIATOR: Only show accepted/rejected notification
+      // 2. For INITIATOR: Only show accepted/rejected/terminated notification
       if (conversationResponse.status === 'success' && conversationResponse.is_initiator) {
         if (conversationResponse.conversation.status === 'accepted' && conversationResponse.conversation.accepted_at) {
           notifications.push({
@@ -155,6 +179,22 @@ export const InboxPage = () => {
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
             status: 'rejected'
+          });
+        } else if (conversationResponse.conversation.status === 'terminated') {
+          // A moderator closing the thread is news for the initiator too, and the thread is
+          // still theirs to read, so it gets the same card as any other outcome -- pointing
+          // at a read-only conversation rather than at nothing.
+          notifications.push({
+            id: `${conversationResponse.conversation.id}_terminated`,
+            type: 'message_terminated',
+            title: TERMINATION_TITLE,
+            body: TERMINATION_BODY,
+            created_at: conversationResponse.conversation.created_at,
+            user_name: conversationResponse.other_user.name,
+            user_profile_picture: conversationResponse.other_user.profile_picture_url,
+            match_id: conversationResponse.match.id,
+            conversation_id: conversationResponse.conversation.id,
+            status: 'terminated'
           });
         }
       }
@@ -204,6 +244,18 @@ export const InboxPage = () => {
               created_at: conv.conversation.created_at,
               status: 'rejected',
             });
+          } else if (conv.conversation.status === 'terminated') {
+            // Same for a moderator-closed request. Without this the receiver's card
+            // disappeared from the inbox at the moment it was terminated.
+            notifications.push({
+              ...base,
+              id: `${conv.conversation.id}_terminated`,
+              type: 'message_terminated',
+              title: TERMINATION_TITLE,
+              body: TERMINATION_BODY,
+              created_at: conv.conversation.created_at,
+              status: 'terminated',
+            });
           }
           // 'pending' is not a request yet, so it produces no notification.
         });
@@ -228,8 +280,10 @@ export const InboxPage = () => {
         return <UserPlus className="w-5 h-5 text-green-500" />;
       case 'message_accepted':
         return <UserCheck className="w-5 h-5 text-green-500" />;
-      case 'message_rejected':
-        return <UserX className="w-5 h-5 text-red-500" />;
+case 'message_rejected':
+      return <UserX className="w-5 h-5 text-red-500" />;
+    case 'message_terminated':
+      return <Ban className="w-5 h-5 text-gray-500" />;
       default:
         return <Bell className="w-5 h-5 text-gray-500" />;
     }
@@ -432,11 +486,13 @@ export const InboxPage = () => {
                               notification.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                               notification.status === 'requested' ? 'bg-yellow-100 text-yellow-800' :
                               notification.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                              notification.status === 'terminated' ? 'bg-gray-200 text-gray-800' :
                               'bg-red-100 text-red-800'
                             }`}>
                               {notification.status === 'pending' ? 'Pending' :
                                notification.status === 'requested' ? 'Pending' :
-                               notification.status === 'accepted' ? 'Accepted' : 'Rejected'}
+                               notification.status === 'accepted' ? 'Accepted' :
+                               notification.status === 'terminated' ? 'Terminated' : 'Rejected'}
                             </span>
                           )}
                         </div>
@@ -484,6 +540,10 @@ export const InboxPage = () => {
                           ) : notification.status === 'rejected' ? (
                             <div className="text-xs text-red-600">
                               Conversation rejected
+                            </div>
+                          ) : notification.status === 'terminated' ? (
+                            <div className="text-xs text-gray-600">
+                              Conversation terminated
                             </div>
                           ) : notification.status === 'accepted' ? (
                             // The status badge above already reads "Accepted", and for

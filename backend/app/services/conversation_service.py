@@ -1,7 +1,7 @@
 # app/services/conversation_service.py
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import ConversationRecord, MatchRecord, UserRecord
@@ -72,6 +72,24 @@ def _get_user_by_regno(db, regno):
     with db.sessions() as session:
         row = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
         return _user_data(row)
+
+def _terminated_match_exists():
+    """Whether the match row in scope has a conversation a moderator has closed.
+
+    A terminated conversation outlives the match's four-hour window on purpose: the thread
+    is the only place either participant can read what was said before it was shut, and the
+    status is the record of that, not the clock. Matched on status rather than on
+    ``terminated_at`` so rows terminated by an older build -- which rewrote ``expires_at``
+    and so look lapsed -- are picked up by the same query.
+    """
+    return (
+        select(ConversationRecord.id)
+        .where(
+            ConversationRecord.match_id == MatchRecord.id,
+            ConversationRecord.status == "terminated",
+        )
+        .exists()
+    )
 
 def _partner_regno(match, regno: str) -> str:
     """The other participant of a match, which is never the caller themselves."""
@@ -429,16 +447,20 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     with db.sessions() as session:
         active_match_row = session.scalar(select(MatchRecord).where(
             MatchRecord.user_1_regno == current_user.regno,
-            MatchRecord.expires_at > current_time,
-        ).order_by(MatchRecord.expires_at.desc()))
+            or_(MatchRecord.expires_at > current_time, _terminated_match_exists()),
+        ).order_by(MatchRecord.created_at.desc()))
         current_match = _match_data(active_match_row)
 
     if not current_match:
-        # No active match where user is initiator — try to find the most recent one (expired or not)
+        # No live or terminated match where user is initiator — fall back to the most
+        # recent one of any state, so a lapsed conversation still has somewhere to be read
+        # from. Ordered by when the match was drawn rather than by when it lapses: a
+        # moderator-closed match used to be stamped as expiring immediately, which sorted
+        # it behind older matches instead of in front of them.
         with db.sessions() as session:
             recent_match_row = session.scalar(select(MatchRecord).where(
                 MatchRecord.user_1_regno == current_user.regno
-            ).order_by(MatchRecord.expires_at.desc()).limit(1))
+            ).order_by(MatchRecord.created_at.desc()).limit(1))
             current_match = _match_data(recent_match_row)
         if not current_match:
             # No matches where user is initiator
@@ -582,11 +604,13 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
     """
     current_time = datetime.now(timezone.utc)
     
-    # Find matches where current user is user_2 (receiver)
+# Find matches where current user is user_2 (receiver). A moderator-closed thread is
+    # included whatever the clock says, so the receiver does not lose the conversation out
+    # of their message box the moment it is terminated.
     with db.sessions() as session:
         received_matches = [_match_data(row) for row in session.scalars(select(MatchRecord).where(
             MatchRecord.user_2_regno == current_user.regno,
-            MatchRecord.expires_at > current_time,
+            or_(MatchRecord.expires_at > current_time, _terminated_match_exists()),
         )).all()]
     
     if not received_matches:

@@ -2,20 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   matchesConversationFilter,
   conversationIsExpired,
+  conversationIsTerminated,
   type ConversationFilter,
 } from '@/pages/MessageBoxPage';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
+const STATUSES = ['pending', 'requested', 'accepted', 'rejected', 'terminated'] as const;
+
 /**
  * A conversation `offsetMs` from now, so "expired" is a function of the fake clock rather
  * than a hardcoded literal that would rot.
  */
-const conversation = (
-  status: 'pending' | 'requested' | 'accepted' | 'rejected',
-  offsetMs: number
-) =>
+const conversation = (status: (typeof STATUSES)[number], offsetMs: number) =>
   ({
     match: {
       id: 'm1',
@@ -70,18 +70,19 @@ describe('matchesConversationFilter', () => {
   });
 
   it('does not let expiry pull a conversation out of All', () => {
-    const every: ConversationFilter[] = ['all', 'pending', 'active', 'expired', 'rejected'];
-    const statuses = ['pending', 'requested', 'accepted', 'rejected'] as const;
+    const every: ConversationFilter[] = [
+      'all', 'pending', 'active', 'expired', 'rejected', 'terminated',
+    ];
 
-    statuses.forEach(status => {
+    STATUSES.forEach(status => {
       expect(matchesConversationFilter(conversation(status, GONE), 'all')).toBe(true);
     });
-    expect(every).toHaveLength(5);
+    expect(every).toHaveLength(6);
   });
 
   it('reports an expired conversation regardless of its stored status', () => {
     // Expiry is checked ahead of status, which is the order the status badge already used.
-    (['pending', 'requested', 'accepted', 'rejected'] as const).forEach(status => {
+    STATUSES.filter(status => status !== 'terminated').forEach(status => {
       expect(matchesConversationFilter(conversation(status, GONE), 'expired')).toBe(true);
     });
   });
@@ -107,5 +108,43 @@ describe('matchesConversationFilter', () => {
 
     expect(conversationIsExpired(broken)).toBe(false);
     expect(matchesConversationFilter(broken, 'active')).toBe(true);
+  });
+
+  it('lists a terminated thread under Terminated even before the match expires', () => {
+    // The reported bug: closing the thread moved it out of the receiver's message box. It has
+    // to stay listed, and a fresh termination is not expired -- which is exactly why the two
+    // questions cannot be answered from one flag.
+    const closed = conversation('terminated', LIVE);
+
+    expect(conversationIsTerminated(closed)).toBe(true);
+    expect(conversationIsExpired(closed)).toBe(false);
+    expect(matchesConversationFilter(closed, 'terminated')).toBe(true);
+    expect(matchesConversationFilter(closed, 'all')).toBe(true);
+  });
+
+  it('keeps a terminated thread out of the tabs it can no longer be used from', () => {
+    const closed = conversation('terminated', LIVE);
+
+    // Chat and accept/reject are gone, so listing it beside live threads would offer actions
+    // that the server refuses.
+    expect(matchesConversationFilter(closed, 'active')).toBe(false);
+    expect(matchesConversationFilter(closed, 'pending')).toBe(false);
+    expect(matchesConversationFilter(closed, 'rejected')).toBe(false);
+  });
+
+  it('does not let a terminated thread also claim to be merely expired', () => {
+    // Termination outranks expiry even when the match has since lapsed, so the tabs stay a
+    // partition: one row, one tab.
+    const closed = conversation('terminated', GONE);
+
+    expect(matchesConversationFilter(closed, 'terminated')).toBe(true);
+    expect(matchesConversationFilter(closed, 'expired')).toBe(false);
+  });
+
+  it('leaves the other tabs on their stored status when a thread is terminated', () => {
+    STATUSES.filter(status => status !== 'terminated').forEach(status => {
+      expect(conversationIsTerminated(conversation(status, LIVE))).toBe(false);
+      expect(matchesConversationFilter(conversation(status, LIVE), 'terminated')).toBe(false);
+    });
   });
 });

@@ -32,7 +32,7 @@ interface ConversationData {
   };
   conversation: {
     id: string;
-    status: 'pending' | 'requested' | 'accepted' | 'rejected';
+    status: ConversationStatus;
     initiator_regno: string;
     receiver_regno: string;
     created_at: string;
@@ -49,14 +49,33 @@ interface ConversationData {
   is_initiator: boolean;
 }
 
+/**
+ * Every status the API can report for a conversation.
+ *
+ * `terminated` is a moderator closing a thread, which is a final answer rather than a stage:
+ * it can never move again, so it is held by its own tab instead of being folded into the
+ * status that happened to be there before. It is a real conversation the user was in and can
+ * still read, so it is never dropped from the list.
+ */
+export type ConversationStatus = 'pending' | 'requested' | 'accepted' | 'rejected' | 'terminated';
+
 /** The tabs on the full conversation list. */
-export type ConversationFilter = 'all' | 'pending' | 'active' | 'expired' | 'rejected';
+export type ConversationFilter = 'all' | 'pending' | 'active' | 'expired' | 'rejected' | 'terminated';
 
 /** Checks if a given expiration timestamp has passed. */
 export const isExpired = (expiresAt: string) => {
   const parsed = parseTimestamp(expiresAt);
   return parsed ? serverNow() > parsed.getTime() : false;
 };
+
+/**
+ * Whether a conversation has been closed by a moderator.
+ *
+ * Separate from expiry because the two answer different questions and can both be true: the
+ * match may still be inside its four hours while the thread is already shut.
+ */
+export const conversationIsTerminated = (conv: ConversationData) =>
+  conv.conversation.status === 'terminated';
 
 /**
  * Whether a conversation is past its match expiry.
@@ -71,8 +90,9 @@ export const conversationIsExpired = (conv: ConversationData) => isExpired(conv.
  *
  * An expired conversation is held by Expired rather than Active: it can no longer be chatted
  * in. It is moved rather than dropped, so it stays reachable and still appears on the
- * landing view, which lists every accepted conversation regardless of expiry. Expiry is
- * checked ahead of the stored status because that is also the order the status badge uses.
+ * landing view, which lists every open conversation regardless of expiry. Termination
+ * outranks expiry, in both directions: a thread a moderator closed is only ever listed as
+ * terminated, so the tabs stay a partition rather than two tabs competing for the same rows.
  */
 export const matchesConversationFilter = (
   conv: ConversationData,
@@ -81,10 +101,16 @@ export const matchesConversationFilter = (
   switch (filter) {
     case 'all':
       return true;
+    case 'terminated':
+      return conversationIsTerminated(conv);
     case 'expired':
-      return conversationIsExpired(conv);
+      return !conversationIsTerminated(conv) && conversationIsExpired(conv);
     case 'active':
-      return conv.conversation.status === 'accepted' && !conversationIsExpired(conv);
+      return (
+        conv.conversation.status === 'accepted' &&
+        !conversationIsTerminated(conv) &&
+        !conversationIsExpired(conv)
+      );
     default:
       return conv.conversation.status === filter;
   }
@@ -164,6 +190,18 @@ export const MessageBoxPage = () => {
 
   // Returns a styled status badge based on conversation status and expiration.
   const getStatusBadge = (status: string, expiresAt: string) => {
+    // Termination first: it is the final state, and it outranks a match that happens to have
+    // run out of time as well. Calling one of these threads "Expired" would hide the fact
+    // that a moderator closed it.
+    if (status === 'terminated') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-800">
+          <XCircle className="w-3 h-3 mr-1" />
+          Terminated
+        </span>
+      );
+    }
+
     if (isExpired(expiresAt)) {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
@@ -255,10 +293,16 @@ export const MessageBoxPage = () => {
     return `in ${hours}h ${minutes}m`;
   };
 
-  // Accepted conversations only, most recently accepted first. Expired ones stay here:
-  // they are still the user's conversations, and the chat behind them is readable.
-  const acceptedConversations = conversations
-    .filter((conv) => conv.conversation.status === 'accepted')
+  // Conversations the user can still open, most recently active first. Expired ones stay here
+  // and so do moderator-closed ones: both are still the user's conversations and the chat
+  // behind them is readable. A terminated conversation used to fall out of this list
+  // entirely, because the landing view looked only for `accepted`.
+  const openConversations = conversations
+    .filter(
+      (conv) =>
+        conv.conversation.status === 'accepted' ||
+        conv.conversation.status === 'terminated'
+    )
     .sort((a, b) => {
       const dateA = timestampMs(a.conversation.accepted_at);
       const dateB = timestampMs(b.conversation.accepted_at);
@@ -384,6 +428,13 @@ export const MessageBoxPage = () => {
                   >
                     Rejected
                   </Button>
+                  <Button
+                    variant={filter === 'terminated' ? 'default' : 'outline'}
+                    onClick={() => setFilter('terminated')}
+                    size="sm"
+                  >
+                    Terminated
+                  </Button>
                 </div>
               </div>
             </div>
@@ -444,6 +495,14 @@ export const MessageBoxPage = () => {
                               )}
                             </div>
                           </div>
+
+                          {conversationIsTerminated(conversation) && (
+                            <div className="mb-3 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-700">
+                              <XCircle className="w-3 h-3 inline mr-1" />
+                              This conversation was terminated by a moderator. You can view
+                              messages but cannot send new ones.
+                            </div>
+                          )}
 
                           {isExpired(conversation.match.expires_at) && (
                             <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
@@ -527,7 +586,7 @@ export const MessageBoxPage = () => {
               </div>
             )}
           </>
-        ) : acceptedConversations.length === 0 ? (
+        ) : openConversations.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <MessageCircle className="w-16 h-16 text-muted-foreground mb-4" />
@@ -539,7 +598,7 @@ export const MessageBoxPage = () => {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {acceptedConversations.map((conversation) => (
+            {openConversations.map((conversation) => (
               <Card
                 key={conversation.conversation.id}
                 className="hover:shadow-lg transition-all cursor-pointer border-2 hover:border-primary/50"
@@ -560,7 +619,12 @@ export const MessageBoxPage = () => {
                         </p>
                       </div>
                     </div>
-                    {conversationIsExpired(conversation) ? (
+                    {conversationIsTerminated(conversation) ? (
+                      <span className="px-3 py-1 bg-gray-200 text-gray-800 rounded-full text-xs font-medium inline-flex items-center">
+                        <XCircle className="w-3 h-3 mr-1" />
+                        Terminated
+                      </span>
+                    ) : conversationIsExpired(conversation) ? (
                       <span className="px-3 py-1 bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300 rounded-full text-xs font-medium inline-flex items-center">
                         <Clock className="w-3 h-3 mr-1" />
                         Expired
@@ -577,6 +641,13 @@ export const MessageBoxPage = () => {
                     <p className="text-sm text-muted-foreground line-clamp-2">
                       {conversation.other_user.bio || 'No bio available'}
                     </p>
+
+                    {conversationIsTerminated(conversation) && (
+                      <p className="text-xs text-muted-foreground bg-gray-100 border border-gray-200 rounded p-2">
+                        A moderator closed this conversation. You can still read it, but it can
+                        no longer be used.
+                      </p>
+                    )}
 
                     {conversation.other_user.interests &&
                       conversation.other_user.interests.length > 0 && (
@@ -609,17 +680,24 @@ export const MessageBoxPage = () => {
                         </span>
                         <span
                           className={`flex items-center ${
-                            isExpired(conversation.match.expires_at) ? 'text-red-600' : ''
+                            conversationIsTerminated(conversation) ||
+                            isExpired(conversation.match.expires_at)
+                              ? 'text-gray-600'
+                              : ''
                           }`}
                         >
                           <Heart className="w-3 h-3 mr-1" />
-                          {isExpired(conversation.match.expires_at)
-                            ? 'Expired'
-                            : `Expires ${getTimeLeft(conversation.match.expires_at)}`}
+                          {conversationIsTerminated(conversation)
+                            ? 'Terminated'
+                            : isExpired(conversation.match.expires_at)
+                              ? 'Expired'
+                              : `Expires ${getTimeLeft(conversation.match.expires_at)}`}
                         </span>
                       </div>
                       <div className="flex items-center text-primary">
-                        <span className="text-sm font-medium">Open chat</span>
+                        <span className="text-sm font-medium">
+                          {conversationIsTerminated(conversation) ? 'View conversation' : 'Open chat'}
+                        </span>
                         <ArrowRight className="w-4 h-4 ml-1" />
                       </div>
                     </div>
