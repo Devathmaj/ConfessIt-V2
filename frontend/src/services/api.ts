@@ -269,6 +269,18 @@ export const markLoveNoteRead = async (noteId: string) => {
     return response.data;
 }
 
+// Used by the recipient to report a love note they received. The server refuses anyone who
+// is not the recipient and anyone who has already filed, so the button is a request, not a
+// decision: it reports that the note was reported.
+export const reportLoveNote = async (noteId: string, reason: string) => {
+    const response = await axios.post(
+        `${API_URL}/love-notes/inbox/${noteId}/report`,
+        { reason },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+}
+
 // --- Profile Endpoints ---
 
 export const getNotifications = async () => {
@@ -317,6 +329,23 @@ export const updateAdminLoveNoteStatus = async (noteId: string, status: "approve
 
 export const deleteAdminLoveNote = async (noteId: string) => {
     const response = await axios.delete(`${API_URL}/admin/love-notes/${noteId}`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+export const getAdminLoveNoteReports = async (status?: string) => {
+    const response = await axios.get(`${API_URL}/admin/love-notes/reports`, {
+        headers: getAuthHeaders(),
+        params: status ? { status } : undefined,
+    });
+    return response.data;
+};
+
+export const updateAdminLoveNoteReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+    const response = await axios.patch(
+        `${API_URL}/admin/love-notes/reports/${reportId}`,
+        {},
+        { headers: getAuthHeaders(), params: { status } }
+    );
     return response.data;
 };
 

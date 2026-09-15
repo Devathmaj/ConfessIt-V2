@@ -48,6 +48,7 @@ ADMIN_READ_ROUTES = [
     "/admin/confessions",
     "/admin/conversations",
     "/admin/love-notes",
+    "/admin/love-notes/reports",
     "/admin/messages/reports",
     "/admin/stats",
     "/admin/stats/active-sessions",

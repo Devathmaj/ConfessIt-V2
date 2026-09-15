@@ -16,9 +16,11 @@ from ..services import asset_delivery_service
 from ..services.authorization import require_participant
 from ..services.love_note_service import (
     LoveNoteCreate,
+    LoveNoteReportCreate,
     get_all_users_service,
     get_all_classes_service,
-    send_love_note_service
+    send_love_note_service,
+    report_love_note_service
 )
 
 router = APIRouter(
@@ -167,3 +169,20 @@ async def mark_love_note_read(
         )
     
     return {"message": "Love note marked as read."}
+
+
+@router.post("/inbox/{note_id}/report", status_code=status.HTTP_201_CREATED)
+async def report_received_love_note(
+    note_id: str,
+    report_data: LoveNoteReportCreate,
+    current_user: Annotated[UserDetails, Depends(require_participant)],
+    db: Database = Depends(get_db)
+):
+    """
+    Report a love note the current user received.
+
+    A note can be reported by the recipient only, and only once. The report is not a
+    moderation action on the note: the note stays exactly as it was until staff act on the
+    report, so filing one does not silently retract a note somebody was shown.
+    """
+    return await report_love_note_service(note_id, report_data, current_user, db)

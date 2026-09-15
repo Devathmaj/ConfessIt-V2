@@ -33,10 +33,12 @@ import {
     MessageCircle,
     Users,
     Search,
-    Info
+    Info,
+    Flag
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { ReportLoveNoteDialog } from '@/components/ReportLoveNoteDialog';
 import { getAllUsers, getClasses, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
 import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
 
@@ -96,11 +98,19 @@ export const LoveNotesPage = () => {
     const [selectedEmoji, setSelectedEmoji] = useState<string | null>(null);
     const [selectedFont, setSelectedFont] = useState<string>('sans-serif');
     const [selectedFontStyle, setSelectedFontStyle] = useState<string>('normal');
-    const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
+const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
     const [receivedNotes, setReceivedNotes] = useState<LoveNote[]>([]);
     const [loadingNotes, setLoadingNotes] = useState(false);
     const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    // Which notes this account has already reported. The server refuses a second report, so
+    // the button is hidden rather than left to fail: a control that can only ever answer
+    // "already reported" is worse than no control. The inbox payload does not carry report
+    // state, so this is the page's own record of it and it resets with the page.
+    const [reportedNoteIds, setReportedNoteIds] = useState<string[]>([]);
+    const [noteToReport, setNoteToReport] = useState<LoveNote | null>(null);
+
 
     // State for recipient selection modal
     const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
@@ -631,10 +641,15 @@ export const LoveNotesPage = () => {
                                                     </div>
                                                 </div>
                                                 <div className="p-4 space-y-3">
-                                                    <p className="text-sm text-muted-foreground line-clamp-2">{note.body}</p>
+<p className="text-sm text-muted-foreground line-clamp-2">{note.body}</p>
                                                     {note.created_at && (
                                                         <p className="text-xs text-muted-foreground">
                                                             {formatDateTimeDDMMYYYY(note.created_at)}
+                                                        </p>
+                                                    )}
+                                                    {reportedNoteIds.includes(note.id) && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            Reported — our team will review it.
                                                         </p>
                                                     )}
                                                     <div className="flex gap-2 pt-2">
@@ -664,6 +679,17 @@ export const LoveNotesPage = () => {
                                                             <Download className="w-4 h-4 mr-1" />
                                                             Download
                                                         </Button>
+                                                        {!reportedNoteIds.includes(note.id) && (
+                                                            <Button
+                                                                onClick={() => setNoteToReport(note)}
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="text-muted-foreground hover:text-destructive"
+                                                                title="Report this love note"
+                                                            >
+                                                                <Flag className="w-4 h-4" />
+                                                            </Button>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </CardContent>
@@ -675,6 +701,18 @@ export const LoveNotesPage = () => {
                     )}
                 </div>
             </div>
+
+<ReportLoveNoteDialog
+                isOpen={noteToReport !== null}
+                onClose={() => setNoteToReport(null)}
+                noteId={noteToReport?.id ?? ''}
+                noteText={noteToReport?.body ?? ''}
+                onReported={(noteId) =>
+                    setReportedNoteIds((previous) =>
+                        previous.includes(noteId) ? previous : [...previous, noteId]
+                    )
+                }
+            />
 
             {/* Recipient Selection Modal */}
             <Dialog open={isRecipientModalOpen} onOpenChange={setIsRecipientModalOpen}>

@@ -1,11 +1,13 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from ..postgres import Database
-from ..db_models import LoveNoteRecord, UserRecord
+from ..db_models import LoveNoteRecord, LoveNoteReportRecord, UserRecord
 from ..logger import get_logger
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
+from ..limits import REPORT_REASON_MAX
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
@@ -31,6 +33,17 @@ class LoveNoteCreate(BaseModel):
     # this field is just as unbounded as the image was.
     body: str = Field(max_length=2000)
     anonymous: bool
+
+class LoveNoteReportCreate(BaseModel):
+    """The body of a report filed by the recipient of a love note.
+
+    The same reason field, and the same cap, as the confession and comment reports. A note
+    may have been sent anonymously, which changes what the recipient knows and nothing
+    about what staff see: the sender is withheld from the recipient and named here.
+    """
+
+    reason: str = Field(max_length=REPORT_REASON_MAX)
+
 
 async def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
     """
@@ -266,6 +279,204 @@ async def update_love_note_status_service(
             )
     
     return {"id": note_id, "status": status_value}
+
+
+async def report_love_note_service(
+    note_id: str,
+    report_data: LoveNoteReportCreate,
+    reporter: UserDetails,
+    db: Database,
+) -> Dict[str, Any]:
+    """
+    File a report against a love note the reporter received.
+
+    The recipient is the only party entitled to report, for the same reason the receiver is
+    the only party entitled to report a message: a note is private to two people, and the
+    person who did not write it is the one who has standing to complain. A duplicate is
+    refused rather than merged, so a report cannot be re-filed to reset its place in the
+    queue.
+    """
+    if not is_valid_id(note_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid love note id",
+        )
+
+    reason = (report_data.reason or "").strip()
+    if not reason:
+        # A blank reason is a report nobody can act on, and it is the kind of thing a
+        # client sends by accident. Refusing it here keeps the queue free of rows that
+        # exist only to be closed again.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A report needs a reason.",
+        )
+
+    with db.sessions.begin() as session:
+        note = session.get(LoveNoteRecord, str(note_id))
+        if note is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Love note not found",
+            )
+        if note.recipient_id != reporter.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only report love notes sent to you",
+            )
+        existing = session.scalar(select(LoveNoteReportRecord.id).where(
+            LoveNoteReportRecord.love_note_id == str(note_id),
+            LoveNoteReportRecord.reporter_regno == reporter.regno,
+        ).limit(1))
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You have already reported this love note",
+            )
+
+        row = LoveNoteReportRecord(
+            love_note_id=str(note_id),
+            reporter_regno=reporter.regno,
+            reason=reason,
+            status="pending",
+            reported_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        session.flush()
+        report_id = str(row.id)
+
+    logger.info(f"Love note {note_id} reported by {reporter.regno} for: {reason}")
+
+    return {"id": report_id, "message": "Love note reported successfully"}
+
+
+async def get_love_note_reports_for_admin(
+    db: Database,
+    viewer: AccountRef,
+    status_filter: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    The staff report queue, newest first, with the reported note joined in.
+
+    The note is carried rather than referenced: the question a moderator opens this screen
+    to answer is "what did this note actually say", and a row holding only a note id sends
+    them to a second screen to find out. The sender comes with it, because a report that
+    says *this note is unacceptable* is only actionable once staff can see who wrote it --
+    the recipient may never have been told, which is the whole point of an anonymous note.
+
+    The join is an inner join on purpose. The report's foreign key cascades, so a report
+    cannot outlive its note; an outer join would only ever render a "[deleted]" row that no
+    code path can produce.
+    """
+    filters = []
+    if status_filter:
+        filters.append(LoveNoteReportRecord.status == status_filter)
+
+    with db.sessions() as session:
+        rows = session.execute(
+            select(LoveNoteReportRecord, LoveNoteRecord)
+            .join(LoveNoteRecord, LoveNoteRecord.id == LoveNoteReportRecord.love_note_id)
+            .where(*filters)
+            .order_by(LoveNoteReportRecord.reported_at.desc())
+            .offset(skip).limit(limit)
+        ).all()
+        # Counted over the same join rather than over the report table alone, so ``total``
+        # is the number of rows this endpoint can actually return instead of a number the
+        # pager cannot reach.
+        total = session.scalar(
+            select(func.count())
+            .select_from(LoveNoteReportRecord)
+            .join(LoveNoteRecord, LoveNoteRecord.id == LoveNoteReportRecord.love_note_id)
+            .where(*filters)
+        ) or 0
+
+        # The reporter is stored as a regno and the sender as a ``users.id``, so both
+        # columns have to be resolved. Two bulk reads rather than two per row: this is the
+        # N+1 mistake the confession admin list is called out for in the knowledge base,
+        # and it is not worth repeating on a queue that grows with every report filed.
+        reporter_regnos = {report.reporter_regno for report, _note in rows}
+        sender_ids = {str(note.sender_id) for _report, note in rows}
+        reporters = {
+            user.regno: user
+            for user in session.scalars(
+                select(UserRecord).where(UserRecord.regno.in_(reporter_regnos))
+            ).all()
+        } if reporter_regnos else {}
+        senders = {
+            str(user.id): user
+            for user in session.scalars(
+                select(UserRecord).where(UserRecord.id.in_(sender_ids))
+            ).all()
+        } if sender_ids else {}
+
+    items: List[Dict[str, Any]] = []
+    for report, note in rows:
+        reporter = reporters.get(report.reporter_regno)
+        sender = senders.get(str(note.sender_id))
+        items.append({
+            "id": str(report.id),
+            "love_note_id": str(report.love_note_id),
+            "body": note.body,
+            "anonymous": bool(note.anonymous),
+            "note_status": note.status,
+            "note_created_at": isoformat_datetime(note.created_at),
+            "image_url": (
+                asset_delivery_service.build_delivery_url(
+                    kind="love-notes", stored_identifier=note.image_url, account=viewer
+                ) or note.image_url
+            ),
+            "reporter": {
+                "regno": report.reporter_regno,
+                "name": reporter.name if reporter else "Unknown",
+            },
+            "reported_user": {
+                "id": str(note.sender_id),
+                "name": sender.name if sender else "Unknown",
+                "regno": sender.regno if sender else None,
+            },
+            "reason": report.reason,
+            "reported_at": isoformat_datetime(report.reported_at),
+            "status": report.status,
+            "reviewed_at": isoformat_datetime(report.reviewed_at),
+            "reviewed_by_regno": report.reviewed_by_regno,
+        })
+
+    return {"reports": items, "total": total, "skip": skip, "limit": limit}
+
+
+async def update_love_note_report_status_service(
+    report_id: str,
+    status_value: str,
+    reviewer: AccountRef,
+    db: Database,
+) -> Dict[str, Any]:
+    """
+    Close out a report as ``reviewed`` or ``dismissed``, recording who closed it.
+
+    This only moves the report. What happens to the note is a separate decision made
+    through the ordinary love-note moderation endpoints, so that the queue and the note
+    list cannot disagree about a note's state.
+    """
+    if not is_valid_id(report_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid report id",
+        )
+
+    with db.sessions.begin() as session:
+        report = session.get(LoveNoteReportRecord, str(report_id))
+        if report is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Report not found",
+            )
+        report.status = status_value
+        report.reviewed_at = datetime.now(timezone.utc)
+        report.reviewed_by_regno = reviewer.regno
+
+    return {"id": report_id, "status": status_value}
 
 
 async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:

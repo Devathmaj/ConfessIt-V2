@@ -1,0 +1,362 @@
+"""Reporting a love note you received.
+
+A love note is the one piece of content in this app that arrives in somebody's inbox without
+the sender's name attached, so it is also the one a recipient most needs a way to complain
+about: without this, everything that can be reported is either public or two-way, and the
+one channel a stranger can use to reach an inbox unopened is the one with no route out.
+
+These tests pin the rules rather than the plumbing. The recipient may report their own note
+and nobody else may; the same note cannot be reported twice; and a report is a queue item that
+a human closes, not an action on the note. That last one is the rule most likely to be
+quietly undone later by someone tidying up the endpoint, so it is asserted directly.
+"""
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import select
+
+from app.accounts import AccountType
+from app.db_models import LoveNoteRecord, LoveNoteReportRecord, UserRecord
+from app.main import app
+from app.models import UserDetails
+from app.services.auth_service import get_current_user
+
+REASON = "harassment"
+RECIPIENT = "recipient"
+
+
+def make_user(db, regno, name=None):
+    with db.sessions.begin() as session:
+        row = UserRecord(
+            regno=regno,
+            name=name or f"User {regno}",
+            email=f"{regno}@test.com",
+            class_name="Test_Class",
+            gender="other",
+        )
+        session.add(row)
+        session.flush()
+        return {"id": str(row.id), "regno": row.regno}
+
+
+def make_note(db, sender, recipient, *, status="approved", body="a love note", anonymous=False):
+    with db.sessions.begin() as session:
+        row = LoveNoteRecord(
+            sender_id=sender["id"],
+            recipient_id=recipient["id"],
+            image_url="love-notes/mock/note.png",
+            body=body,
+            anonymous=anonymous,
+            status=status,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        session.flush()
+        return str(row.id)
+
+
+def make_bystander(db):
+    """A participant with no part in the note, who still has a session and an account."""
+    return make_user(db, "bystander")
+
+
+def note_between(db, *, anonymous=False, status="approved", body="a love note"):
+    """The module's standing cast: ``sender`` writes a note to ``recipient``, and ``bystander``
+    is a third account with no part in it.
+
+    All three are created by every test that sets up a note because the reporting rule is about
+    which of them is the caller, and a test that wanted to try one role should not first have
+    to go and create that account.
+    """
+    make_bystander(db)
+    return make_note(
+        db,
+        make_user(db, "sender"),
+        make_user(db, RECIPIENT),
+        anonymous=anonymous,
+        status=status,
+        body=body,
+    )
+
+
+@pytest.fixture
+def login_as(db):
+    """Run the calls inside the block as a named participant.
+
+    The shared override in conftest resolves to one fixed account, which is enough for "a
+    signed-in user" but not for a rule about *which* user: whether a note can be reported
+    turns on being its recipient, so the sender and an uninvolved bystander both have to be
+    the caller. The previous override is put back on the way out so a test can hold both a
+    participant and a staff account in the same body.
+    """
+
+    @contextmanager
+    def _login(regno: str):
+        with db.sessions() as session:
+            row = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
+        assert row is not None, f"no participant named {regno} to sign in as"
+        previous = app.dependency_overrides.get(get_current_user)
+        app.dependency_overrides[get_current_user] = lambda: UserDetails(
+            id=str(row.id), regno=row.regno, name=row.name, email=row.email,
+            class_name=row.class_name, gender=row.gender,
+            matchmaking_enabled=row.matchmaking_enabled,
+            notifications_enabled=row.notifications_enabled,
+            account_type=AccountType.USERS.value,
+        )
+        try:
+            yield
+        finally:
+            app.dependency_overrides[get_current_user] = previous
+
+    return _login
+
+
+def file_report(client, login_as, note_id, *, reason=REASON, as_user=RECIPIENT):
+    """File a report the way the note's recipient would, and hand back the response."""
+    with login_as(as_user):
+        return client.post(f"/love-notes/inbox/{note_id}/report", json={"reason": reason})
+
+
+def only_report(response):
+    """The single report in the queue, so a test cannot quietly pass on the wrong row."""
+    reports = response.json()["reports"]
+    assert len(reports) == 1, f"expected one report, got {reports}"
+    return reports[0]
+
+
+# ---------------------------------------------------------------- filing a report
+
+
+def test_the_recipient_can_report_a_note_they_received(client, login_as, db):
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id)
+
+    assert response.status_code == 201, response.text
+    with db.sessions() as session:
+        report = session.scalar(select(LoveNoteReportRecord))
+        assert report is not None
+        assert str(report.love_note_id) == note_id
+        assert report.reporter_regno == RECIPIENT
+        assert report.reason == REASON
+        assert report.status == "pending"
+        assert report.reviewed_at is None and report.reviewed_by_regno is None
+
+
+def test_a_note_sent_to_somebody_else_cannot_be_reported(client, login_as, db):
+    """The whole authorisation rule: a note is private to two people, and only the one who
+    did not write it has standing to complain about it."""
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id, as_user="bystander")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "You can only report love notes sent to you"
+    with db.sessions() as session:
+        assert session.scalar(select(LoveNoteReportRecord)) is None
+
+
+def test_the_sender_cannot_report_their_own_note(client, login_as, db):
+    """Filing a report against your own note is not reporting, it is deletion with extra
+    steps -- and deletion is a staff decision."""
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id, as_user="sender")
+
+    assert response.status_code == 403
+    with db.sessions() as session:
+        assert session.scalar(select(LoveNoteReportRecord)) is None
+
+
+def test_the_recipient_is_the_only_caller_the_rule_admits(client, login_as, db):
+    """The same note, refused twice for two different reasons, then accepted.
+
+    Worth separating from the cases above because a check written as "not the sender" would
+    pass both of them while still letting an uninvolved account report somebody's inbox.
+    """
+    note_id = note_between(db)
+
+    assert file_report(client, login_as, note_id, as_user="bystander").status_code == 403
+    assert file_report(client, login_as, note_id, as_user="sender").status_code == 403
+    assert file_report(client, login_as, note_id).status_code == 201
+
+
+def test_a_note_cannot_be_reported_twice(client, login_as, db):
+    note_id = note_between(db)
+
+    first = file_report(client, login_as, note_id)
+    second = file_report(client, login_as, note_id)
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["detail"] == "You have already reported this love note"
+    with db.sessions() as session:
+        assert len(session.scalars(select(LoveNoteReportRecord)).all()) == 1
+
+
+def test_an_unknown_note_is_a_404(client, login_as, db):
+    make_user(db, RECIPIENT)
+
+    response = file_report(client, login_as, "11111111-1111-1111-1111-111111111111")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Love note not found"
+
+
+def test_an_id_that_is_not_a_uuid_is_refused_before_the_database_is_asked(client, login_as, db):
+    """Asking the database to cast a non-UUID is a 500; the id is the caller's input and is
+    validated like any other."""
+    make_user(db, RECIPIENT)
+
+    response = file_report(client, login_as, "not-a-note-id")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid love note id"
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "\n\t"])
+def test_a_report_without_a_reason_is_refused(client, login_as, db, reason):
+    """A blank reason is a queue item nobody can act on."""
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id, reason=reason)
+
+    assert response.status_code == 400
+    with db.sessions() as session:
+        assert session.scalar(select(LoveNoteReportRecord)) is None
+
+
+def test_an_oversized_reason_is_refused(client, login_as, db):
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id, reason="r" * 1001)
+
+    assert response.status_code == 422
+
+
+def test_surrounding_whitespace_is_trimmed_off_the_reason(client, login_as, db):
+    """The reason is stored as the person wrote it, minus the padding a text field carries."""
+    note_id = note_between(db)
+
+    response = file_report(client, login_as, note_id, reason="  a real reason  ")
+
+    assert response.status_code == 201
+    with db.sessions() as session:
+        assert session.scalar(select(LoveNoteReportRecord)).reason == "a real reason"
+
+
+# ---------------------------------------------------------------- the staff queue
+
+
+def test_a_report_reaches_the_queue_carrying_the_note_and_its_sender(admin_client, client, login_as, db):
+    """A report nobody can read is not a report, so the queue has to carry the note itself."""
+    sender = make_user(db, "sender", name="Sender Name")
+    recipient = make_user(db, RECIPIENT, name="Recipient Name")
+    note_id = make_note(db, sender, recipient, body="the note that was reported")
+
+    assert file_report(client, login_as, note_id).status_code == 201
+    report = only_report(admin_client.get("/admin/love-notes/reports"))
+
+    assert report["love_note_id"] == note_id
+    assert report["body"] == "the note that was reported"
+    assert report["anonymous"] is False
+    assert report["note_status"] == "approved"
+    assert report["reporter"] == {"regno": RECIPIENT, "name": "Recipient Name"}
+    # The recipient never learned who sent the note, but a report is only actionable if
+    # staff can see, so the sender travels with it.
+    assert report["reported_user"]["name"] == "Sender Name"
+    assert report["reported_user"]["regno"] == "sender"
+    assert report["reason"] == REASON
+    assert report["status"] == "pending"
+    assert report["reviewed_at"] is None
+
+
+def test_the_queue_reports_an_anonymous_note_as_anonymous(admin_client, client, login_as, db):
+    """The flag is carried through so a reviewer knows why a sender name may be missing in
+    the participant's own view of the note, rather than inferring it from the payload."""
+    note_id = note_between(db, anonymous=True)
+
+    file_report(client, login_as, note_id)
+
+    assert only_report(admin_client.get("/admin/love-notes/reports"))["anonymous"] is True
+
+
+def test_a_plain_account_cannot_read_the_report_queue(client):
+    assert client.get("/admin/love-notes/reports").status_code == 403
+
+
+def test_a_moderator_can_read_and_close_a_report(moderator_client, client, login_as, db):
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+
+    closed = moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "reviewed"})
+
+    assert closed.status_code == 200
+    with db.sessions() as session:
+        report = session.get(LoveNoteReportRecord, report_id)
+        assert report.status == "reviewed"
+        # The audit trail names the staff account, which is why the column is plain text:
+        # it lives in ``moderator``, where a foreign key to ``users`` could never point.
+        assert report.reviewed_by_regno == "moduser"
+        assert report.reviewed_at is not None
+
+
+def test_the_queue_can_be_filtered_by_status(moderator_client, client, login_as, db):
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+    moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "dismissed"})
+
+    assert moderator_client.get("/admin/love-notes/reports", params={"status": "pending"}).json()["reports"] == []
+    dismissed = moderator_client.get("/admin/love-notes/reports", params={"status": "dismissed"}).json()["reports"]
+    assert [report["id"] for report in dismissed] == [report_id]
+
+
+def test_closing_an_unknown_report_is_a_404(moderator_client):
+    response = moderator_client.patch(
+        "/admin/love-notes/reports/11111111-1111-1111-1111-111111111111", params={"status": "reviewed"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_report_cannot_be_closed_in_a_state_that_does_not_exist(moderator_client, client, login_as, db):
+    """``pending`` is where a report is born, not a state a human can put it back into, so
+    re-opening a closed report stays a deliberate future decision."""
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+
+    response = moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "pending"})
+
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------- what a report is not
+
+
+def test_reporting_a_note_changes_nothing_about_the_note(client, login_as, db):
+    """The load-bearing assertion. Filing a report is a request for attention, not a verdict:
+    the note keeps its status and stays where it is until staff act on the note in its own
+    right, because a report is one person's word and the note is judged by the queue."""
+    note_id = note_between(db, status="approved")
+
+    assert file_report(client, login_as, note_id).status_code == 201
+
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).status == "approved"
+
+
+def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as, db):
+    """The foreign key cascades, so a report cannot outlive the note it is about and the
+    queue can never show a note that no longer exists."""
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+
+    assert admin_client.delete(f"/admin/love-notes/{note_id}").status_code == 200
+    with db.sessions() as session:
+        assert session.scalar(select(LoveNoteReportRecord)) is None
+    assert admin_client.get("/admin/love-notes/reports").json()["reports"] == []

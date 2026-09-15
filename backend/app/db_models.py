@@ -19,6 +19,7 @@ from .limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     MESSAGE_BODY_MAX,
+    REPORT_REASON_MAX,
 )
 from .accounts import (
     ACCOUNT_TYPE_VALUES,
@@ -249,6 +250,49 @@ class LoveNoteRecord(Base):
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class LoveNoteReportRecord(Base):
+    """A recipient's report that a love note they received breaks the rules.
+
+    Kept in its own table rather than as a flag on ``love_notes`` for the same reason
+    ``message_reports`` is separate from ``messages``: the report is a *review queue item*
+    with a lifecycle of its own (pending -> reviewed/dismissed) and an audit trail naming
+    who looked at it, and a note the recipient has reported is still a note staff must be
+    able to read, approve or reject on its own merits.
+
+    A note has exactly one recipient, so ``(love_note_id, reporter_regno)`` is unique in
+    practice as well as on paper: the same person cannot file the same complaint twice, and
+    nobody else is entitled to file one.
+
+    The reported party is deliberately **not** denormalised into a second regno column.
+    ``love_notes.sender_id`` is a foreign key that cascades, so a report can never outlive
+    the note it is about, and the sender is one join away in a table that has to be read
+    anyway to show the note. Storing it would add a column that can only ever disagree with
+    its source.
+    """
+
+    __tablename__ = "love_note_reports"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    love_note_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("love_notes.id", ondelete="CASCADE"), index=True)
+    # The reporter is always the note's recipient, and the regno rather than the id because
+    # this is the column the staff queue groups and displays by.
+    reporter_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    # Capped in the database as well as by Pydantic, so a write that does not come through
+    # the API cannot store a reason longer than the application claims to accept.
+    reason: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # No foreign key, for the same reason as message_reports.reviewed_by_regno: the reviewer
+    # is a staff account whose regno lives in ``admin`` or ``moderator``, never in ``users``,
+    # so a FK would reject every moderator's sign-off.
+    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    __table_args__ = (
+        UniqueConstraint("love_note_id", "reporter_regno"),
+        CheckConstraint(f"length(reason) <= {REPORT_REASON_MAX}", name="ck_love_note_reports_reason_length"),
+    )
 
 
 class LoveNoteTemplateRecord(Base):

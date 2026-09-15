@@ -13,6 +13,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { AlertTriangle } from 'lucide-react';
 import { reportMessage } from '@/lib/messaging';
+import { REPORT_REASONS } from '@/lib/reportReasons';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -25,17 +26,6 @@ interface ReportMessageDialogProps {
   reportedUserId: string;
   conversationId: string;
 }
-
-const REPORT_REASONS = [
-  { value: 'harassment', label: 'Harassment or bullying' },
-  { value: 'hate_speech', label: 'Hate speech or discrimination' },
-  { value: 'spam', label: 'Spam or scam' },
-  { value: 'inappropriate_content', label: 'Inappropriate or offensive content' },
-  { value: 'threats', label: 'Threats or violence' },
-  { value: 'sexual_content', label: 'Unwanted sexual content' },
-  { value: 'impersonation', label: 'Impersonation or fake identity' },
-  { value: 'other', label: 'Other violation' },
-];
 
 export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
   isOpen,

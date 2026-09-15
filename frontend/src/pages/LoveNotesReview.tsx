@@ -12,6 +12,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
+import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -21,6 +27,8 @@ import {
   getAdminLoveNotes,
   updateAdminLoveNoteStatus,
   deleteAdminLoveNote,
+  getAdminLoveNoteReports,
+  updateAdminLoveNoteReportStatus,
 } from '@/services/api';
 import {
   AlertDialog,
@@ -33,7 +41,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
-import { ShieldAlert, ShieldCheck, Trash2, ImageIcon, User, X, Download } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { CAPABILITIES } from '@/lib/capabilities';
+import { ShieldAlert, ShieldCheck, Trash2, ImageIcon, User, X, Download, Flag } from 'lucide-react';
 
 interface PersonDetails {
   id: string | null;
@@ -54,6 +64,24 @@ interface AdminLoveNote {
   read_at: string | null;
 }
 
+/** One row of the report queue: a note a recipient asked staff to look at. */
+interface LoveNoteReport {
+  id: string;
+  love_note_id: string;
+  body: string;
+  anonymous: boolean;
+  note_status: 'approved' | 'rejected' | 'pending_review' | null;
+  note_created_at: string | null;
+  image_url: string | null;
+  reporter: { regno: string; name: string };
+  reported_user: { id: string; name: string; regno: string | null };
+  reason: string;
+  reported_at: string | null;
+  status: 'pending' | 'reviewed' | 'dismissed';
+  reviewed_at: string | null;
+  reviewed_by_regno: string | null;
+}
+
 const formatTimestamp = (value: string | null) => {
   return formatDateTimeDDMMYYYY(value);
 };
@@ -65,12 +93,22 @@ const statusConfig: Record<AdminLoveNote['status'], { label: string; variant: 'd
 };
 
 export const LoveNotesReview = () => {
+  const { can } = useAuth();
+  // Read and close-out are separately grantable on the server, so they are hidden
+  // separately here. This is presentation only: the gate that matters is the one on the
+  // route, and both of these endpoints re-check it on every call.
+  const canReadReports = can(CAPABILITIES.REPORTS_REVIEW);
+  const canModerateReports = can(CAPABILITIES.REPORTS_MODERATE);
+  const [activeTab, setActiveTab] = useState<'notes' | 'reports'>('notes');
   const [notes, setNotes] = useState<AdminLoveNote[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | AdminLoveNote['status']>('all');
   const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
+  const [reports, setReports] = useState<LoveNoteReport[]>([]);
+  const [reportsLoading, setReportsLoading] = useState<boolean>(true);
+  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | LoveNoteReport['status']>('all');
 
   const statusSections: Array<{ key: AdminLoveNote['status']; heading: string; emptyLabel: string }> = useMemo(
     () => [
@@ -120,6 +158,52 @@ export const LoveNotesReview = () => {
 
     fetchNotes();
   }, []);
+
+  useEffect(() => {
+    if (!canReadReports) {
+      setReportsLoading(false);
+      return;
+    }
+
+    const fetchReports = async () => {
+      try {
+        setReportsLoading(true);
+        const response = await getAdminLoveNoteReports(
+          reportStatusFilter === 'all' ? undefined : reportStatusFilter
+        );
+        setReports(Array.isArray(response?.reports) ? response.reports : []);
+      } catch (error) {
+        console.error('Failed to load love note reports', error);
+        toast.error('Unable to load love note reports.');
+      } finally {
+        setReportsLoading(false);
+      }
+    };
+
+    fetchReports();
+  }, [canReadReports, reportStatusFilter]);
+
+  const pendingReportCount = useMemo(
+    () => reports.filter((report) => report.status === 'pending').length,
+    [reports]
+  );
+
+  const handleReportStatusChange = async (reportId: string, status: 'reviewed' | 'dismissed') => {
+    try {
+      await updateAdminLoveNoteReportStatus(reportId, status);
+      setReports((prev) =>
+        prev.map((report) =>
+          report.id === reportId
+            ? { ...report, status, reviewed_at: new Date().toISOString() }
+            : report
+        )
+      );
+      toast.success(`Report ${status}.`);
+    } catch (error) {
+      console.error('Failed to update love note report', error);
+      toast.error('Unable to update this report.');
+    }
+  };
 
   const pendingCount = useMemo(
     () => notes.filter((note) => note.status === 'pending_review').length,
@@ -224,6 +308,19 @@ export const LoveNotesReview = () => {
           </p>
         </header>
 
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as typeof activeTab)}
+          className="mt-2"
+        >
+          <TabsList>
+            <TabsTrigger value="notes">Notes ({pendingCount} pending)</TabsTrigger>
+            {canReadReports && (
+              <TabsTrigger value="reports">Reports ({pendingReportCount})</TabsTrigger>
+            )}
+          </TabsList>
+
+          <TabsContent value="notes" className="mt-6 space-y-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="uppercase tracking-wide">Filter</span>
@@ -394,6 +491,129 @@ export const LoveNotesReview = () => {
             })}
           </div>
         )}
+          </TabsContent>
+
+          {canReadReports && (
+            <TabsContent value="reports" className="mt-6 space-y-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="uppercase tracking-wide">Filter</span>
+                  <Select
+                    value={reportStatusFilter}
+                    onValueChange={(value) => setReportStatusFilter(value as typeof reportStatusFilter)}
+                  >
+                    <SelectTrigger className="w-44">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All reports</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="reviewed">Reviewed</SelectItem>
+                      <SelectItem value="dismissed">Dismissed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Badge variant="secondary">
+                  Showing {reports.length} {reports.length === 1 ? 'report' : 'reports'}
+                </Badge>
+              </div>
+
+              {reportsLoading ? (
+                <Card>
+                  <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                    Loading reported love notes...
+                  </CardContent>
+                </Card>
+              ) : reports.length === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                    No love note reports in this state.
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="space-y-3">
+                  {reports.map((report) => (
+                    <Card key={report.id} className="overflow-hidden rounded-2xl border-border bg-muted/20">
+                      <CardHeader className="pb-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                            <Flag className="h-4 w-4 text-destructive" />
+                            {report.reported_user.name} → {report.reporter.name}
+                          </CardTitle>
+                          <Badge variant={report.status === 'pending' ? 'secondary' : 'default'}>
+                            {report.status === 'pending' ? 'Awaiting review' : report.status}
+                          </Badge>
+                        </div>
+                        <CardDescription className="text-xs">
+                          Reported {formatTimestamp(report.reported_at)} · Note sent{' '}
+                          {formatTimestamp(report.note_created_at)}
+                          {report.anonymous ? ' · Anonymous to recipient' : ''}
+                          {report.note_status ? ` · Note is ${report.note_status.replace('_', ' ')}` : ''}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-2xl border border-border bg-background/60 p-4">
+                          <p className="text-sm uppercase tracking-wide text-muted-foreground">
+                            Why it was reported
+                          </p>
+                          <p className="mt-2 whitespace-pre-line text-base leading-relaxed">
+                            {report.reason}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-border bg-background/60 p-4">
+                          <p className="text-sm uppercase tracking-wide text-muted-foreground">
+                            The note as the recipient received it
+                          </p>
+                          <p className="mt-2 whitespace-pre-line text-base leading-relaxed">
+                            {report.body}
+                          </p>
+                          {report.image_url && (
+                            <img
+                              src={report.image_url}
+                              alt="Reported love note illustration"
+                              className="mt-3 max-h-64 w-full cursor-pointer rounded-xl object-cover hover:opacity-90 transition-opacity"
+                              onClick={() => setViewingImageUrl(report.image_url)}
+                            />
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-muted-foreground">
+                            Reporter {report.reporter.regno} · Sender {report.reported_user.regno ?? 'unknown'}
+                            {report.reviewed_by_regno
+                              ? ` · Closed by ${report.reviewed_by_regno} on ${formatTimestamp(report.reviewed_at)}`
+                              : ''}
+                          </p>
+                          {canModerateReports && report.status === 'pending' && (
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-green-500 text-green-500 hover:bg-green-500 hover:text-white"
+                                onClick={() => handleReportStatusChange(report.id, 'reviewed')}
+                              >
+                                <ShieldCheck className="mr-2 h-4 w-4" /> Mark reviewed
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-muted-foreground text-muted-foreground hover:bg-muted"
+                                onClick={() => handleReportStatusChange(report.id, 'dismissed')}
+                              >
+                                Dismiss
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          )}
+        </Tabs>
       </div>
 
       <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
