@@ -30,6 +30,7 @@ from ..services.report_resolution_service import (
     resolve_message_report,
     resolve_status_filter,
 )
+from ..services.report_resolution_service import hide_confession as hide_confession_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -91,7 +92,13 @@ async def delete_confession(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE))
 ) -> Dict[str, Any]:
-    """Remove a confession permanently."""
+    """Remove a confession permanently, row and attached reports included.
+
+A hard delete, and deliberately the odd one out: it is the route that exists for content that
+must not remain in the database at all. The Confession Review screen does not offer it --
+``PATCH /confessions/{confession_id}/hide`` is what a reviewer reaches for, and that one keeps
+the row so the report trail stays intact.
+"""
     if not is_valid_id(confession_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
 
@@ -103,10 +110,41 @@ async def delete_confession(
     return {"deleted": confession_id}
 
 
+@router.patch("/confessions/{confession_id}/hide")
+async def hide_confession(
+    confession_id: str,
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
+) -> Dict[str, Any]:
+    """Hide a confession from public view, keeping the row and everything attached to it.
+
+    This is what the Confession Review screen offers instead of deleting. The write is the same
+    one a ``removed`` ruling on a report performs -- ``removed_at`` plus who stamped it -- so a
+    confession hidden from the review screen and one taken down through a report queue end up in
+    identical state, and every participant-facing read filters the one column.
+
+    What replaces ``DELETE /confessions/{confession_id}`` on that screen is not nothing: the
+    delete route stays, for the cases that genuinely need the row and its reports to be gone.
+    What is dropped is the one-keystroke path to it from the screen where a reviewer works
+    through many posts.
+
+    Hiding an already-hidden confession is answered, not refused, and says so in
+    ``already_hidden``. The alternative -- a 409 -- turns a double click into an error toast
+    that reads like a failure when the requested state is already in place, and pushes the
+    screen to special-case a condition the user did nothing wrong about.
+
+    There is deliberately no matching unhide route. Hiding is one-way here, and the
+    confirmation dialog says so rather than offering a promise the API does not keep.
+    """
+    return hide_confession_service(db, confession_id, reviewer.regno)
+
+
 # The report queue is declared after ``/confessions/{confession_id}`` on purpose. FastAPI
 # matches on method first, and the only sibling is a DELETE, so nothing here is shadowed
 # today; keeping the literal path last means adding a ``GET /{confession_id}`` later cannot
-# swallow it. These two carry the reporting capabilities rather than the confession ones, so
+# swallow it. ``/confessions/{confession_id}/hide`` is PATCH like ``/confessions/reports/...``,
+# and the literal ``reports`` segment is matched first, so a report id is never read as a
+# confession id. These two carry the reporting capabilities rather than the confession ones, so
 # that ruling on reports stays separately grantable from reviewing the posts themselves.
 
 

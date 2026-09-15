@@ -74,6 +74,17 @@ def make_comment(db, confession_id, commenter_id):
         return str(row.id)
 
 
+def react(db, confession_id, user_id, key="heart"):
+    """Record a reaction, keeping the denormalised counter in step the way the service does."""
+    with db.sessions.begin() as session:
+        row = session.get(ConfessionRecord, confession_id)
+        reactions = dict(row.reactions or {})
+        reactions[key] = [*reactions.get(key, []), str(user_id)]
+        row.reactions = reactions
+        row.heart_count += 1
+        session.flush()
+
+
 def make_report(db, target_id, reporter_id, reporter_name, column="confession_id"):
     """Report a confession or one of its comments; the table is polymorphic on the column."""
     with db.sessions.begin() as session:
@@ -197,3 +208,88 @@ def test_a_reported_comment_is_still_actionable_on_an_anonymous_confession(db):
     comment = item["comments"][0]
     assert [report["reason"] for report in comment["reports"]] == ["harmful content"]
     assert item["sender"]["name"] is None
+
+
+def test_reactors_are_resolved_by_name_for_a_reviewer(db):
+    """The point of the reactor list is to name an account a reviewer can act on."""
+    author_id = make_user(db, "author", "Post Author")
+    reactor_id = make_user(db, "reactor", "Heart Reactor")
+    confession_id = make_confession(db, author_id, anonymous=False)
+    react(db, confession_id, reactor_id, key="heart")
+
+    item = find(get_all_confessions_data(db), confession_id)
+    assert item["reaction_users"]["heart"] == [
+        {"id": reactor_id, "name": "Heart Reactor", "withheld_reason": None}
+    ]
+    # The raw id list is retained alongside it: the counters are a separate column, so anything
+    # auditing engagement needs both rather than one derived from the other.
+    assert item["reactions"]["heart"] == [reactor_id]
+
+
+def test_an_anonymous_authors_reaction_on_their_own_post_is_withheld(db):
+    """The likeliest reactor on an anonymous post is its author, and naming them would unmask it."""
+    author_id = make_user(db, "ghost", "Ghost Writer")
+    confession_id = make_confession(db, author_id, anonymous=True)
+    react(db, confession_id, author_id, key="heart")
+
+    item = find(get_all_confessions_data(db), confession_id)
+    assert item["reaction_users"]["heart"] == [
+        {"id": author_id, "name": None, "withheld_reason": "anonymous_author"}
+    ]
+    assert "Ghost Writer" not in json.dumps(get_all_confessions_data(db))
+
+
+def test_reactors_on_an_anonymous_post_are_named_apart_from_its_author(db):
+    """Withholding the author is not withholding everyone: other reactors are still reviewable."""
+    author_id = make_user(db, "ghost2", "Ghost Writer Two")
+    reactor_id = make_user(db, "onlooker2", "On Looker Two")
+    confession_id = make_confession(db, author_id, anonymous=True)
+    react(db, confession_id, author_id, key="haha")
+    react(db, confession_id, reactor_id, key="haha")
+
+    item = find(get_all_confessions_data(db), confession_id)
+    assert item["reaction_users"]["haha"] == [
+        {"id": author_id, "name": None, "withheld_reason": "anonymous_author"},
+        {"id": reactor_id, "name": "On Looker Two", "withheld_reason": None},
+    ]
+
+
+def test_anonymous_authorship_is_respected_once_a_reaction_is_named(db):
+    """One person, one anonymous post and one public post, reacting in both cases."""
+    author_id = make_user(db, "dualreactor", "Dual Reactor")
+    anonymous_id = make_confession(db, author_id, anonymous=True, body="an anonymous confession")
+    public_id = make_confession(db, author_id, anonymous=False, body="a public confession")
+    react(db, anonymous_id, author_id, key="whoa")
+    react(db, public_id, author_id, key="whoa")
+
+    items = get_all_confessions_data(db)
+    anonymous_item = find(items, anonymous_id)
+    public_item = find(items, public_id)
+    assert anonymous_item["reaction_users"]["whoa"][0]["name"] is None
+    assert public_item["reaction_users"]["whoa"][0]["name"] == "Dual Reactor"
+
+
+def test_a_reaction_from_a_deleted_account_is_withheld_rather_than_dropped(db):
+    """The id outlives the row in the JSONB array; the entry stays so the list still adds up."""
+    author_id = make_user(db, "author3", "Post Author Three")
+    confession_id = make_confession(db, author_id, anonymous=False)
+    react(db, confession_id, "00000000-0000-0000-0000-000000000009", key="heartbreak")
+
+    item = find(get_all_confessions_data(db), confession_id)
+    assert item["reaction_users"]["heartbreak"] == [
+        {"id": "00000000-0000-0000-0000-000000000009", "name": None, "withheld_reason": "unknown"}
+    ]
+
+
+@pytest.mark.parametrize("staff_fixture", ["admin_client", "moderator_client"])
+def test_the_review_endpoint_serves_reaction_users(db, request, staff_fixture):
+    client = request.getfixturevalue(staff_fixture)
+    author_id = make_user(db, "author4", "Post Author Four")
+    reactor_id = make_user(db, "reactor4", "Whoa Reactor")
+    confession_id = make_confession(db, author_id, anonymous=False)
+    react(db, confession_id, reactor_id, key="whoa")
+
+    response = client.get("/admin/confessions")
+    assert response.status_code == 200
+    item = find(response.json(), confession_id)
+    assert item["reaction_users"]["whoa"][0]["name"] == "Whoa Reactor"

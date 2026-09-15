@@ -14,7 +14,7 @@ import {
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
-import { getAdminConfessions, deleteAdminConfession } from '@/services/api';
+import { getAdminConfessions, hideAdminConfession } from '@/services/api';
 import { toast } from 'sonner';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
@@ -23,9 +23,9 @@ import {
   Flame,
   HeartCrack,
   Flag,
-  Trash2,
   User,
   UserX,
+  ChevronDown,
   Eye,
   EyeOff,
   MessageSquare,
@@ -93,16 +93,45 @@ interface AdminConfession {
   reported_by: string[];
   reports: AdminReport[];
   reactions: Record<string, string[]>;
+  reaction_users?: Record<string, Array<{ id: string; name: string | null; withheld_reason?: string | null }>>;
   heart_count: number;
   haha_count: number;
   whoa_count: number;
   heartbreak_count: number;
   comment_count: number;
   comments: AdminComment[];
+  // Set by the server, never derived here. A confession hidden from the review screen and one
+  // taken down by a report ruling produce the same state on the same column, so this is the
+  // only thing the screen can key its "already hidden" state off -- and it stays true for the
+  // rest of the row's life, because there is no unhide.
+  content_removed?: boolean;
+  removed_at?: string | null;
+  removed_by_regno?: string | null;
 }
 
 type ConfessionSortOption = 'recent' | 'reports' | 'comments' | 'reactions';
 type ConfessionFilterOption = 'all' | 'reported' | 'anonymous' | 'with-comments';
+
+/**
+ * The denormalised counter beside each emoji, which is what every other surface shows.
+ *
+ * Kept as the count rather than `reactors.length` because the two are stored independently: the
+ * counters are columns on the row and the ids are a JSONB array, so they can disagree. A reviewer
+ * comparing the two against the reactor list is doing the audit, and quietly substituting one for
+ * the other would remove the discrepancy instead of showing it.
+ */
+const countFor = (confession: AdminConfession, key: string) => {
+  switch (key) {
+    case 'heart':
+      return confession.heart_count;
+    case 'haha':
+      return confession.haha_count;
+    case 'whoa':
+      return confession.whoa_count;
+    default:
+      return confession.heartbreak_count;
+  }
+};
 
 const reactionDisplay = [
   { key: 'heart', label: 'Hearts', icon: Heart, color: 'text-pink-400' },
@@ -121,6 +150,10 @@ export const ConfessionsAdmin = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedConfessionId, setSelectedConfessionId] = useState<string | null>(null);
   const [visibleSenders, setVisibleSenders] = useState<Record<string, boolean>>({});
+  // One open reaction at a time, across every row, keyed `confessionId:reaction`. A record would
+  // allow several at once, which turns a snapshot into a wall of names; a single slot keeps it
+  // scannable and means a reviewer expanding a second one has implicitly closed the first.
+  const [expandedReaction, setExpandedReaction] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<ConfessionSortOption>('reports');
   const [filterOption, setFilterOption] = useState<ConfessionFilterOption>('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -158,12 +191,16 @@ export const ConfessionsAdmin = () => {
                     },
                   }))
                 : [],
-              reactions: item.reactions ?? {},
+               reactions: item.reactions ?? {},
+               reaction_users: item.reaction_users ?? {},
               heart_count: item.heart_count ?? 0,
               haha_count: item.haha_count ?? 0,
               whoa_count: item.whoa_count ?? 0,
               heartbreak_count: item.heartbreak_count ?? 0,
               comment_count: item.comment_count ?? 0,
+              content_removed: item.content_removed ?? false,
+              removed_at: item.removed_at ?? null,
+              removed_by_regno: item.removed_by_regno ?? null,
               comments: Array.isArray(item.comments)
                 ? item.comments.map((comment: Partial<AdminComment>, commentIndex) => ({
                     id: comment.id ?? `confession-${index}-comment-${commentIndex}`,
@@ -274,20 +311,40 @@ export const ConfessionsAdmin = () => {
     return sorted;
   }, [confessions, filterOption, searchTerm, sortOption]);
 
-  const handleDelete = (confessionId: string) => {
+  const handleHide = (confessionId: string) => {
     setSelectedConfessionId(confessionId);
     setDialogOpen(true);
   };
 
-  const confirmDelete = async () => {
+  const confirmHide = async () => {
     if (!selectedConfessionId) return;
+    const confessionId = selectedConfessionId;
     try {
-      await deleteAdminConfession(selectedConfessionId);
-      setConfessions((prev) => prev.filter((item) => item.id !== selectedConfessionId));
-      toast.success('Confession removed successfully.');
+      const result = await hideAdminConfession(confessionId);
+      // The row stays in the list rather than being filtered out: a reviewer working down a queue
+      // needs to see that this one is already handled, and the hidden state is the evidence.
+      // `already_hidden` is answered separately so a double click says so rather than claiming
+      // a second moderation action happened.
+      setConfessions((prev) =>
+        prev.map((item) =>
+          item.id === confessionId
+            ? {
+                ...item,
+                content_removed: true,
+                removed_at: result?.removed_at ?? item.removed_at ?? null,
+                removed_by_regno: result?.removed_by_regno ?? item.removed_by_regno ?? null,
+              }
+            : item
+        )
+      );
+      toast.success(
+        result?.already_hidden
+          ? 'This confession was already hidden.'
+          : 'Confession hidden from public view.',
+      );
     } catch (error) {
-      console.error('Failed to delete confession', error);
-      toast.error('Could not delete the confession.');
+      console.error('Failed to hide confession', error);
+      toast.error('Could not hide the confession.');
     } finally {
       setDialogOpen(false);
       setSelectedConfessionId(null);
@@ -309,10 +366,11 @@ export const ConfessionsAdmin = () => {
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold">Confession Review</h1>
           <p className="text-sm text-muted-foreground">
-            Review every confession, act on its reports and comments, and remove harmful submissions.
-            An anonymous confession is anonymous here too, so action it on what was written.
-            Each confession is collapsed to the line a reviewer triages on; expand one to read it
-            in full and act on it.
+            Review every confession, act on its reports and comments, and hide harmful submissions.
+            Hiding takes a confession out of public view and cannot be undone; the post stays here
+            as a record. An anonymous confession is anonymous here too, so action it on what was
+            written. Each confession is collapsed to the line a reviewer triages on; expand one to
+            read it in full and act on it.
           </p>
           <p className="text-xs text-muted-foreground/80">
             Total confessions: {confessions.length} · Reports in queue: {totalReports}
@@ -497,26 +555,67 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                           <span className="text-xs text-muted-foreground">Comments: {commentTotal}</span>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
-                          {reactionDisplay.map(({ key, label, icon: Icon, color }) => (
-                            <div
-                              key={key}
-                              className="flex items-center justify-between rounded-xl border border-border bg-background/40 px-3 py-2 text-sm"
-                            >
-                              <div className="flex items-center gap-2">
-                                <Icon className={`h-4 w-4 ${color}`} />
-                                <span>{label}</span>
+                          {reactionDisplay.map(({ key, label, icon: Icon, color }) => {
+                            const reactors = confession.reaction_users?.[key] ?? [];
+                            return (
+                              <div
+                                key={key}
+                                className="rounded-xl border border-border bg-background/40 px-3 py-2 text-sm"
+                              >
+                                {/* A button rather than a plain row so the reactor list is reachable
+                                    by keyboard. It is disabled at zero rather than hidden: the four
+                                    rows line up as a comparison, and a reviewer scanning them wants
+                                    to see which reactions are absent, not find gaps in the grid. */}
+                                <button
+                                  type="button"
+                                  disabled={reactors.length === 0}
+                                  aria-expanded={reactors.length > 0 && expandedReaction === `${confession.id}:${key}`}
+                                  onClick={() =>
+                                    setExpandedReaction((prev) =>
+                                      prev === `${confession.id}:${key}` ? null : `${confession.id}:${key}`,
+                                    )
+                                  }
+                                  className="flex w-full items-center justify-between text-left disabled:cursor-default"
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <Icon className={`h-4 w-4 ${color}`} />
+                                    <span>{label}</span>
+                                  </span>
+                                  <span className="flex items-center gap-2 font-medium">
+                                    {countFor(confession, key)}
+                                    {reactors.length > 0 && (
+                                      <ChevronDown
+                                        className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                                          expandedReaction === `${confession.id}:${key}` ? 'rotate-180' : ''
+                                        }`}
+                                      />
+                                    )}
+                                  </span>
+                                </button>
+                                {expandedReaction === `${confession.id}:${key}` && reactors.length > 0 && (
+                                  <ul className="mt-2 space-y-1 border-t border-border/70 pt-2">
+                                    {reactors.map((reactor) => (
+                                      <li key={reactor.id} className="flex items-center gap-2 text-xs">
+                                        <User className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                        <span className="truncate text-muted-foreground">
+                                          {/* Two different reasons a name is absent, and the reviewer is
+                                              told which: an anonymous post's author is withheld on
+                                              purpose, while a stale id means the account is gone.
+                                              Rendering both as "Unknown" would make a privacy
+                                              decision look like a data fault. */}
+                                          {reactor.name ?? (
+                                            reactor.withheld_reason === 'anonymous_author'
+                                              ? 'Withheld — author of an anonymous confession'
+                                              : 'Unknown — account no longer exists'
+                                          )}
+                                        </span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
                               </div>
-                              <span className="font-medium">
-                                {key === 'heart'
-                                  ? confession.heart_count
-                                  : key === 'haha'
-                                  ? confession.haha_count
-                                  : key === 'whoa'
-                                  ? confession.whoa_count
-                                  : confession.heartbreak_count}
-                              </span>
-                            </div>
-                          ))}
+                            );
+                          })}
                           <div className="flex items-center justify-between rounded-xl border border-border bg-background/40 px-3 py-2 text-sm">
                             <div className="flex items-center gap-2">
                               <MessageSquare className="h-4 w-4 text-violet-400" />
@@ -629,15 +728,27 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                       )}
                     </div>
 
-                    <div className="flex justify-end">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                        onClick={() => handleDelete(confession.id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" /> Delete confession
-                      </Button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                      {confession.content_removed ? (
+                        // Not a disabled button. A control the reviewer can see but cannot use
+                        // invites a second click that does nothing, and a screen full of greyed-out
+                        // controls is harder to scan than one that simply says what happened.
+                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <EyeOff className="h-4 w-4" />
+                          Already hidden from public view
+                          {confession.removed_at ? ` on ${formatTimestamp(confession.removed_at)}` : ''}
+                          {confession.removed_by_regno ? ` by ${confession.removed_by_regno}` : ''}.
+                        </p>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                          onClick={() => handleHide(confession.id)}
+                        >
+                          <EyeOff className="mr-2 h-4 w-4" /> Hide confession
+                        </Button>
+                      )}
                     </div>
                   </AccordionContent>
                 </AccordionItem>
@@ -651,15 +762,17 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
       <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this confession?</AlertDialogTitle>
+            <AlertDialogTitle>Hide this confession?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The confession will be permanently removed for every user.
+              This will hide the confession from public view and notify its author. It cannot be
+              unhidden -- there is no way to bring a hidden confession back. The confession stays on
+              this screen as a record of the decision.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
-              Delete
+            <AlertDialogAction onClick={confirmHide} className="bg-destructive hover:bg-destructive/90">
+              Hide confession
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

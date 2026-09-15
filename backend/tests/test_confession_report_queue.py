@@ -107,6 +107,12 @@ def find_report(items, report_id):
     return matched[0]
 
 
+def find_confession(items, confession_id):
+    matched = [item for item in items if item["id"] == confession_id]
+    assert len(matched) == 1, f"expected exactly one confession {confession_id}"
+    return matched[0]
+
+
 # ---------------------------------------------------------------- one queue, two kinds
 
 
@@ -640,6 +646,209 @@ def test_deleting_a_confession_takes_the_reports_on_its_comments_too(admin_clien
     admin_client.delete(f"/admin/confessions/{confession_id}")
 
     assert admin_client.get("/admin/confessions/reports").json()["reports"] == []
+
+
+# --------------------------------------------------- hiding from the confession review screen
+
+
+def test_hiding_a_confession_keeps_the_row_and_the_reports(admin_client, db, moderator_client):
+    """The soft half of the split, and the reason the review screen offers hide rather than delete.
+
+    ``DELETE /admin/confessions/{id}`` cascades the reports away with the post, which would
+    destroy the record that the post was reported and ruled on. Hiding stamps ``removed_at``
+    and leaves every row standing, so this asserts the reports are still there afterwards --
+    the failure this guards against is the one where the review screen quietly becomes a way to
+    delete a reported post and its evidence.
+    """
+    confession_id = make_confession(db, make_user(db, "author"), body="hidden but kept")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+
+    response = moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == confession_id
+    assert body["content_removed"] is True
+    assert body["already_hidden"] is False
+    with db.sessions() as session:
+        confession = session.get(ConfessionRecord, confession_id)
+        assert confession is not None
+        assert confession.body == "hidden but kept"
+        assert confession.removed_at is not None
+        assert confession.removed_by_regno == "moduser"
+        assert session.get(ReportRecord, report_id) is not None
+
+
+def test_a_hidden_confession_reads_back_as_already_hidden_from_the_review_screen(
+    admin_client, db, moderator_client
+):
+    """``content_removed`` is what the screen keys its "Already hidden" state off.
+
+    Taken from the review payload rather than from the hide response, because the state has to
+    survive a page reload: a reviewer who navigates away and comes back must not find the Hide
+    button offered again on a post that is already down.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    item = find_confession(admin_client.get("/admin/confessions").json(), confession_id)
+
+    assert item["content_removed"] is True
+    assert item["removed_at"] is not None
+    assert item["removed_by_regno"] == "moduser"
+
+
+def test_hiding_and_removing_through_a_report_land_in_the_same_state(db, moderator_client):
+    """One column, so the two doors cannot disagree about what hidden means.
+
+    A confession hidden from the review screen and one taken down by ruling on a report are the
+    same outcome reached two ways. Anything that filtered only on one path -- the participant
+    feed, the total count, the staff payload -- would be a hole in one of them.
+    """
+    hidden_directly = make_confession(db, make_user(db, "author-1"))
+    removed_by_report = make_confession(db, make_user(db, "author-2"))
+    report_id = make_report(db, removed_by_report, make_user(db, "reporter"))
+
+    moderator_client.patch(f"/admin/confessions/{hidden_directly}/hide")
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    with db.sessions() as session:
+        direct = session.get(ConfessionRecord, hidden_directly)
+        via_report = session.get(ConfessionRecord, removed_by_report)
+        assert (direct.removed_at is None) == (via_report.removed_at is None) is False
+
+
+def test_hiding_a_confession_takes_it_out_of_the_participant_feed(db, client, moderator_client):
+    """Same guarantee as a report-driven removal, asserted on the other door."""
+    confession_id = make_confession(db, make_user(db, "author"))
+    assert any(row["id"] == confession_id for row in client.get("/confessions").json())
+
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    assert client.get("/confessions").json() == []
+    assert client.get("/confessions/total_count").json() == 0
+
+
+def test_hiding_a_confession_tells_its_author_once(db, moderator_client):
+    """One removal is one notice, and nobody else is dragged into it.
+
+    There is no reporter here -- nobody complained -- so the author is the only party with an
+    interest. Telling anyone else would be announcing a moderator's decision to a bystander.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    bystander = make_user(db, "bystander")
+
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    assert [notice.heading for notice in notices_for(db, "author")] == ["Confession removed"]
+    assert notices_for(db, "bystander") == []
+
+
+def test_hiding_twice_keeps_the_first_decision(db, moderator_client):
+    """``removed_at`` is when the content came down, and the reviewer who did it stays named.
+
+    A double click re-stamping the timestamp would make the audit trail say the second click
+    took the post down, and the moderation trail would name whoever happened to click last.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+    with db.sessions() as session:
+        first = session.get(ConfessionRecord, confession_id).removed_at
+
+    second = moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    assert second.status_code == 200, "a double click must not be answered with an error"
+    assert second.json()["already_hidden"] is True
+    assert second.json()["content_removed"] is False, "this call removed nothing"
+    with db.sessions() as session:
+        confession = session.get(ConfessionRecord, confession_id)
+        assert confession.removed_at == first
+        assert confession.removed_by_regno == "moduser"
+    # The author was told once. A second notice for one removal reads as two events.
+    assert [notice.heading for notice in notices_for(db, "author")] == ["Confession removed"]
+
+
+def test_a_confession_hidden_by_a_report_then_hidden_again_keeps_the_reports_decision(
+    db, moderator_client
+):
+    """The review screen's Hide cannot overwrite the trail left by a report ruling.
+
+    ``removed_by_regno`` is who is accountable for the post coming down. If hiding an
+    already-removed confession restamped it, the moderator who actually ruled on the report
+    would stop being the one on record, and the report queue's ``reviewed_by`` would disagree
+    with the confession's ``removed_by`` about who did what.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    body = moderator_client.patch(f"/admin/confessions/{confession_id}/hide").json()
+
+    assert body["already_hidden"] is True
+    with db.sessions() as session:
+        confession = session.get(ConfessionRecord, confession_id)
+        assert confession.removed_by_regno == "moduser"
+
+
+def test_there_is_no_way_to_unhide_a_hidden_confession(moderator_client, db):
+    """Hiding is one-way, and that is a property of the API rather than of the UI.
+
+    The confirmation dialog promises there is no bringing a post back, so the claim has to hold
+    for any caller. Every write verb is tried here on purpose: a future ``unhide`` endpoint, or
+    a DELETE that quietly restores visibility, would make the warning a lie.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    for method, path, kwargs in (
+        ("post", f"/admin/confessions/{confession_id}/unhide", {}),
+        ("patch", f"/admin/confessions/{confession_id}/unhide", {}),
+        ("put", f"/admin/confessions/{confession_id}/unhide", {}),
+        ("patch", f"/admin/confessions/{confession_id}/show", {}),
+        ("patch", f"/admin/confessions/{confession_id}/restore", {}),
+    ):
+        response = moderator_client.request(method, path, **kwargs)
+        assert response.status_code == 404, f"{method.upper()} {path} unexpectedly exists"
+
+    with db.sessions() as session:
+        assert session.get(ConfessionRecord, confession_id).removed_at is not None
+
+
+def test_hiding_keeps_the_comments_and_their_own_removal_state(db, moderator_client):
+    """Comments are unreachable behind a hidden parent, so nothing needs to be written to them.
+
+    Stamping them would be a second, redundant write -- and it would overwrite the removal state
+    of a comment that a report against the comment had already taken down for its own reasons,
+    which is the one part of the audit trail a moderator acting on a post has no business
+    rewriting.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
+
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    with db.sessions() as session:
+        comment = session.get(ConfessionCommentRecord, comment_id)
+        assert comment is not None, "the comment row is not cascaded away by hiding"
+        assert comment.removed_at is None
+
+
+def test_hiding_an_unknown_confession_is_a_404(moderator_client):
+    """A well-formed id for a row that is not there.
+
+    Not a malformed id -- that is the 400 below. This is the 404, and it matters because the
+    review screen holds ids across a page load: a confession deleted out from under an open tab
+    has to fail as "gone", not as a 500 from a lookup that assumed it existed.
+    """
+    response = moderator_client.patch(
+        "/admin/confessions/00000000-0000-4000-8000-000000000000/hide"
+    )
+
+    assert response.status_code == 404
+
+
+def test_hiding_a_confession_that_is_not_a_uuid_is_refused(moderator_client):
+    assert moderator_client.patch("/admin/confessions/not-a-uuid/hide").status_code == 400
 
 
 @pytest.mark.parametrize("kind", ["confession", "comment"])

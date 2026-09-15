@@ -310,6 +310,23 @@ export const deleteAdminConfession = async (confessionId: string) => {
     return response.data;
 };
 
+/**
+ * Hide a confession from public view. One-way: there is no matching unhide call, and the
+ * server has no route for one either.
+ *
+ * `already_hidden` is a separate flag from `content_removed` because the two answer different
+ * questions -- the second is "did this click take something down", the first is "was it already
+ * down" -- and a double click should not read to the reviewer as a second moderation action.
+ */
+export const hideAdminConfession = async (confessionId: string) => {
+    const response = await axios.patch(
+        `${API_URL}/admin/confessions/${confessionId}/hide`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export const getAdminLoveNotes = async () => {
     const response = await axios.get(`${API_URL}/admin/love-notes`, { headers: getAuthHeaders() });
     return response.data;

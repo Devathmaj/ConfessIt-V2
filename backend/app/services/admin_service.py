@@ -283,8 +283,23 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         # The author of an anonymous confession is not loaded at all, so the identity is
         # absent from this process rather than filtered out of the payload later. Commenters
         # are a different population and are always resolved.
+        #
+        # Reactors are a different population from the author and are resolved, with one
+        # exception applied later: an anonymous confession's author reacting to their own post is
+        # the most likely reactor on any anonymous confession, and naming them in a reactor list
+        # would de-anonymise the post on the same screen that promises it cannot be.
+        #
+        # That exception cannot be applied here by excluding the id from the query, the way the
+        # author block above does. Excluding it works only while the id appears nowhere else, and
+        # someone who has written a public confession is loaded legitimately for it -- dropping
+        # their id here would strip the name off that public post as well. An id is in this
+        # process for reasons unrelated to any one confession, so the decision belongs where the
+        # confession is, which is why it is made per confession below.
         user_ids = {row.author_id for row in confessions if not row.anonymous}
         user_ids |= {row.user_id for row in comments}
+        for row in confessions:
+            for reactor_ids in (row.reactions or {}).values():
+                user_ids.update(str(reactor) for reactor in reactor_ids)
         users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all() if user_ids else []
     users_by_id = {user.id: user for user in users}
     comments_by_confession: Dict[str, List[ConfessionCommentRecord]] = defaultdict(list)
@@ -310,6 +325,36 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
 
         confession_id = str(doc.id)
         reactions = {key: (doc.reactions or {}).get(key, []) for key in reaction_keys}
+
+        # Who reacted, resolved to a name so the Engagement snapshot can answer "who is this"
+        # without a second round trip per emoji. Built here rather than exposed as raw ids
+        # because an id in a moderator's hands identifies nobody they can act on: the point is
+        # to see whether one account is behind a pile of reactions.
+        #
+        # An id can fail to resolve for two reasons and neither is a bug: an anonymous post's
+        # author is withheld on purpose, and a participant who has since been deleted is gone
+        # from `users` while their id remains in the JSONB array. Both keep their place in the
+        # list so it still adds up to the count beside it, and each reports which of the two it
+        # is, so a reviewer can tell a privacy decision from a data fault.
+        reactor_entries: Dict[str, List[Dict[str, Any]]] = {}
+        for key in reaction_keys:
+            entries = []
+            for reactor_id in reactions[key]:
+                reactor = users_by_id.get(str(reactor_id))
+                is_anonymous_author = doc.anonymous and str(reactor_id) == str(doc.author_id)
+                withheld_reason = None
+                if is_anonymous_author:
+                    withheld_reason = "anonymous_author"
+                elif reactor is None:
+                    withheld_reason = "unknown"
+                entries.append(
+                    {
+                        "id": str(reactor_id),
+                        "name": None if withheld_reason else reactor.name,
+                        "withheld_reason": withheld_reason,
+                    }
+                )
+            reactor_entries[key] = entries
         
         # Process confession reports
         confession_reports_docs = sorted(
@@ -388,7 +433,10 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                 "report_count": doc.report_count,
                 "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(confession_id, [])],
                 "reports": confession_reports,
+                # The raw id list is kept: `heart_count` and friends are denormalised counters
+                # and can disagree with the array, so anything auditing engagement needs both.
                 "reactions": {key: [str(user) for user in value] for key, value in reactions.items()},
+                "reaction_users": reactor_entries,
                 "heart_count": doc.heart_count,
                 "haha_count": doc.haha_count,
                 "whoa_count": doc.whoa_count,

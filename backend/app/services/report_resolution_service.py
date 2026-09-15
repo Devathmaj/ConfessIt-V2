@@ -47,6 +47,7 @@ from ..db_models import (
 )
 from ..logger import get_logger
 from ..postgres import Database, is_valid_id
+from ..utils import isoformat_datetime
 from .notification_service import create_notification_service
 
 logger = get_logger(__name__)
@@ -416,6 +417,72 @@ def resolve_message_report(
 
     logger.info(f"Message report {report_id} closed as {status_value} by {reviewer_regno}")
     return {"id": str(report_id), "status": status_value, "content_removed": removed_content}
+
+
+def hide_confession(
+    db: Database,
+    confession_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Take a confession out of public view from the review screen, with no report behind it.
+
+    The same write a ``removed`` ruling performs, reached on a confession nobody reported. That
+    is why it is a soft removal and not a delete: ``removed_at`` is already the column every
+    participant-facing read filters on, so reusing it means there is only ever one way for a
+    confession to be hidden and staff reads never disagree with the feed about whether it is
+    live. A delete would be a second, differently-implemented answer to the same question, and
+    it would cascade the report rows away with the post.
+
+    Comments are left alone. They are unreachable while their parent confession is hidden,
+    because a comment is only ever read through its confession, and stamping them would rewrite
+    the removal state of rows that a report against the comment may have taken down on their
+    own evidence.
+
+    **There is no unhide, by design.** Nothing in this app clears ``removed_at``, so the warning
+    the confirmation dialog carries describes what actually happens rather than something the
+    back end does not honour. Hiding something already hidden is answered rather than refused:
+    a double click is a double click, and the response says plainly that nothing changed.
+
+    The author is notified only on the transition, for the same reason the report path notifies
+    them there -- one removal is one notice. A second one for the same removal reads as two
+    events, and there was only ever one.
+    """
+    if not is_valid_id(confession_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
+
+    author_regno: Optional[str] = None
+    hidden = False
+    already_hidden = False
+    removed_at: Optional[datetime] = None
+    removed_by_regno: Optional[str] = None
+
+    with db.sessions.begin() as session:
+        confession = session.get(ConfessionRecord, str(confession_id))
+        if confession is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
+
+        author_regno = _regno_for_user(session, confession.author_id)
+        # Read the row back after stamping rather than trusting the branch below: on the
+        # already-hidden path these are somebody else's decision, and the review screen is
+        # about to render them as the audit trail they are.
+        hidden = _stamp_removal(confession, reviewer_regno)
+        already_hidden = not hidden
+        removed_at = confession.removed_at
+        removed_by_regno = confession.removed_by_regno
+
+    if hidden:
+        _notify_removal(db, author_regno=author_regno, reporter_regno=None, kind="confession")
+        logger.info(f"Confession {confession_id} hidden by {reviewer_regno}")
+    else:
+        logger.info(f"Confession {confession_id} was already hidden; left as it was")
+
+    return {
+        "id": str(confession_id),
+        "content_removed": hidden,
+        "already_hidden": already_hidden,
+        "removed_at": isoformat_datetime(removed_at),
+        "removed_by_regno": removed_by_regno,
+    }
 
 
 def pending_report_totals(db: Database) -> Dict[str, int]:
