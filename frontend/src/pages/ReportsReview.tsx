@@ -18,16 +18,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { CAPABILITIES } from '@/lib/capabilities';
 import { authorLabel, partyName, partyRef, type Person } from '@/lib/reportAuthors';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { toast } from 'sonner';
-import { Flag, MessageSquare, MessageCircleHeart, ShieldQuestion, ShieldCheck } from 'lucide-react';
+import { Flag, MessageSquare, MessageCircleHeart, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react';
 
-type ReportStatus = 'pending' | 'reviewed' | 'dismissed';
+/** Every state a report row can be in, including the one only history produces.
+ *
+ * `reviewed` is the word the close-out used before the screen grew a remove button. It is
+ * still a real value in the database and still a real filter, so rows closed under the old
+ * vocabulary keep showing up under their own name instead of disappearing from the list a
+ * moderator is using to audit what was decided.
+ */
+type ReportStatus = 'pending' | 'reviewed' | 'dismissed' | 'removed';
 type StatusFilter = 'all' | ReportStatus;
+
+/** The two decisions this screen offers.
+ *
+ * `reviewed` is deliberately absent: it is a synonym for `dismissed` that the server still
+ * accepts for callers holding a stale vocabulary, but offering it as a third button is how the
+ * same action ends up recorded three different ways in the database.
+ */
+type Resolution = 'dismissed' | 'removed';
 
 /** A report against a confession, or against a comment on one. */
 interface ConfessionReport {
@@ -47,6 +72,12 @@ interface ConfessionReport {
   status: ReportStatus;
   reviewed_at: string | null;
   reviewed_by_regno: string | null;
+  /** Whether the reported content is currently taken down. Kept separate from `status` because
+   *  they answer different questions: `status` is what this report was decided as, this is what
+   *  happened to the content -- which can also have been removed by a different report. */
+  content_removed: boolean;
+  removed_at?: string | null;
+  removed_by_regno?: string | null;
 }
 
 /** A report against a love note a recipient received. */
@@ -65,6 +96,11 @@ interface LoveNoteReport {
   status: ReportStatus;
   reviewed_at: string | null;
   reviewed_by_regno: string | null;
+  /** Same split as the confession queue: the note's own approval status is untouched by a
+   *  removal, so this is the only field that says the content came down. */
+  content_removed: boolean;
+  removed_at?: string | null;
+  removed_by_regno?: string | null;
 }
 
 /** A report against a chat message. */
@@ -80,6 +116,9 @@ interface MessageReport {
   status: ReportStatus;
   reviewed_at: string | null;
   reviewed_by_regno: string | null;
+  content_removed: boolean;
+  removed_at?: string | null;
+  removed_by_regno?: string | null;
 }
 
 /** The three id spaces the server owns, named once so the queue keys cannot drift apart. */
@@ -107,9 +146,32 @@ interface Queue {
 const formatTimestamp = (value: string | null): string =>
   value ? formatDateTimeDDMMYYYY(value) : 'an unknown time';
 
+/** The outcome a report was decided as, phrased for a human.
+ *
+ * `reviewed` and `dismissed` mean the same thing and are both shown as "Dismissed": the row
+ * in the database keeps the word it was written with, the reviewer sees one meaning.
+ */
+const RESOLUTION_LABELS: Record<Resolution, { verb: string; toast: string }> = {
+  dismissed: { verb: 'Dismiss', toast: 'Report dismissed. The content was left up.' },
+  removed: { verb: 'Remove content', toast: 'Content removed and everyone affected notified.' },
+};
+
+/** What the dialog leads with, per outcome.
+ *
+ * The lead line states the consequence before the button asks for the decision, because the
+ * only thing that makes a confirm dialog worth having is that it is the last place the
+ * consequence is stated.
+ */
+const RESOLUTION_COPY: Record<Resolution, { title: string }> = {
+  dismissed: { title: 'The content will stay up and will not be touched.' },
+  removed: { title: 'This will remove the reported content for good.' },
+};
+
 function statusBadge(status: ReportStatus) {
   if (status === 'pending') return <Badge variant="secondary">Awaiting review</Badge>;
-  return <Badge variant="outline">{status}</Badge>;
+  if (status === 'reviewed') return <Badge variant="outline">Dismissed</Badge>;
+  if (status === 'removed') return <Badge variant="destructive">Content removed</Badge>;
+  return <Badge variant="outline">Dismissed</Badge>;
 }
 
 export const ReportsReview = () => {
@@ -119,6 +181,21 @@ export const ReportsReview = () => {
   const canModerate = can(CAPABILITIES.REPORTS_MODERATE);
   const [activeTab, setActiveTab] = useState('confessions');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  // The decision awaiting confirmation, or null when no dialog is open. Held as state rather
+  // than wired through a per-card `useState` because the copy has to name the actual content
+  // being removed, which the dialog is rendered from -- and because one slot is the only thing
+  // that makes "a click opened a dialog, nothing happened yet" true by construction rather than
+  // by every button remembering to check a flag.
+  const [pendingDecision, setPendingDecision] = useState<{
+    reportId: string;
+    queue: QueueKey;
+    status: Resolution;
+  } | null>(null);
+
+  // Whether the confirmed request is in flight. Without it the confirm button stays live for
+  // the whole round trip and a second click sends a second request for the same report.
+  const [submitting, setSubmitting] = useState(false);
 
   // One state slot per queue rather than one shared list, because the three payloads have
   // nothing in common but a reason and a status. A single union list would need a cast on
@@ -195,7 +272,7 @@ export const ReportsReview = () => {
   const handleClose = async (
     reportId: string,
     queue: QueueKey,
-    status: 'reviewed' | 'dismissed'
+    status: Resolution
   ) => {
     const close = {
       confessions: updateAdminConfessionReportStatus,
@@ -209,20 +286,37 @@ export const ReportsReview = () => {
     }[queue];
 
     try {
-      await close(reportId, status);
+      const result = await close(reportId, status);
       // Patched locally rather than refetched: the row the reviewer just acted on does not
       // move, and a refetch would make the list jump under the next click.
+      //
+      // `content_removed` comes from the server rather than from `status === 'removed'` because
+      // they are not the same question. The server re-deciding a report whose content was
+      // already taken down by an earlier report has not removed anything this time, and a
+      // button that claimed otherwise would tell a moderator they removed something when the
+      // content had been gone since before they arrived.
       setReports((previous) =>
         previous.map((report) =>
           report.id === reportId
-            ? { ...report, status, reviewed_at: new Date().toISOString() }
+            ? {
+                ...report,
+                status,
+                reviewed_at: new Date().toISOString(),
+                content_removed: result?.content_removed ?? report.content_removed,
+              }
             : report
         )
       );
-      toast.success(`Report ${status}.`);
+      toast.success(RESOLUTION_LABELS[status].toast);
     } catch (error) {
       console.error('Failed to close report', error);
       toast.error('Unable to update this report.');
+    } finally {
+      // Cleared here rather than on the dialog's own close so a failed request does not leave
+      // a stale card marked as "being acted on". The `submitting` flag is released too --
+      // otherwise one failed request would leave the dialog permanently disabled.
+      setPendingDecision(null);
+      setSubmitting(false);
     }
   };
 
@@ -257,24 +351,25 @@ export const ReportsReview = () => {
     messages: messageReports.length,
   };
 
+  // A click opens the dialog and nothing else. The request is made from the dialog's confirm
+  // button, so the network call is only ever reachable from a deliberate second action.
   const renderCloseButtons = (reportId: string, queue: Queue['key']) =>
     canModerate ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
-          className="border-green-500 text-green-500 hover:bg-green-500 hover:text-white"
-          onClick={() => handleClose(reportId, queue, 'reviewed')}
+          className="border-muted-foreground text-muted-foreground hover:bg-muted"
+          onClick={() => setPendingDecision({ reportId, queue, status: 'dismissed' })}
         >
-          <ShieldCheck className="mr-2 h-4 w-4" /> Mark reviewed
+          <ShieldX className="mr-2 h-4 w-4" /> Dismiss
         </Button>
         <Button
-          variant="outline"
+          variant="destructive"
           size="sm"
-          className="border-muted-foreground text-muted-foreground hover:bg-muted"
-          onClick={() => handleClose(reportId, queue, 'dismissed')}
+          onClick={() => setPendingDecision({ reportId, queue, status: 'removed' })}
         >
-          Dismiss
+          <Trash2 className="mr-2 h-4 w-4" /> Remove content
         </Button>
       </div>
     ) : null;
@@ -287,14 +382,26 @@ export const ReportsReview = () => {
     reviewedBy: string | null,
     reporterRef: string,
     targetRef: string,
+    contentRemoved: boolean,
     children?: React.ReactNode
   ) => (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-xs text-muted-foreground">
-        Reporter {reporterRef}
-        {targetRef ? ` · Content ${targetRef}` : ''}
-        {reviewedBy ? ` · Closed by ${reviewedBy} on ${formatTimestamp(reviewedAt)}` : ''}
-      </p>
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground">
+          Reporter {reporterRef}
+          {targetRef ? ` · Content ${targetRef}` : ''}
+          {reviewedBy ? ` · Closed by ${reviewedBy} on ${formatTimestamp(reviewedAt)}` : ''}
+        </p>
+        {/* Said on every row where the content is down, not only on the report that took it
+            down. A second report against the same content was still about content that no
+            longer exists, and a moderator looking at it now needs to know that. */}
+        {contentRemoved ? (
+          <p className="text-xs font-medium text-destructive">
+            This content has been removed from every participant-facing view. The record of it
+            is kept for auditing.
+          </p>
+        ) : null}
+      </div>
       {status === 'pending' ? renderCloseButtons(reportId, queue) : null}
       {children}
     </div>
@@ -330,8 +437,10 @@ export const ReportsReview = () => {
           <h1 className="text-3xl font-semibold">Reports Review</h1>
           <p className="text-sm text-muted-foreground">
             Everything a participant has reported, in the three places they can report
-            something. Closing a report records that someone looked at it — the content itself
-            is ruled on in the screen that owns it.
+            something. Dismiss a report and the content stays up. Remove content and it leaves
+            every participant-facing view for good — the record of it is kept so the decision
+            can be audited — and both the person who wrote it and the person who reported it are
+            told what happened.
           </p>
         </header>
 
@@ -348,8 +457,8 @@ export const ReportsReview = () => {
               <SelectContent>
                 <SelectItem value="all">All reports</SelectItem>
                 <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="reviewed">Reviewed</SelectItem>
                 <SelectItem value="dismissed">Dismissed</SelectItem>
+                <SelectItem value="removed">Content removed</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -426,7 +535,8 @@ export const ReportsReview = () => {
                       report.reviewed_at,
                       report.reviewed_by_regno,
                       partyRef(report.reporter),
-                      report.target_id
+                      report.target_id,
+                      report.content_removed
                     )}
                   </CardContent>
                 </Card>
@@ -496,7 +606,8 @@ export const ReportsReview = () => {
                       report.reviewed_at,
                       report.reviewed_by_regno,
                       partyRef(report.reporter),
-                      report.love_note_id
+                      report.love_note_id,
+                      report.content_removed
                     )}
                   </CardContent>
                 </Card>
@@ -554,7 +665,8 @@ export const ReportsReview = () => {
                       report.reviewed_at,
                       report.reviewed_by_regno,
                       partyRef(report.reporter),
-                      report.message_id
+                      report.message_id,
+                      report.content_removed
                     )}
                   </CardContent>
                 </Card>
@@ -573,6 +685,63 @@ export const ReportsReview = () => {
             .join(' · ')}
         </p>
       </div>
+
+      {/* One dialog for every card. It is rendered from `pendingDecision` rather than living
+          inside each report, so there is exactly one place where "a removal is being
+          confirmed" can be true and exactly one place that makes the request. */}
+      <AlertDialog
+        open={pendingDecision !== null}
+        onOpenChange={(open) => {
+          // Closing by any route -- the backdrop, Escape, Cancel -- clears the pending
+          // decision, so nothing survives a cancel for the next card to pick up by mistake.
+          if (!open) setPendingDecision(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingDecision ? RESOLUTION_LABELS[pendingDecision.status].verb : ''} this
+              report?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDecision?.status === 'removed'
+                ? `${RESOLUTION_COPY.removed.title} The reporter and the person who wrote it will both be notified, and the content will no longer be visible to anyone except staff. This cannot be undone from this screen.`
+                : pendingDecision?.status === 'dismissed'
+                  ? `${RESOLUTION_COPY.dismissed.title} The reporter is told it was reviewed and found to be within policy. Nobody else is notified, and the content stays exactly as it is.`
+                  : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={submitting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={submitting}
+              onClick={(event) => {
+                // The dialog closes on confirm by default; holding it open for the duration of
+                // the request keeps a second confirm from being possible mid-flight.
+                event.preventDefault();
+                if (!pendingDecision) return;
+                setSubmitting(true);
+                void handleClose(
+                  pendingDecision.reportId,
+                  pendingDecision.queue,
+                  pendingDecision.status
+                );
+              }}
+              className={
+                pendingDecision?.status === 'removed' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined
+              }
+            >
+              {submitting
+                ? 'Working...'
+                : pendingDecision
+                  ? RESOLUTION_LABELS[pendingDecision.status].verb
+                  : ''}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

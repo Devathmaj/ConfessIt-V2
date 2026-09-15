@@ -13,6 +13,7 @@ from fastapi import HTTPException, status
 from ..models import UserDetails, LoveNote
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
+from ..services.report_resolution_service import resolve_status_filter
 from ..accounts import AccountRef
 
 # Logger
@@ -193,7 +194,9 @@ async def get_all_love_notes_for_admin(db: Database, viewer: AccountRef) -> List
                 "regno": recipient_doc.regno if recipient_doc else None,
                 "email": recipient_doc.email if recipient_doc else None,
             },
-            # Admins moderate notes in every state, so the proxy serves them the image.
+# Admins moderate notes in every state, so the proxy serves them the image -- a
+            # removed note included, because deciding whether a removal was warranted starts
+            # with being able to see the note it was applied to.
             "image_url": asset_delivery_service.build_delivery_url(
                 kind="love-notes", stored_identifier=doc.image_url, account=viewer
             ) or doc.image_url,
@@ -202,6 +205,12 @@ async def get_all_love_notes_for_admin(db: Database, viewer: AccountRef) -> List
             "status": doc.status,
             "created_at": isoformat_datetime(doc.created_at),
             "read_at": isoformat_datetime(doc.read_at),
+            # Flagged, not filtered, for the same reason: staff see removed notes so a
+            # removal can be audited, and ``status`` above keeps answering the separate
+            # question of whether the note was judged acceptable.
+            "content_removed": doc.removed_at is not None,
+            "removed_at": isoformat_datetime(doc.removed_at),
+            "removed_by_regno": doc.removed_by_regno,
         })
     return items
 
@@ -372,7 +381,7 @@ async def get_love_note_reports_for_admin(
     """
     filters = []
     if status_filter:
-        filters.append(LoveNoteReportRecord.status == status_filter)
+        filters.append(LoveNoteReportRecord.status.in_(resolve_status_filter(status_filter)))
 
     with db.sessions() as session:
         rows = session.execute(
@@ -441,42 +450,16 @@ async def get_love_note_reports_for_admin(
             "status": report.status,
             "reviewed_at": isoformat_datetime(report.reviewed_at),
             "reviewed_by_regno": report.reviewed_by_regno,
+            # Whether the note this report is about has been taken down, so a moderator sees
+            # that before deciding. Kept beside ``status`` because the two answer different
+            # questions and the screen needs both.
+            "content_removed": bool(note.removed_at) if note else False,
         })
 
     return {"reports": items, "total": total, "skip": skip, "limit": limit}
 
 
-async def update_love_note_report_status_service(
-    report_id: str,
-    status_value: str,
-    reviewer: AccountRef,
-    db: Database,
-) -> Dict[str, Any]:
-    """
-    Close out a report as ``reviewed`` or ``dismissed``, recording who closed it.
 
-    This only moves the report. What happens to the note is a separate decision made
-    through the ordinary love-note moderation endpoints, so that the queue and the note
-    list cannot disagree about a note's state.
-    """
-    if not is_valid_id(report_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid report id",
-        )
-
-    with db.sessions.begin() as session:
-        report = session.get(LoveNoteReportRecord, str(report_id))
-        if report is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Report not found",
-            )
-        report.status = status_value
-        report.reviewed_at = datetime.now(timezone.utc)
-        report.reviewed_by_regno = reviewer.regno
-
-    return {"id": report_id, "status": status_value}
 
 
 async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:

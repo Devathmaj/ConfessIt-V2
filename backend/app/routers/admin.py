@@ -22,9 +22,13 @@ from ..services.admin_service import (
     collect_active_sessions,
     get_all_confessions_data,
     get_confession_reports_data,
-    update_confession_report_status,
     get_all_conversations_data,
     get_admin_statistics_data,
+)
+from ..services.report_resolution_service import (
+    resolve_confession_report,
+    resolve_message_report,
+    resolve_status_filter,
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -109,7 +113,7 @@ async def delete_confession(
 @router.get("/confessions/reports")
 async def get_confession_reports(
     status_filter: Optional[str] = Query(
-        None, alias="status", description="Filter by status: pending, reviewed, dismissed"
+        None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -129,17 +133,37 @@ async def get_confession_reports(
 @router.patch("/confessions/reports/{report_id}")
 async def update_confession_report(
     report_id: str,
-    new_status: str = Query(..., alias="status", regex="^(reviewed|dismissed)$"),
+    new_status: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
 ) -> Dict[str, Any]:
-    """Close out a confession or comment report as reviewed or dismissed.
+    """Rule on a confession or comment report: dismiss it, or take the content down.
 
-    Deliberately does not delete anything. Removing the reported post stays with
-    ``DELETE /admin/confessions/{id}``, so this records that a human looked and the
-    confession review screen remains the single place a post's fate is decided.
+    Two outcomes and no third. ``dismissed`` records that a human looked and the content
+    stays; ``removed`` marks the reported confession or comment removed so it disappears from
+    every participant-facing read, and notifies both the author and the reporter.
+
+    ``reviewed`` is accepted as a synonym for ``dismissed``. It is the word this route used
+    before the screen grew a remove button, it is what the queue's status filter still labels
+    older rows with, and it is what a bookmarked request or a stale client will send. Turning it
+    into a 422 would break a caller over a rename and would not stop a single moderation action,
+    so it is answered rather than refused -- while the screen only ever offers the two new
+    words, which is what stops ``reviewed`` from being the thing a moderator actually picks.
+
+    Removal here is deliberately *not* the same as ``DELETE /admin/confessions/{id}``. That
+    route is a hard delete, and the report's foreign key cascades from the content, so deleting
+    a reported post would delete the record that it was reported and ruled on. Ruling on a
+    report keeps both.
+
+    ``reports:moderate`` is the whole gate rather than a second capability for the removing
+    case. A moderator already holds ``confessions:delete``, so this grants them nothing over
+    confessions; the one genuine widening is that ruling on a *message* report can now take a
+    message down, which no route could do before. A route declaring one capability is the
+    invariant ``test_roles_routes.py`` holds the admin surface to, so splitting the check
+    across two capabilities would mean checking the second one in the handler body instead --
+    the one place a gate can be forgotten.
     """
-    return update_confession_report_status(db, report_id, new_status, reviewer.regno)
+    return resolve_confession_report(db, report_id, new_status, reviewer.regno)
 
 
 @router.get("/users", response_model=List[Dict[str, Any]])
@@ -370,6 +394,8 @@ async def get_conversation_detail(
                 "body": message.body,
                 "created_at": serialize_datetime(message.created_at),
                 "is_read": message.is_read,
+                "removed_at": serialize_datetime(message.removed_at),
+                "removed_by_regno": message.removed_by_regno,
             }
         )
 
@@ -558,7 +584,7 @@ async def get_archived_messages(
 @router.get("/messages/reports")
 async def get_message_reports(
     status_filter: Optional[str] = Query(
-        None, alias="status", description="Filter by status: pending, reviewed, dismissed"
+        None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -578,10 +604,15 @@ async def get_message_reports(
     as ``status_filter``, which was the odd one out among the queues; nothing called this
     endpoint before the unified Reports Review screen, so renaming it cost nothing and leaves
     all three queues speaking the same word for the same filter.
+
+    ``dismissed`` is widened to include the older ``reviewed`` by ``resolve_status_filter``, so a
+    legacy row closed out before the rename is still returned by the filter whose name matches the
+    label the screen prints (section 17.1).
     """
     filters = []
-    if status_filter:
-        filters.append(MessageReportRecord.status == status_filter)
+    wanted = resolve_status_filter(status_filter)
+    if wanted:
+        filters.append(MessageReportRecord.status.in_(wanted))
     with db.sessions() as session:
         reports = session.scalars(select(MessageReportRecord).where(*filters)
             .order_by(MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
@@ -620,6 +651,10 @@ async def get_message_reports(
             # a second request, matching the other two queues.
             "reviewed_at": serialize_datetime(report.reviewed_at),
             "reviewed_by_regno": report.reviewed_by_regno,
+            # Whether the message this report is about has been taken down. The screen cannot
+            # infer it from ``status``, because a content admin can remove a message without a
+            # report ever existing, and a moderator needs to see that before deciding.
+            "content_removed": bool(message.removed_at) if message else False,
         })
 
     return {
@@ -633,26 +668,23 @@ async def get_message_reports(
 @router.patch("/messages/reports/{report_id}")
 async def update_message_report_status(
     report_id: str,
-    new_status: str = Query(..., alias="status", regex="^(reviewed|dismissed)$"),
+    new_status: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),
-    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
+    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
 ) -> Dict[str, Any]:
-    """Close out a chat-message report as reviewed or dismissed.
+    """Rule on a chat-message report: dismiss it, or take the message down.
 
-    Returns ``{id, status}`` rather than a sentence, to match the other two close-out
-    endpoints. Nothing is deleted here: a reported message is removed through the ordinary
-    conversation endpoints, so the queue records that a human looked and does not become a
-    second way to destroy history.
+    ``reviewed`` is the older spelling of ``dismissed`` and is still accepted; the screen only
+    offers the two new words. See ``update_confession_report`` for why.
+
+    ``dismissed`` leaves the thread exactly as it was and tells the reporter it was reviewed.
+    ``removed`` marks the message removed so it disappears from every participant read -- and
+    moves the conversation's preview forward, since the preview is a copy of the newest
+    message's text and would otherwise keep showing it -- and tells both the sender and the
+    reporter.
+
+    Returns ``{id, status, content_removed}`` to match the other two close-out endpoints, with
+    the third field so the screen can say plainly whether anything came down.
     """
-    if not is_valid_id(report_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report id")
+    return resolve_message_report(db, report_id, new_status, reviewer.regno)
 
-    with db.sessions.begin() as session:
-        report = session.get(MessageReportRecord, str(report_id))
-        if report is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
-        report.status = new_status
-        report.reviewed_at = datetime.now(timezone.utc)
-        report.reviewed_by_regno = reviewer.regno
-
-    return {"id": str(report_id), "status": new_status}

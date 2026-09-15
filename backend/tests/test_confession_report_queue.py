@@ -11,13 +11,26 @@ question a reviewer opens the screen to answer is "what did this actually say"; 
 of an anonymous confession stays withheld here exactly as it is on the confession review
 screen. That last one is the assertion most worth having: a second reader of the same promise
 is a second way to break it.
+
+Closing a report now has exactly two outcomes rather than three. ``dismissed`` records that a
+human looked and the content stays. ``removed`` takes the content down -- and the tests below
+are mostly about what that does and does not do: the row survives so the report it is the
+subject of still means something, participants stop seeing it, staff do not, and exactly one
+notification goes to the author and one to the reporter.
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 
-from app.db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
+from app.db_models import (
+    ConfessionCommentRecord,
+    ConfessionRecord,
+    NotificationRecord,
+    ReportRecord,
+    UserRecord,
+)
 
 REASONS = {"confession": "this is hateful", "comment": "this is spam"}
 REACTIONS = {"heart": [], "haha": [], "whoa": [], "heartbreak": []}
@@ -234,51 +247,98 @@ def test_an_empty_queue_is_an_empty_queue_not_an_error(admin_client):
 # ---------------------------------------------------------------- closing one out
 
 
-def test_a_moderator_can_close_a_report_and_it_records_who_did(moderator_client, db):
+def test_a_moderator_can_dismiss_a_report_and_it_records_who_did(moderator_client, db):
     reporter = make_user(db, "reporter")
     confession_id = make_confession(db, make_user(db, "author"))
     report_id = make_report(db, confession_id, reporter)
 
-    response = moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "reviewed"})
+    response = moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "dismissed"})
 
     assert response.status_code == 200
-    assert response.json() == {"id": report_id, "status": "reviewed"}
+    assert response.json() == {"id": report_id, "status": "dismissed", "content_removed": False}
     with db.sessions() as session:
         report = session.get(ReportRecord, report_id)
-        assert report.status == "reviewed"
+        assert report.status == "dismissed"
         # The column is plain text rather than a foreign key: the value names an account in
         # ``moderator``, which a foreign key to ``users`` could never point at.
         assert report.reviewed_by_regno == "moduser"
         assert report.reviewed_at is not None
 
 
-def test_closing_a_report_changes_nothing_about_the_content(moderator_client, db):
-    """A report is one person's word. Recording that a human looked must not remove the post,
-    because the post's fate is decided on the confession review screen."""
+def test_dismissing_a_report_changes_nothing_about_the_content(moderator_client, db):
+    """A dismissal is one person's word going unanswered. The post stays exactly as it was."""
     confession_id = make_confession(db, make_user(db, "author"), body="still here")
     report_id = make_report(db, confession_id, make_user(db, "reporter"))
 
-    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "reviewed"})
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "dismissed"})
 
     with db.sessions() as session:
         confession = session.get(ConfessionRecord, confession_id)
         assert confession is not None
         assert confession.body == "still here"
+        assert confession.removed_at is None
 
 
 def test_a_report_cannot_be_closed_in_a_state_that_does_not_exist(moderator_client, db):
-    """``pending`` is where a report is born, not a state a human can put it back into."""
+    """``pending`` is where a report is born, not a state a human can put it back into, so
+    re-opening a closed report stays a deliberate future decision."""
     confession_id = make_confession(db, make_user(db, "author"))
     report_id = make_report(db, confession_id, make_user(db, "reporter"))
 
-    response = moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "pending"})
+    for status_value in ("pending", "deleted", "removed "):
+        response = moderator_client.patch(
+            f"/admin/confessions/reports/{report_id}", params={"status": status_value}
+        )
+        assert response.status_code == 422, f"{status_value!r} was accepted"
 
-    assert response.status_code == 422
+
+def test_the_older_word_for_dismissing_is_still_accepted(moderator_client, db):
+    """``reviewed`` was the word this endpoint used before the screen grew a remove button.
+
+    Answering a stale caller beats refusing it: the action it means is unchanged, so a 422 would
+    break a working client over a rename without preventing anything. It is stored as sent,
+    which keeps the row's own history honest, and it is a dismissal -- the post stays.
+    """
+    confession_id = make_confession(db, make_user(db, "author"), body="still here")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+
+    response = moderator_client.patch(
+        f"/admin/confessions/reports/{report_id}", params={"status": "reviewed"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": report_id, "status": "reviewed", "content_removed": False}
+    with db.sessions() as session:
+        assert session.get(ReportRecord, report_id).status == "reviewed"
+        # Still a dismissal, not a removal: the post is untouched.
+        assert session.get(ConfessionRecord, confession_id).removed_at is None
+
+
+def test_filtering_for_dismissed_includes_rows_stored_as_reviewed(admin_client, moderator_client, db):
+    """The screen says "Dismissed", but legacy rows are stored as "reviewed".
+
+    Filtering on ``status=dismissed`` must return them too, or the list goes empty once an old
+    batch is filtered. That is a read-side only change, and the write side must continue to
+    accept ``reviewed`` on PATCH.
+    """
+    c1 = make_confession(db, make_user(db, "a1"), body="one")
+    c2 = make_confession(db, make_user(db, "a2"), body="two")
+    r1 = make_report(db, c1, make_user(db, "r1"))
+    r2 = make_report(db, c2, make_user(db, "r2"))
+
+    moderator_client.patch(f"/admin/confessions/reports/{r1}", params={"status": "reviewed"})
+    moderator_client.patch(f"/admin/confessions/reports/{r2}", params={"status": "dismissed"})
+
+    dismissed = admin_client.get("/admin/confessions/reports", params={"status": "dismissed"}).json()
+    ids = {report["id"] for report in dismissed["reports"]}
+    assert {r1, r2} <= ids
+    removed = admin_client.get("/admin/confessions/reports", params={"status": "removed"}).json()
+    assert removed["reports"] == []
 
 
 def test_closing_an_unknown_report_is_a_404(moderator_client):
     response = moderator_client.patch(
-        "/admin/confessions/reports/11111111-1111-1111-1111-111111111111", params={"status": "reviewed"}
+        "/admin/confessions/reports/11111111-1111-1111-1111-111111111111", params={"status": "dismissed"}
     )
 
     assert response.status_code == 404
@@ -286,7 +346,7 @@ def test_closing_an_unknown_report_is_a_404(moderator_client):
 
 def test_closing_a_report_that_is_not_a_uuid_is_refused(moderator_client):
     response = moderator_client.patch(
-        "/admin/confessions/reports/not-a-report-id", params={"status": "reviewed"}
+        "/admin/confessions/reports/not-a-report-id", params={"status": "dismissed"}
     )
 
     assert response.status_code == 400
@@ -303,7 +363,7 @@ def test_a_plain_account_cannot_close_a_report(client, db):
     confession_id = make_confession(db, make_user(db, "author"))
     report_id = make_report(db, confession_id, make_user(db, "reporter"))
 
-    response = client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "reviewed"})
+    response = client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "dismissed"})
 
     assert response.status_code == 403
 
@@ -316,6 +376,248 @@ def test_reading_the_queue_does_not_need_the_confession_capability(moderator_cli
 
     assert moderator_client.get("/admin/confessions/reports").status_code == 200
     assert moderator_client.get("/admin/confessions").status_code == 200
+
+
+# ---------------------------------------------------------------- removal
+
+
+def test_removing_a_report_keeps_the_row_and_the_report(moderator_client, db):
+    """Removal is soft, and the reason is the foreign key.
+
+    The report's ``confession_id`` cascades from ``confessions.id``, so deleting the row to take
+    the post down would delete the record of the complaint about it. The row stays; what
+    changes is who can see it.
+    """
+    confession_id = make_confession(db, make_user(db, "author"), body="the offending post")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+
+    response = moderator_client.patch(
+        f"/admin/confessions/reports/{report_id}", params={"status": "removed"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": report_id, "status": "removed", "content_removed": True}
+    with db.sessions() as session:
+        confession = session.get(ConfessionRecord, confession_id)
+        assert confession is not None
+        assert confession.body == "the offending post"
+        assert confession.removed_at is not None
+        assert confession.removed_by_regno == "moduser"
+        report = session.get(ReportRecord, report_id)
+        assert report is not None
+        assert report.status == "removed"
+
+
+def test_removed_content_leaves_the_participant_feed(db, client, moderator_client):
+    """The feed is the participant's view of the application, so a removal has to close it.
+
+    Filtered rather than emptied: the row is still in the database, which is the previous
+    test's assertion. This one is about what a participant can reach.
+    """
+    confession_id = make_confession(db, make_user(db, "author"), body="still visible")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    assert any(row["id"] == confession_id for row in client.get("/confessions").json())
+
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    assert client.get("/confessions").json() == []
+    assert client.get("/confessions/total_count").json() == 0
+
+
+def test_removed_content_is_still_visible_to_staff(admin_client, moderator_client, db):
+    """Staff have to be able to see what is already removed.
+
+    Without this a moderator cannot tell a report against something that was never touched
+    from one against something a colleague has already taken down, and cannot check a removal
+    they are reviewing. So the staff views flag rather than filter.
+    """
+    confession_id = make_confession(db, make_user(db, "author"), body="the offending post")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    reviewed = [row for row in admin_client.get("/admin/confessions").json() if row["id"] == confession_id]
+    assert len(reviewed) == 1
+    assert reviewed[0]["content_removed"] is True
+    assert reviewed[0]["removed_by_regno"] == "moduser"
+
+    queued = find_report(admin_client.get("/admin/confessions/reports").json()["reports"], report_id)
+    assert queued["content_removed"] is True
+
+
+def test_removing_a_comment_also_fixes_the_confessions_comment_count(moderator_client, db):
+    """``comment_count`` is denormalised onto the parent, so removing a comment has to walk
+    back up and decrement it.
+
+    Otherwise the feed advertises a comment count for a thread with fewer comments in it than
+    it claims, which is a smaller lie than showing the removed comment but is still a lie.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    commenter = make_user(db, "commenter")
+    comment_id = make_comment(db, confession_id, commenter)
+    with db.sessions.begin() as session:
+        session.get(ConfessionRecord, confession_id).comment_count = 1
+    report_id = make_report(db, comment_id, make_user(db, "reporter"), kind="comment")
+
+    response = moderator_client.patch(
+        f"/admin/confessions/reports/{report_id}", params={"status": "removed"}
+    )
+
+    assert response.json()["content_removed"] is True
+    with db.sessions() as session:
+        assert session.get(ConfessionCommentRecord, comment_id).removed_at is not None
+        assert session.get(ConfessionRecord, confession_id).comment_count == 0
+
+
+def test_removing_a_confession_leaves_its_comments_alone_but_invisible(moderator_client, client, db):
+    """A removed confession is not a reason to destroy the replies under it.
+
+    The comments keep their rows and their own removal timestamps stay unset -- they were not
+    ruled on. They simply stop being reachable, because the parent they hang off is gone.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    comment_id = make_comment(db, confession_id, make_user(db, "commenter"), body="a reply")
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    with db.sessions() as session:
+        comment = session.get(ConfessionCommentRecord, comment_id)
+        assert comment is not None
+        assert comment.body == "a reply"
+        assert comment.removed_at is None
+    # The feed is the only participant read of a confession, so it is the only place a removed
+    # post can still leak from.
+    assert client.get("/confessions").json() == []
+
+
+def test_removed_content_takes_no_further_reactions_or_comments(db, client, moderator_client):
+    """Writes into a post nobody can see are refused, rather than accepted into the dark.
+
+    Otherwise engagement keeps accruing on removed content and the counts disagree with every
+    list a participant can actually open.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    assert client.post(f"/confessions/{confession_id}/react", json={"reaction_type": "heart"}).status_code >= 400
+
+
+# ---------------------------------------------------------------- who hears about it
+
+
+def notices_for(db, regno):
+    """Every notification addressed to ``regno``, newest first."""
+    with db.sessions() as session:
+        return session.scalars(
+            select(NotificationRecord)
+            .where(NotificationRecord.recipient_regno == regno)
+            .order_by(NotificationRecord.created_at.desc())
+        ).all()
+
+
+def test_removing_content_tells_the_author_and_the_reporter(moderator_client, db):
+    """Both parties learn the outcome, and they are told different things.
+
+    The author needs to know their post is gone and why. The reporter needs to know their
+    report was upheld -- silence on a upheld report reads exactly like being ignored.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    to_author = notices_for(db, "author")
+    to_reporter = notices_for(db, "reporter")
+    assert [notice.heading for notice in to_author] == ["Confession removed"]
+    assert "policies" in to_author[0].body
+    assert [notice.heading for notice in to_reporter] == ["Your report was acted on"]
+    assert "taken down" in to_reporter[0].body.lower()
+
+
+def test_a_dismissal_tells_only_the_reporter(moderator_client, db):
+    """The author is not told their post was cleared.
+
+    There is nothing that happened to them: a report that was dismissed leaves their post
+    exactly where it was, and a notification saying so would tell a participant that a stranger
+    complained about them and that staff looked -- which is the one piece of this the report
+    system exists to keep from them.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "dismissed"})
+
+    assert notices_for(db, "author") == []
+    reporter_notices = notices_for(db, "reporter")
+    assert [notice.heading for notice in reporter_notices] == ["We reviewed your report"]
+    assert "not removed" in reporter_notices[0].body
+
+
+def test_a_removal_does_not_leak_the_reporter_to_the_author(moderator_client, db):
+    """The author is told their content broke the rules, never who reported it."""
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    body = notices_for(db, "author")[0].body
+    assert "reporter" not in body.lower()
+
+
+def test_a_notification_never_embeds_a_wall_clock_time(moderator_client, db):
+    """``created_at`` already renders in the reader's local time.
+
+    A time written into the body at send time would be the server's clock, not theirs, and the
+    app has a test holding exactly that for the matchmaking notice. A notification that states
+    *when it was taken down* is the same trap with a worse consequence: the reader is being told
+    about a moderation decision and will treat the stated time as the moment of it.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    bodies = [notice.body for notice in notices_for(db, "author") + notices_for(db, "reporter")]
+    month_names = (
+        "january february march april may june july august september "
+        "october november december"
+    ).split()
+    for body in bodies:
+        lowered = body.lower()
+        assert not any(name in lowered for name in month_names), body
+        assert ":" not in body, body
+
+
+def test_removing_a_comment_notifies_the_commenter_not_the_post_author(moderator_client, db):
+    """A comment report is about the comment.
+
+    Notifying the parent post's author would tell somebody whose post was not removed that they
+    had lost something, because of a reply they did not write.
+    """
+    post_author = make_user(db, "author")
+    commenter = make_user(db, "commenter")
+    confession_id = make_confession(db, post_author)
+    comment_id = make_comment(db, confession_id, commenter)
+    report_id = make_report(db, comment_id, make_user(db, "reporter"), kind="comment")
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    assert [notice.heading for notice in notices_for(db, "commenter")] == ["Comment removed"]
+    assert notices_for(db, "author") == []
+
+
+def test_removing_twice_keeps_the_first_timestamp(moderator_client, db):
+    """``removed_at`` records when the content came down.
+
+    A second click on a report that is already closed as ``removed`` re-stamping the column
+    would make the audit trail say the second decision was the one that removed it.
+    """
+    confession_id = make_confession(db, make_user(db, "author"))
+    report_id = make_report(db, confession_id, make_user(db, "reporter"))
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+    with db.sessions() as session:
+        first = session.get(ConfessionRecord, confession_id).removed_at
+
+    moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
+
+    with db.sessions() as session:
+        assert session.get(ConfessionRecord, confession_id).removed_at == first
 
 
 # ---------------------------------------------------------------- the target's own lifecycle

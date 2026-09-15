@@ -114,6 +114,10 @@ async def get_received_love_notes(
         love_notes = session.scalars(select(LoveNoteRecord).where(
             LoveNoteRecord.recipient_id == current_user.id,
             LoveNoteRecord.status == "approved",
+            # A note taken down for a report leaves the inbox. ``status == "approved"`` is
+            # not enough on its own: the removal is a separate decision from approval, and a
+            # note can be approved and then removed later, which is the case this catches.
+            LoveNoteRecord.removed_at.is_(None),
         ).order_by(LoveNoteRecord.created_at.desc())).all()
         sender_ids = {note.sender_id for note in love_notes if note.sender_id}
         senders = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(sender_ids))).all()} if sender_ids else {}
@@ -123,8 +127,8 @@ async def get_received_love_notes(
             sender_name = "Anonymous" if note.anonymous or not sender else sender.name or "Unknown"
             result.append({
                 "id": str(note.id), "from": sender_name, "body": note.body,
-                # Only approved notes reach this list, so the recipient is entitled to
-                # the image and the proxy will serve it.
+                # Only approved, non-removed notes reach this list, so the recipient is
+                # entitled to the image and the proxy will serve it.
                 "image_url": asset_delivery_service.build_delivery_url(
                     kind="love-notes",
                     stored_identifier=note.image_url,
@@ -153,15 +157,16 @@ async def mark_love_note_read(
             detail="Invalid love note ID."
         )
     
-    # Verify the note belongs to the current user
+# Verify the note belongs to the current user
     with db.sessions.begin() as session:
         note = session.scalar(select(LoveNoteRecord).where(
             LoveNoteRecord.id == str(note_id),
             LoveNoteRecord.recipient_id == current_user.id,
+            LoveNoteRecord.removed_at.is_(None),
         ).with_for_update())
         if note:
             note.read_at = datetime.now(timezone.utc)
-    
+
     if not note:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

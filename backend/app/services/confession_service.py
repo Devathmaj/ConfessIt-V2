@@ -68,8 +68,19 @@ class ConfessionService:
 
     def get_confessions(self, sort_by: str = 'popularity', user_id: Optional[str] = None) -> List[Confession]:
         with self.sessions() as session:
-            confession_models = session.scalars(select(ConfessionRecord)).all()
-            comment_models = session.scalars(select(ConfessionCommentRecord).order_by(ConfessionCommentRecord.created_at.desc())).all()
+            # Both tables are filtered on removed_at rather than deleted: a confession taken
+            # down by a moderator still has a report pointing at it, and the row has to stay
+            # for that report to mean anything. What changes is that it is no longer a thing
+            # a participant can read, react to, or count. Staff surfaces deliberately do not
+            # filter -- see app.services.report_resolution_service for why.
+            confession_models = session.scalars(
+                select(ConfessionRecord).where(ConfessionRecord.removed_at.is_(None))
+            ).all()
+            comment_models = session.scalars(
+                select(ConfessionCommentRecord)
+                .where(ConfessionCommentRecord.removed_at.is_(None))
+                .order_by(ConfessionCommentRecord.created_at.desc())
+            ).all()
             user_map = {user.id: user for user in session.scalars(select(UserRecord)).all()}
             confession_rows = [self._confession_payload(row) for row in confession_models]
             comments_by_confession = {}
@@ -142,6 +153,11 @@ class ConfessionService:
     def get_confession(self, confession_id: str, user_id: Optional[str] = None) -> Optional[Confession]:
         with self.sessions() as session:
             row = session.get(ConfessionRecord, str(confession_id))
+            # A removed confession reads as absent rather than as a placeholder. The row is
+            # still there for the report about it, but this is the participant-facing getter
+            # and "not found" is the honest answer for a post that has been taken down.
+            if row is not None and row.removed_at is not None:
+                row = None
             confession_doc = self._confession_payload(row) if row else None
         if confession_doc:
             confession_doc["reported_by"] = self._reporter_ids(confession_id)
@@ -157,7 +173,8 @@ class ConfessionService:
             
             with self.sessions() as session:
                 comment_models = session.scalars(select(ConfessionCommentRecord).where(
-                    ConfessionCommentRecord.confession_id == str(confession_id)
+                    ConfessionCommentRecord.confession_id == str(confession_id),
+                    ConfessionCommentRecord.removed_at.is_(None),
                 ).order_by(ConfessionCommentRecord.created_at.desc())).all()
                 comment_users = {u.id: u for u in session.scalars(select(UserRecord).where(
                     UserRecord.id.in_({c.user_id for c in comment_models})
@@ -234,9 +251,17 @@ class ConfessionService:
     def get_total_confessions_count(self) -> int:
         """
         Used to get the total number of confessions in the database.
+
+        Counts what a participant can see. A removed confession is still a row, so counting
+        all rows would make this disagree with the feed it is supposed to describe -- and it
+        is the number that gets shown next to the feed.
         """
         with self.sessions() as session:
-            count = session.scalar(select(func.count()).select_from(ConfessionRecord)) or 0
+            count = session.scalar(
+                select(func.count())
+                .select_from(ConfessionRecord)
+                .where(ConfessionRecord.removed_at.is_(None))
+            ) or 0
         logger.info(f"Retrieved total confession count: {count}")
         return count
 
@@ -251,7 +276,11 @@ class ConfessionService:
 
         with self.sessions.begin() as session:
             row = session.get(ConfessionRecord, str(confession_id))
-            if not row:
+            # A removed confession no longer exists as far as a participant is concerned, so
+            # reacting to it fails the same way reacting to a deleted one does. Leaving the
+            # write open would let engagement accumulate on a post nobody can see, and the
+            # counts would then disagree with the feed for the same reason as above.
+            if not row or row.removed_at is not None:
                 return None
             # The map has to be built fresh and assigned. Mutating the dict already loaded
             # on the row in place does not mark the JSONB column dirty, so the flush below
@@ -280,7 +309,10 @@ class ConfessionService:
         with self.sessions() as session:
             row = session.get(ConfessionRecord, str(confession_id))
             confession = self._confession_payload(row) if row else None
-        if not confession:
+        # Commenting on removed content is refused for the same reason reacting to it is:
+        # the post is not in the participant's view, so a new comment on it is a write into a
+        # conversation they cannot reach.
+        if not confession or row.removed_at is not None:
             return "CONFESSION_NOT_FOUND"
         if not confession.get("comments_enabled", True):
             logger.warning(f"User {user.id} tried to comment on disabled confession {confession_id}")
@@ -314,7 +346,9 @@ class ConfessionService:
         user_new_reaction = None
         with self.sessions.begin() as session:
             row = session.get(ConfessionCommentRecord, str(comment_id))
-            if not row:
+            # As with a removed confession: no reaction lands on content a participant can no
+            # longer see, so the like count cannot quietly drift away from the visible list.
+            if not row or row.removed_at is not None:
                 return None
             likes = [str(value) for value in (row.likes or [])]
             dislikes = [str(value) for value in (row.dislikes or [])]
@@ -354,7 +388,9 @@ class ConfessionService:
         user_id = str(user.id)
         with self.sessions() as session:
             comment = session.get(ConfessionCommentRecord, str(comment_id))
-        if not comment:
+        # Removed content cannot be reported: there is nothing left for a moderator to rule
+        # on, and a report against it would sit in the queue forever.
+        if not comment or comment.removed_at is not None:
             return None
 
         with self.sessions() as session:
@@ -384,7 +420,8 @@ class ConfessionService:
         user_id = str(user.id)
         with self.sessions() as session:
             confession = session.get(ConfessionRecord, str(confession_id))
-        if not confession:
+        # Removed content cannot be reported -- see report_comment.
+        if not confession or confession.removed_at is not None:
             return None
 
         with self.sessions() as session:

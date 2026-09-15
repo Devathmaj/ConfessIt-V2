@@ -275,9 +275,15 @@ class MessageService:
         
         # Fetch messages
         with db.sessions() as session:
-            rows = session.scalars(select(MessageRecord)
-                .where(MessageRecord.conversation_id == str(conversation_id))
-                .order_by(MessageRecord.created_at.asc()).limit(limit)).all()
+            base_query = select(MessageRecord).where(
+                MessageRecord.conversation_id == str(conversation_id)
+            )
+            # A participant must not see removed messages. Staff readers go through the
+            # conversation detail admin route instead, which returns the full history; the
+            # flag on each message is not present here, but the view is participant-facing.
+            if not may_read_any:
+                base_query = base_query.where(MessageRecord.removed_at.is_(None))
+            rows = session.scalars(base_query.order_by(MessageRecord.created_at.asc()).limit(limit)).all()
             messages = [{"id": str(row.id), "conversation_id": row.conversation_id,
                 "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
                 "created_at": row.created_at, "is_read": row.is_read} for row in rows]
@@ -290,6 +296,9 @@ class MessageService:
                     MessageRecord.conversation_id == str(conversation_id),
                     MessageRecord.receiver_regno == user.regno,
                     MessageRecord.is_read.is_(False),
+                    # Matches the read above: if the message is not visible, reading the
+                    # thread did not read it, so it must not be marked as though it did.
+                    MessageRecord.removed_at.is_(None),
                 )).all()
                 for row in rows:
                     row.is_read = True

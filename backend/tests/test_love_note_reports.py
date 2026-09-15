@@ -292,16 +292,38 @@ def test_a_moderator_can_read_and_close_a_report(moderator_client, client, login
     file_report(client, login_as, note_id)
     report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
 
-    closed = moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "reviewed"})
+    closed = moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "dismissed"})
 
     assert closed.status_code == 200
+    assert closed.json() == {"id": report_id, "status": "dismissed", "content_removed": False}
     with db.sessions() as session:
         report = session.get(LoveNoteReportRecord, report_id)
-        assert report.status == "reviewed"
+        assert report.status == "dismissed"
         # The audit trail names the staff account, which is why the column is plain text:
         # it lives in ``moderator``, where a foreign key to ``users`` could never point.
         assert report.reviewed_by_regno == "moduser"
         assert report.reviewed_at is not None
+
+
+def test_the_older_word_for_dismissing_is_still_accepted(moderator_client, client, login_as, db):
+    """``reviewed`` was the word this endpoint used before the screen grew a remove button.
+
+    Answering a stale caller beats refusing it: the action it means is unchanged, so a 422 would
+    break a working client over a rename without preventing anything. It is stored as sent,
+    which keeps the row's own history honest.
+    """
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+
+    response = moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "reviewed"})
+
+    assert response.status_code == 200
+    assert response.json() == {"id": report_id, "status": "reviewed", "content_removed": False}
+    with db.sessions() as session:
+        assert session.get(LoveNoteReportRecord, report_id).status == "reviewed"
+        # Still a dismissal, not a removal: the note is untouched.
+        assert session.get(LoveNoteRecord, note_id).removed_at is None
 
 
 def test_the_queue_can_be_filtered_by_status(moderator_client, client, login_as, db):
@@ -317,7 +339,7 @@ def test_the_queue_can_be_filtered_by_status(moderator_client, client, login_as,
 
 def test_closing_an_unknown_report_is_a_404(moderator_client):
     response = moderator_client.patch(
-        "/admin/love-notes/reports/11111111-1111-1111-1111-111111111111", params={"status": "reviewed"}
+        "/admin/love-notes/reports/11111111-1111-1111-1111-111111111111", params={"status": "dismissed"}
     )
 
     assert response.status_code == 404
@@ -352,7 +374,11 @@ def test_reporting_a_note_changes_nothing_about_the_note(client, login_as, db):
 
 def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as, db):
     """The foreign key cascades, so a report cannot outlive the note it is about and the
-    queue can never show a note that no longer exists."""
+    queue can never show a note that no longer exists.
+
+    This is why ruling on a report soft-removes instead of calling this route: deleting the
+    note would delete the record of the report and the decision made on it.
+    """
     note_id = note_between(db)
     file_report(client, login_as, note_id)
 
@@ -360,3 +386,98 @@ def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as
     with db.sessions() as session:
         assert session.scalar(select(LoveNoteReportRecord)) is None
     assert admin_client.get("/admin/love-notes/reports").json()["reports"] == []
+
+
+# ------------------------------------------------------- removing content for a report
+
+
+def remove_report(client, moderator_client, login_as, db, *, status="removed"):
+    """File one report against a fresh note, rule on it with ``status``, hand back the ids.
+
+    Returns ``(note_id, report_id, response_body)`` so a test can assert against either side of
+    the decision without repeating the four calls.
+    """
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+    response = moderator_client.patch(
+        f"/admin/love-notes/reports/{report_id}", params={"status": status}
+    )
+    assert response.status_code == 200
+    return note_id, report_id, response.json()
+
+
+def test_removing_a_note_keeps_both_the_note_and_the_report(client, moderator_client, login_as, db):
+    """The load-bearing assertion of soft removal: nothing is destroyed.
+
+    A hard delete would take the note with it and cascade the report away, leaving no way to
+    show what was reported, what was decided, or by whom.
+    """
+    note_id, report_id, body = remove_report(client, moderator_client, login_as, db)
+
+    assert body == {"id": report_id, "status": "removed", "content_removed": True}
+    with db.sessions() as session:
+        note = session.get(LoveNoteRecord, note_id)
+        assert note is not None
+        assert note.body == "a love note"
+        assert note.removed_at is not None
+        assert note.removed_by_regno == "moduser"
+        report = session.get(LoveNoteReportRecord, report_id)
+        assert report is not None
+        assert report.status == "removed"
+
+
+def test_removing_a_note_leaves_its_own_approval_status_alone(client, moderator_client, login_as, db):
+    """``status`` says whether the note was judged as a love note; ``removed_at`` says whether
+    it was taken down for a report. Overwriting one with the other is how the note list and the
+    report queue end up disagreeing about the same note."""
+    note_id, _, _ = remove_report(client, moderator_client, login_as, db)
+
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).status == "approved"
+
+
+def test_a_removed_note_leaves_the_recipients_inbox(client, moderator_client, db, login_as):
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+    moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "removed"})
+
+    with login_as(RECIPIENT):
+        inbox = client.get("/love-notes/inbox").json()
+
+    assert [note["id"] for note in inbox] == []
+
+
+def test_a_removed_note_is_still_listed_for_staff(moderator_client, client, login_as, db):
+    """Staff have to be able to see what is already removed, both to avoid re-opening an old
+    decision and to audit it afterwards."""
+    note_id = note_between(db)
+    file_report(client, login_as, note_id)
+    report_id = only_report(moderator_client.get("/admin/love-notes/reports"))["id"]
+    moderator_client.patch(f"/admin/love-notes/reports/{report_id}", params={"status": "removed"})
+
+    queued = only_report(moderator_client.get("/admin/love-notes/reports"))
+    assert queued["id"] == report_id
+    assert queued["content_removed"] is True
+
+    listed = moderator_client.get("/admin/love-notes").json()
+    matching = [note for note in listed if note["id"] == note_id]
+    assert matching, "the note vanished from the staff list instead of being flagged removed"
+    assert matching[0]["content_removed"] is True
+
+
+def test_removing_a_note_twice_keeps_the_first_timestamp(client, moderator_client, login_as, db):
+    """``removed_at`` is when the content came down. Re-deciding an already-removed report
+    must not re-stamp it, or the audit trail would blame the second click for the first."""
+    note_id, report_id, _ = remove_report(client, moderator_client, login_as, db)
+    with db.sessions() as session:
+        first = session.get(LoveNoteRecord, note_id).removed_at
+
+    again = moderator_client.patch(
+        f"/admin/love-notes/reports/{report_id}", params={"status": "removed"}
+    )
+
+    assert again.json()["content_removed"] is False, "the second call removed nothing"
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).removed_at == first

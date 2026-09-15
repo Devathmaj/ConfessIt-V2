@@ -340,7 +340,26 @@ export const getAdminLoveNoteReports = async (status?: string) => {
     return response.data;
 };
 
-export const updateAdminLoveNoteReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+/** How a moderator can close a report, as the three queues accept it.
+ *
+ * `removed` is the soft removal: the content leaves every participant-facing read but stays
+ * in the database, and both the author and the reporter are notified. `dismissed` leaves the
+ * content alone and notifies only the reporter. `reviewed` is the older word for `dismissed`
+ * and is still accepted so a stale caller is not met with a 422; nothing in the UI sends it.
+ */
+export type AdminReportResolution = "removed" | "dismissed" | "reviewed";
+
+/** { id, status, content_removed } -- whether this call is what took the content down. */
+export interface AdminReportResolutionResult {
+    id: string;
+    status: AdminReportResolution;
+    content_removed: boolean;
+}
+
+export const updateAdminLoveNoteReportStatus = async (
+    reportId: string,
+    status: AdminReportResolution
+): Promise<AdminReportResolutionResult> => {
     const response = await axios.patch(
         `${API_URL}/admin/love-notes/reports/${reportId}`,
         {},
@@ -365,7 +384,10 @@ export const getAdminConfessionReports = async (status?: string) => {
     return response.data;
 };
 
-export const updateAdminConfessionReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+export const updateAdminConfessionReportStatus = async (
+    reportId: string,
+    status: AdminReportResolution
+): Promise<AdminReportResolutionResult> => {
     const response = await axios.patch(
         `${API_URL}/admin/confessions/reports/${reportId}`,
         {},
@@ -382,7 +404,10 @@ export const getAdminMessageReports = async (status?: string) => {
     return response.data;
 };
 
-export const updateAdminMessageReportStatus = async (reportId: string, status: "reviewed" | "dismissed") => {
+export const updateAdminMessageReportStatus = async (
+    reportId: string,
+    status: AdminReportResolution
+): Promise<AdminReportResolutionResult> => {
     const response = await axios.patch(
         `${API_URL}/admin/messages/reports/${reportId}`,
         {},

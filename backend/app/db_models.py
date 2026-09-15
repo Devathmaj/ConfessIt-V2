@@ -162,7 +162,44 @@ ACCOUNT_MODELS: dict[str, type[Base]] = {
 }
 
 
-class ConfessionRecord(Base):
+class RemovedContentColumns:
+    """The columns every *content* table carries so a row can be taken down but kept.
+
+    A reported post is not deleted when a moderator rules on it: it is marked removed. The
+    row survives, the report that is about it survives, and the content itself disappears from
+    every participant-facing read. Deleting would cascade the report away with it and leave
+    nobody able to answer "why was this taken down, and who decided" six months later.
+
+    Three things read these columns, and the split between them is the point:
+
+    * every participant-facing query filters on ``removed_at IS NULL``;
+    * staff surfaces do not filter, and carry the flag instead, because a moderator deciding
+      whether to remove something has to be able to see what is already removed;
+    * ``asset_delivery_service`` uses them to stop serving a removed love note's image, which
+      closing the inbox query alone would not do -- an already-minted delivery URL would
+      otherwise keep working.
+
+    No index on either column. Every read that matters filters ``removed_at IS NULL``, and this is
+    a small table whose rows are added as content arrives rather than by retro-fitting a backlog;
+    an index on the ``IS NULL`` side of a low-selectivity predicate costs writes on every insert
+    and buys nothing the planner can use. ``removed_by_regno`` is never filtered at all -- it is
+    read to answer "who did this", which is a per-report lookup by id. Add indexes here if the feed
+    ever grows enough for the planner to want them.
+
+    ``removed_by_regno`` is plain text, like every ``reviewed_by_regno`` in this schema: the
+    reviewer is a staff account whose regno lives in ``admin`` or ``moderator`` and never in
+    ``users``, so a foreign key could only ever reject a moderator's decision.
+    """
+
+    removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    removed_by_regno: Mapped[Optional[str]] = mapped_column(String(100))
+
+    @property
+    def is_removed(self) -> bool:
+        return self.removed_at is not None
+
+
+class ConfessionRecord(RemovedContentColumns, Base):
     __tablename__ = "confessions"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
@@ -217,7 +254,7 @@ class ConfessionRecord(Base):
     )
 
 
-class ConfessionCommentRecord(Base):
+class ConfessionCommentRecord(RemovedContentColumns, Base):
     __tablename__ = "confession_comments"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
@@ -251,6 +288,21 @@ class ReportRecord(Base):
     Review screen was built, and every pre-existing row backfills to ``'pending'``: a report
     nobody had looked at is pending, which is what it was being treated as before the
     lifecycle was recorded at all.
+
+    ``status`` carries the whole vocabulary, and it has exactly two closed outcomes:
+
+    ``pending``
+        Nobody has ruled on it yet.
+    ``removed``
+        A moderator ruled that the reported content broke the rules and took it down. The
+        content row is marked removed rather than deleted, and both parties are notified.
+    ``dismissed``
+        A moderator looked and the content stays. The reporter is told it was reviewed.
+
+    ``reviewed`` was the older word for "a human looked at this" and no longer has a button
+    behind it; ``reviewed_at``/``reviewed_by_regno`` are what now record that a human looked,
+    independently of which of the two outcomes they chose. Rows closed under the old
+    vocabulary still read back as ``reviewed`` and are shown as such.
 
     The reported party is not stored. For a confession it is ``confessions.author_id`` and
     for a comment it is ``confession_comments.user_id`` -- both foreign keys that cascade, and
@@ -320,7 +372,7 @@ class LoginTokenRecord(Base):
     device: Mapped[Optional[str]] = mapped_column(String(512))
 
 
-class LoveNoteRecord(Base):
+class LoveNoteRecord(RemovedContentColumns, Base):
     __tablename__ = "love_notes"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
@@ -421,7 +473,7 @@ class ConversationRecord(Base):
     terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
-class MessageRecord(Base):
+class MessageRecord(RemovedContentColumns, Base):
     __tablename__ = "messages"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)

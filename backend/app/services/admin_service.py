@@ -14,6 +14,7 @@ from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionReco
     ReportRecord, UserRecord, find_account_in_table, resolve_account,
     resolve_account_by_id)
 from ..accounts import AccountType, normalize_account_type
+from ..services.report_resolution_service import resolve_status_filter
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -367,6 +368,10 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                     "like_count": comment_doc.like_count,
                     "dislike_count": comment_doc.dislike_count,
                     "reports": comment_reports,
+                    # Same reasoning as the parent post: staff see removed comments, flagged.
+                    "content_removed": comment_doc.removed_at is not None,
+                    "removed_at": serialize_datetime(comment_doc.removed_at),
+                    "removed_by_regno": comment_doc.removed_by_regno,
                 }
             )
 
@@ -390,6 +395,12 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                 "heartbreak_count": doc.heartbreak_count,
                 "comment_count": doc.comment_count,
                 "comments": comment_entries,
+                # Not filtered out, flagged. This is the staff view: a moderator deciding
+                # whether to remove something has to be able to see what is already removed,
+                # and the same row is also how a removal gets audited after the fact.
+                "content_removed": doc.removed_at is not None,
+                "removed_at": serialize_datetime(doc.removed_at),
+                "removed_by_regno": doc.removed_by_regno,
             }
         )
 
@@ -423,7 +434,7 @@ def get_confession_reports_data(
     """
     filters = []
     if status_filter:
-        filters.append(ReportRecord.status == status_filter)
+        filters.append(ReportRecord.status.in_(resolve_status_filter(status_filter)))
 
     with db.sessions() as session:
         reports = session.execute(
@@ -506,6 +517,10 @@ def get_confession_reports_data(
             author = None if author_hidden else authors.get(confession.author_id) if confession else None
             target_id = str(report.confession_id)
             confession_id = target_id
+        # The reported row itself, whichever kind it was, so the removal flag below reads one
+        # attribute instead of repeating the branch. It can be None even though the report
+        # exists -- see the note on ``content_removed``.
+        target = comment if is_comment else confession
 
         items.append({
             "id": str(report.id),
@@ -534,41 +549,20 @@ def get_confession_reports_data(
             "status": report.status,
             "reviewed_at": serialize_datetime(report.reviewed_at),
             "reviewed_by_regno": report.reviewed_by_regno,
+            # Whether the reported content is already taken down. The screen cannot infer it
+            # from ``status``: a content admin can remove a confession without a report ever
+            # existing, and a moderator has to see that before choosing between the two.
+            #
+            # ``target`` rather than the two branches above: the content row can be missing
+            # even though the report exists, since deleting a confession cascades its reports
+            # but a comment's parent going away does not take the comment report with it.
+            "content_removed": bool(target.removed_at) if target is not None else False,
         })
 
     return {"reports": items, "total": total, "skip": skip, "limit": limit}
 
 
-def update_confession_report_status(
-    db: Database,
-    report_id: str,
-    new_status: str,
-    reviewer_regno: str,
-) -> Dict[str, Any]:
-    """Close out one confession or comment report as ``reviewed`` or ``dismissed``.
 
-    This moves the report only. Deleting the reported confession is still a separate decision
-    through ``DELETE /admin/confessions/{id}``, so the queue records that a human looked and
-    the confession review screen remains the single place a post's fate is decided.
-    """
-    if not is_valid_id(report_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid report id",
-        )
-
-    with db.sessions.begin() as session:
-        report = session.get(ReportRecord, str(report_id))
-        if report is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Report not found",
-            )
-        report.status = new_status
-        report.reviewed_at = datetime.now(timezone.utc)
-        report.reviewed_by_regno = reviewer_regno
-
-    return {"id": str(report_id), "status": new_status}
 
 
 def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
@@ -580,9 +574,25 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
         message_rows = session.scalars(select(MessageRecord).where(
             MessageRecord.conversation_id.in_([row.id for row in conversation_docs])
         ).order_by(MessageRecord.created_at.desc())).all() if conversation_docs else []
-    latest_by_conversation = {}
+    # Built from the remaining messages only. A removed message is still in ``message_rows``
+        # and still counted in ``message_counts`` below -- staff need it -- but the preview has
+        # to fall through to the newest message that is actually readable, otherwise ruling on
+        # a report would take the text down and leave it sitting in the conversation list.
+        latest_by_conversation = {}
     for message in message_rows:
+        if message.removed_at is not None:
+            continue
         latest_by_conversation.setdefault(message.conversation_id, message)
+
+    # Two counters from the rows already loaded, not three more aggregate queries: the
+    # transcript screen needs both numbers and this is the one place every message of every
+    # listed conversation is in memory anyway.
+    visible_counts: Dict[str, int] = defaultdict(int)
+    message_counts: Dict[str, int] = defaultdict(int)
+    for message in message_rows:
+        message_counts[message.conversation_id] += 1
+        if message.removed_at is None:
+            visible_counts[message.conversation_id] += 1
 
     results: List[Dict[str, Any]] = []
     for doc in conversation_docs:
@@ -623,6 +633,13 @@ def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
                 "latest_message": latest_message,
                 "is_blocked": bool(doc.blocked_by),
                 "blocked_by": (doc.blocked_by or [None])[0],
+                # How much of the thread a moderator has left to read. Computed here rather
+                # than on the participant side, because the removed rows are filtered out of
+                # the participant's transcript but not out of this one, and a count of visible
+                # messages has to be a count of the same set the viewer can see.
+                "visible_message_count": visible_counts.get(doc.id, 0),
+                "removed_message_count": message_counts.get(doc.id, 0)
+                - visible_counts.get(doc.id, 0),
             }
         )
 

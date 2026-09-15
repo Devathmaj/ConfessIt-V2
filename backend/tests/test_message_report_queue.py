@@ -3,13 +3,20 @@
 Message reports had a queue before the unified Reports Review screen, but nothing tested it: no
 module anywhere filed one or read the queue back. The rules the other two queues are held to --
 the content travels with the report, the envelope matches, closing a report records who closed
-it and when, and closing one is not a way to delete a message -- were therefore unenforced here.
+it and when, and a dismissal leaves the content alone -- were therefore unenforced here.
 
 These tests fill that gap, and they pin the two names the unified screen standardised on: the
 filter arrives as ``?status=`` (it used to be ``?status_filter=``) and close-out answers
 ``{id, status}`` (it used to answer a sentence). No client called either endpoint before the
 unified page existed, so both renames were free, and a rename nobody called is exactly the kind
 of change that silently regresses.
+
+Closing a report has two outcomes rather than three. ``dismissed`` records that a human looked
+and the message stays. ``removed`` takes the message down while keeping the row, drops it from
+both participants' transcripts and from the conversation preview, and notifies the sender and
+the reporter. Most of what follows is about that removal, and the recurring question is whether
+it destroyed anything: it must not, because the report is about this message and a decision
+nobody can audit afterwards is a decision that gets repeated.
 """
 
 from contextlib import contextmanager
@@ -23,6 +30,7 @@ from app.db_models import (
     MatchRecord,
     MessageRecord,
     MessageReportRecord,
+    NotificationRecord,
     UserRecord,
 )
 from app.main import app
@@ -189,6 +197,7 @@ def test_the_filter_arrives_as_status(admin_client, thread):
     assert matching.status_code == 200
     assert only_report(matching)["id"] == thread["report_id"]
     assert admin_client.get("/admin/messages/reports?status=dismissed").json()["reports"] == []
+    assert admin_client.get("/admin/messages/reports?status=removed").json()["reports"] == []
 
 
 def test_the_newest_report_comes_first(admin_client, db, client, login_as):
@@ -227,24 +236,159 @@ def test_the_newest_report_comes_first(admin_client, db, client, login_as):
 
 
 def test_closing_a_report_records_who_closed_it_and_when(admin_client, thread):
-    response = admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=reviewed", json={})
+    response = admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=dismissed", json={})
 
     assert response.status_code == 200
-    assert response.json() == {"id": thread["report_id"], "status": "reviewed"}
+    assert response.json() == {
+        "id": thread["report_id"], "status": "dismissed", "content_removed": False,
+    }
 
     report = only_report(admin_client.get("/admin/messages/reports"))
-    assert report["status"] == "reviewed"
+    assert report["status"] == "dismissed"
     assert report["reviewed_by_regno"] is not None
     assert report["reviewed_at"] is not None
 
 
+def test_the_older_word_for_dismissing_is_still_accepted(admin_client, thread):
+    """``reviewed`` was the word this queue used before the screen grew a remove button.
+
+    It is stored as sent, so the row's own history stays honest, but it takes nothing down: the
+    action it named did not change, and that action was "a human looked and it stays". Answering
+    a stale caller beats a 422 over a rename.
+    """
+    response = admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=reviewed", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": thread["report_id"], "status": "reviewed", "content_removed": False,
+    }
+    assert only_report(admin_client.get("/admin/messages/reports"))["content_removed"] is False
+
+
 def test_closing_a_report_leaves_the_message_alone(admin_client, thread, db):
-    """A report is one person's word, and the message is judged in its own right. A queue that
-    could destroy the evidence would remove the reason to read it at all."""
+    """A dismissal changes nothing about the message. A report is one person's word, and the
+    message is judged in its own right -- a queue that could destroy the evidence on dismissal
+    would remove the reason to read it at all."""
     admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=dismissed", json={})
 
     with db.sessions() as session:
-        assert session.get(MessageRecord, thread["message_id"]) is not None
+        message = session.get(MessageRecord, thread["message_id"])
+        assert message is not None
+        assert message.body == "a message"
+        assert message.removed_at is None
+
+
+# --------------------------------------------------------------- taking the message down
+
+
+def test_removing_a_message_keeps_both_the_message_and_the_report(admin_client, thread, db):
+    """The load-bearing assertion of soft removal: nothing is destroyed.
+
+    The report is about a message, and somebody has to answer for this decision later. If the
+    removal deleted the row, the report would cascade away with it and there would be nothing
+    left to answer with.
+    """
+    response = admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    assert response.status_code == 200
+    assert response.json()["content_removed"] is True
+    with db.sessions() as session:
+        message = session.get(MessageRecord, thread["message_id"])
+        assert message is not None
+        assert message.body == "a message"
+        assert message.removed_at is not None
+        assert message.removed_by_regno is not None
+        report = session.get(MessageReportRecord, thread["report_id"])
+        assert report is not None
+        assert report.status == "removed"
+
+
+def test_a_removed_message_leaves_the_conversation_for_both_participants(
+    thread, client, login_as, admin_client
+):
+    """Neither party can still read it.
+
+    The recipient reported it, so checking only the sender would be checking the easy half: the
+    sender has to lose access to their own message too, or "removed" would mean only "hidden from
+    the person who complained".
+    """
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    for regno in ("sender", RECIPIENT):
+        with login_as(regno):
+            history = client.get(f"/messages/{thread['conversation_id']}").json()
+        bodies = [message["body"] for message in history["messages"]]
+        assert "a message" not in bodies, f"the removed message is still visible to {regno}"
+
+
+def test_removing_a_message_moves_the_conversation_preview_off_it(thread, db, admin_client):
+    """The conversation preview is a copy of the newest message's text.
+
+    Leaving it pointing at removed content would keep showing the ruled-against message in the
+    conversation list to both participants -- the one place a participant would still read
+    something a moderator has taken down.
+    """
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    with db.sessions() as session:
+        conversation = session.get(ConversationRecord, thread["conversation_id"])
+        assert "a message" not in (conversation.last_message_preview or "")
+
+
+def test_a_removed_message_is_still_visible_to_staff(thread, admin_client):
+    """Staff keep their moderation read, or an appeal could never be answered.
+
+    The transcript is the appeal record, so it also has to say which messages are gone rather
+    than leaving a moderator to infer it from a hole in the list.
+    """
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    detail = admin_client.get(f"/admin/conversations/{thread['conversation_id']}").json()
+
+    assert [message["body"] for message in detail["messages"]] == ["a message"]
+    assert detail["messages"][0]["removed_at"] is not None
+    assert detail["messages"][0]["removed_by_regno"] is not None
+
+
+def test_removing_a_message_twice_reports_that_it_removed_nothing(admin_client, thread, db):
+    """The response says whether *this* call took the content down.
+
+    A second click must not report success again: a moderator clicking twice would be told
+    twice that they removed something that had been gone since before they arrived, and
+    ``removed_at`` must keep pointing at when it actually came down.
+    """
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+    with db.sessions() as session:
+        first = session.get(MessageRecord, thread["message_id"]).removed_at
+
+    again = admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    assert again.json()["content_removed"] is False
+    with db.sessions() as session:
+        assert session.get(MessageRecord, thread["message_id"]).removed_at == first
+
+
+def test_removing_a_message_tells_the_sender_and_the_reporter(thread, db, admin_client):
+    """Both parties hear the outcome.
+
+    The reporter here is the receiver, so this is also the check that the notice reaches the
+    person who received the message rather than the one who wrote it.
+    """
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+
+    def headings(regno):
+        with db.sessions() as session:
+            return [
+                row.heading
+                for row in session.scalars(
+                    select(NotificationRecord)
+                    .where(NotificationRecord.recipient_regno == regno)
+                    .order_by(NotificationRecord.created_at.desc())
+                ).all()
+            ]
+
+    assert headings("sender") == ["Message removed"]
+    assert headings(RECIPIENT) == ["Your report was acted on"]
 
 
 def test_pending_is_not_a_destination(admin_client, thread):
@@ -256,12 +400,12 @@ def test_pending_is_not_a_destination(admin_client, thread):
 
 
 def test_a_malformed_report_id_is_a_400_and_leaves_the_queue_readable(admin_client, thread):
-    assert admin_client.patch("/admin/messages/reports/not-a-uuid?status=reviewed", json={}).status_code == 400
+    assert admin_client.patch("/admin/messages/reports/not-a-uuid?status=dismissed", json={}).status_code == 400
     assert admin_client.get("/admin/messages/reports").status_code == 200
 
 
 def test_a_report_that_does_not_exist_is_a_404(admin_client):
-    response = admin_client.patch(f"/admin/messages/reports/{new_id()}?status=reviewed", json={})
+    response = admin_client.patch(f"/admin/messages/reports/{new_id()}?status=dismissed", json={})
 
     assert response.status_code == 404
 
@@ -276,7 +420,7 @@ def test_reading_the_queue_needs_the_reports_capability(client, thread):
 def test_a_moderator_can_work_the_whole_queue(moderator_client, thread):
     assert moderator_client.get("/admin/messages/reports").status_code == 200
     assert moderator_client.patch(
-        f"/admin/messages/reports/{thread['report_id']}?status=reviewed", json={},
+        f"/admin/messages/reports/{thread['report_id']}?status=dismissed", json={},
     ).status_code == 200
 
 
@@ -297,7 +441,7 @@ def test_opening_the_queue_is_not_the_same_permission_as_ruling_on_it(admin_clie
 
     assert admin_client.get("/admin/messages/reports").status_code == 200
     assert admin_client.patch(
-        f"/admin/messages/reports/{thread['report_id']}?status=reviewed", json={},
+        f"/admin/messages/reports/{thread['report_id']}?status=dismissed", json={},
     ).status_code == 403
     assert only_report(admin_client.get("/admin/messages/reports"))["status"] == "pending"
 

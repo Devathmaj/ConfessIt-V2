@@ -14,8 +14,8 @@ from ..services.love_note_service import (
     update_love_note_status_service,
     delete_love_note_service,
     get_love_note_reports_for_admin,
-    update_love_note_report_status_service,
 )
+from ..services.report_resolution_service import resolve_love_note_report
 
 router = APIRouter(prefix="/admin/love-notes", tags=["Admin - Love Notes"])
 
@@ -32,7 +32,7 @@ async def get_all_love_notes(
 @router.put("/{note_id}/status")
 async def update_love_note_status(
     note_id: str,
-    status_value: str = Query(..., alias="status", regex="^(approved|rejected|pending_review)$"),
+    status_value: str = Query(..., alias="status", pattern="^(approved|rejected|pending_review)$"),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_MODERATE))
 ) -> Dict[str, Any]:
@@ -68,7 +68,7 @@ async def delete_love_note(
 
 @router.get("/reports")
 async def get_love_note_reports(
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, reviewed, dismissed"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Database = Depends(get_db),
@@ -87,17 +87,23 @@ async def get_love_note_reports(
 @router.patch("/reports/{report_id}")
 async def update_love_note_report_status(
     report_id: str,
-    status_value: str = Query(..., alias="status", regex="^(reviewed|dismissed)$"),
+    status_value: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE))
 ) -> Dict[str, Any]:
     """
-    Close a love note report out as ``reviewed`` or ``dismissed``.
+    Rule on a love note report: ``dismissed`` or ``removed``.
 
-    Deliberately does not touch the note. Approving, rejecting or deleting the note stays
-    with the love-note endpoints, so the report queue records that a human looked and the
-    note list remains the single place a note's state is decided.
+    ``reviewed`` is the older spelling of ``dismissed`` and is still accepted; the screen only
+    offers the two new words. See ``admin.update_confession_report`` for why.
+
+    ``dismissed`` leaves the note exactly as it is and tells the reporter it was reviewed.
+    ``removed`` marks the note removed so it leaves the recipient's inbox and stops being
+    served by the image proxy, and tells both the sender and the reporter.
+
+    The note's own ``status`` is untouched either way. Approving, rejecting or deleting a note
+    stays with the love-note endpoints above, so ``status`` keeps meaning "judged as a love
+    note" and ``removed_at`` keeps meaning "taken down for a report" -- two questions, two
+    columns, and no screen left guessing which one it is looking at.
     """
-    return await update_love_note_report_status_service(
-        report_id, status_value, AccountRef.of(reviewer), db
-    )
+    return resolve_love_note_report(db, report_id, status_value, AccountRef.of(reviewer))

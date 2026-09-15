@@ -169,6 +169,40 @@ export const notifyExpiredMatch = (
   toast.info(describeExpiredMatch(cooldown));
 };
 
+const COOLDOWN_NOTICE_SUPPRESSED_UNTIL_KEY = 'matchmaking_cooldown_notice_until';
+
+/** When a cooldown noticed `now` will have run out. */
+const cooldownEndsAt = (now: number, { hours, minutes }: CooldownRemaining) =>
+  now + hours * 3600_000 + minutes * 60_000;
+
+/**
+ * Whether a cooldown has already been announced for the wait that is running now.
+ *
+ * A cooldown lasts hours and the page is visited repeatedly across it, so a notice raised on
+ * every mount is the same sentence over and over. Remembering when the current wait ends --
+ * rather than a bare flag -- means the suppression expires on its own: this visit is quiet,
+ * and the next cooldown still gets to speak for itself without anything having to clear it.
+ */
+export const cooldownNoticeSuppressed = (now: number, remaining: CooldownRemaining | null) => {
+  if (!remaining) return true;
+  const until = Number(localStorage.getItem(COOLDOWN_NOTICE_SUPPRESSED_UNTIL_KEY));
+  return Number.isFinite(until) && until > now;
+};
+
+/**
+ * Announce a cooldown, at most once per wait.
+ *
+ * `force` is for the heart click, where the user has just asked what is going on and a silent
+ * no would read as a broken button rather than as an answer.
+ */
+export const notifyCooldown = (remaining: CooldownRemaining | null, { force = false } = {}) => {
+  if (!remaining) return;
+  if (!force && cooldownNoticeSuppressed(serverNow(), remaining)) return;
+
+  localStorage.setItem(COOLDOWN_NOTICE_SUPPRESSED_UNTIL_KEY, String(cooldownEndsAt(serverNow(), remaining)));
+  toast.info(remaining.message);
+};
+
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
     { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', class_name: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
@@ -322,8 +356,6 @@ export const MatchmakingPage = () => {
   const [cooldownKnown, setCooldownKnown] = useState(false);
 
   const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
-  const [showCooldownDialog, setShowCooldownDialog] = useState(false);
-  const [cooldownMessage, setCooldownMessage] = useState("");
   const [showRareMatchDialog, setShowRareMatchDialog] = useState(false);
 
   // The periodic sweep and the callbacks below run against the newest render's values, but
@@ -465,13 +497,13 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     const load = async () => {
       const check = await fetchCooldown();
       if (cancelled) return;
-      // Nothing truthful can be said about the wait, so nothing is said: no dialog, and no
+      // Nothing truthful can be said about the wait, so nothing is said: no notice, and no
       // conversation notice either, since that notice would have to promise a new match.
       if (!check.known) return;
-      if (check.remaining) {
-        setCooldownMessage(check.remaining.message);
-        setShowCooldownDialog(true);
-      }
+      // Announced once per wait rather than on every visit: this modal used to open every
+      // time the page loaded, for as long as the cooldown ran, which is hours of the same
+      // sentence with an OK to click each time.
+      notifyCooldown(check.remaining);
       await checkForExistingConversation(check.remaining);
     };
 
@@ -514,7 +546,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
   /**
    * Handles the click event on the main heart icon.
    * Checks the user's eligibility and either shows a confirmation dialog
-   * or a cooldown message if they've matched recently.
+   * or says how long the cooldown has left if they've matched recently.
    */
   const handleHeartClick = async () => {
     if (isMatching || matchedProfile) return;
@@ -525,8 +557,9 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
       // failed draw at the far end of the matching animation.
       const check = await fetchCooldown();
       if (check.known && check.remaining) {
-        setCooldownMessage(check.remaining.message);
-        setShowCooldownDialog(true);
+        // Forced past the once-per-wait suppression: the user just clicked, and a click that
+        // silently does nothing is indistinguishable from a broken button.
+        notifyCooldown(check.remaining, { force: true });
         return;
       }
       if (!check.known) {
@@ -538,8 +571,8 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
       setShowConfirmationDialog(true);
     } catch (error: any) {
       if (error.response?.status === 429) {
-        setCooldownMessage(error.response.data.detail);
-        setShowCooldownDialog(true);
+        // The draw endpoint is the last word on the wait, so its own message is what is shown.
+        toast.info(error.response.data.detail);
       } else {
         toast.error("An error occurred. Please try again later.");
       }
@@ -609,7 +642,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               // even though nothing was matched. Ask it what the wait is rather than leaving
               // the page offering a heart that cannot do anything.
               const check = await fetchCooldown();
-              if (check.known && check.remaining) setCooldownMessage(check.remaining.message);
+              if (check.known && check.remaining) notifyCooldown(check.remaining, { force: true });
             })
             .finally(() => {
               setSlotMachineUser(null);
@@ -951,18 +984,6 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={startMatching}>Proceed</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={showCooldownDialog} onOpenChange={setShowCooldownDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Matchmaking on Cooldown</AlertDialogTitle>
-            <AlertDialogDescription>{cooldownMessage}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setShowCooldownDialog(false)}>OK</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

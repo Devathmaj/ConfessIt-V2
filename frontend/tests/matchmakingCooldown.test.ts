@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { toast } from 'sonner';
 import {
   EXPIRED_MATCH_NOTICE,
@@ -6,6 +6,8 @@ import {
   describeExpiredMatch,
   formatRemaining,
   notifyExpiredMatch,
+  notifyCooldown,
+  cooldownNoticeSuppressed,
   cooldownPermitsMatch,
   UNANSWERED_COOLDOWN,
   type CooldownRemaining,
@@ -118,5 +120,90 @@ describe('notifyExpiredMatch with a cooldown running', () => {
     notifyExpiredMatch('match-1');
 
     expect(infoCalls()[0][0]).toBe(EXPIRED_MATCH_NOTICE);
+  });
+});
+
+describe('notifyCooldown', () => {
+  const HOUR = 3600_000;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(toast.info).mockClear();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const now = () => Date.now();
+
+  it('says the wait on the first visit', () => {
+    notifyCooldown(cooldown);
+
+    expect(infoCalls()).toHaveLength(1);
+    expect(infoCalls()[0][0]).toBe(COOLDOWN_RESPONSE.message);
+  });
+
+  it('stays quiet on later visits within the same wait', () => {
+    // The change: this used to be a modal that opened on every page load, for as long as the
+    // cooldown ran. Hours of the same sentence, each time with an OK to dismiss.
+    //
+    // Times and remaining waits below are kept consistent with the first announcement, which
+    // puts the end of this wait at 15:20.
+    notifyCooldown(cooldown);
+
+    vi.setSystemTime(new Date('2026-03-01T13:10:00Z'));
+    notifyCooldown(readCooldown({ ...COOLDOWN_RESPONSE, remaining_hours: 2, remaining_minutes: 10 }));
+    vi.setSystemTime(new Date('2026-03-01T14:50:00Z'));
+    notifyCooldown(readCooldown({ ...COOLDOWN_RESPONSE, remaining_hours: 0, remaining_minutes: 30 }));
+
+    expect(infoCalls()).toHaveLength(1);
+  });
+
+  it('speaks again for the next cooldown, without anything having to clear the record', () => {
+    notifyCooldown(cooldown);
+
+    // Past the wait the first notice covered.
+    vi.setSystemTime(new Date('2026-03-02T12:00:00Z'));
+    const next = readCooldown({ ...COOLDOWN_RESPONSE, message: 'Try again in 2 hours.' });
+    notifyCooldown(next);
+
+    expect(infoCalls()).toHaveLength(2);
+    expect(infoCalls()[1][0]).toBe('Try again in 2 hours.');
+  });
+
+  it('answers a heart click even after it has already said so once', () => {
+    // The click is a question the user just asked, so a click that silently does nothing reads
+    // as a broken button rather than as a wait.
+    notifyCooldown(cooldown);
+    notifyCooldown(cooldown, { force: true });
+
+    expect(infoCalls()).toHaveLength(2);
+  });
+
+  it('says nothing when there is no wait', () => {
+    notifyCooldown(null);
+
+    expect(infoCalls()).toHaveLength(0);
+  });
+
+  it('treats an unannounced wait as needing an announcement', () => {
+    expect(cooldownNoticeSuppressed(now(), cooldown)).toBe(false);
+  });
+
+  it('reports nothing to suppress when there is no wait', () => {
+    expect(cooldownNoticeSuppressed(now(), null)).toBe(true);
+  });
+
+  it('remembers the end of the wait rather than a bare flag', () => {
+    // An end time is what lets the suppression expire on its own, so the next cooldown speaks
+    // for itself without any code having to notice that the last one finished.
+    notifyCooldown(cooldown);
+
+    expect(Number(localStorage.getItem('matchmaking_cooldown_notice_until'))).toBe(
+      now() + 3 * HOUR + 20 * 60_000
+    );
   });
 });

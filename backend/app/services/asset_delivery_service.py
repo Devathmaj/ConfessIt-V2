@@ -227,19 +227,27 @@ def _may_view_love_note_asset(db: Database, user: AccountDetails, object_path: s
     - the recipient may only view a note once a moderator has approved it
     - the sender may always view the note they sent
     - staff may view any note, in any state, in order to moderate it
+    - nobody but staff may view the image of a note that has been removed for a report
+
+    That last rule is the reason this is checked here rather than only in the inbox query. A
+    delivery URL is minted when a note is listed and keeps working for its TTL, so filtering
+    the inbox would leave the image of a removed note still fetchable by anyone holding the
+    old URL -- the removal would hide the note's text and leave its picture.
     """
+    is_staff = has_capability(user.account_type, Capability.LOVE_NOTES_REVIEW)
     with db.sessions() as session:
         query = select(
             LoveNoteRecord.sender_id,
             LoveNoteRecord.recipient_id,
             LoveNoteRecord.image_url,
             LoveNoteRecord.status,
+            LoveNoteRecord.removed_at,
         )
         # Widening the query to every note is what lets a moderator inspect an image on a
         # note that is still pending, which is the point of the review screen. Keyed on the
         # capability that guards the love-note review endpoint, so the image proxy and the
         # review list grant the same people access.
-        if not has_capability(user.account_type, Capability.LOVE_NOTES_REVIEW):
+        if not is_staff:
             query = query.where(
                 or_(
                     LoveNoteRecord.sender_id == user.id,
@@ -248,11 +256,16 @@ def _may_view_love_note_asset(db: Database, user: AccountDetails, object_path: s
             )
         rows = session.execute(query).all()
 
-    for sender_id, recipient_id, image_url, status in rows:
+    for sender_id, recipient_id, image_url, status, removed_at in rows:
         is_recipient = str(recipient_id or "") == str(user.id)
         # A recipient must never see a note that has not been approved; a rejected or
         # still-pending note stays visible only to its sender and to staff.
         if is_recipient and status != "approved":
+            continue
+        # A removed note's image belongs to staff only. The sender is refused here too, not
+        # out of caution about them: the removal is a statement that the note was not theirs
+        # to send, and leaving its picture readable by its author serves nobody.
+        if removed_at is not None and not is_staff:
             continue
         if _matches_stored_asset(image_url, "love-notes", object_path):
             return True

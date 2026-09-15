@@ -6,6 +6,7 @@ database entitlement check.
 """
 
 import time
+from datetime import datetime, timezone
 
 import jwt
 import pytest
@@ -66,6 +67,7 @@ FILE_ROUTES = ["profile", "love-notes"]
 OWNER_ID = "11111111-1111-1111-1111-111111111111"
 RECIPIENT_ID = "22222222-2222-2222-2222-222222222222"
 STRANGER_ID = "33333333-3333-3333-3333-333333333333"
+REMOVED_AT = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
 
 # Ids used when a delivery token is minted for a regno whose row id does not matter to the
 # assertion -- which is most of the token-shape tests below.
@@ -236,10 +238,12 @@ def profile_db(actor_regno: str = "testuser", actor_id: str = OWNER_ID) -> _Fake
     )
 
 
-def love_note_db(status: str, actor_regno: str, actor_id: str) -> _FakeDatabase:
+def love_note_db(status: str, actor_regno: str, actor_id: str, *, removed_at=None) -> _FakeDatabase:
     return _FakeDatabase(
         users={actor_regno: make_user_row(actor_regno, actor_id)},
-        love_note_rows=[(OWNER_ID, RECIPIENT_ID, stored_url("love-notes", NOTE_PATH), status)],
+        love_note_rows=[
+            (OWNER_ID, RECIPIENT_ID, stored_url("love-notes", NOTE_PATH), status, removed_at),
+        ],
     )
 
 
@@ -479,6 +483,44 @@ def test_unrelated_note_image_not_served():
     ) is False
 
 
+@pytest.mark.parametrize("status", ["pending_review", "approved", "rejected"])
+def test_approval_cannot_resurrect_a_removed_notes_image(status):
+    """Approval is not the only question asked of a note.
+
+    ``status`` says whether the recipient may open the note; ``removed_at`` says whether anyone
+    but staff may open it. A note that was removed after it had been approved must stay closed to
+    both parties, or taking a note down would only hide its text while leaving its picture
+    readable by anyone still holding an old delivery URL.
+    """
+    db = love_note_db(status, "recipient", RECIPIENT_ID, removed_at=REMOVED_AT)
+    assert is_entitled_to_asset(
+        db, kind="love-notes", object_path=NOTE_PATH, user=user_details("recipient", RECIPIENT_ID)
+    ) is False
+
+
+def test_the_sender_is_not_allowed_to_see_a_removed_notes_image():
+    """The author loses the picture too.
+
+    The sender keeps every other entitlement unconditionally, so this is the one case where the
+    blanket sender rule has to yield -- and it does so deliberately: a removal is a statement that
+    this note was not theirs to send, and leaving its image readable by its author serves nobody.
+    """
+    db = love_note_db("approved", "sender", OWNER_ID, removed_at=REMOVED_AT)
+    assert is_entitled_to_asset(
+        db, kind="love-notes", object_path=NOTE_PATH, user=user_details("sender", OWNER_ID)
+    ) is False
+
+
+@pytest.mark.parametrize("status", ["pending_review", "approved", "rejected"])
+def test_staff_keep_access_to_a_removed_notes_image(status):
+    """Otherwise the image could not be reviewed at all, and the removal unappealable."""
+    db = love_note_db(status, "admin", STRANGER_ID, removed_at=REMOVED_AT)
+    assert is_entitled_to_asset(
+        db, kind="love-notes", object_path=NOTE_PATH,
+        user=staff_details("admin", STRANGER_ID, AccountType.ADMIN.value),
+    ) is True
+
+
 def test_unknown_kind_is_never_entitled():
     assert is_entitled_to_asset(
         profile_db(), kind="events", object_path=OWNED_PATH, user=user_details("testuser", OWNER_ID)
@@ -637,7 +679,9 @@ def test_revoking_a_note_stops_an_already_issued_token(serve):
     token = mint_asset_token(account=_REF("recipient"), kind="love-notes", object_path=NOTE_PATH)
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 200
 
-    db.love_note_rows = [(OWNER_ID, RECIPIENT_ID, stored_url("love-notes", NOTE_PATH), "rejected")]
+    db.love_note_rows = [
+        (OWNER_ID, RECIPIENT_ID, stored_url("love-notes", NOTE_PATH), "rejected", None),
+    ]
     assert client.get(f"/api/love-notes/files/{NOTE_PATH}?t={token}").status_code == 404
 
 
