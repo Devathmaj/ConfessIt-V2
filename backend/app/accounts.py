@@ -85,6 +85,7 @@ class Capability(str, Enum):
     USERS_BLOCK = "users:block"
     SESSIONS_READ = "sessions:read"
     MESSAGES_ARCHIVE = "messages:archive"
+    APP_CONFIG_READ = "app_config:read"
 
 
 # What a moderator can do: review and act on content, and read the aggregate counters that
@@ -116,6 +117,7 @@ ADMIN_ONLY_CAPABILITIES: frozenset[str] = frozenset(
         Capability.USERS_BLOCK,
         Capability.SESSIONS_READ,
         Capability.MESSAGES_ARCHIVE,
+        Capability.APP_CONFIG_READ,
     )
 )
 

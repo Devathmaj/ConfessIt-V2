@@ -54,6 +54,7 @@ SAMPLE_ROUTES = [
     ("PUT", "/admin/users/{user_id}"),
     ("GET", "/admin/stats"),
     ("GET", "/admin/stats/active-sessions"),
+    ("GET", "/admin/config"),
     ("POST", "/admin/messages/archive"),
     ("GET", "/admin/messages/archives"),
     ("GET", "/admin/messages/archives/{date}"),

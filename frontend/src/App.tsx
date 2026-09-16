@@ -23,6 +23,7 @@ import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ReportsReview } from "./pages/ReportsReview";
 import { ProfileReview } from "./pages/ProfileReview";
+import { AppConfiguration } from "./pages/AppConfiguration";
 
 const queryClient = new QueryClient();
 
@@ -203,6 +204,14 @@ const AppRoutes = () => {
         element={
           <CapabilityRoute capability={CAPABILITIES.STATS_READ}>
             <AdminDashboard />
+          </CapabilityRoute>
+        }
+      />
+      <Route
+        path="/admin/configuration"
+        element={
+          <CapabilityRoute capability={CAPABILITIES.APP_CONFIG_READ}>
+            <AppConfiguration />
           </CapabilityRoute>
         }
       />

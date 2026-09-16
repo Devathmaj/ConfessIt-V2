@@ -33,6 +33,7 @@ export const CAPABILITIES = {
   USERS_BLOCK: 'users:block',
   SESSIONS_READ: 'sessions:read',
   MESSAGES_ARCHIVE: 'messages:archive',
+  APP_CONFIG_READ: 'app_config:read',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];

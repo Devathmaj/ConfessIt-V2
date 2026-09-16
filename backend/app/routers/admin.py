@@ -428,6 +428,21 @@ async def list_active_sessions(
     }
 
 
+@router.get("/config", response_model=Dict[str, Any])
+async def read_app_configuration(
+    _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
+) -> Dict[str, Any]:
+    """Return the application's operator-settable configuration.
+
+    Deliberately empty for now. Platform settings are still environment variables read by
+    ``app.config`` at import time, so there is nothing stored to report yet; the key exists so
+    the App Configuration screen has a place to read from and to grow settings into. Declaring
+    it here is also what makes ``APP_CONFIG_READ`` a capability an admin can actually exercise
+    rather than a name with nothing behind it.
+    """
+    return {"settings": {}}
+
+
 # ----------------------
 # Message Management
 # ----------------------

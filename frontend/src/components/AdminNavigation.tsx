@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag } from "lucide-react";
+import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -19,6 +19,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true, capability: CAPABILITIES.STATS_READ },
+  { to: "/admin/configuration", label: "App Configuration", icon: Settings, capability: CAPABILITIES.APP_CONFIG_READ },
   { to: "/admin/reports", label: "Reports Review", icon: Flag, capability: CAPABILITIES.REPORTS_REVIEW },
   { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
   { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },
