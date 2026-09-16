@@ -386,10 +386,10 @@ export const deleteAdminLoveNote = async (noteId: string) => {
     return response.data;
 };
 
-export const getAdminLoveNoteReports = async (status?: string) => {
+export const getAdminLoveNoteReports = async (status?: string, limit?: number) => {
     const response = await axios.get(`${API_URL}/admin/love-notes/reports`, {
         headers: getAuthHeaders(),
-        params: status ? { status } : undefined,
+        params: { status, limit },
     });
     return response.data;
 };
@@ -429,11 +429,16 @@ export const updateAdminLoveNoteReportStatus = async (
 // nothing in common but a reason and a status. Every one of them takes the same `status`
 // filter and answers with the same { reports, total, skip, limit } envelope, so the screen can
 // treat them uniformly without the server pretending they are the same data.
+//
+// `limit` is for a caller that wants `total` and nothing else -- the moderator dashboard's
+// count cards ask for one row and read the envelope's count, rather than downloading fifty
+// reported messages to add up a number the query already returned. It is a server-side filter
+// and not a display length, so `total` still counts every matching row however few came back.
 
-export const getAdminConfessionReports = async (status?: string) => {
+export const getAdminConfessionReports = async (status?: string, limit?: number) => {
     const response = await axios.get(`${API_URL}/admin/confessions/reports`, {
         headers: getAuthHeaders(),
-        params: status ? { status } : undefined,
+        params: { status, limit },
     });
     return response.data;
 };
@@ -450,10 +455,10 @@ export const updateAdminConfessionReportStatus = async (
     return response.data;
 };
 
-export const getAdminMessageReports = async (status?: string) => {
+export const getAdminMessageReports = async (status?: string, limit?: number) => {
     const response = await axios.get(`${API_URL}/admin/messages/reports`, {
         headers: getAuthHeaders(),
-        params: status ? { status } : undefined,
+        params: { status, limit },
     });
     return response.data;
 };

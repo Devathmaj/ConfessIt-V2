@@ -79,7 +79,7 @@ def client_with_no_auth_override():
 
 
 def _seed_shared(db):
-    """One regno as a participant and as a moderator. Returns {account_type: id}."""
+    """One regno in all three tables. Returns {account_type: id}."""
     ids = {}
     with db.sessions.begin() as session:
         participant = UserRecord(
@@ -87,10 +87,12 @@ def _seed_shared(db):
             class_name="Test_Class", gender="other",
         )
         moderator = ModeratorRecord(regno=SHARED, name="Moderator", gender="other")
-        session.add_all([participant, moderator])
+        admin = AdminRecord(regno=SHARED, name="Admin", gender="other")
+        session.add_all([participant, moderator, admin])
         session.flush()
         ids[AccountType.USERS.value] = str(participant.id)
         ids[AccountType.MODERATOR.value] = str(moderator.id)
+        ids[AccountType.ADMIN.value] = str(admin.id)
     return ids
 
 
@@ -242,11 +244,11 @@ def test_a_redeemed_link_becomes_a_session_for_that_exact_account(
 def test_each_page_sends_its_account_to_its_own_landing_path(
     client_with_no_auth_override, db
 ):
-    """A moderator's link must not offer the participant dashboard as its destination."""
+    """A moderator's link must not offer the participant dashboard, or the admin console."""
     _seed_shared(db)
 
     destinations = {}
-    for account_type in (AccountType.USERS.value, AccountType.MODERATOR.value):
+    for account_type in (AccountType.USERS.value, AccountType.MODERATOR.value, AccountType.ADMIN.value):
         verified = client_with_no_auth_override.get(
             f"/auth/login/magic/verify?token={_mint_for(db, account_type)}"
         )
@@ -254,7 +256,12 @@ def test_each_page_sends_its_account_to_its_own_landing_path(
         destinations[account_type] = verified.json()["redirect_url"]
 
     assert destinations[AccountType.USERS.value] == "/dashboard"
-    assert destinations[AccountType.MODERATOR.value] == "/admin"
+    # Staff are separated from each other, not only from participants. A moderator is sent to
+    # the moderation hub, which lists the queue actions without the platform-wide figures the
+    # admin console puts on screen -- so signing in never presents an account with numbers it
+    # has no power to act on. An admin holds `stats:read` and lands on the console.
+    assert destinations[AccountType.MODERATOR.value] == "/moderation"
+    assert destinations[AccountType.ADMIN.value] == "/admin"
 
 
 def test_a_token_with_only_a_regno_is_refused_rather_than_resolved(client_with_no_auth_override, db):

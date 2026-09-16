@@ -16,8 +16,9 @@ from ..postgres import Database
 from ..config import settings
 from ..dependencies import get_db
 from ..models import AccountDetails, UserDetails
-from ..accounts import (AccountRef, AccountType, capabilities_for,
-                        is_valid_account_type, normalize_account_type)
+from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
+                        has_capability, is_valid_account_type,
+                        normalize_account_type)
 from ..logger import get_console_only_logger, get_logger
 
 logger = get_logger(__name__)
@@ -389,13 +390,24 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         expires_delta=access_token_expires
     )
 
-    # Staff land on the moderation area; participants on their dashboard. Decided by the
+# Staff land on the moderation area; participants on their dashboard. Decided by the
     # account table, via the capabilities that table grants, so a moderator is not bounced
     # to a dashboard it has no business seeing and a table added later does not have to be
     # remembered here. The client re-derives the same destination from /auth/me once it
     # loads, so this only decides what the browser shows in the moment between the redirect
     # and that first fetch.
-    redirect_url = "/admin" if capabilities_for(account_type) else "/dashboard"
+    #
+    # Both kinds of staff get a landing page and they are not the same one. An admin can read
+    # the platform census and goes to the console that shows it; a moderator cannot, and goes
+    # to the moderation hub, which counts the backlog of the queues they can rule on. Both
+    # destinations are reached through `/admin/*` except the hub, which is its own page
+    # precisely because it is not the admin's.
+    if has_capability(account_type, Capability.STATS_READ):
+        redirect_url = "/admin"
+    elif capabilities_for(account_type):
+        redirect_url = "/moderation"
+    else:
+        redirect_url = "/dashboard"
 
     return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
 

@@ -6,9 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { CAPABILITIES, Capability } from "./lib/capabilities";
+import { landingPathFor } from "./lib/landing";
 import { Login, AdminLogin, ModeratorLogin } from "./pages/Login";
 import { UserDashboard } from "./pages/UserDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
+import { ModeratorDashboard } from "./pages/ModeratorDashboard";
 import { ConfessionsPage } from "./pages/ConfessionsPage";
 import { MatchmakingPage } from "./pages/MatchmakingPage";
 import { InboxPage } from "./pages/InboxPage";
@@ -52,20 +54,6 @@ export const PublicOnlyRoute = ({ children }: { children: ReactNode }) => {
 };
 
 /**
- * Where a signed-in account belongs after signing in or hitting the root path.
- *
- * Decided by the capability list rather than by the account's table, matching the server's
- * own rule for the magic-link redirect: staff land in the moderation area, participants on
- * their dashboard. A table check here would send a moderator to /dashboard, which is a page
- * they have no use for.
- *
- * Takes the context's `can` rather than the user object so the whole app asks the
- * capabilities question the same way.
- */
-const landingPathFor = (can: (capability: Capability) => boolean) =>
-  can(CAPABILITIES.STATS_READ) ? '/admin' : '/dashboard';
-
-/**
  * Used to protect routes that require authentication.
  * It checks if the user is authenticated and redirects to the login page if not.
  * It also shows a loading indicator while the authentication status is being checked.
@@ -99,14 +87,25 @@ export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
  * account that lacks the capability back to its own landing page avoids showing a dead
  * screen or a page whose every fetch would 403.
  *
+ * `without` names a capability that disqualifies an account *even when it holds* `capability`,
+ * and it exists for exactly one route. `/moderation` is gated on `reports:review`, which an admin
+ * holds too, so the capability alone would leave the hub reachable by typing its URL -- a second
+ * staff landing page for an account that already has one, offering that admin the same queues
+ * their own console already lists. The console is where an admin lands; the hub is the other
+ * staff account's landing page and nothing more. Stating the exclusion here rather than inside
+ * the page is what keeps the nav bar and the route in agreement: both ask this one question, so
+ * the hub cannot be offered in one and refused in the other.
+ *
  * This is a convenience, not a boundary. Each of these routes re-checks the same capability
  * on the server, so bypassing this component in a console grants nothing.
  */
 export const CapabilityRoute = ({
   capability,
+  without,
   children,
 }: {
   capability: Capability;
+  without?: Capability;
   children: ReactNode;
 }) => {
   const { isAuthenticated, isLoading, can, signInPath } = useAuth();
@@ -123,7 +122,11 @@ export const CapabilityRoute = ({
     return <Navigate to={signInPath} replace />;
   }
 
-  if (!can(capability)) {
+  // Both halves of the same question, and the redirect is the same either way: an account that
+  // cannot be here goes to the page that is actually its own. For the hub that is the console
+  // for an admin, and for an anonymous account it is whichever staff page its capabilities
+  // reach, which is the destination the sign-in redirect would have chosen.
+  if (!can(capability) || (without !== undefined && can(without))) {
     return <Navigate to={landingPathFor(can)} replace />;
   }
 
@@ -198,12 +201,30 @@ const AppRoutes = () => {
       />
       
       {/* Moderation routes. Each is gated on the capability its endpoints require, so a
-          moderator sees the review screens and is refused the account-management one. */}
+          moderator sees the review screens and is refused the account-management one.
+
+          The two dashboards are separated by the same gate, which is why a moderator signing
+          in lands on `/moderation` rather than here: `stats:read` guards the console because
+          the console shows what `/admin/stats` returns, and that census of the platform is
+          admin-only. The rest of the area is unchanged -- a moderator reaches every review
+          screen below exactly as before. */}
       <Route
         path="/admin"
         element={
           <CapabilityRoute capability={CAPABILITIES.STATS_READ}>
             <AdminDashboard />
+          </CapabilityRoute>
+        }
+      />
+      <Route
+        path="/moderation"
+        element={
+          /* `without: stats:read` is what keeps this page off an admin's map. It is the other
+              staff landing page, not a second door into this one: an admin's landing page is
+              the console, which already lists every queue below, so the hub would offer them a
+              smaller version of the page they were just on. */
+          <CapabilityRoute capability={CAPABILITIES.REPORTS_REVIEW} without={CAPABILITIES.STATS_READ}>
+            <ModeratorDashboard />
           </CapabilityRoute>
         }
       />

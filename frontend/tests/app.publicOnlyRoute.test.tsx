@@ -4,7 +4,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { PublicOnlyRoute } from '@/App';
 import { AuthContext, type User } from '@/contexts/AuthContext';
-import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
+import {
+  CAPABILITIES,
+  type Capability,
+  can,
+} from '@/lib/capabilities';
 
 type AuthContextValue = ContextType<typeof AuthContext>;
 
@@ -18,11 +22,22 @@ const asUser = (overrides: Partial<User> = {}): User => ({
 });
 
 /**
- * The capability list the server would send a staff account. Only `STATS_READ` is named
- * because it is the one this guard keys on, standing in for "holds any moderation
- * capability" -- the guard asks whether the account is staff at all.
+ * What the server sends a moderator: the content queues, and nothing else. `stats:read` is
+ * deliberately absent -- it belongs to the admin table alone, which is why a moderator never
+ * sees the administration console.
  */
-const MODERATION_CAPABILITIES = [CAPABILITIES.STATS_READ, CAPABILITIES.CONFESSIONS_REVIEW];
+const MODERATION_CAPABILITIES = [
+  CAPABILITIES.CONFESSIONS_REVIEW,
+  CAPABILITIES.REPORTS_REVIEW,
+  CAPABILITIES.LOVE_NOTES_REVIEW,
+];
+
+/** What the server sends an admin: the queues plus the platform census and account lifecycle. */
+const ADMIN_CAPABILITIES = [
+  ...MODERATION_CAPABILITIES,
+  CAPABILITIES.STATS_READ,
+  CAPABILITIES.APP_CONFIG_READ,
+];
 
 const authValue = (
   user: User | null,
@@ -56,6 +71,7 @@ const renderAtLogin = (value: AuthContextValue) =>
           />
           <Route path="/dashboard" element={<div>USER DASHBOARD</div>} />
           <Route path="/admin" element={<div>ADMIN DASHBOARD</div>} />
+          <Route path="/moderation" element={<div>MODERATION DASHBOARD</div>} />
         </Routes>
       </MemoryRouter>
     </AuthContext.Provider>
@@ -73,23 +89,24 @@ describe('PublicOnlyRoute', () => {
 
   it('sends an admin to the admin dashboard rather than the user one', async () => {
     const user = asUser({ name: 'Admin', account_type: 'admin' });
-    renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
+    renderAtLogin(authValue(user, true, ADMIN_CAPABILITIES));
 
     await waitFor(() => {
       expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();
     });
   });
 
-  it('sends a moderator to the admin dashboard too', async () => {
-    // The destination is decided by the capability list, not by the account's table, so a
-    // moderator lands in the moderation area instead of a participant dashboard they have
-    // no use for. A table check would send them to /dashboard.
+  it('sends a moderator to the moderation dashboard, not the admin one', async () => {
+    // Staff are separated from each other, not only from participants. The admin dashboard is
+    // where the platform counters live, which is `stats:read`, and a moderator does not hold
+    // it -- so signing in must not put those figures in front of one.
     const user = asUser({ name: 'Mod', account_type: 'moderator' });
     renderAtLogin(authValue(user, true, MODERATION_CAPABILITIES));
 
     await waitFor(() => {
-      expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();
+      expect(screen.getByText('MODERATION DASHBOARD')).toBeInTheDocument();
     });
+    expect(screen.queryByText('ADMIN DASHBOARD')).not.toBeInTheDocument();
   });
 
   it('does not treat the account table as a grant', async () => {
@@ -101,6 +118,19 @@ describe('PublicOnlyRoute', () => {
 
     await waitFor(() => {
       expect(screen.getByText('USER DASHBOARD')).toBeInTheDocument();
+    });
+  });
+
+  it('does not treat a moderator account as a reason to see the admin dashboard', async () => {
+    // The mirror of the test above, and the reason this can be checked either way round: the
+    // destination follows the capability list, so a row in the `moderator` table that somehow
+    // carried `stats:read` would land on the console, and a row in the `admin` table without it
+    // would not. The table alone decides nothing.
+    const user = asUser({ name: 'Mod', account_type: 'moderator' });
+    renderAtLogin(authValue(user, true, [CAPABILITIES.STATS_READ]));
+
+    await waitFor(() => {
+      expect(screen.getByText('ADMIN DASHBOARD')).toBeInTheDocument();
     });
   });
 

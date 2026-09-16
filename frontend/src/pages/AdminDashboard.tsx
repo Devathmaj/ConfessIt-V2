@@ -152,11 +152,11 @@ export const AdminDashboard = () => {
   const [activeSessions, setActiveSessions] = useState<ActiveSessionRecord[]>([]);
   const [activeSessionsLoading, setActiveSessionsLoading] = useState(false);
 
-  // The counters on this page are readable by any moderator. The list behind the Active
-  // Sessions card exposes each account's IP and device, so it stays admin-only. The card
-  // still shows its count to everyone -- that number comes from /admin/stats, which a
-  // moderator can read -- but only becomes clickable for an account that could open the
-  // list, so the affordance matches what the server would allow.
+  // Every card below reads `/admin/stats`, which is `stats:read` -- so this page is only ever
+  // mounted for an admin, and a moderator's landing page is the moderation hub instead. The
+  // Active Sessions card re-checks separately because it is a different capability
+  // (`sessions:read`), and the check is here rather than only on the route so the affordance
+  // matches what the server would allow.
   const canReadSessions = can(CAPABILITIES.SESSIONS_READ);
 
   useEffect(() => {

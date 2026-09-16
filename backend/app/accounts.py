@@ -76,9 +76,9 @@ class Capability(str, Enum):
     LOVE_NOTES_DELETE = "love_notes:delete"
     REPORTS_REVIEW = "reports:review"
     REPORTS_MODERATE = "reports:moderate"
-    STATS_READ = "stats:read"
 
     # --- account and platform administration (admin only) ---
+    STATS_READ = "stats:read"
     USERS_REVIEW = "users:review"
     USERS_CREATE = "users:create"
     USERS_UPDATE = "users:update"
@@ -88,9 +88,10 @@ class Capability(str, Enum):
     APP_CONFIG_READ = "app_config:read"
 
 
-# What a moderator can do: review and act on content, and read the aggregate counters that
-# describe it. Nothing here can create, edit, block, or mint an account, see a session, or
-# touch the message archive.
+# What a moderator can do: read every content queue and act on what is in it. Nothing here can
+# count the platform, create, edit, block, or mint an account, see a session, or touch the
+# message archive -- the moderator dashboard this backs measures its own backlog, from the
+# queue endpoints below, rather than counting the platform behind them.
 MODERATION_CAPABILITIES: frozenset[str] = frozenset(
     capability.value
     for capability in (
@@ -101,16 +102,23 @@ MODERATION_CAPABILITIES: frozenset[str] = frozenset(
         Capability.LOVE_NOTES_DELETE,
         Capability.REPORTS_REVIEW,
         Capability.REPORTS_MODERATE,
-        Capability.STATS_READ,
     )
 )
 
 # What only an admin can do. Account lifecycle sits here because it is the capability from
 # which privilege grows: anything that can create an ``admin`` row can mint an account that
 # holds every other capability on this list.
+#
+# ``stats:read`` sits here rather than with the moderation set because what it returns is a
+# census of the platform -- how many accounts exist, how many are blocked, who is signed in --
+# and not a measure of a queue. A moderator is sent to the moderation dashboard, which shows
+# the backlog of the queues they can rule on: a number they can act on, read from the queue
+# endpoints. Keeping this one open to them would hand over a figure that describes nothing they
+# are able to change.
 ADMIN_ONLY_CAPABILITIES: frozenset[str] = frozenset(
     capability.value
     for capability in (
+        Capability.STATS_READ,
         Capability.USERS_REVIEW,
         Capability.USERS_CREATE,
         Capability.USERS_UPDATE,
