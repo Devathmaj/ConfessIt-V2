@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +26,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
-import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, Plus } from 'lucide-react';
+import {
+  Crown,
+  Mail,
+  Plus,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldHalf,
+  ShieldX,
+  User,
+  Users,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AccountType } from '@/lib/capabilities';
 
@@ -51,6 +63,33 @@ const REPORT_KIND_LABELS: Record<ReportKind, string> = {
 };
 
 const REPORT_KIND_ORDER: ReportKind[] = ['confession', 'love_note', 'message'];
+
+/**
+ * How many upheld removals a participant has to accumulate before they are worth an operator's
+ * attention, which is what separates the two participant sections on this screen.
+ *
+ * Summing across the three kinds is deliberate and is the whole point of the threshold: a
+ * participant can be a handful of times over the line on one kind of content, and a person
+ * removed for three confessions and two love notes is a different picture from someone who was
+ * reported twenty times and cleared every one of them. Only `removals` counts towards it.
+ * `reports` measures how often people complained, which a dismissed complaint inflates just as
+ * much as an upheld one, so a participant who was reported six times and cleared six times stays
+ * in the ordinary section.
+ *
+ * Strictly more than this number, so the boundary case (exactly 5) reads as ordinary. Exported
+ * because a threshold that lives in two places would be a threshold that eventually disagrees
+ * with itself.
+ */
+export const FLAGGED_REMOVAL_THRESHOLD = 5;
+
+/**
+ * The id of the section holding participants above that threshold.
+ *
+ * Named rather than written as an index because the header line reads its count from here: a
+ * section inserted between the flagged group and the participants would silently change what
+ * `sections[2]` means, and the header would report the wrong number.
+ */
+const FLAGGED_SECTION_ID = 'flagged';
 
 interface AdminUserProfile {
   id: string;
@@ -139,6 +178,205 @@ const makeInitials = (name?: string | null) => {
     .join('');
 };
 
+/**
+ * Whether this row is a staff account.
+ *
+ * Derived from the table the row came from, the same way the rest of this app distinguishes
+ * accounts: there is no role column, so `account_type` is the only thing that says what kind of
+ * account a row is. Anything the server did not label as admin or moderator is treated as a
+ * participant, because the alternative -- dropping an unrecognised value -- would silently hide
+ * an account from the only screen an operator uses to find it.
+ */
+const isStaffAccount = (profile: AdminUserProfile) =>
+  profile.account_type === 'admin' || profile.account_type === 'moderator';
+
+/**
+ * Every upheld removal against this participant's content, across all three kinds.
+ *
+ * A confession and a comment on one already share a kind on the server, so summing the three
+ * counters counts each piece of taken-down content once. Reads zero for a staff row, which has
+ * no reportable content at all -- see `isStaffAccount` for why the tally is omitted rather than
+ * sent as zeros.
+ */
+const totalRemovalsFor = (profile: AdminUserProfile) =>
+  REPORT_KIND_ORDER.reduce(
+    (sum, kind) => sum + (profile.report_history?.[kind]?.removals ?? 0),
+    0,
+  );
+
+interface ProfileSection {
+  id: string;
+  title: string;
+  /** What an operator should understand about who belongs here. */
+  description: string;
+  /** Said instead of a grid when the section is empty, so an empty list still explains itself. */
+  emptyNote: string;
+  icon: LucideIcon;
+  badgeVariant: 'default' | 'secondary' | 'outline' | 'destructive';
+  accounts: AdminUserProfile[];
+}
+
+/**
+ * One account as a card.
+ *
+ * The grid is the point: a page of full-width rows makes an operator scroll a long way to compare
+ * two people, and the comparison is what this screen exists for. A card carries the same facts as
+ * the row it replaces, laid out to be read as one unit.
+ *
+ * The upper block opens the editor and is the only part that is clickable; the block button sits
+ * below it in the card footer so pressing it cannot also open the dialog. Keyboard activation is
+ * handled explicitly rather than left to a native button, because the clickable area is a `div`
+ * holding an `Avatar`, a tally and a button-adjacent footer.
+ */
+const ProfileCard = ({
+  profile,
+  blocked,
+  busy,
+  flagged,
+  onOpen,
+  onToggleBlock,
+}: {
+  profile: AdminUserProfile;
+  blocked: boolean;
+  busy: boolean;
+  /** Above `FLAGGED_REMOVAL_THRESHOLD` upheld removals, which is what put them in that section. */
+  flagged: boolean;
+  onOpen: (profile: AdminUserProfile) => void;
+  onToggleBlock: (profile: AdminUserProfile) => void;
+}) => {
+  // Staff accounts have no reportable content, so the tally is absent on their rows rather than
+  // present-and-zero. Three rows of zeros would read as a clean record rather than as a field
+  // that does not apply to them.
+  const isParticipant = !isStaffAccount(profile);
+  const totalRemovals = totalRemovalsFor(profile);
+
+  return (
+    <Card className="flex flex-col overflow-hidden transition hover:border-primary/40 hover:shadow-md">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(profile)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onOpen(profile);
+          }
+        }}
+        aria-label={`View profile for ${profile.name ?? 'user'}`}
+        className="flex cursor-pointer flex-col gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        <div className="flex items-start gap-3">
+          <Avatar className="h-11 w-11 shrink-0">
+            <AvatarFallback>{makeInitials(profile.name)}</AvatarFallback>
+          </Avatar>
+          <div className="grid min-w-0 flex-1 gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-semibold">{profile.name ?? 'Unknown user'}</span>
+              {blocked && <Badge variant="destructive">Blocked</Badge>}
+              {/* The section this card is in already says the count is above the line; this
+                  says the same thing on the card itself, so a card still reads correctly once
+                  it has been scrolled away from its heading. */}
+              {flagged && <Badge variant="outline">Repeated removals</Badge>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              {profile.regno && (
+                <span className="flex items-center gap-1">
+                  <User className="h-3 w-3 shrink-0" />
+                  {profile.regno}
+                </span>
+              )}
+              {profile.class_name && <Badge variant="outline">{profile.class_name}</Badge>}
+            </div>
+            {profile.email && (
+              <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                <Mail className="h-3 w-3 shrink-0" />
+                <span className="truncate">{profile.email}</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {isParticipant && (
+          <div className="space-y-1 rounded-md border border-border/60 bg-muted/20 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-foreground">Report history</span>
+              {totalRemovals > 0 && (
+                <Badge variant="destructive">{totalRemovals} removed</Badge>
+              )}
+            </div>
+            {REPORT_KIND_ORDER.map((kind) => {
+              const tally = profile.report_history?.[kind];
+              return (
+                <div key={kind} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-muted-foreground">{REPORT_KIND_LABELS[kind]}</span>
+                  <span className="font-mono tabular-nums">
+                    {/* Removals first and in the foreground: it is the number a decision should
+                        be based on, and `reports` beside it is the number of complaints that
+                        survived scrutiny. Each figure is its own element so the pair reads as two
+                        facts rather than one string. */}
+                    <span
+                      className={
+                        (tally?.removals ?? 0) > 0 ? 'font-semibold text-destructive' : undefined
+                      }
+                    >
+                      {tally?.removals ?? 0}
+                    </span>
+                    <span className="text-muted-foreground">removed</span>
+                    <span aria-hidden="true" className="px-1 text-muted-foreground">
+                      /
+                    </span>
+                    <span className="text-muted-foreground">{tally?.reports ?? 0} reported</span>
+                  </span>
+                </div>
+              );
+            })}
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Removals are the authoritative count: reports includes complaints a moderator
+              dismissed as unfounded.
+            </p>
+          </div>
+        )}
+
+        <div className="grid gap-0.5 text-[11px] text-muted-foreground">
+          <span>Last login: {formatDate(profile.last_login_at)}</span>
+          {profile.last_login_ip && <span>Last IP: {profile.last_login_ip}</span>}
+        </div>
+      </div>
+
+      <div className="mt-auto flex flex-col gap-2 border-t border-border p-3">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          className={
+            blocked
+              ? 'border-green-500 text-green-500 hover:bg-green-500 hover:text-white'
+              : 'border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground'
+          }
+          onClick={() => onToggleBlock(profile)}
+        >
+          {blocked ? (
+            <>
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Unblock user
+            </>
+          ) : (
+            <>
+              <ShieldX className="mr-2 h-4 w-4" />
+              Block user
+            </>
+          )}
+        </Button>
+        <div className="text-[11px] text-muted-foreground">
+          Matchmaking: {profile.matchmaking_enabled ? 'Enabled' : 'Disabled'} · Notifications:{' '}
+          {profile.notifications_enabled ? 'On' : 'Off'} · Love notes receive:{' '}
+          {profile.love_notes_receive_enabled ? 'On' : 'Off'}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 export const ProfileReview = () => {
   const buildDefaultCreateForm = (): CreateUserForm => ({
     regno: '',
@@ -203,6 +441,79 @@ export const ProfileReview = () => {
       return haystack.includes(query);
     });
   }, [profiles, searchTerm]);
+
+  /**
+   * The four groups this screen shows, in the order an operator should meet them.
+   *
+   * The order is a reading order rather than an alphabetical accident. Admins first because a
+   * staff account with the wrong privileges is the most consequential mistake on the page, and
+   * moderators next because they are the accounts that actually do the reviewing. Participants
+   * come last, split by the one thing that separates a routine account from one that needs a
+   * decision: how much of their content has actually been taken down.
+   *
+   * Every row lands in exactly one section. The two staff sections name a table, so they cannot
+   * overlap; the two participant sections are complements of the same predicate, so a participant
+   * is in one or the other and never both.
+   *
+   * Within the flagged section, most removals first: that is the order in which a moderator
+   * should work through them. The other sections keep the server's ordering, which is by name.
+   */
+  const sections = useMemo<ProfileSection[]>(() => {
+    const admins = filteredProfiles.filter((profile) => profile.account_type === 'admin');
+    const moderators = filteredProfiles.filter((profile) => profile.account_type === 'moderator');
+    const participants = filteredProfiles.filter((profile) => !isStaffAccount(profile));
+    const flagged = participants
+      .filter((profile) => totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD)
+      .sort((a, b) => totalRemovalsFor(b) - totalRemovalsFor(a));
+    const ordinary = participants.filter(
+      (profile) => totalRemovalsFor(profile) <= FLAGGED_REMOVAL_THRESHOLD,
+    );
+
+    return [
+      {
+        id: 'admins',
+        title: 'Admins',
+        description:
+          'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page.',
+        emptyNote: 'No admin accounts exist yet.',
+        icon: Crown,
+        badgeVariant: 'default',
+        accounts: admins,
+      },
+      {
+        id: 'moderators',
+        title: 'Moderators',
+        description:
+          'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own.',
+        emptyNote: 'No moderator accounts exist yet.',
+        icon: ShieldHalf,
+        badgeVariant: 'secondary',
+        accounts: moderators,
+      },
+      {
+        id: FLAGGED_SECTION_ID,
+        title: `Participants with more than ${FLAGGED_REMOVAL_THRESHOLD} removals`,
+        description: `Participants whose content has been taken down more than ${FLAGGED_REMOVAL_THRESHOLD} times in total, counting confessions and their comments together, love notes and chat messages. Complaints that were dismissed do not count towards this.`,
+        emptyNote: `No participant is above ${FLAGGED_REMOVAL_THRESHOLD} upheld removals.`,
+        icon: ShieldAlert,
+        badgeVariant: 'destructive',
+        accounts: flagged,
+      },
+      {
+        id: 'participants',
+        title: 'Participants',
+        description:
+          'Everyone else on the platform, at or below the removal threshold. Blocked accounts stay here unless removals put them in the section above.',
+        emptyNote: 'No participants match.',
+        icon: Users,
+        badgeVariant: 'outline',
+        accounts: ordinary,
+      },
+    ];
+  }, [filteredProfiles]);
+
+  const flaggedCount =
+    sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0;
 
   const toggleBlock = async (profile: AdminUserProfile) => {
     if (!profile.id) return;
@@ -406,14 +717,16 @@ export const ProfileReview = () => {
     <div className="relative min-h-screen bg-background">
       <AdminNavigation />
 
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pb-16 pt-28">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 pb-16 pt-28">
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold">Profile Review</h1>
           <p className="text-sm text-muted-foreground">
-            Inspect every user account and block harmful profiles instantly.
+            Every account on the platform, grouped by who it is and by how much of its content has
+            been taken down. Click a card to edit an account, or block one to suspend it instantly.
           </p>
           <p className="text-xs text-muted-foreground/80">
-            Total users: {profiles.length} · Blocked: {profiles.filter((p) => p.is_blocked).length}
+            Total users: {profiles.length} · Blocked: {profiles.filter((p) => p.is_blocked).length} ·
+            Over {FLAGGED_REMOVAL_THRESHOLD} removals: {flaggedCount}
           </p>
         </header>
 
@@ -429,7 +742,7 @@ export const ProfileReview = () => {
           </div>
           <div className="flex items-center gap-3">
             <Badge variant="secondary" className="w-max gap-2">
-              <UsersRound className="h-4 w-4" />
+              <Users className="h-4 w-4" />
               Showing {filteredProfiles.length} profiles
             </Badge>
             <Button size="sm" onClick={openCreateDialog}>
@@ -439,198 +752,75 @@ export const ProfileReview = () => {
           </div>
         </div>
 
-        <Card className="border border-border">
-          <CardHeader className="flex flex-col gap-1">
-            <CardTitle className="text-lg">Profiles</CardTitle>
-            <CardDescription>
-              Click block to immediately suspend access. Unblock to restore their account.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-[70vh]">
-              <div className="divide-y divide-border">
-                {loading ? (
-                  <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-                    Loading user profiles...
-                  </div>
-                ) : filteredProfiles.length === 0 ? (
-                  <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-                    No profiles match your search.
-                  </div>
-                ) : (
-                  filteredProfiles.map((profile) => {
-                    const blocked = Boolean(profile.is_blocked);
-                    // Staff accounts have no reportable content, so the tally is absent on
-                    // their rows rather than present-and-zero. Derived from the table the row
-                    // came from, the same way the rest of this app distinguishes accounts.
-                    const isParticipant = profile.account_type === 'users';
-                    const totalRemovals = isParticipant
-                      ? REPORT_KIND_ORDER.reduce(
-                          (sum, kind) => sum + (profile.report_history?.[kind]?.removals ?? 0),
-                          0,
-                        )
-                      : 0;
-                    return (
-                      <div
-                        key={profile.id}
-                        className="flex flex-col gap-4 px-4 py-4 md:flex-row md:items-center md:justify-between"
+        {loading ? (
+          <Card>
+            <CardContent className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+              Loading user profiles...
+            </CardContent>
+          </Card>
+        ) : filteredProfiles.length === 0 ? (
+          /* One message for the whole page rather than four empty sections. When a search matches
+             nothing, four headings over empty grids is four false impressions that the platform
+             has no admins, no moderators and no participants. */
+          <Card>
+            <CardHeader className="flex flex-col gap-1">
+              <CardTitle className="text-lg">No accounts match</CardTitle>
+              <CardDescription>
+                No account matches this search. Clear the search to see every group again.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          sections.map((section) => {
+            const Icon = section.icon;
+            const accountCount = section.accounts.length;
+            return (
+              <section key={section.id} aria-labelledby={`profile-section-${section.id}`}>
+                <Card>
+                  <CardHeader className="gap-2 pb-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <CardTitle
+                        id={`profile-section-${section.id}`}
+                        className="flex items-center gap-2 text-lg"
                       >
-                        <div className="flex flex-1 flex-col gap-2">
-                          <div
-                            className="flex cursor-pointer items-start gap-4 rounded-xl border border-transparent p-2 transition hover:border-border hover:bg-muted/30"
-                            onClick={() => openProfileEditor(profile)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                openProfileEditor(profile);
-                              }
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`View profile for ${profile.name ?? 'user'}`}
-                          >
-                            <Avatar className="h-12 w-12">
-                              <AvatarFallback>{makeInitials(profile.name)}</AvatarFallback>
-                            </Avatar>
-                            <div className="grid gap-1 text-sm">
-                              <div className="flex flex-wrap items-center gap-2 text-base font-semibold">
-                                <span>{profile.name ?? 'Unknown user'}</span>
-                                {profile.account_type && profile.account_type !== 'users' && (
-                                  // Only staff is badged. A participant badge on every row of a
-                                  // hundred would be noise, and the one thing an operator needs
-                                  // to see at a glance is which rows are not participants.
-                                  <Badge variant={profile.account_type === 'admin' ? 'default' : 'secondary'}>
-                                    {ACCOUNT_TYPE_LABELS[profile.account_type as AccountType] ??
-                                      profile.account_type}
-                                  </Badge>
-                                )}
-                                {blocked && <Badge variant="destructive">Blocked</Badge>}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                                {profile.regno && (
-                                  <span className="flex items-center gap-1">
-                                    <User className="h-3 w-3" />
-                                    {profile.regno}
-                                  </span>
-                                )}
-                                {profile.class_name && (
-                                  <span className="flex items-center gap-1">
-                                    <Badge variant="outline">{profile.class_name}</Badge>
-                                  </span>
-                                )}
-                                {profile.email && (
-                                  <span className="flex items-center gap-1">
-                                    <Mail className="h-3 w-3" />
-                                    {profile.email}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="grid gap-1 text-xs text-muted-foreground">
-                                {/* Only participants have reportable content, so a staff row
-                                    renders nothing here rather than three rows of zeros that
-                                    would read as a clean record. */}
-                                {isParticipant && (
-                                  <div className="mt-1 space-y-1 rounded-md border p-2">
-                                    <div className="flex items-center justify-between">
-                                      <span className="font-medium text-foreground">
-                                        Report history
-                                      </span>
-                                      {totalRemovals > 0 && (
-                                        <Badge variant="destructive">
-                                          {totalRemovals} removed
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    {REPORT_KIND_ORDER.map((kind) => {
-                                      const tally = profile.report_history?.[kind];
-                                      return (
-                                        <div
-                                          key={kind}
-                                          className="flex items-center justify-between gap-2"
-                                        >
-                                          <span>{REPORT_KIND_LABELS[kind]}</span>
-                                          <span className="font-mono tabular-nums">
-                                            {/* Removals first and in the foreground: it is the
-                                                number a decision should be based on, and
-                                                `reports` beside it is the number of complaints
-                                                that survived scrutiny. Each figure is its own
-                                                element so the pair reads as two facts rather
-                                                than one string. */}
-                                            <span
-                                              className={
-                                                (tally?.removals ?? 0) > 0
-                                                  ? 'font-semibold text-destructive'
-                                                  : ''
-                                              }
-                                            >
-                                              {tally?.removals ?? 0}
-                                            </span>
-                                            <span className="text-muted-foreground">
-                                              removed
-                                            </span>
-                                            <span
-                                              aria-hidden="true"
-                                              className="px-1 text-muted-foreground"
-                                            >
-                                              /
-                                            </span>
-                                            <span className="text-muted-foreground">
-                                              {tally?.reports ?? 0} reported
-                                            </span>
-                                          </span>
-                                        </div>
-                                      );
-                                    })}
-                                    <p className="text-[11px] leading-snug text-muted-foreground">
-                                      Removals are the authoritative count: reports includes
-                                      complaints a moderator dismissed as unfounded.
-                                    </p>
-                                  </div>
-                                )}
-                                <span>Last login: {formatDate(profile.last_login_at)}</span>
-                                {profile.last_login_ip && <span>Last IP: {profile.last_login_ip}</span>}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex w-full flex-col gap-2 md:w-auto">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={blocking === profile.id}
-                            className={
-                              blocked
-                                ? 'border-green-500 text-green-500 hover:bg-green-500 hover:text-white'
-                                : 'border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground'
-                            }
-                            onClick={() => toggleBlock(profile)}
-                          >
-                            {blocked ? (
-                              <>
-                                <ShieldCheck className="mr-2 h-4 w-4" />
-                                Unblock user
-                              </>
-                            ) : (
-                              <>
-                                <ShieldX className="mr-2 h-4 w-4" />
-                                Block user
-                              </>
-                            )}
-                          </Button>
-                          <div className="text-xs text-muted-foreground">
-                            Matchmaking: {profile.matchmaking_enabled ? 'Enabled' : 'Disabled'} · Notifications:{' '}
-                            {profile.notifications_enabled ? 'On' : 'Off'} · Love notes receive:{' '}
-                            {profile.love_notes_receive_enabled ? 'On' : 'Off'}
-                          </div>
-                        </div>
+                        <Icon className="h-4 w-4" />
+                        {section.title}
+                      </CardTitle>
+                      <Badge variant={section.badgeVariant}>
+                        {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
+                      </Badge>
+                    </div>
+                    <CardDescription>{section.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {accountCount === 0 ? (
+                      /* Said in words rather than left blank. An operator who expected a moderator
+                         to be on this screen needs to see that the group was checked and is empty,
+                         which an empty grid does not tell them. */
+                      <p className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
+                        {section.emptyNote}
+                      </p>
+                    ) : (
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        {section.accounts.map((profile) => (
+                          <ProfileCard
+                            key={profile.id}
+                            profile={profile}
+                            blocked={Boolean(profile.is_blocked)}
+                            busy={blocking === profile.id}
+                            flagged={section.id === FLAGGED_SECTION_ID}
+                            onOpen={openProfileEditor}
+                            onToggleBlock={toggleBlock}
+                          />
+                        ))}
                       </div>
-                    );
-                  })
-                )}
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
+                    )}
+                  </CardContent>
+                </Card>
+              </section>
+            );
+          })
+        )}
       </div>
 
       <Dialog
