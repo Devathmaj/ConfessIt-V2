@@ -262,14 +262,21 @@ async def update_love_note_status_service(
             sender_name = "Someone" if love_note.anonymous else (
                 sender.name if sender else "Someone"
             )
+            # The one notification here with a target. This notice is written at the exact
+            # moment the note becomes readable in the recipient's inbox and nowhere else --
+            # the inbox lists approved notes and nothing else -- so pointing at the note id is
+            # the difference between a reader who has to go looking and one who lands on it.
             create_notification_service(
                 recipient_regno=recipient.regno,
                 heading="💌 You received a Love Note!",
                 body=f"{sender_name} sent you a love note! Go to Love Notes → Inbox to view it.",
-                db=db
+                db=db,
+                target_kind="love_note",
+                target_id=str(love_note.id),
             )
         
-        # Notify sender that their love note was accepted
+        # Notify sender that their love note was accepted. No target: a sender has no list of
+        # notes they have sent to open, so there is nowhere on any page for this to land.
         if sender:
             create_notification_service(
                 recipient_regno=sender.regno,
@@ -279,7 +286,8 @@ async def update_love_note_status_service(
             )
     
     elif status_value == "rejected":
-        # Notify sender that their love note was rejected
+        # Notify sender that their love note was rejected. No target for the same reason as
+        # the delivered notice above.
         if sender:
             create_notification_service(
                 recipient_regno=sender.regno,

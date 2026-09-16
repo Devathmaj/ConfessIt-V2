@@ -192,16 +192,21 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         requested_at = datetime.now(timezone.utc)
         _save_conversation(db, conversation.id, status="requested", requested_at=requested_at)
         
-        # 8. Create notification for the receiver
+# 8. Create notification for the receiver
         from ..services.notification_service import create_notification_service
         receiver_user_doc = _get_user_by_regno(db, conversation.receiver_regno)
         if receiver_user_doc:
             receiver_user = UserDetails(**receiver_user_doc)
+            # The target is the match, not the conversation. Every conversation route in the
+            # API is keyed by match -- there is at most one conversation per match -- so the
+            # match id is the one the client needs to reach the thing being announced.
             create_notification_service(
                 recipient_regno=conversation.receiver_regno,
                 heading=f"Message request from {current_user.name}",
                 body=f"{current_user.name} wants to start a conversation with you!",
-                db=db
+                db=db,
+                target_kind="conversation",
+                target_id=match_id,
             )
         
         logger.info(f"Conversation request sent from {current_user.regno} to {conversation.receiver_regno} for match {match_id}")
@@ -345,7 +350,9 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
                 recipient_regno=conversation.initiator_regno,
                 heading=f"{current_user.name} accepted your message request",
                 body=f"{current_user.name} accepted your message request. You can now start chatting!",
-                db=db
+                db=db,
+                target_kind="conversation",
+                target_id=match_id,
             )
         
         logger.info(f"Conversation {conversation.id} accepted by {current_user.regno}")
@@ -423,7 +430,9 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
                 recipient_regno=conversation.initiator_regno,
                 heading=f"{current_user.name} rejected your message request",
                 body=f"{current_user.name} rejected your message request.",
-                db=db
+                db=db,
+                target_kind="conversation",
+                target_id=match_id,
             )
         
         logger.info(f"Conversation {conversation.id} rejected by {current_user.regno}")

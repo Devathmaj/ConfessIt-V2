@@ -1,6 +1,7 @@
 // src/pages/LoveNotesPage.tsx
 
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,7 +90,8 @@ const availableFontStyles = ['normal', 'bold', 'italic'];
 const MAX_NOTE_IMAGE_BYTES = 2 * 1024 * 1024;
 
 export const LoveNotesPage = () => {
-    const { user, fetchAndSetUser, token } = useAuth();
+const { user, fetchAndSetUser, token } = useAuth();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [activeTab, setActiveTab] = useState<'create' | 'inbox'>('create');
     const [templates, setTemplates] = useState<Template[]>([]);
     const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
@@ -173,6 +175,51 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
             fetchReceivedNotes();
         }
     }, [activeTab, receivedNotes.length]);
+
+    // A notification about a received love note arrives here as
+    // /love-notes?tab=inbox&note=<note_id>. The reader clicked it to read the note, so
+    // both params are honoured: switch to the inbox tab, because the note is only visible
+    // there, and open it once the list has loaded.
+    //
+    // The open is keyed off `receivedNotes` rather than done inside the fetch above, so it
+    // works whether the list was already loaded from a previous visit or arrives now. If the
+    // id is not in the list -- the note was taken down since the notification was written --
+    // nothing opens and the list renders as usual, which is the honest outcome.
+    useEffect(() => {
+        const noteId = searchParams.get('note');
+        if (!noteId) return;
+
+        // `tab=inbox` is implied by a note id -- the note lives nowhere else -- so it is
+        // honoured whether or not the notification happened to include it.
+        if (searchParams.get('tab') !== 'inbox') {
+            const next = new URLSearchParams(searchParams);
+            next.set('tab', 'inbox');
+            setSearchParams(next, { replace: true });
+        }
+        setActiveTab('inbox');
+
+        // Both are cleared together, once the note has actually been opened. Clearing the
+        // params before the fetch resolves would reopen it on any later re-render of the
+        // list; clearing them after means closing the image does not close the tab.
+        if (loadingNotes || receivedNotes.length === 0) return;
+        const note = receivedNotes.find((n) => n.id === noteId);
+        if (!note) return;
+
+        setViewingImageUrl(note.image_url);
+
+        const next = new URLSearchParams(searchParams);
+        next.delete('note');
+        next.delete('tab');
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams, loadingNotes, receivedNotes]);
+
+    // Used to open the tab named by ?tab= on a plain link with no note id, e.g. a plain
+    // "go to my inbox" link. Only applied when it is a tab this page actually has, so a
+    // typo in a link cannot leave the page showing a tab that does not exist.
+    useEffect(() => {
+        if (searchParams.get('note')) return;
+        if (searchParams.get('tab') === 'inbox') setActiveTab('inbox');
+    }, [searchParams]);
 
     // Used to draw the content on the canvas
     useEffect(() => {

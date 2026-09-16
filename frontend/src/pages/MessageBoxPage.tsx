@@ -1,6 +1,7 @@
 // src/pages/MessageBoxPage.tsx
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { parseTimestamp, resolveProfilePictureUrl, timestampMs } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -117,6 +118,7 @@ export const matchesConversationFilter = (
 };
 
 export const MessageBoxPage = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [conversations, setConversations] = useState<ConversationData[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedConversation, setSelectedConversation] = useState<ConversationData | null>(null);
@@ -167,21 +169,54 @@ export const MessageBoxPage = () => {
     }
   };
 
-  // Opens the conversation dialog for a selected conversation.
-  const handleOpenConversation = async (conversation: ConversationData) => {
-    try {
-      const response = await getConversationByMatch(conversation.match.id);
+  // A notification about a conversation arrives here as /inbox?match=<match_id>, and the
+  // reader expects the thread to be open when they land -- the whole point of the click was
+  // to avoid hunting for it. Opened off the match id rather than off the loaded list, because
+  // the conversation that needs opening is often one the default view is not showing: a
+  // rejected or terminated thread, or a request still pending.
+  //
+  // The param is cleared once it has been acted on, before the fetch resolves, so that
+  // closing the dialog does not immediately reopen it and a reload does not land on a stale
+  // thread from an old link. `handledMatchRef` covers the reload case for the same reason.
+  const handledMatchRef = useRef<string | null>(null);
+  useEffect(() => {
+    const matchId = searchParams.get('match');
+    if (!matchId || handledMatchRef.current === matchId) return;
+    handledMatchRef.current = matchId;
 
+    // Drop the param without touching the rest of the query, so clearing one does not
+    // disturb any other deep link that arrived on the same navigation.
+    const next = new URLSearchParams(searchParams);
+    next.delete('match');
+    setSearchParams(next, { replace: true });
+
+    openConversationByMatchId(matchId);
+  }, [searchParams, setSearchParams]);
+
+  // Fetches and opens the thread for a match id, reporting rather than throwing when it
+  // cannot be opened -- a notification can outlive the thing it points at (an expired match
+  // with no conversation row, a thread the reader is no longer part of), and a dead link
+  // should say so rather than throw.
+  const openConversationByMatchId = async (matchId: string) => {
+    try {
+      const response = await getConversationByMatch(matchId);
       if (response.status === 'success') {
         setSelectedConversation(response as ConversationData);
         setShowConversationDialog(true);
       } else {
-        toast.error('Failed to load conversation');
+        toast.error('That conversation is no longer available');
       }
     } catch (error) {
       console.error('Failed to fetch conversation:', error);
-      toast.error('Failed to load conversation');
+      toast.error('That conversation is no longer available');
     }
+  };
+
+  // Opens the conversation dialog for a selected conversation. Same path as the deep link
+  // takes, so a click on a row and a click on the notification that announced it open the
+  // thread identically rather than by two slightly different routes.
+  const handleOpenConversation = async (conversation: ConversationData) => {
+    await openConversationByMatchId(conversation.match.id);
   };
 
   // Constructs the full URL for a user's profile picture.

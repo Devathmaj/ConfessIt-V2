@@ -156,6 +156,18 @@ _REPORTER_DISMISSED_BODY = (
     "violate our community policies, so it was not removed."
 )
 
+# None of the four helpers below writes a navigation target, and that is the design rather than
+# an omission. Each of these notices is about something the reader can no longer open: the
+# content a removal speaks for has already stopped being visible to its author, and a report is
+# only ever visible on the staff review queue, which a participant cannot reach and which would
+# tell them nothing they were not already told in the body. A target on any of them would send
+# the reader to a page that cannot answer the notification -- so the removal notices land on the
+# confession feed, the message box and the love notes page respectively, and the two report
+# notices go nowhere at all.
+#
+# Recorded here rather than left implicit because the next removal path added will also be
+# tempted to pass an id, and the reason it must not is not obvious from the call site.
+
 
 def _assert_resolution_status(status_value: str) -> str:
     if status_value not in RESOLUTION_STATUSES:

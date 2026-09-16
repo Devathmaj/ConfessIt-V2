@@ -539,6 +539,21 @@ class MessageRecord(RemovedContentColumns, Base):
 
 
 class NotificationRecord(Base):
+    """Something worth telling a participant, and -- when there is one -- what to open.
+
+    ``target_kind`` and ``target_id`` are what a click on the notification resolves to. They
+    are nullable and always null together, because a good share of notices have nothing to
+    point at: a match that was drawn, a report that was reviewed, content that was taken down.
+    The item those notices describe either does not exist any more or was never the
+    participant's to open, so a target would send them somewhere that cannot answer the
+    notification. The honest answer for those rows is "nothing to open", and a null pair says
+    that without the client having to re-guess it from the heading text.
+
+    Nullable also matters for how they arrive: ``apply_missing_columns`` skips a NOT NULL
+    column that has no server default, so a non-nullable pair would leave every already-deployed
+    database without the columns and silently non-clickable notifications forever.
+    """
+
     __tablename__ = "notifications"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
@@ -547,6 +562,13 @@ class NotificationRecord(Base):
     body: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # The kind names the table the id belongs to, so a client never has to guess how to read
+    # the id. Deliberately plain text rather than a foreign key, and deliberately not one
+    # column per kind: the target of a message-removal notice does not exist, the target of a
+    # conversation notice is a match rather than a conversation, and the set of things a
+    # notification can point at is exactly the set of kinds the client knows how to open.
+    target_kind: Mapped[Optional[str]] = mapped_column(String(40))
+    target_id: Mapped[Optional[str]] = mapped_column(String(100))
 
 
 class MessageReportRecord(Base):

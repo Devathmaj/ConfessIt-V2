@@ -227,6 +227,9 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     # "12:00 PM" for a match made at 17:31. The row's own created_at is timezone-aware and
     # already renders in the reader's local time, so the body stays timezone-free.
     from ..services.notification_service import create_notification_service
+    # No target. A match is a fact about two people, not a thing on a page: the recipient has
+    # no list of their matches to open, and the match id means nothing until someone asks for
+    # the conversation it opened. So this notice says what happened and stops there.
     create_notification_service(
         recipient_regno=matched_user.regno,
         heading="You appeared in matchmaking",

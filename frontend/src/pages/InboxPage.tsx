@@ -1,13 +1,14 @@
 // src/pages/InboxPage.tsx
 
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { parseTimestamp, resolveProfilePictureUrl, formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
+import { notificationIsClickable, notificationTargetPath } from '@/lib/notificationTargets';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
-import { getCurrentConversation, acceptConversation, rejectConversation, getNotifications, getReceivedConversations, getConversationByMatch } from '@/services/api';
-import { ConversationDialog } from '@/components/ConversationDialog';
+import { getCurrentConversation, acceptConversation, rejectConversation, getNotifications, getReceivedConversations } from '@/services/api';
 import {
   Inbox,
   Search,
@@ -65,6 +66,11 @@ interface NotificationItem {
   match_id?: string;
   conversation_id?: string;
   status?: ConversationStatus;
+  // What a click on this card opens. Supplied by the server for the rows it writes, and
+  // derived from the match for the conversation cards below, which are not rows at all.
+  // Absent on both for a purely informational notice, which is then not clickable.
+  target_kind?: string | null;
+  target_id?: string | null;
 }
 
 /**
@@ -89,10 +95,9 @@ const TERMINATION_BODY =
 
 export const InboxPage = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedConversation, setSelectedConversation] = useState<ConversationData | null>(null);
-  const [showConversationDialog, setShowConversationDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -141,13 +146,18 @@ export const InboxPage = () => {
           );
 
           if (!isConversationNotification) {
-            notifications.push({
-              id: notification.id,
-              type: 'matchmaking',
-              title: notification.heading,
-              body: notification.body,
-              created_at: notification.created_at,
-            });
+notifications.push({
+            id: notification.id,
+            type: 'matchmaking',
+            title: notification.heading,
+            body: notification.body,
+            created_at: notification.created_at,
+            // The nulls here are the server's answer, not a placeholder: they mean this
+            // notice has no item to open. They are passed through rather than defaulted,
+            // because a default would invent clickability the server did not offer.
+            target_kind: notification.target_kind ?? null,
+            target_id: notification.target_id ?? null,
+          });
           }
         });
       }
@@ -165,7 +175,9 @@ export const InboxPage = () => {
             user_profile_picture: conversationResponse.other_user.profile_picture_url,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
-            status: 'accepted'
+            status: 'accepted',
+            target_kind: 'conversation',
+            target_id: conversationResponse.match.id,
           });
         } else if (conversationResponse.conversation.status === 'rejected') {
           notifications.push({
@@ -178,7 +190,9 @@ export const InboxPage = () => {
             user_profile_picture: conversationResponse.other_user.profile_picture_url,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
-            status: 'rejected'
+            status: 'rejected',
+            target_kind: 'conversation',
+            target_id: conversationResponse.match.id,
           });
         } else if (conversationResponse.conversation.status === 'terminated') {
           // A moderator closing the thread is news for the initiator too, and the thread is
@@ -194,7 +208,9 @@ export const InboxPage = () => {
             user_profile_picture: conversationResponse.other_user.profile_picture_url,
             match_id: conversationResponse.match.id,
             conversation_id: conversationResponse.conversation.id,
-            status: 'terminated'
+            status: 'terminated',
+            target_kind: 'conversation',
+            target_id: conversationResponse.match.id,
           });
         }
       }
@@ -204,11 +220,17 @@ export const InboxPage = () => {
         receivedConversationsResponse.conversations.forEach((conv: any) => {
           // Same conversation fields in every state, so the card is the same card and only
           // the part describing the outcome changes.
+          // Every one of these cards points at the same match, so the target is set once here
+          // rather than repeated in each branch -- including the rejected one. A rejected
+          // request is still the thread the reader asked about, and the Message Box shows it
+          // read-only, so going there answers the card better than a dead card would.
           const base = {
             user_name: conv.other_user.name,
             user_profile_picture: conv.other_user.profile_picture_url,
             match_id: conv.match.id,
             conversation_id: conv.conversation.id,
+            target_kind: 'conversation',
+            target_id: conv.match.id,
           };
 
           if (conv.conversation.status === 'requested') {
@@ -304,60 +326,36 @@ case 'message_rejected':
     return `${Math.floor(diffInMinutes / 1440)}d ago`;
   };
 
-  // Filters notifications based on the current search query.
+// Filters notifications based on the current search query.
 
   const filteredNotifications = notifications.filter(notification => {
-    if (!searchQuery.trim()) return true; // Show all if no search query
-    
-    const matchesSearch = (notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         notification.user_name?.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                         notification.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         notification.body?.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesSearch;
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return true; // Show all if no search query
+
+    // The sender's name is searched once. It used to be tested twice, in both halves of an
+    // `a || a`, which meant a note whose sender is anonymous fell through to matching on
+    // title and body alone -- fine, except that the duplicate also made it look like the name
+    // was being matched with different logic on the two sides.
+    return (
+      (notification.user_name?.toLowerCase().includes(query) ?? false) ||
+      notification.title.toLowerCase().includes(query) ||
+      notification.body.toLowerCase().includes(query)
+    );
   });
 
-  // Handles clicking on a notification, opening the corresponding conversation.
-  const handleNotificationClick = async (notification: NotificationItem) => {
-    // Only allow clicking on notifications that have conversation data and are not rejected
-    if (notification.match_id && notification.conversation_id && notification.status !== 'rejected') {
-      console.log('🔔 Notification clicked:', {
-        match_id: notification.match_id,
-        notification_status: notification.status
-      });
-      
-      // ALWAYS fetch fresh data from API
-      try {
-        console.log('📡 Fetching conversation from API...');
-        const response = await getConversationByMatch(notification.match_id);
-        console.log('📡 API Response:', response);
-        
-        if (response.status === 'success') {
-          const conversation = response as ConversationData;
-          console.log('✅ Conversation fetched:', {
-            conversation_id: conversation.conversation.id,
-            status: conversation.conversation.status
-          });
-          
-          setSelectedConversation(conversation);
-          setShowConversationDialog(true);
-        } else {
-          toast.error('Failed to load conversation');
-        }
-      } catch (error) {
-        console.error('❌ Failed to fetch conversation:', error);
-        toast.error('Failed to load conversation');
-      }
-    }
-    // System notifications and rejected conversations are not clickable
+  // Handles clicking on a notification by navigating to the item it is about.
+  const handleNotificationClick = (notification: NotificationItem) => {
+    const path = notificationTargetPath(notification.target_kind, notification.target_id);
+    // No target means there is nothing to open -- a match that was drawn, a report that was
+    // reviewed, content that was taken down. The card is styled and announced as inert for
+    // the same reason, so this branch should be unreachable from a real click; the guard is
+    // here so a card can never navigate somewhere meaningless.
+    if (!path) return;
+    navigate(path);
   };
 
   // Refreshes all data on the page.
   const handleRefreshData = () => {
-    fetchData();
-  };
-
-  // Refreshes data after a conversation has been accepted.
-  const handleConversationAccepted = () => {
     fetchData();
   };
 
@@ -431,13 +429,36 @@ case 'message_rejected':
           <div className="grid gap-4">
             {filteredNotifications
               .sort((a, b) => timestampMs(b.created_at) - timestampMs(a.created_at))
-              .map((notification) => (
+              .map((notification) => {
+                const isClickable = notificationIsClickable(
+                  notification.target_kind,
+                  notification.target_id
+                );
+                const targetPath = notificationTargetPath(
+                  notification.target_kind,
+                  notification.target_id
+                );
+
+                return (
               <Card 
-                key={notification.id} 
-                className={`hover:shadow-lg transition-shadow duration-200 ${
-                  notification.match_id && notification.conversation_id && notification.status !== 'rejected' ? 'cursor-pointer' : ''
+                key={notification.id}
+                className={`transition-shadow duration-200 ${
+                  isClickable ? 'cursor-pointer hover:shadow-lg hover:border-pink-400 focus-visible:ring-2 focus-visible:ring-pink-500' : ''
                 }`}
+                // Keyboard-reachable for the targeted ones. A non-target card stays out of
+                // the tab order entirely, because there is no action to perform -- an inert
+                // card that still takes focus is worse than one that is visibly not a control.
+                role={isClickable ? 'button' : undefined}
+                tabIndex={isClickable ? 0 : undefined}
+                aria-label={isClickable && targetPath ? `Open ${notification.title}` : undefined}
                 onClick={() => handleNotificationClick(notification)}
+                onKeyDown={(e) => {
+                  if (!isClickable) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleNotificationClick(notification);
+                  }
+                }}
               >
                 <CardContent className="p-6">
                   <div className="flex items-start space-x-4">
@@ -559,23 +580,13 @@ case 'message_rejected':
                       </div>
                     </div>
                   </div>
-                </CardContent>
+</CardContent>
               </Card>
-            ))}
+                );
+              })}
           </div>
         )}
       </div>
-
-
-      {/* Conversation Dialog */}
-      {showConversationDialog && selectedConversation && (
-        <ConversationDialog
-          conversationData={selectedConversation}
-          onClose={() => setShowConversationDialog(false)}
-          onRefresh={handleRefreshData}
-          onConversationAccepted={handleConversationAccepted}
-        />
-      )}
     </div>
   );
 };
