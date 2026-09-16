@@ -10,8 +10,7 @@ from sqlalchemy import func, or_, select, update
 from ..postgres import new_id, is_valid_id
 from ..postgres import Database
 from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionRecord,
-    ConversationRecord, LoginTokenRecord, LoveNoteRecord, MatchRecord, MessageRecord,
-    ReportRecord, UserRecord, find_account_in_table, resolve_account,
+    LoginTokenRecord, LoveNoteRecord, ReportRecord, UserRecord, resolve_account,
     resolve_account_by_id)
 from ..accounts import AccountType, normalize_account_type
 from ..services.report_resolution_service import resolve_status_filter
@@ -125,27 +124,6 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     return payload
-
-
-def serialize_account_by_regno(db: Database, regno: Optional[str]) -> Dict[str, Any]:
-    """Fetch and serialise a participant by regno.
-
-    Always reads the ``users`` table, because every caller is naming the initiator or receiver
-    of a conversation and those are participants by construction. Searching all three tables
-    would be ambiguous for no benefit now that a regno may exist in more than one of them.
-
-    Returns a document with a null ``name`` when no row holds the regno, which is what the
-    review screens already expect for an account that no longer exists.
-    """
-    if not regno:
-        return {"regno": None}
-
-    with db.sessions() as session:
-        found = find_account_in_table(session, AccountType.USERS.value, regno)
-    if found:
-        account_type, row = found
-        return serialize_user_doc(_account_row_payload(account_type, row))
-    return {"regno": regno, "name": None, "account_type": None}
 
 
 def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[str, Any]]:
@@ -659,90 +637,6 @@ def get_confession_reports_data(
         })
 
     return {"reports": items, "total": total, "skip": skip, "limit": limit}
-
-
-
-
-
-def get_all_conversations_data(db: Database) -> List[Dict[str, Any]]:
-    """Fetch all conversations with participant and message metadata."""
-    with db.sessions() as session:
-        conversation_docs = session.scalars(select(ConversationRecord).order_by(ConversationRecord.created_at.desc())).all()
-        match_ids = {row.match_id for row in conversation_docs}
-        match_map = {str(row.id): row for row in session.scalars(select(MatchRecord).where(MatchRecord.id.in_(match_ids))).all()} if match_ids else {}
-        message_rows = session.scalars(select(MessageRecord).where(
-            MessageRecord.conversation_id.in_([row.id for row in conversation_docs])
-        ).order_by(MessageRecord.created_at.desc())).all() if conversation_docs else []
-    # Built from the remaining messages only. A removed message is still in ``message_rows``
-        # and still counted in ``message_counts`` below -- staff need it -- but the preview has
-        # to fall through to the newest message that is actually readable, otherwise ruling on
-        # a report would take the text down and leave it sitting in the conversation list.
-        latest_by_conversation = {}
-    for message in message_rows:
-        if message.removed_at is not None:
-            continue
-        latest_by_conversation.setdefault(message.conversation_id, message)
-
-    # Two counters from the rows already loaded, not three more aggregate queries: the
-    # transcript screen needs both numbers and this is the one place every message of every
-    # listed conversation is in memory anyway.
-    visible_counts: Dict[str, int] = defaultdict(int)
-    message_counts: Dict[str, int] = defaultdict(int)
-    for message in message_rows:
-        message_counts[message.conversation_id] += 1
-        if message.removed_at is None:
-            visible_counts[message.conversation_id] += 1
-
-    results: List[Dict[str, Any]] = []
-    for doc in conversation_docs:
-        conversation_id = str(doc.id)
-        match_id = doc.match_id
-        match_doc = match_map.get(str(match_id)) if match_id is not None else None
-
-        # Get latest message
-        latest_message = None
-        latest_message_doc = latest_by_conversation.get(doc.id)
-        if latest_message_doc:
-            latest_message = {
-                "id": str(latest_message_doc.id),
-                "sender_regno": latest_message_doc.sender_regno,
-                "body": latest_message_doc.body,
-                "created_at": serialize_datetime(latest_message_doc.created_at),
-            }
-
-        results.append(
-            {
-                "id": conversation_id,
-                "status": doc.status,
-                "created_at": serialize_datetime(doc.created_at),
-                "requested_at": serialize_datetime(doc.requested_at),
-                "accepted_at": serialize_datetime(doc.accepted_at),
-                "terminated_at": serialize_datetime(doc.terminated_at),
-                "initiator": serialize_account_by_regno(db, doc.initiator_regno),
-                "receiver": serialize_account_by_regno(db, doc.receiver_regno),
-                "match": None
-                if not match_doc
-                else {
-                    "id": str(match_doc.id),
-                    "user_1_regno": match_doc.user_1_regno,
-                    "user_2_regno": match_doc.user_2_regno,
-                    "created_at": serialize_datetime(match_doc.created_at),
-                    "expires_at": serialize_datetime(match_doc.expires_at),
-                },
-                "latest_message": latest_message,
-                "is_blocked": bool(doc.blocked_by),
-                "blocked_by": (doc.blocked_by or [None])[0],
-                # How much of the thread a moderator has left to read. Computed here rather
-                # than on the participant side, because the removed rows are filtered out of
-                # the participant's transcript but not out of this one, and a count of visible
-                # messages has to be a count of the same set the viewer can see.
-                "visible_message_count": visible_counts.get(doc.id, 0),
-                "removed_message_count": message_counts.get(doc.id, 0)
-                - visible_counts.get(doc.id, 0),
-            }
-        )
-
-    return results
 
 
 def get_admin_statistics_data(db: Database) -> Dict[str, Any]:

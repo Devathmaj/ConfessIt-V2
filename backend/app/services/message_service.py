@@ -11,7 +11,6 @@ from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
 from ..models import UserDetails
-from ..accounts import Capability, has_capability
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 from .report_counters import MESSAGE, record_report_filed
@@ -249,60 +248,53 @@ class MessageService:
     ) -> List[Dict[str, Any]]:
         """
         Get messages for a conversation
-        
+
         Enforces:
-        - User is participant in conversation (unless a moderator)
+        - User is participant in conversation
         - Conversation is accepted
         """
-        # A caller holding CONVERSATIONS_READ_MESSAGES -- the same capability that guards
-        # GET /admin/conversations/{id} -- may read any thread. Keyed on the capability that
-        # the caller's account table grants, rather than on the admin role, so the two paths
-        # cannot disagree about who may read a transcript, and so a moderator gets it here
-        # too. A participant's table grants nothing, so this is False for them without a
-        # second branch naming them.
-        may_read_any = has_capability(user.account_type, Capability.CONVERSATIONS_READ_MESSAGES)
-        if not may_read_any:
-            # Validate user is participant
-            conversation = self.validate_conversation_participant(db, conversation_id, user.regno)
+        # Participant-only. There is no staff bypass here: a moderator is not a party to a
+        # private thread, and ``reports:review`` -- which they do hold -- governs what they
+        # may see *about* a conversation they have been asked to rule on, not a transcript
+        # of every thread in the database. The report queue carries the reported message and
+        # its surrounding context; nothing else is readable by staff.
+        conversation = self.validate_conversation_participant(db, conversation_id, user.regno)
 
-            # Reading a thread with a blocked partner is refused for the same reason sending
-            # is: the conversation is not reachable from this account any more. Staff keep
-            # their moderation read, so this stays inside the non-staff branch.
-            if self.is_partner_blocked(db, conversation, user.regno):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=ACCOUNT_UNAVAILABLE_DETAIL
-                )
-        
+        # Reading a thread with a blocked partner is refused for the same reason sending is:
+        # the conversation is not reachable from this account any more.
+        if self.is_partner_blocked(db, conversation, user.regno):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ACCOUNT_UNAVAILABLE_DETAIL
+            )
+
         # Fetch messages
         with db.sessions() as session:
-            base_query = select(MessageRecord).where(
-                MessageRecord.conversation_id == str(conversation_id)
-            )
-            # A participant must not see removed messages. Staff readers go through the
-            # conversation detail admin route instead, which returns the full history; the
-            # flag on each message is not present here, but the view is participant-facing.
-            if not may_read_any:
-                base_query = base_query.where(MessageRecord.removed_at.is_(None))
-            rows = session.scalars(base_query.order_by(MessageRecord.created_at.asc()).limit(limit)).all()
+            rows = session.scalars(
+                # A removed message is invisible on the participant read, which is the only
+                # read there is.
+                select(MessageRecord).where(
+                    MessageRecord.conversation_id == str(conversation_id),
+                    MessageRecord.removed_at.is_(None),
+                ).order_by(MessageRecord.created_at.asc()).limit(limit)
+            ).all()
             messages = [{"id": str(row.id), "conversation_id": row.conversation_id,
                 "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
                 "created_at": row.created_at, "is_read": row.is_read} for row in rows]
-        
-        # Mark messages as read for receiver. A moderator's read must not clear the other
-        # party's unread state, so this is skipped for exactly the readers above.
-        if not may_read_any:
-            with db.sessions.begin() as session:
-                rows = session.scalars(select(MessageRecord).where(
-                    MessageRecord.conversation_id == str(conversation_id),
-                    MessageRecord.receiver_regno == user.regno,
-                    MessageRecord.is_read.is_(False),
-                    # Matches the read above: if the message is not visible, reading the
-                    # thread did not read it, so it must not be marked as though it did.
-                    MessageRecord.removed_at.is_(None),
-                )).all()
-                for row in rows:
-                    row.is_read = True
+
+        # Mark messages as read for receiver. Scoped to the messages actually returned above,
+        # so reading a thread marks read exactly what the reader was shown.
+        with db.sessions.begin() as session:
+            rows = session.scalars(select(MessageRecord).where(
+                MessageRecord.conversation_id == str(conversation_id),
+                MessageRecord.receiver_regno == user.regno,
+                MessageRecord.is_read.is_(False),
+                # Matches the read above: if the message is not visible, reading the
+                # thread did not read it, so it must not be marked as though it did.
+                MessageRecord.removed_at.is_(None),
+            )).all()
+            for row in rows:
+                row.is_read = True
         
         # Format response
         return [

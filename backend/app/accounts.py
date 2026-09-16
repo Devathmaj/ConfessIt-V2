@@ -68,15 +68,12 @@ class Capability(str, Enum):
     account-table names across the codebase.
     """
 
-    # --- content and conversation moderation (admin + moderator) ---
+    # --- content moderation (admin + moderator) ---
     CONFESSIONS_REVIEW = "confessions:review"
     CONFESSIONS_DELETE = "confessions:delete"
     LOVE_NOTES_REVIEW = "love_notes:review"
     LOVE_NOTES_MODERATE = "love_notes:moderate"
     LOVE_NOTES_DELETE = "love_notes:delete"
-    CONVERSATIONS_REVIEW = "conversations:review"
-    CONVERSATIONS_READ_MESSAGES = "conversations:read_messages"
-    CONVERSATIONS_TERMINATE = "conversations:terminate"
     REPORTS_REVIEW = "reports:review"
     REPORTS_MODERATE = "reports:moderate"
     STATS_READ = "stats:read"
@@ -101,9 +98,6 @@ MODERATION_CAPABILITIES: frozenset[str] = frozenset(
         Capability.LOVE_NOTES_REVIEW,
         Capability.LOVE_NOTES_MODERATE,
         Capability.LOVE_NOTES_DELETE,
-        Capability.CONVERSATIONS_REVIEW,
-        Capability.CONVERSATIONS_READ_MESSAGES,
-        Capability.CONVERSATIONS_TERMINATE,
         Capability.REPORTS_REVIEW,
         Capability.REPORTS_MODERATE,
         Capability.STATS_READ,

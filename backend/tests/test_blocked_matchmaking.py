@@ -285,20 +285,29 @@ def test_the_history_of_a_blocked_partner_is_not_readable(db):
     assert excinfo.value.status_code == 403
 
 
-def test_an_admin_can_still_read_a_blocked_conversation(db):
-    """Moderation is the one job that has to keep working."""
+@pytest.mark.parametrize("staff_type", (AccountType.ADMIN.value, AccountType.MODERATOR.value))
+def test_staff_cannot_read_a_blocked_conversation_either(db, staff_type):
+    """A block is not something a staff account can read past.
+
+    This used to be a deliberate exception -- "moderation is the one job that has to keep
+    working" -- keyed on the capability that guarded the admin transcript route. With that
+    route gone the capability is gone, and so is the exception. A blocked thread is reached
+    through the report queue, on the strength of a report, rather than by anyone with a
+    staff account deciding to open it.
+    """
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_staff(db, "mod", AccountType.ADMIN.value)
+    make_staff(db, "mod", staff_type)
     _, conversation_id = make_match_and_conversation(db, "alice", "bob", status="accepted")
     message_service.send_message(db, conversation_id, as_user(db, "alice"), "hello")
     set_blocked(db, "bob", True)
 
-    messages = message_service.get_messages(
-        db, conversation_id, as_staff(db, "mod", AccountType.ADMIN.value)
-    )
+    with pytest.raises(HTTPException) as excinfo:
+        message_service.get_messages(
+            db, conversation_id, as_staff(db, "mod", staff_type)
+        )
 
-    assert [m["body"] for m in messages] == ["hello"]
+    assert excinfo.value.status_code == 403
 
 
 # ------------------------------------------------------------------ love notes stay open

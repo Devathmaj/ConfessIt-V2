@@ -1,17 +1,18 @@
-"""A moderator-closed conversation is finished, not erased.
+"""A conversation closed by a moderator is finished, not erased.
 
-Termination used to stamp the match's ``expires_at`` with the current time. That made one
-event look like two very different ones: to the matchmaking screen the match had simply run
-out, so it announced that a new match could be drawn -- while ``last_matchmaking_at`` was
-untouched and the server was still refusing the draw inside the four-hour cooldown. To the
-conversation lists, which select on ``expires_at``, the receiver's thread vanished from their
-message box and both parties lost the notification explaining what had happened.
+There is no longer a route that writes this state -- the moderation surface that produced it
+was removed, and with it the ability for anyone to close a thread. The state itself is not
+gone, though: ``conversations.status = 'terminated'`` and ``terminated_at`` remain columns,
+every participant-facing query still branches on them, and rows written by the build that
+predates the removal are sitting in databases right now with no migration to take them out.
+These tests cover how the participants' own surfaces treat such a thread, because that
+behaviour is still live code and still reachable.
 
-These tests pin the properties that fixes: the cooldown is untouched and still reported as
-running, the terminated thread stays listed and readable to both participants, and both are
-told it happened. The last group covers conversations terminated by the previous build, whose
-``expires_at`` was already rewritten, so the fix reaches rows that are already in the
-database rather than only preventing new ones.
+The distinction that matters, and that the old tests existed to protect: a closed thread is
+**finished, not unreadable**. It stays in both parties' lists, its transcript still opens,
+and a message of its own can still be reported -- what stops is sending. Expiry is a
+different axis and these tests hold the thread inside its match window so that a refusal can
+only have come from the termination.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,6 @@ from app.db_models import (
     ConversationRecord,
     MatchRecord,
     MessageRecord,
-    NotificationRecord,
     UserRecord,
 )
 from app.models import UserDetails
@@ -34,15 +34,10 @@ from app.services.conversation_service import (
     get_current_conversation_service,
     get_received_conversations_service,
 )
-from app.services.matchmaking_service import (
-    check_matchmaking_cooldown_service,
-    find_match_service,
-)
 from app.services.message_service import message_service
 
 
 WINDOW = timedelta(hours=4)
-TERMINATION_HEADING = "Conversation terminated by a moderator"
 
 
 @pytest.fixture
@@ -75,11 +70,10 @@ def as_user(db, regno) -> UserDetails:
 
 
 def make_accepted_conversation(db, initiator, receiver, *, minutes_ago=10):
-    """A matched, accepted conversation whose initiator has spent their attempt.
+    """A matched, accepted conversation inside its own four-hour match window.
 
-    ``last_matchmaking_at`` is what the cooldown counts down from and the match expiry is
-    what the conversation lists count down from, so both are written from one instant here --
-    otherwise a test could pass for the wrong reason.
+    Kept well inside the window so that any refusal a test sees is attributable to the
+    termination rather than to the match having run out.
     """
     created_at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
     with db.sessions.begin() as session:
@@ -96,255 +90,28 @@ def make_accepted_conversation(db, initiator, receiver, *, minutes_ago=10):
         )
         session.add(conversation)
         session.flush()
-        match_id, conversation_id = str(match_row.id), str(conversation.id)
-
-        session.scalar(select(UserRecord).where(UserRecord.regno == initiator)).last_matchmaking_at = (
-            created_at
-        )
-
-    return match_id, conversation_id
+        return str(match_row.id), str(conversation.id)
 
 
-def terminate(admin_client, conversation_id):
-    response = admin_client.post(
-        f"/admin/conversations/{conversation_id}/terminate", json={"reason": "abuse"}
-    )
-    assert response.status_code == 200, response.text
-    return response.json()
+def mark_terminated(db, conversation_id, *, minutes_ago=5):
+    """Write the terminal state the way the removed route did.
 
-
-def match_expiry(db, match_id):
-    with db.sessions() as session:
-        return session.get(MatchRecord, match_id).expires_at
-
-
-def notifications_for(db, regno):
-    with db.sessions() as session:
-        return list(
-            session.scalars(
-                select(NotificationRecord).where(NotificationRecord.recipient_regno == regno)
-            ).all()
-        )
-
-
-def stored_message_count(db) -> int:
-    with db.sessions() as session:
-        return len(list(session.scalars(select(MessageRecord)).all()))
-
-
-# ----------------------------------------------------- the cooldown is not what ends here
-
-
-def test_terminating_leaves_the_match_expiry_alone(db, admin_client):
-    # The regression: the endpoint rewrote expires_at to "now", which is what made every
-    # client read a moderator decision as the four-hour window running out.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    match_id, conversation_id = make_accepted_conversation(db, "alice", "bob")
-    before = match_expiry(db, match_id)
-
-    terminate(admin_client, conversation_id)
-
-    assert match_expiry(db, match_id) == before
-
-
-def test_terminating_does_not_lift_the_cooldown(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob", minutes_ago=10)
-
-    before = check_matchmaking_cooldown_service(as_user(db, "alice"), db)
-    terminate(admin_client, conversation_id)
-    after = check_matchmaking_cooldown_service(as_user(db, "alice"), db)
-
-    assert before["status"] == "cooldown"
-    assert after["status"] == "cooldown"
-
-
-def test_the_cooldown_wait_is_still_the_real_one_after_a_termination(db, admin_client):
-    # Not merely "still on cooldown": the remaining time has to be the one the server would
-    # quote for a real attempt, because that is the number the user is shown. Asserted as a
-    # window rather than to the minute, since the wait is quoted as of now and a moment has
-    # already passed since the attempt was written.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob", minutes_ago=30)
-
-    terminate(admin_client, conversation_id)
-    answer = check_matchmaking_cooldown_service(as_user(db, "alice"), db)
-
-    remaining = answer["remaining_hours"] * 3600 + answer["remaining_minutes"] * 60
-    assert 3 * 3600 + 29 * 60 <= remaining <= 3 * 3600 + 30 * 60
-
-
-def test_a_draw_is_still_refused_after_a_termination(db, admin_client):
-    # The whole point: the thread is closed but the attempt is spent, so the draw the client
-    # used to be invited to make is still the one the server refuses.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    with pytest.raises(HTTPException) as excinfo:
-        find_match_service(as_user(db, "alice"), db)
-
-    assert excinfo.value.status_code == 429
-
-
-def test_a_partner_who_drew_nothing_is_untouched(db, admin_client):
-    # The receiver spent no attempt of their own, so termination must not appear in their
-    # eligibility either.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    assert check_matchmaking_cooldown_service(as_user(db, "bob"), db)["status"] == "eligible"
-
-
-def test_a_terminated_match_is_still_reported_as_live_by_the_conversation_list(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    match_id, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    with db.sessions() as session:
+    Status and ``terminated_at`` only. The match's ``expires_at`` is deliberately left
+    alone: that was the whole point of the fix this file originally guarded, and a moderator
+    closing a thread is not the same event as the window running out.
+    """
+    with db.sessions.begin() as session:
         conversation = session.get(ConversationRecord, conversation_id)
-        assert conversation.status == "terminated"
-        assert conversation.terminated_at is not None
-        # "Is this conversation still open" is read off the expiry, so a moderator-closed
-        # thread has to keep saying yes.
-        assert session.get(MatchRecord, match_id).expires_at > datetime.now(timezone.utc)
+        conversation.status = "terminated"
+        conversation.terminated_at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
 
-# ------------------------------------------------- both participants keep the conversation
+def make_lapsed_thread(db, status, *, hours_ago=5, terminated_hours_ago=None):
+    """A thread whose match has already run out, in one of the two states that can coexist.
 
-
-def test_the_initiator_still_sees_the_conversation(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-    response = get_current_conversation_service(as_user(db, "alice"), db)
-
-    assert response["status"] == "success"
-    assert response["conversation"]["id"] == conversation_id
-    assert response["conversation"]["status"] == "terminated"
-
-
-def test_the_receiver_still_sees_the_conversation(db, admin_client):
-    # The reported bug: this list selects on expires_at, so rewriting it dropped the thread
-    # out of the receiver's message box.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-    response = get_received_conversations_service(as_user(db, "bob"), db)
-
-    assert response["status"] == "success"
-    assert [c["conversation"]["id"] for c in response["conversations"]] == [conversation_id]
-    assert response["conversations"][0]["conversation"]["status"] == "terminated"
-
-
-def test_both_participants_are_told_the_conversation_was_terminated(db, admin_client):
-    # The second half of the reported bug: nothing was written to the notifications table, so
-    # both sides simply stopped hearing about the conversation.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    for regno in ("alice", "bob"):
-        assert TERMINATION_HEADING in [row.heading for row in notifications_for(db, regno)]
-
-
-def test_a_termination_notification_carries_no_wall_clock_time(db, admin_client):
-    # The row's own created_at renders in the reader's local time; a formatted clock string in
-    # the body reads wrong for everyone outside the server's zone.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    row = next(r for r in notifications_for(db, "alice") if r.heading == TERMINATION_HEADING)
-    assert not any(character.isdigit() for character in row.body)
-
-
-# ------------------------------------------------------------------ finished, not unreadable
-
-
-def test_the_transcript_of_a_terminated_conversation_is_still_readable(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-    message_service.send_message(db, conversation_id, as_user(db, "alice"), "before it was shut")
-
-    terminate(admin_client, conversation_id)
-
-    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
-    assert [m["body"] for m in messages] == ["before it was shut"]
-
-
-def test_both_sides_keep_reading_a_terminated_conversation(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-    message_service.send_message(db, conversation_id, as_user(db, "alice"), "one")
-    message_service.send_message(db, conversation_id, as_user(db, "bob"), "two")
-
-    terminate(admin_client, conversation_id)
-
-    for regno in ("alice", "bob"):
-        bodies = [
-            m["body"]
-            for m in message_service.get_messages(db, conversation_id, as_user(db, regno))
-        ]
-        assert bodies == ["one", "two"]
-
-
-def test_a_message_to_a_terminated_conversation_is_refused_and_stores_nothing(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    terminate(admin_client, conversation_id)
-
-    with pytest.raises(HTTPException) as excinfo:
-        message_service.send_message(db, conversation_id, as_user(db, "alice"), "still here?")
-
-    assert excinfo.value.status_code == 403
-    assert excinfo.value.detail == "This conversation has been terminated"
-    assert stored_message_count(db) == 0
-
-
-def test_a_participant_can_still_report_a_message_from_a_terminated_conversation(db, admin_client):
-    # The report menu is offered on whatever the reader can open, so the server has to agree
-    # for the messages of a closed thread.
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-    sent = message_service.send_message(db, conversation_id, as_user(db, "alice"), "rude")
-
-    terminate(admin_client, conversation_id)
-
-    assert message_service.report_message(db, sent["id"], as_user(db, "bob"), "abuse")["id"]
-
-
-# ---------------------------------------------- conversations terminated by the previous build
-
-
-def make_expired_thread(db, status, *, hours_ago=5, terminated_hours_ago=None):
-    """A thread whose match has already lapsed, in one of the two states that can coexist.
-
-    ``terminated_hours_ago`` set is how the previous build wrote a termination: the match was
-    stamped as expiring at the instant of the moderator's decision.
+    ``terminated_hours_ago`` set is how an older build recorded a termination: the match was
+    stamped as expiring at the instant of the decision, so the row reads as lapsed by every
+    clock-based query. Both shapes are in existing databases.
     """
     expires_at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
     created_at = expires_at - WINDOW
@@ -365,23 +132,123 @@ def make_expired_thread(db, status, *, hours_ago=5, terminated_hours_ago=None):
         ))
 
 
-def test_a_thread_terminated_by_the_old_build_is_still_listed(db):
-    # Those rows carry expires_at == terminated_at, so every clock-based query reads them as
-    # lapsed. They are already in the database, so the fix has to reach them rather than only
-    # preventing new ones.
+def stored_message_count(db) -> int:
+    with db.sessions() as session:
+        return len(list(session.scalars(select(MessageRecord)).all()))
+
+
+# ------------------------------------------------- both participants keep the conversation
+
+
+def test_a_closed_thread_is_still_in_the_initiators_list(db):
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_expired_thread(db, "terminated", hours_ago=1, terminated_hours_ago=1)
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+
+    mark_terminated(db, conversation_id)
+    response = get_current_conversation_service(as_user(db, "alice"), db)
+
+    assert response["status"] == "success"
+    assert response["conversation"]["id"] == conversation_id
+    assert response["conversation"]["status"] == "terminated"
+
+
+def test_a_closed_thread_is_still_in_the_receivers_list(db):
+    # This list selects on the match expiry, so anything that rewrote ``expires_at`` dropped
+    # the thread out of the receiver's message box. A closed thread has to keep saying live.
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+
+    mark_terminated(db, conversation_id)
+    response = get_received_conversations_service(as_user(db, "bob"), db)
+
+    assert response["status"] == "success"
+    assert [c["conversation"]["id"] for c in response["conversations"]] == [conversation_id]
+    assert response["conversations"][0]["conversation"]["status"] == "terminated"
+
+
+# ------------------------------------------------------------------ finished, not unreadable
+
+
+def test_the_transcript_of_a_closed_thread_is_still_readable(db):
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+    message_service.send_message(db, conversation_id, as_user(db, "alice"), "before it was shut")
+
+    mark_terminated(db, conversation_id)
+
+    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    assert [m["body"] for m in messages] == ["before it was shut"]
+
+
+def test_both_sides_keep_reading_a_closed_thread(db):
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+    message_service.send_message(db, conversation_id, as_user(db, "alice"), "one")
+    message_service.send_message(db, conversation_id, as_user(db, "bob"), "two")
+
+    mark_terminated(db, conversation_id)
+
+    for regno in ("alice", "bob"):
+        bodies = [
+            m["body"]
+            for m in message_service.get_messages(db, conversation_id, as_user(db, regno))
+        ]
+        assert bodies == ["one", "two"]
+
+
+def test_a_message_to_a_closed_thread_is_refused_and_stores_nothing(db):
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+
+    mark_terminated(db, conversation_id)
+
+    with pytest.raises(HTTPException) as excinfo:
+        message_service.send_message(db, conversation_id, as_user(db, "alice"), "still here?")
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail == "This conversation has been terminated"
+    assert stored_message_count(db) == 0
+
+
+def test_a_participant_can_still_report_a_message_from_a_closed_thread(db):
+    # The report menu is offered on whatever the reader can open, so the server has to agree
+    # for the messages of a closed thread. This is the one route out of a conversation that
+    # does not depend on it still being open, and a thread nobody can report is exactly the
+    # case where a report matters most.
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
+    sent = message_service.send_message(db, conversation_id, as_user(db, "alice"), "rude")
+
+    mark_terminated(db, conversation_id)
+
+    assert message_service.report_message(db, sent["id"], as_user(db, "bob"), "abuse")["id"]
+
+
+# ------------------------------------------- threads closed by a build that could close them
+
+
+def test_a_thread_closed_by_the_old_build_is_still_listed(db):
+    # Those rows carry expires_at == terminated_at, so every clock-based query reads them as
+    # lapsed. They are already in the database, so the participants' lists have to cope.
+    make_user(db, "alice", "female")
+    make_user(db, "bob", "male")
+    make_lapsed_thread(db, "terminated", hours_ago=1, terminated_hours_ago=1)
 
     response = get_received_conversations_service(as_user(db, "bob"), db)
 
     assert [c["conversation"]["status"] for c in response["conversations"]] == ["terminated"]
 
 
-def test_the_initiator_sees_an_old_terminated_thread_too(db):
+def test_the_initiator_sees_a_thread_closed_by_the_old_build_too(db):
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_expired_thread(db, "terminated", hours_ago=1, terminated_hours_ago=1)
+    make_lapsed_thread(db, "terminated", hours_ago=1, terminated_hours_ago=1)
 
     response = get_current_conversation_service(as_user(db, "alice"), db)
 
@@ -391,10 +258,11 @@ def test_the_initiator_sees_an_old_terminated_thread_too(db):
 
 def test_a_lapsed_thread_is_not_listed_merely_because_it_is_old(db):
     # The counterpart: the same query must not turn every expired conversation back into an
-    # open one, or the message box would fill with dead threads.
+    # open one, or the message box would fill with dead threads. Being closed is not what
+    # keeps a thread listed here -- the match window is -- so an old accepted thread goes.
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
-    make_expired_thread(db, "accepted", hours_ago=6)
+    make_lapsed_thread(db, "accepted", hours_ago=6)
 
     assert get_received_conversations_service(as_user(db, "bob"), db) == {
         "status": "no_received_conversations",
@@ -414,16 +282,3 @@ def test_a_live_conversation_is_still_listed_for_the_receiver(db):
 
     assert [c["conversation"]["id"] for c in response["conversations"]] == [conversation_id]
     assert response["conversations"][0]["conversation"]["status"] == "accepted"
-
-
-def test_the_terminal_state_is_recorded_with_the_time_it_happened(db, admin_client):
-    make_user(db, "alice", "female")
-    make_user(db, "bob", "male")
-    _, conversation_id = make_accepted_conversation(db, "alice", "bob")
-
-    result = terminate(admin_client, conversation_id)
-
-    with db.sessions() as session:
-        terminated_at = session.get(ConversationRecord, conversation_id).terminated_at
-    assert result["status"] == "terminated"
-    assert terminated_at is not None

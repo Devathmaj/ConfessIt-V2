@@ -8,8 +8,8 @@ access:
   than by a clause that could be forgotten;
 * a love-note image is readable by the two people involved, or by a moderator reviewing the
   queue;
-* reading a transcript as staff does not mark the thread as read, because a moderator looking
-  at a report is not a participant.
+* reading a transcript is for its participants only, so staff get no special route in and a
+  refused read leaves the recipient's unread state untouched.
 
 These are deliberately unit-level: the account type is the input, and the assertion is about
 which row the service can see, so the tests do not depend on the router that happens to call
@@ -310,35 +310,23 @@ def _unread_count(db, conversation_id, regno):
 
 
 @pytest.mark.parametrize("staff_type", STAFF_TYPES)
-def test_staff_may_read_a_transcript_they_are_not_part_of(db, staff_type):
-    """The same capability that guards the admin transcript route, applied here.
+def test_staff_may_not_read_a_transcript_they_are_not_part_of(db, staff_type):
+    """A private thread is readable by the two people in it and by nobody else.
 
-    Keyed on the account table's capabilities rather than on the admin role so that a
-    moderator can actually see the conversation a report is about.
+    Staff are no longer an exception, whatever they hold. This used to be a bypass keyed on a
+    capability that also guarded the admin transcript route; with that surface removed the
+    capability went with it, and a moderator is not a party to a conversation between two
+    participants. What staff may see *about* a conversation is the report queue, which is
+    built from the reported message and its own context rather than from the thread.
     """
     make_user(db, "one")
     make_user(db, "two")
     conversation_id = _make_thread(db, "one", "two")
     reader = _account_with_id(make_staff(db, "mod", staff_type), "mod", staff_type)
 
-    messages = message_service.get_messages(db, conversation_id, reader)
-    assert [message["body"] for message in messages] == ["hello"]
-
-
-@pytest.mark.parametrize("staff_type", STAFF_TYPES)
-def test_staff_reading_a_transcript_does_not_clear_the_unread_flag(db, staff_type):
-    """A moderator looking at a report is not a participant in the conversation.
-
-    If a moderation read marked the thread read, the real recipient would never see the
-    unread badge for a message a moderator happened to open first.
-    """
-    make_user(db, "one")
-    make_user(db, "two")
-    conversation_id = _make_thread(db, "one", "two")
-    reader = _account_with_id(make_staff(db, "mod", staff_type), "mod", staff_type)
-
-    message_service.get_messages(db, conversation_id, reader)
-    assert _unread_count(db, conversation_id, "two") == 1, "a moderation read consumed the recipient's unread state"
+    with pytest.raises(HTTPException) as refusal:
+        message_service.get_messages(db, conversation_id, reader)
+    assert refusal.value.status_code in (403, 404)
 
 
 def test_a_participant_reading_their_own_thread_does_mark_it_read(db):
@@ -352,8 +340,45 @@ def test_a_participant_reading_their_own_thread_does_mark_it_read(db):
     assert _unread_count(db, conversation_id, "two") == 0
 
 
+def test_a_refused_read_does_not_consume_the_recipients_unread_state(db):
+    """Whoever is turned away must leave the thread exactly as it was.
+
+    The unread flag belongs to the recipient. A read that was refused -- by the participant
+    check, or by the account having no business in the thread -- is not a read, so it must not
+    consume the badge the real recipient is entitled to see.
+    """
+    make_user(db, "one")
+    make_user(db, "two")
+    conversation_id = _make_thread(db, "one", "two")
+    stranger = _account_with_id(make_user(db, "stranger"), "stranger", AccountType.USERS.value)
+
+    with pytest.raises(HTTPException):
+        message_service.get_messages(db, conversation_id, stranger)
+
+    assert _unread_count(db, conversation_id, "two") == 1
+
+
+@pytest.mark.parametrize("staff_type", STAFF_TYPES)
+def test_a_blocked_staff_read_leaves_the_unread_flag_alone(db, staff_type):
+    """The specific regression the old bypass had to avoid, now structural.
+
+    The bypass skipped the read-marking step for exactly the readers it let in. With no
+    bypass there is no second path, so a staff account cannot clear a participant's unread
+    state -- asserted here because the property mattered enough to be written down once.
+    """
+    make_user(db, "one")
+    make_user(db, "two")
+    conversation_id = _make_thread(db, "one", "two")
+    reader = _account_with_id(make_staff(db, "mod", staff_type), "mod", staff_type)
+
+    with pytest.raises(HTTPException):
+        message_service.get_messages(db, conversation_id, reader)
+
+    assert _unread_count(db, conversation_id, "two") == 1
+
+
 def test_an_uninvolved_participant_may_not_read_a_transcript(db):
-    """A plain account is not staff, so the participant check still applies to them."""
+    """The baseline the two refusals above are variations of."""
     make_user(db, "one")
     make_user(db, "two")
     conversation_id = _make_thread(db, "one", "two")

@@ -1,15 +1,13 @@
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 
 from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ..postgres import Database
-from pydantic import BaseModel
 
 from ..dependencies import get_db
 from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate
-from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord, MatchRecord,
+from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
     MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
 from ..accounts import AccountType, Capability, normalize_account_type
@@ -17,12 +15,10 @@ from ..services.authorization import require_capability
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
-    serialize_account_by_regno,
     _account_row_payload,
     collect_active_sessions,
     get_all_confessions_data,
     get_confession_reports_data,
-    get_all_conversations_data,
     get_admin_statistics_data,
 )
 from ..services.report_resolution_service import (
@@ -56,20 +52,6 @@ def _user_payload(user):
         "created_at": user.created_at, "updated_at": user.updated_at,
         "is_blocked": user.is_blocked,
     }
-
-def _conversation_payload(row):
-    return {"id": str(row.id), "match_id": str(row.match_id), "initiator_regno": row.initiator_regno,
-        "receiver_regno": row.receiver_regno, "status": row.status, "created_at": row.created_at,
-        "requested_at": row.requested_at, "accepted_at": row.accepted_at, "terminated_at": row.terminated_at,
-        "is_blocked": bool(row.blocked_by), "blocked_by": (row.blocked_by or [None])[0]}
-
-def _match_payload(row):
-    return {"id": str(row.id), "user_1_regno": row.user_1_regno, "user_2_regno": row.user_2_regno,
-        "created_at": row.created_at, "expires_at": row.expires_at}
-
-
-class ConversationTerminateRequest(BaseModel):
-    reason: Optional[str] = None
 
 
 @router.get("/confessions", response_model=List[Dict[str, Any]])
@@ -416,144 +398,6 @@ async def update_user_details(
     return serialize_user_doc(updated_doc)
 
 
-@router.get("/conversations", response_model=List[Dict[str, Any]])
-async def list_conversations(
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_REVIEW))
-) -> List[Dict[str, Any]]:
-    """Return every conversation with participant and latest message metadata."""
-    return get_all_conversations_data(db)
-
-
-@router.get("/conversations/{conversation_id}", response_model=Dict[str, Any])
-async def get_conversation_detail(
-    conversation_id: str,
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_READ_MESSAGES))
-) -> Dict[str, Any]:
-    """Return a single conversation with full participant info and message transcript."""
-    if not is_valid_id(conversation_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
-
-    with db.sessions() as session:
-        conversation_row = session.get(ConversationRecord, str(conversation_id))
-        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
-    if not conversation_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-
-    match_id = conversation_doc.get("match_id")
-    match_doc = None
-    if match_id is not None:
-        with db.sessions() as session:
-            match_row = session.get(MatchRecord, match_id)
-            match_doc = _match_payload(match_row) if match_row else None
-
-    # Get messages from the PostgreSQL messages table
-    messages: List[Dict[str, Any]] = []
-    with db.sessions() as session:
-        raw_messages = session.scalars(select(MessageRecord).where(
-            MessageRecord.conversation_id == str(conversation_id)
-        ).order_by(MessageRecord.created_at.asc())).all()
-    for message in raw_messages:
-        messages.append(
-            {
-                "id": str(message.id),
-                "sender_regno": message.sender_regno,
-                "body": message.body,
-                "created_at": serialize_datetime(message.created_at),
-                "is_read": message.is_read,
-                "removed_at": serialize_datetime(message.removed_at),
-                "removed_by_regno": message.removed_by_regno,
-            }
-        )
-
-    return {
-        "id": conversation_id,
-        "status": conversation_doc.get("status"),
-        "created_at": serialize_datetime(conversation_doc.get("created_at")),
-        "requested_at": serialize_datetime(conversation_doc.get("requested_at")),
-        "accepted_at": serialize_datetime(conversation_doc.get("accepted_at")),
-        "terminated_at": serialize_datetime(conversation_doc.get("terminated_at")),
-        "initiator": serialize_account_by_regno(db, conversation_doc.get("initiator_regno")),
-        "receiver": serialize_account_by_regno(db, conversation_doc.get("receiver_regno")),
-        "match": None
-        if not match_doc
-        else {
-            "id": str(match_doc.get("id")),
-            "user_1_regno": match_doc.get("user_1_regno"),
-            "user_2_regno": match_doc.get("user_2_regno"),
-            "created_at": serialize_datetime(match_doc.get("created_at")),
-            "expires_at": serialize_datetime(match_doc.get("expires_at")),
-        },
-        "is_blocked": conversation_doc.get("is_blocked", False),
-        "blocked_by": conversation_doc.get("blocked_by"),
-        "messages": messages,
-    }
-
-
-@router.post("/conversations/{conversation_id}/terminate", response_model=Dict[str, Any])
-async def terminate_conversation(
-    conversation_id: str,
-    payload: ConversationTerminateRequest,
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.CONVERSATIONS_TERMINATE))
-) -> Dict[str, Any]:
-    """Terminate a conversation.
-
-    Two clocks are deliberately left alone here. The match keeps its own four-hour expiry,
-    because a moderator closing a thread early is not the same event as the window running
-    out, and rewriting ``expires_at`` made every client read the termination as an ordinary
-    expiry -- which is how a terminated pair was told it could rematch while both of them
-    were still inside the cooldown that ``last_matchmaking_at`` is counting down. The
-    participants' ``last_matchmaking_at`` is likewise untouched: the cooldown is theirs to
-    serve out, not something a moderator action shortens.
-
-    What termination does change is the conversation's status, which every participant-facing
-    query reads, so the thread stays listed and readable to both of them.
-    """
-    if not is_valid_id(conversation_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversation id")
-
-    with db.sessions() as session:
-        conversation_row = session.get(ConversationRecord, str(conversation_id))
-        conversation_doc = _conversation_payload(conversation_row) if conversation_row else None
-    if not conversation_doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-
-    now = datetime.now(timezone.utc)
-
-    with db.sessions.begin() as session:
-        conversation = session.get(ConversationRecord, conversation_doc["id"])
-        if conversation:
-            conversation.status = "terminated"
-            conversation.terminated_at = now
-
-    # Written after the commit, as everywhere else in the app: a notification failure must
-    # not undo a termination an admin has already been told succeeded. No wall-clock time is
-    # put in the body -- the row's own created_at renders in the reader's local time.
-    from ..services.notification_service import create_notification_service
-
-    _TERMINATION_HEADING = "Conversation terminated by a moderator"
-    _TERMINATION_BODY = (
-        "This conversation was closed by a moderator. You can still read it, but it can no "
-        "longer be used."
-    )
-    for participant in (conversation_doc.get("initiator_regno"), conversation_doc.get("receiver_regno")):
-        if participant:
-            create_notification_service(
-                recipient_regno=participant,
-                heading=_TERMINATION_HEADING,
-                body=_TERMINATION_BODY,
-                db=db,
-            )
-
-    return {
-        "id": conversation_id,
-        "status": "terminated",
-        "terminated_at": serialize_datetime(now),
-    }
-
-
 @router.get("/stats", response_model=Dict[str, Any])
 async def get_admin_statistics(
     db: Database = Depends(get_db),
@@ -749,9 +593,9 @@ async def get_message_reports(
         if conversation is not None:
             conversation_context = {
                 "id": str(conversation.id),
-                # Whether the thread is still open matters: a live conversation can be
-                # terminated as a consequence of this ruling, and a moderator deciding that
-                # cannot see from this card that it is still possible.
+                # Whether the thread is still open matters: a moderator weighing whether this
+                # is one lapse or a pattern is deciding against a conversation that may
+                # already have gone quiet on its own, and the two readings differ.
                 "status": conversation.status,
                 # The two parties, deduplicated by regno so a self-conversation would not render
                 # the same person twice.

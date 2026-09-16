@@ -23,7 +23,6 @@ import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ReportsReview } from "./pages/ReportsReview";
 import { ProfileReview } from "./pages/ProfileReview";
-import ChatMonitor from "./pages/ChatMonitor";
 
 const queryClient = new QueryClient();
 
@@ -215,15 +214,7 @@ const AppRoutes = () => {
           </CapabilityRoute>
         }
       />
-       <Route
-        path="/admin/conversations"
-        element={
-          <CapabilityRoute capability={CAPABILITIES.CONVERSATIONS_REVIEW}>
-            <ChatMonitor />
-          </CapabilityRoute>
-        }
-      />
-       <Route
+      <Route
         path="/admin/reports"
         element={
           <CapabilityRoute capability={CAPABILITIES.REPORTS_REVIEW}>

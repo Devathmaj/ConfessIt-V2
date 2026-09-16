@@ -169,7 +169,15 @@ def test_an_expired_thread_already_open_is_readable_without_a_reload(db):
     assert [m["body"] for m in second] == ["hello"]
 
 
-def test_an_admin_can_still_moderate_an_expired_conversation(db):
+def test_staff_cannot_read_an_expired_conversation_either(db):
+    """Expiry is readable-by-participants-only now, staff included.
+
+    The reason expiry stopped blocking reads was that a conversation goes on being useful
+    after its window closes. That is an argument about the two people in it, and it was
+    implemented with a staff bypass as well; with the admin transcript route removed the
+    bypass went and the read is participant-only. The report queue remains the route to a
+    reported thread.
+    """
     make_user(db, "alice", "female")
     make_user(db, "bob", "male")
     make_staff(db, "mod", AccountType.ADMIN.value)
@@ -181,11 +189,12 @@ def test_an_admin_can_still_moderate_an_expired_conversation(db):
             datetime.now(timezone.utc) - WINDOW - timedelta(minutes=1)
         )
 
-    messages = message_service.get_messages(
-        db, conversation_id, as_staff(db, "mod", AccountType.ADMIN.value)
-    )
+    with pytest.raises(HTTPException) as excinfo:
+        message_service.get_messages(
+            db, conversation_id, as_staff(db, "mod", AccountType.ADMIN.value)
+        )
 
-    assert [m["body"] for m in messages] == ["hello"]
+    assert excinfo.value.status_code == 403
 
 
 # ------------------------------------------------------------------ writing stops

@@ -424,19 +424,28 @@ def test_removing_a_message_moves_the_conversation_preview_off_it(thread, db, ad
         assert "a message" not in (conversation.last_message_preview or "")
 
 
-def test_a_removed_message_is_still_visible_to_staff(thread, admin_client):
-    """Staff keep their moderation read, or an appeal could never be answered.
+def test_a_removed_message_is_still_visible_to_staff_on_its_report(thread, admin_client, db):
+    """Staff keep the content of a message they have ruled on, or an appeal is unanswerable.
 
-    The transcript is the appeal record, so it also has to say which messages are gone rather
-    than leaving a moderator to infer it from a hole in the list.
+    The reported message is not deleted, and the report that named it is not either, so the
+    report row is the appeal record: it still carries the text, and it says the content has
+    been taken down rather than leaving a moderator to infer that from an empty field.
+
+    This used to be read off the admin conversation detail route. That route is gone, and the
+    report row is what a moderator actually opens, so it is what has to answer the question.
     """
     admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
 
-    detail = admin_client.get(f"/admin/conversations/{thread['conversation_id']}").json()
+    report = only_report(admin_client.get("/admin/messages/reports"))
 
-    assert [message["body"] for message in detail["messages"]] == ["a message"]
-    assert detail["messages"][0]["removed_at"] is not None
-    assert detail["messages"][0]["removed_by_regno"] is not None
+    assert report["body"] == "a message"
+    assert report["content_removed"] is True
+    # The removal is stamped, not merely flagged, so "who took this down and when" survives
+    # the decision being reviewed later.
+    with db.sessions() as session:
+        message = session.get(MessageRecord, thread["message_id"])
+        assert message.removed_at is not None
+        assert message.removed_by_regno is not None
 
 
 def test_removing_a_message_twice_reports_that_it_removed_nothing(admin_client, thread, db):

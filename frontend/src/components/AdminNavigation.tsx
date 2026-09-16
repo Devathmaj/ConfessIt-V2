@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, MessageSquare, Flag } from "lucide-react";
+import { Heart, LayoutDashboard, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -22,7 +22,6 @@ const navItems: NavItem[] = [
   { to: "/admin/reports", label: "Reports Review", icon: Flag, capability: CAPABILITIES.REPORTS_REVIEW },
   { to: "/admin/confessions", label: "Confession Review", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
   { to: "/admin/love-notes", label: "Love Notes Review", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },
-  { to: "/admin/conversations", label: "Chat Monitor", icon: MessageSquare, capability: CAPABILITIES.CONVERSATIONS_REVIEW },
   { to: "/admin/profile-review", label: "Profile Review", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];
 
