@@ -57,6 +57,12 @@ from ..logger import get_logger
 from ..postgres import Database, is_valid_id
 from ..utils import isoformat_datetime
 from .notification_service import create_notification_service
+from .report_counters import (
+    CONFESSION,
+    LOVE_NOTE,
+    MESSAGE,
+    record_removal,
+)
 
 logger = get_logger(__name__)
 
@@ -322,6 +328,7 @@ def resolve_confession_report(
 
     reporter_regno: Optional[str] = None
     author_regno: Optional[str] = None
+    author_user_id: Optional[str] = None
     removed_content = False
 
     with db.sessions.begin() as session:
@@ -338,9 +345,8 @@ def resolve_confession_report(
             )
 
         if target is not None:
-            author_regno = _regno_for_user(
-                session, target.user_id if is_comment else target.author_id
-            )
+            author_user_id = target.user_id if is_comment else target.author_id
+            author_regno = _regno_for_user(session, author_user_id)
             # Resolving the reporter here rather than after the commit keeps every read that
             # decides the outcome inside one transaction, so a report closed against content
             # deleted a microsecond earlier takes the same branch as one that was not.
@@ -352,6 +358,11 @@ def resolve_confession_report(
                     parent = session.get(ConfessionRecord, str(target.confession_id))
                     if parent is not None and parent.comment_count > 0:
                         parent.comment_count = parent.comment_count - 1
+                # An upheld report against the participant's writing. Inside the transition
+                # branch for the same reason as the comment count: re-deciding a report that
+                # was already ruled removed is not a second event and must not be counted as
+                # one. A confession and a comment share the bucket -- see report_counters.
+                record_removal(session, kind=CONFESSION, author_user_id=author_user_id)
 
         report.status = status_value
         report.reviewed_at = datetime.now(timezone.utc)
@@ -414,6 +425,11 @@ def resolve_love_note_report(
             author_regno = _regno_for_user(session, note.sender_id)
             if status_value == REMOVAL_STATUS:
                 removed_content = _stamp_removal(note, reviewer.regno)
+                if removed_content:
+                    # Only on the transition: re-deciding an already-removed note is not a
+                    # second takedown, and the sender's removal count has to say how many times
+                    # their content actually came down.
+                    record_removal(session, kind=LOVE_NOTE, author_user_id=note.sender_id)
 
         report.status = status_value
         report.reviewed_at = datetime.now(timezone.utc)
@@ -471,6 +487,9 @@ def resolve_message_report(
                 # already-removed message must not rewind the preview to it.
                 _recompute_conversation_preview(session, message.conversation_id)
                 removed_content = True
+                record_removal(
+                    session, kind=MESSAGE, author_regno=report.reported_user_regno
+                )
 
         report.status = status_value
         report.reviewed_at = datetime.now(timezone.utc)
@@ -536,7 +555,8 @@ def hide_confession(
         if confession is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
 
-        author_regno = _regno_for_user(session, confession.author_id)
+        author_user_id = confession.author_id
+        author_regno = _regno_for_user(session, author_user_id)
         # Read the row back after stamping rather than trusting the branch below: on the
         # already-hidden path these are somebody else's decision, and the review screen is
         # about to render them as the audit trail they are.
@@ -544,6 +564,13 @@ def hide_confession(
         already_hidden = not hidden
         removed_at = confession.removed_at
         removed_by_regno = confession.removed_by_regno
+
+        if hidden:
+            # A direct hide is charged as a removal even though no report was upheld -- see
+            # report_counters. Without this the authoritative count would only move when a
+            # complaint happened to exist, and a moderator could take a participant's history
+            # down from this screen without it showing up on their record at all.
+            record_removal(session, kind=CONFESSION, author_user_id=author_user_id)
 
     if hidden:
         _notify_direct_removal(db, author_regno=author_regno, kind="confession")
@@ -573,16 +600,17 @@ def hide_comment(
     reusing it means a comment hidden from the review screen and one taken down by a report
     ruling land in identical state and staff reads never disagree with the feed.
 
-    **The parent confession is left alone**, including its ``comment_count``, for the same
-    reason ``hide_confession`` leaves the comments alone in the other direction: hiding a post
-    does not rewrite the removal state of the rows beneath it, which may be the subject of
-    their own reports and their own rulings.
+    **The parent confession is not removed**, and its own ``removed_at`` is left alone, for the
+    same reason ``hide_confession`` leaves the comments alone in the other direction: hiding a
+    comment does not rewrite the removal state of the post it sits on.
 
-    The ``comment_count`` decrement is the one extra write this needs, and it happens **only on
-    the transition** -- inside the ``if hidden`` branch rather than beside the lookup, because
-    reading it as "this comment was acted on, so subtract one" would let a second click on an
-    already-hidden comment take the count to zero while the comment stayed on screen for staff.
-    Same reasoning as the identical branch in :func:`resolve_confession_report`.
+    Its ``comment_count`` is the one thing about the parent that does move, and it has to:
+    that number is what the feed shows, so leaving it counting a comment no participant can open
+    would advertise something that is not there. It decrements **only on the transition** --
+    inside the ``if hidden`` branch rather than beside the lookup, because reading it as "this
+    comment was acted on, so subtract one" would let a second click on an already-hidden comment
+    take the count to zero while the comment stayed on screen for staff. Same reasoning as the
+    identical branch in :func:`resolve_confession_report`.
 
     The author is notified once, on the transition, and told the comment was removed with no
     claim about the policies -- nothing was ruled on here. **There is no unhide.**
@@ -620,6 +648,10 @@ def hide_comment(
             # nonsense number in the feed rather than as an obviously broken one.
             if parent is not None and parent.comment_count > 0:
                 parent.comment_count = parent.comment_count - 1
+            # Charged to the comment's author, in the same bucket as a confession removal -- a
+            # complaint about what somebody wrote on a confession is a complaint about them in
+            # the same way. Only on the transition, as above.
+            record_removal(session, kind=CONFESSION, author_user_id=comment.user_id)
 
     if hidden:
         _notify_direct_removal(db, author_regno=author_regno, kind="comment")

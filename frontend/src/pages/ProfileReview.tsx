@@ -30,6 +30,28 @@ import { Search, ShieldCheck, ShieldX, UsersRound, Mail, User, Plus } from 'luci
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AccountType } from '@/lib/capabilities';
 
+/**
+ * The three kinds of content a participant can be reported for. A confession and a comment on
+ * one share a kind, so the keys here match `report_counters.REPORT_KINDS` on the server.
+ */
+export type ReportKind = 'confession' | 'love_note' | 'message';
+
+export interface ReportTally {
+  /** Every report filed against this person's content of this kind, dismissed ones included. */
+  reports: number;
+  /** Only the reports a moderator took the content down for. The one to act on. */
+  removals: number;
+}
+
+/** Row order and wording for the tally, so all three kinds read the same way in the UI. */
+const REPORT_KIND_LABELS: Record<ReportKind, string> = {
+  confession: 'Confessions & comments',
+  love_note: 'Love notes',
+  message: 'Chat messages',
+};
+
+const REPORT_KIND_ORDER: ReportKind[] = ['confession', 'love_note', 'message'];
+
 interface AdminUserProfile {
   id: string;
   regno?: string | null;
@@ -46,7 +68,14 @@ interface AdminUserProfile {
   notifications_enabled?: boolean;
   love_notes_receive_enabled?: boolean;
   love_notes_send_enabled?: boolean;
-  reported_count?: number;
+  /**
+   * How often this participant's content has been reported, per kind, and how many of those
+   * reports a moderator upheld. Absent on staff rows, which have no reportable content.
+   *
+   * `removals` is the authoritative figure -- `reports` includes complaints that were
+   * dismissed, so it measures how often people complained rather than what was upheld.
+   */
+  report_history?: Partial<Record<ReportKind, ReportTally>>;
   last_login_at?: string | null;
   last_login_ip?: string | null;
   is_blocked?: boolean;
@@ -425,6 +454,16 @@ export const ProfileReview = () => {
                 ) : (
                   filteredProfiles.map((profile) => {
                     const blocked = Boolean(profile.is_blocked);
+                    // Staff accounts have no reportable content, so the tally is absent on
+                    // their rows rather than present-and-zero. Derived from the table the row
+                    // came from, the same way the rest of this app distinguishes accounts.
+                    const isParticipant = profile.account_type === 'users';
+                    const totalRemovals = isParticipant
+                      ? REPORT_KIND_ORDER.reduce(
+                          (sum, kind) => sum + (profile.report_history?.[kind]?.removals ?? 0),
+                          0,
+                        )
+                      : 0;
                     return (
                       <div
                         key={profile.id}
@@ -481,7 +520,67 @@ export const ProfileReview = () => {
                                 )}
                               </div>
                               <div className="grid gap-1 text-xs text-muted-foreground">
-                                <span>Reports: {profile.reported_count ?? 0}</span>
+                                {/* Only participants have reportable content, so a staff row
+                                    renders nothing here rather than three rows of zeros that
+                                    would read as a clean record. */}
+                                {isParticipant && (
+                                  <div className="mt-1 space-y-1 rounded-md border p-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-medium text-foreground">
+                                        Report history
+                                      </span>
+                                      {totalRemovals > 0 && (
+                                        <Badge variant="destructive">
+                                          {totalRemovals} removed
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {REPORT_KIND_ORDER.map((kind) => {
+                                      const tally = profile.report_history?.[kind];
+                                      return (
+                                        <div
+                                          key={kind}
+                                          className="flex items-center justify-between gap-2"
+                                        >
+                                          <span>{REPORT_KIND_LABELS[kind]}</span>
+                                          <span className="font-mono tabular-nums">
+                                            {/* Removals first and in the foreground: it is the
+                                                number a decision should be based on, and
+                                                `reports` beside it is the number of complaints
+                                                that survived scrutiny. Each figure is its own
+                                                element so the pair reads as two facts rather
+                                                than one string. */}
+                                            <span
+                                              className={
+                                                (tally?.removals ?? 0) > 0
+                                                  ? 'font-semibold text-destructive'
+                                                  : ''
+                                              }
+                                            >
+                                              {tally?.removals ?? 0}
+                                            </span>
+                                            <span className="text-muted-foreground">
+                                              removed
+                                            </span>
+                                            <span
+                                              aria-hidden="true"
+                                              className="px-1 text-muted-foreground"
+                                            >
+                                              /
+                                            </span>
+                                            <span className="text-muted-foreground">
+                                              {tally?.reports ?? 0} reported
+                                            </span>
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                    <p className="text-[11px] leading-snug text-muted-foreground">
+                                      Removals are the authoritative count: reports includes
+                                      complaints a moderator dismissed as unfounded.
+                                    </p>
+                                  </div>
+                                )}
                                 <span>Last login: {formatDate(profile.last_login_at)}</span>
                                 {profile.last_login_ip && <span>Last IP: {profile.last_login_ip}</span>}
                               </div>

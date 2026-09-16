@@ -15,6 +15,7 @@ from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionReco
     resolve_account_by_id)
 from ..accounts import AccountType, normalize_account_type
 from ..services.report_resolution_service import resolve_status_filter
+from .report_counters import tally_for_row
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -67,6 +68,11 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
             "love_notes_receive_enabled": row.love_notes_receive_enabled,
             "love_notes_send_enabled": row.love_notes_send_enabled,
             "last_matchmaking_at": serialize_datetime(row.last_matchmaking_at),
+            # Six counts, grouped by the kind of content they are about. Participant-only
+            # because only a participant has content anyone can report: a staff row would show
+            # "0 removals", which reads as a clean record rather than as a field that does not
+            # apply. Maintained by app.services.report_counters.
+            "report_history": tally_for_row(row),
         })
     return payload
 
@@ -111,6 +117,11 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
             "love_notes_receive_enabled": doc.get("love_notes_receive_enabled", True),
             "love_notes_send_enabled": doc.get("love_notes_send_enabled", False),
             "last_matchmaking_at": serialize_datetime(doc.get("last_matchmaking_at")),
+            # Passed through rather than recomputed: these are denormalised columns written by
+            # report_counters at filing and removal time, and the number an administrator is
+            # shown has to be the stored one. ``{}`` rather than omitted for a participant
+            # whose row predates the fields, so the client always has all three kinds to read.
+            "report_history": doc.get("report_history") or {},
         })
 
     return payload

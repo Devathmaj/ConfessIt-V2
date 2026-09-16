@@ -128,6 +128,46 @@ class AccountColumns:
 
 
 class UserRecord(AccountColumns, Base):
+    """A participant, and the only account table content can be attributed to.
+
+    **On participants and not on ``AccountColumns``:** the six ``*_report_count`` and
+    ``*_removal_count`` columns below describe *what a person has been reported for*, and
+    only a participant is ever reported -- a moderator's posts are not in anybody's report
+    queue, so a staff row would have six columns nothing ever writes and nothing reads. Same
+    reasoning as ``emoji``, ``bio`` and the matchmaking toggles being absent from the mixin.
+
+    **What the two columns per kind mean, and why there are two.** For each of the three kinds
+    of content a participant can be reported for, this table holds:
+
+    ``*_report_count``
+        Every report filed against this person's content of that kind, counted the moment the
+        report row is created. Includes reports a moderator later dismisses, so it is a measure
+        of *how often people complained*, not of wrongdoing.
+    ``*_removal_count``
+        Only those reports where a moderator took the content down. This is the authoritative
+        one -- it is the "report identity" of the participant, and the only one anything should
+        be decided on -- because every report counted in the first column that was dismissed was
+        somebody being wrong about content a moderator found fine.
+
+    The split is the whole point of storing both. A single number cannot distinguish a
+    participant whose content was reported once and vindicated from one whose content was taken
+    down once, and the second is the person an administrator needs to notice.
+
+    **Confessions and comments share one pair of columns.** A report queue does not separate
+    them (``ReportRecord`` discriminates by which nullable foreign key is set, and the Reports
+    Review screen is one screen), and a moderator's judgement about somebody writing a comment
+    on a confession is the same judgement as about the confession itself. Splitting them would
+    mean two numbers that no screen ever shows side by side and an admin would have to add up
+    mentally.
+
+    **How they are kept.** ``server_default`` of zero so a row written by a script or a raw
+    insert starts at zero rather than NULL, and the increments happen as SQL ``UPDATE ... SET n
+    = n + 1`` inside the same transaction as the report row or the removal stamp. Read-modify-
+    write through the ORM would lose an increment whenever two reports for the same person were
+    filed at once. See ``app.services.report_counters``, which is the only thing that writes
+    them.
+    """
+
     __tablename__ = "users"
 
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
@@ -138,6 +178,12 @@ class UserRecord(AccountColumns, Base):
     love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    confession_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    confession_removal_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    love_note_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    love_note_removal_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    message_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    message_removal_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
 
 class AdminRecord(AccountColumns, Base):

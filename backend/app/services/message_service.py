@@ -14,6 +14,7 @@ from ..models import UserDetails
 from ..accounts import Capability, has_capability
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
+from .report_counters import MESSAGE, record_report_filed
 
 logger = get_logger(__name__)
 
@@ -404,6 +405,11 @@ class MessageService:
             session.add(row)
             session.flush()
             report_id = str(row.id)
+            # Charged to the sender, not the receiver: the receiver filed the complaint. By
+            # regno because that is how ``messages`` names its author -- see report_counters.
+            record_report_filed(
+                session, kind=MESSAGE, author_regno=report_doc["reported_user_regno"]
+            )
         
         logger.info(f"Message {message_id} reported by {reporter.regno} for: {reason}")
         

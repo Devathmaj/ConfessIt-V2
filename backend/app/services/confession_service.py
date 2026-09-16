@@ -7,6 +7,8 @@ import datetime
 from datetime import timezone
 from typing import Optional, List
 
+from .report_counters import CONFESSION, record_report_filed
+
 logger = get_logger(__name__)
 
 class ConfessionService:
@@ -404,13 +406,23 @@ class ConfessionService:
                 reported_by_name=user.name, reason=report_data.reason,
                 created_at=datetime.datetime.now(datetime.timezone.utc)))
             comment_row = session.get(ConfessionCommentRecord, str(comment_id))
-            if comment_row: comment_row.report_count += 1
+            if comment_row:
+                comment_row.report_count += 1
+            # The complaint is against the comment, but what an administrator needs to see is
+            # who is being complained about, so it lands on the comment's author. Same column
+            # bucket as the confession itself -- see ``report_counters``.
+            record_report_filed(
+                session,
+                kind=CONFESSION,
+                author_user_id=comment_row.user_id if comment_row else None,
+            )
 
         logger.info(f"User {user_id} reported comment {comment_id}")
         with self.sessions() as session:
             row = session.get(ConfessionCommentRecord, str(comment_id))
             author = session.get(UserRecord, row.user_id) if row else None
-        if not row: return None
+        if not row:
+            return None
         updated_comment_doc = self._comment_payload(row, author)
         updated_comment_doc["reported_by"] = self._reporter_ids(comment_id)
         updated_comment_doc["report_count"] = len(updated_comment_doc["reported_by"])
@@ -435,7 +447,13 @@ class ConfessionService:
                 reported_by_name=user.name, reason=report_data.reason,
                 created_at=datetime.datetime.now(datetime.timezone.utc)))
             confession_row = session.get(ConfessionRecord, str(confession_id))
-            if confession_row: confession_row.report_count += 1
+            if confession_row:
+                confession_row.report_count += 1
+            record_report_filed(
+                session,
+                kind=CONFESSION,
+                author_user_id=confession_row.author_id if confession_row else None,
+            )
 
         logger.info(f"User {user_id} reported confession {confession_id}")
         return self.get_confession(confession_id, user_id)

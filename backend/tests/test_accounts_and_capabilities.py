@@ -242,10 +242,44 @@ def test_email_uniqueness_is_declared_per_table_not_across_tables():
 
 
 def test_no_account_table_has_a_role_column():
-    """There is no column a privilege could be stored in, which is the point."""
+    """There is no column a privilege could be stored in, which is the point.
+
+    Asserted across all three tables, and it has to stay a *schema* assertion rather than a
+    behavioural one: a role column that nothing writes is harmless today and is exactly how
+    one that something writes arrives later.
+    """
     for model in (UserRecord, AdminRecord, ModeratorRecord):
         assert "role" not in model.__table__.columns
-        assert "reported_count" not in model.__table__.columns
+
+
+def test_report_counts_live_on_participants_only():
+    """The six report counters exist on ``users`` and on neither staff table.
+
+    A staff account has no content in anybody's report queue, so a ``confession_removal_count``
+    on ``moderator`` would be a column that reads 0 forever -- indistinguishable, in a staff
+    list rendered beside participants, from a moderator with a clean record. Same reasoning as
+    ``emoji`` and ``bio`` being participant-only, and asserted separately from ``role`` above
+    because this one is a deliberate feature rather than an absence.
+
+    Two columns per kind of content, and never a single combined total: ``reports`` counts
+    complaints and ``removals`` counts upheld ones, and the second is the number an
+    administrator is meant to act on. See ``UserRecord``.
+    """
+    expected = {
+        "confession_report_count", "confession_removal_count",
+        "love_note_report_count", "love_note_removal_count",
+        "message_report_count", "message_removal_count",
+    }
+    assert expected <= set(UserRecord.__table__.columns.keys())
+
+    for model in (AdminRecord, ModeratorRecord):
+        assert not (expected & set(model.__table__.columns.keys())), model.__tablename__
+
+    # No combined "total reports" column anywhere: it would be the sum of a number that
+    # includes dismissed reports and a number that does not, which is the exact comparison
+    # that is not meaningful.
+    for model in (UserRecord, AdminRecord, ModeratorRecord):
+        assert "reported_count" not in model.__table__.columns, model.__tablename__
 
 
 # --- API payload validation ------------------------------------------------------

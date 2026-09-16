@@ -15,6 +15,7 @@ from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 from ..services.report_resolution_service import resolve_status_filter
 from ..accounts import AccountRef
+from .report_counters import LOVE_NOTE, record_report_filed
 
 # Logger
 logger = get_logger(__name__)
@@ -353,6 +354,10 @@ async def report_love_note_service(
         session.add(row)
         session.flush()
         report_id = str(row.id)
+        # The reporter is the recipient, so the person the complaint belongs to is the sender.
+        # Counted here, in the same transaction as the report row, so a rolled-back filing
+        # leaves no phantom complaint against them.
+        record_report_filed(session, kind=LOVE_NOTE, author_user_id=note.sender_id)
 
     logger.info(f"Love note {note_id} reported by {reporter.regno} for: {reason}")
 
