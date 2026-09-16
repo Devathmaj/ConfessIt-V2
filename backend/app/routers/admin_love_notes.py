@@ -25,8 +25,14 @@ async def get_all_love_notes(
     db: Database = Depends(get_db),
     admin: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_REVIEW))
 ) -> List[Dict[str, Any]]:
-    """Return every love note with full sender and recipient details for admin review."""
-    return await get_all_love_notes_for_admin(db, AccountRef.of(admin))
+    """
+    Return every love note for moderation as text only.
+
+    No sender, no recipient, no image, no anonymity flag: the reviewer judges the words. The
+    operational fields the screen needs to act -- id, status, arrival time, and whether the
+    note was already taken down -- come with it.
+    """
+    return await get_all_love_notes_for_admin(db)
 
 
 @router.put("/{note_id}/status")

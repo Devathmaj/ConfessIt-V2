@@ -18,7 +18,12 @@ import pytest
 from sqlalchemy import select
 
 from app.accounts import AccountType
-from app.db_models import LoveNoteRecord, LoveNoteReportRecord, UserRecord
+from app.db_models import (
+    LoveNoteRecord,
+    LoveNoteReportRecord,
+    NotificationRecord,
+    UserRecord,
+)
 from app.main import app
 from app.models import UserDetails
 from app.services.auth_service import get_current_user
@@ -388,6 +393,125 @@ def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as
     assert admin_client.get("/admin/love-notes/reports").json()["reports"] == []
 
 
+# ---------------------------------------------------------- a rejection is final
+
+
+def notifications_for(db, regno):
+    """Every notification heading a given account has, oldest first, so a test can assert on
+    what a person was told without depending on the order rows came back in."""
+    with db.sessions() as session:
+        rows = session.scalars(
+            select(NotificationRecord)
+            .where(NotificationRecord.recipient_regno == regno)
+            .order_by(NotificationRecord.created_at)
+        ).all()
+    return [(row.heading, row.body) for row in rows]
+
+
+def test_a_rejected_note_cannot_be_approved_afterwards(admin_client, db):
+    """The judgement that a note was never acceptable has to stay made. Without this, a
+    second click delivers a note that broke the rules -- and the screen's own rule is that a
+    rejected note offers no control at all, so this is the server half of that promise."""
+    note_id = note_between(db, status="pending_review")
+
+    assert admin_client.put(
+        f"/admin/love-notes/{note_id}/status", params={"status": "rejected"}
+    ).status_code == 200
+    refused = admin_client.put(
+        f"/admin/love-notes/{note_id}/status", params={"status": "approved"}
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "This love note was rejected and cannot be approved later."
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).status == "rejected"
+
+
+def test_a_rejected_note_cannot_be_put_back_to_pending(admin_client, db):
+    """There is no "un-decide": a note that has been ruled on has been ruled on, and letting
+    it return to the queue would put an unapprovable note back in front of a moderator."""
+    note_id = note_between(db, status="pending_review")
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "rejected"})
+
+    refused = admin_client.put(
+        f"/admin/love-notes/{note_id}/status", params={"status": "pending_review"}
+    )
+
+    assert refused.status_code == 409
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).status == "rejected"
+
+
+def test_an_approved_note_can_still_be_taken_back_down(admin_client, db):
+    """The other half, and the reason the refusal above is not simply "reject is permanent".
+
+    ``approved -> rejected`` is a different act under the same status: the note was delivered
+    and is being pulled back out of the recipient's inbox. Refusing it would leave a delivered
+    note no way to be withdrawn.
+    """
+    note_id = note_between(db, status="approved")
+
+    assert admin_client.put(
+        f"/admin/love-notes/{note_id}/status", params={"status": "rejected"}
+    ).status_code == 200
+    with db.sessions() as session:
+        assert session.get(LoveNoteRecord, note_id).status == "rejected"
+
+
+def test_a_refused_approval_sends_the_sender_nothing(admin_client, db):
+    """A refusal is not a moderation action, so it must not read as one. The sender has
+    already been told the note was not delivered; a second notice arriving from a click that
+    changed nothing would be a second event for a decision that was not re-made."""
+    note_id = note_between(db, status="pending_review")
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "rejected"})
+
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "approved"})
+
+    assert notifications_for(db, "sender") == [(
+        "❌ Love Note Not Delivered",
+        "Your love note could not be sent. It may have violated our community guidelines.",
+    )]
+
+
+def test_rejecting_before_delivery_still_says_it_could_not_be_sent(admin_client, db):
+    """The wording the sender was already getting, unchanged for the case it was written for."""
+    note_id = note_between(db, status="pending_review")
+
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "rejected"})
+
+    assert notifications_for(db, "sender") == [(
+        "❌ Love Note Not Delivered",
+        "Your love note could not be sent. It may have violated our community guidelines.",
+    )]
+
+
+def test_taking_down_a_delivered_note_says_it_was_taken_down(admin_client, db):
+    """The sender has already seen "Love Note Delivered!" and may have watched it be opened.
+    Telling them now that it "could not be sent" states something untrue about a note that
+    demonstrably arrived, so the notice names what actually happened instead."""
+    note_id = note_between(db, status="approved")
+
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "rejected"})
+
+    headings = notifications_for(db, "sender")
+    assert ("💔 Love Note Taken Down", "Your love note was taken down by a moderator "
+            "and is no longer available to the recipient.") in headings
+    assert not any("Not Delivered" in heading for heading, _body in headings), (
+        "a note that was delivered must not be reported as never having been sent"
+    )
+
+
+def test_taking_down_a_delivered_note_does_not_notify_the_recipient_again(admin_client, db):
+    """Hiding is a decision about what the sender wrote, not about the recipient. They are
+    not the author of it and are not the party who acted, so a second notice would only
+    announce that somebody's message had been pulled back."""
+    note_id = note_between(db, status="approved")
+
+    admin_client.put(f"/admin/love-notes/{note_id}/status", params={"status": "rejected"})
+
+    assert not any("Taken Down" in heading for heading, _body in notifications_for(db, RECIPIENT))
+
+
 # ------------------------------------------------------- removing content for a report
 
 
@@ -465,6 +589,48 @@ def test_a_removed_note_is_still_listed_for_staff(moderator_client, client, logi
     matching = [note for note in listed if note["id"] == note_id]
     assert matching, "the note vanished from the staff list instead of being flagged removed"
     assert matching[0]["content_removed"] is True
+
+
+def test_the_review_list_carries_the_words_and_nothing_about_the_people(admin_client, db):
+    """A reviewer judges the note, not the exchange behind it.
+
+    Every identifying field is absent from the payload rather than blanked in the client, so
+    a later screen cannot surface what this one no longer receives. The image goes too: a
+    reviewer can only rule on what they can read, and minting a delivery URL for an image
+    this screen does not show would hand staff a way to fetch every note's picture anyway.
+    """
+    sender = make_user(db, "sender", name="Sender Name")
+    recipient = make_user(db, RECIPIENT, name="Recipient Name")
+    note_id = make_note(
+        db, sender, recipient, body="the words under review", anonymous=True
+    )
+
+    listed = admin_client.get("/admin/love-notes").json()
+
+    assert [note["id"] for note in listed] == [note_id]
+    note = listed[0]
+    assert note["body"] == "the words under review"
+    for withheld in (
+        "sender", "recipient", "image_url", "anonymous", "read_at",
+        "sender_id", "recipient_id",
+    ):
+        assert withheld not in note, f"{withheld} is still handed to the review screen"
+
+
+def test_the_review_list_still_carries_what_moderation_needs(admin_client, db):
+    """Redaction must not cost the reviewer the ability to act or to be audited: every action
+    takes the note id, so without it the screen could not approve anything, and the removal
+    fields are the record of who took a note down."""
+    note_id = note_between(db)
+
+    listed = admin_client.get("/admin/love-notes").json()
+
+    assert listed[0]["id"] == note_id
+    assert listed[0]["status"] == "approved"
+    assert listed[0]["created_at"] is not None
+    assert listed[0]["content_removed"] is False
+    assert listed[0]["removed_at"] is None
+    assert listed[0]["removed_by_regno"] is None
 
 
 def test_removing_a_note_twice_keeps_the_first_timestamp(client, moderator_client, login_as, db):

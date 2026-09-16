@@ -168,47 +168,37 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
 # Admin-only Love Note Functions
 # ============================================================================
 
-async def get_all_love_notes_for_admin(db: Database, viewer: AccountRef) -> List[Dict[str, Any]]:
+async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
     """
-    Fetch all love notes with full sender and recipient details for admin review.
+    Fetch every love note for moderation, as the note's text and nothing else.
+
+    A reviewer of an anonymous love note is judging a message, not the people who exchanged
+    it, so this deliberately withholds every field that identifies either party -- sender and
+    recipient ids, names, regnos and emails, the ``anonymous`` flag that says which of them is
+    hidden, and the read receipt that says the recipient opened it. None of it is needed to
+    decide whether a note is acceptable, and loading it at all would put the identities in
+    the response where a future field could surface them.
+
+    The image is withheld for the same reason. It is content in its own right, so a reviewer
+    can only rule on the words the reviewer can read, and the asset proxy is not asked to
+    mint a delivery URL for a review this payload no longer carries.
+
+    What stays is what moderation needs to act and to be audited: the note id (every action
+    takes it), the body, the moderation status, when it arrived, and the removal flags -- so
+    a removed note is still listed and still shows who took it down and when.
     """
     items: List[Dict[str, Any]] = []
     with db.sessions() as session:
         rows = session.scalars(select(LoveNoteRecord).order_by(LoveNoteRecord.created_at.desc())).all()
-        user_ids = {note.sender_id for note in rows} | {note.recipient_id for note in rows}
-        users = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all()} if user_ids else {}
     for doc in rows:
-        sender_doc = users.get(doc.sender_id)
-        recipient_doc = users.get(doc.recipient_id)
-        
         items.append({
             "id": str(doc.id),
-            "sender": {
-                "id": str(doc.sender_id) if doc.sender_id else None,
-                "name": sender_doc.name if sender_doc else None,
-                "regno": sender_doc.regno if sender_doc else None,
-                "email": sender_doc.email if sender_doc else None,
-            },
-            "recipient": {
-                "id": str(doc.recipient_id) if doc.recipient_id else None,
-                "name": recipient_doc.name if recipient_doc else None,
-                "regno": recipient_doc.regno if recipient_doc else None,
-                "email": recipient_doc.email if recipient_doc else None,
-            },
-# Admins moderate notes in every state, so the proxy serves them the image -- a
-            # removed note included, because deciding whether a removal was warranted starts
-            # with being able to see the note it was applied to.
-            "image_url": asset_delivery_service.build_delivery_url(
-                kind="love-notes", stored_identifier=doc.image_url, account=viewer
-            ) or doc.image_url,
             "body": doc.body,
-            "anonymous": doc.anonymous,
             "status": doc.status,
             "created_at": isoformat_datetime(doc.created_at),
-            "read_at": isoformat_datetime(doc.read_at),
-            # Flagged, not filtered, for the same reason: staff see removed notes so a
-            # removal can be audited, and ``status`` above keeps answering the separate
-            # question of whether the note was judged acceptable.
+            # Flagged, not filtered: staff see removed notes so a removal can be audited, and
+            # ``status`` above keeps answering the separate question of whether the note was
+            # judged acceptable.
             "content_removed": doc.removed_at is not None,
             "removed_at": isoformat_datetime(doc.removed_at),
             "removed_by_regno": doc.removed_by_regno,
@@ -223,7 +213,14 @@ async def update_love_note_status_service(
 ) -> Dict[str, Any]:
     """
     Update the status of a love note and send appropriate notifications.
-    
+
+    A rejection is final. ``pending_review -> rejected`` is a judgement that the note was never
+    acceptable, and a moderator reversing that would mean a note that broke the rules could be
+    delivered by a second click, so the transition is refused here rather than merely not
+    offered by the screen. ``approved -> rejected`` is a different act under the same status:
+    the note was delivered and is being taken back out of the recipient's inbox. It is
+    permitted, and it tells the sender so in different words.
+
     Args:
         note_id: The str of the love note
         status_value: New status (approved, rejected, pending_review)
@@ -238,10 +235,19 @@ async def update_love_note_status_service(
             detail="Invalid love note id"
         )
 
-    # Get the love note before updating
+    # Get the love note before updating. The previous status is read inside the transaction and
+    # decides which notice the sender gets, so it has to be the value the row actually held --
+    # read outside, a second moderator clicking in between would produce the wrong notice.
+    previous_status: Optional[str] = None
     with db.sessions.begin() as session:
         love_note = session.get(LoveNoteRecord, str(note_id))
         if love_note:
+            previous_status = love_note.status
+            if previous_status == "rejected" and status_value != "rejected":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This love note was rejected and cannot be approved later.",
+                )
             love_note.status = status_value
     if not love_note:
         raise HTTPException(
@@ -286,15 +292,28 @@ async def update_love_note_status_service(
             )
     
     elif status_value == "rejected":
-        # Notify sender that their love note was rejected. No target for the same reason as
-        # the delivered notice above.
+        # Two different things end in ``rejected``, and the sender is owed an accurate account
+        # of which one happened to them. A note refused before it was ever delivered reads as
+        # "could not be sent". A note that was delivered and has now been pulled back out of
+        # the recipient's inbox reads as "taken down", because the sender has already seen the
+        # delivered notice and the silent disappearance would be the confusing part. Telling
+        # the second one "could not be sent" would state something untrue about a note that
+        # demonstrably arrived. No target for either, same reason as above.
         if sender:
-            create_notification_service(
-                recipient_regno=sender.regno,
-                heading="❌ Love Note Not Delivered",
-                body="Your love note could not be sent. It may have violated our community guidelines.",
-                db=db
-            )
+            if previous_status == "approved":
+                create_notification_service(
+                    recipient_regno=sender.regno,
+                    heading="💔 Love Note Taken Down",
+                    body="Your love note was taken down by a moderator and is no longer available to the recipient.",
+                    db=db
+                )
+            else:
+                create_notification_service(
+                    recipient_regno=sender.regno,
+                    heading="❌ Love Note Not Delivered",
+                    body="Your love note could not be sent. It may have violated our community guidelines.",
+                    db=db
+                )
     
     return {"id": note_id, "status": status_value}
 
