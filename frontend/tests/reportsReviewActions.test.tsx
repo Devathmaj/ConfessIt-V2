@@ -95,6 +95,20 @@ function renderPage() {
 const dismissButton = () => screen.getByRole('button', { name: /dismiss/i });
 const removeButton = () => screen.getByRole('button', { name: /remove content/i });
 
+/** Opens the report card and returns its header toggle.
+ *
+ * Cards are collapsed by default, so the close-out buttons do not exist until one is opened.
+ * The header *is* the toggle, so it is found by the accessible name it already had as a title,
+ * which is also the check that the button still carries a usable name after the markup changed.
+ */
+async function openCard() {
+  const toggle = await screen.findByRole('button', { name: /confession reported by/i });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  return toggle;
+}
+
 describe('ReportsReview: ruling on a report', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,7 +124,8 @@ describe('ReportsReview: ruling on a report', () => {
 
   it('offers both outcomes on a pending report', async () => {
     renderPage();
-    expect(await screen.findByText('hateful content')).toBeInTheDocument();
+    await screen.findByText('hateful content');
+    await openCard();
     expect(dismissButton()).toBeInTheDocument();
     expect(removeButton()).toBeInTheDocument();
   });
@@ -118,6 +133,7 @@ describe('ReportsReview: ruling on a report', () => {
   it('sends nothing when the dialog opens', async () => {
     renderPage();
     await screen.findByText('hateful content');
+    await openCard();
 
     fireEvent.click(removeButton());
 
@@ -135,6 +151,7 @@ describe('ReportsReview: ruling on a report', () => {
     });
     renderPage();
     await screen.findByText('hateful content');
+    await openCard();
 
     fireEvent.click(removeButton());
     const dialog = await screen.findByRole('alertdialog');
@@ -151,6 +168,7 @@ describe('ReportsReview: ruling on a report', () => {
   it('sends nothing when the dialog is cancelled', async () => {
     renderPage();
     await screen.findByText('hateful content');
+    await openCard();
 
     fireEvent.click(removeButton());
     const dialog = await screen.findByRole('alertdialog');
@@ -170,6 +188,7 @@ describe('ReportsReview: ruling on a report', () => {
     });
     renderPage();
     await screen.findByText('hateful content');
+    await openCard();
 
     fireEvent.click(dismissButton());
     const dialog = await screen.findByRole('alertdialog');
@@ -197,6 +216,7 @@ describe('ReportsReview: ruling on a report', () => {
     });
     renderPage();
     await screen.findByText('hateful content');
+    await openCard();
 
     fireEvent.click(removeButton());
     const dialog = await screen.findByRole('alertdialog');

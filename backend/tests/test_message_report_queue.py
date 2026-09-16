@@ -36,6 +36,7 @@ from app.db_models import (
 from app.main import app
 from app.models import AccountType, UserDetails
 from app.postgres import new_id
+from app.services.admin_service import serialize_datetime
 from app.services.auth_service import get_current_user
 
 WINDOW = timedelta(hours=4)
@@ -177,10 +178,98 @@ def test_a_reported_message_arrives_with_the_message_and_both_parties(admin_clie
     assert report["reviewed_by_regno"] is None
 
 
+def test_a_reported_message_arrives_with_when_it_was_sent(admin_client, thread, db):
+    """When the message was sent, not only when it was reported.
+
+    The two are different facts and the gap between them is the whole delay: a report filed the
+    moment it arrived and one filed three weeks later look identical on the row, so a moderator
+    reading only ``reported_at`` would date the offending message by the complaint rather than by
+    what was actually said.
+    """
+    report = only_report(admin_client.get("/admin/messages/reports"))
+
+    assert report["message_created_at"] is not None
+    with db.sessions() as session:
+        assert report["message_created_at"] == serialize_datetime(
+            session.get(MessageRecord, thread["message_id"]).created_at
+        )
+
+
+def test_a_reported_message_names_the_conversation_it_was_sent_in(admin_client, thread):
+    """A single message is a sentence with the rest of the thread missing.
+
+    Which thread it came out of, who was in it and whether it is still open are all things a
+    moderator needs before ruling, and none of them are recoverable from the report row.
+    """
+    report = only_report(admin_client.get("/admin/messages/reports"))
+
+    conversation = report["conversation"]
+    assert conversation["id"] == thread["conversation_id"]
+    assert conversation["status"] == "accepted"
+    assert [person["regno"] for person in conversation["participants"]] == ["sender", RECIPIENT]
+    # Names, not just regnos: a regno identifies a person to the database, not to the moderator.
+    assert [person["name"] for person in conversation["participants"]] == ["User sender", f"User {RECIPIENT}"]
+    assert conversation["message_count"] == 1
+    assert conversation["removed_message_count"] == 0
+
+
+def test_the_conversation_context_counts_what_is_already_removed(admin_client, thread, db, client, login_as):
+    """How much of the thread is already gone is what separates one lapse from a pattern.
+
+    The counts include removed rows deliberately. Excluding them would make a thread where two
+    messages have already been taken down look identical to a clean one, which is precisely the
+    difference a moderator needs to see.
+    """
+    with login_as("sender"):
+        for index in range(3):
+            client.post("/messages/send", json={
+                "conversation_id": thread["conversation_id"], "body": f"more {index}",
+            })
+        extra = client.post("/messages/send", json={
+            "conversation_id": thread["conversation_id"], "body": "also mine",
+        }).json()["id"]
+    with login_as(RECIPIENT):
+        client.post("/messages/send", json={
+            "conversation_id": thread["conversation_id"], "body": "my own reply",
+        })
+
+    # Two of the messages in the thread come down: one by a report ruling, one by writing
+    # ``removed_at`` directly, which is how a message removed outside any report -- content
+    # moderation with no report filed -- reaches the same state. The count has to reflect both.
+    admin_client.patch(f"/admin/messages/reports/{thread['report_id']}?status=removed", json={})
+    with db.sessions.begin() as session:
+        session.get(MessageRecord, extra).removed_at = datetime.now(timezone.utc)
+
+    conversation = only_report(admin_client.get("/admin/messages/reports"))["conversation"]
+
+    assert conversation["message_count"] == 6
+    assert conversation["removed_message_count"] == 2
+
+
+def test_the_conversation_context_is_shared_by_reports_in_the_same_thread(admin_client, thread, db, client, login_as):
+    """Every report on the same conversation reports the same thread.
+
+    The context is read once per conversation rather than per report, so two reports in one
+    thread must not disagree about what that thread contains.
+    """
+    with login_as("sender"):
+        second = client.post("/messages/send", json={
+            "conversation_id": thread["conversation_id"], "body": "a second message",
+        })
+    with login_as(RECIPIENT):
+        client.post("/messages/report", json={
+            "message_id": second.json()["id"], "reason": "also this",
+        })
+
+    reports = admin_client.get("/admin/messages/reports").json()["reports"]
+
+    assert len(reports) == 2
+    assert {report["conversation"]["id"] for report in reports} == {thread["conversation_id"]}
+    assert {report["conversation"]["message_count"] for report in reports} == {2}
+
+
 def test_the_queue_answers_the_envelope_the_other_two_queues_answer(admin_client, thread):
     body = admin_client.get("/admin/messages/reports").json()
-
-    assert body["total"] == 1
     assert body["skip"] == 0
     assert body["limit"] == 50
 

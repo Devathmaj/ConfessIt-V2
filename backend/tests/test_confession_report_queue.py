@@ -211,6 +211,111 @@ def test_a_comment_on_an_anonymous_confession_still_names_its_author(admin_clien
     assert report["author_hidden"] is False
 
 
+# ------------------------------------------------------- the confession behind a comment
+
+
+def test_a_comment_report_carries_the_confession_it_was_left_on(admin_client, db):
+    """The context that makes a comment readable.
+
+    Whether a reply is a threat or an argument often turns entirely on the post it answers, and a
+    moderator shown the remark alone has to guess. So the parent travels with the report: its
+    body, who it was addressed to, when it was written, and how many comments it has.
+    """
+    author = make_user(db, "author", name="The Author")
+    commenter = make_user(db, "commenter", name="The Commenter")
+    reporter = make_user(db, "reporter")
+    confession_id = make_confession(
+        db, author, body="the confession the comment answers",
+    )
+    comment_id = make_comment(db, confession_id, commenter, body="the reported comment")
+    # A second comment, so the count is not 1 by accident -- the number is what turns "a remark"
+    # into "the second of two", which is part of the picture.
+    make_comment(db, confession_id, commenter, body="an unreported comment")
+    # ``comment_count`` is denormalised onto the confession and these rows are written directly,
+    # so the count is set by hand too. That the application keeps it correct is a separate
+    # question, covered where the increment and the decrement are tested.
+    with db.sessions.begin() as session:
+        session.get(ConfessionRecord, confession_id).comment_count = 2
+    make_report(db, comment_id, reporter, kind="comment")
+
+    report = only_report(admin_client.get("/admin/confessions/reports"))
+
+    parent = report["parent_confession"]
+    assert parent["id"] == confession_id
+    assert parent["body"] == "the confession the comment answers"
+    assert parent["recipient_name"] == "Someone In Particular"
+    assert parent["created_at"] is not None
+    assert parent["comment_count"] == 2
+    assert parent["anonymous"] is False
+    assert parent["content_removed"] is False
+    assert parent["author"]["name"] == "The Author"
+    assert parent["author"]["regno"] == "author"
+    # The parent is context, not a second thing to rule on: the reported target is unchanged.
+    assert report["target_id"] == comment_id
+
+
+def test_a_comment_report_on_an_anonymous_confession_withholds_its_author(admin_client, db):
+    """The load-bearing case for showing a parent at all.
+
+    A comment report points at a post, so rendering the parent carelessly would make "report a
+    comment on an anonymous confession" a way to de-anonymise it -- for staff as well as for
+    everyone else. The body is readable, because staff review means reading the post; the author
+    is not sent at all.
+    """
+    author = make_user(db, "author", name="The Anonymous Author")
+    commenter = make_user(db, "commenter", name="The Commenter")
+    reporter = make_user(db, "reporter")
+    confession_id = make_confession(db, author, anonymous=True, body="an anonymous confession")
+    comment_id = make_comment(db, confession_id, commenter)
+    make_report(db, comment_id, reporter, kind="comment")
+
+    response = admin_client.get("/admin/confessions/reports")
+    parent = only_report(response)["parent_confession"]
+
+    assert parent["anonymous"] is True
+    # Present as a key with a null value, so the client can tell "anonymous" from "author gone".
+    assert parent["author"] is None
+    # The commenter is a different population and is still named.
+    assert only_report(response)["author"]["name"] == "The Commenter"
+    assert "an anonymous confession" in response.text
+    # On the raw body: a redaction that only blanks one field still leaks through another key.
+    assert "The Anonymous Author" not in response.text
+    assert author["id"] not in response.text
+
+
+def test_a_confession_report_has_no_parent_to_show(admin_client, db):
+    """The parent of a confession report *is* the reported content.
+
+    Carrying it anyway would put the same body in ``content`` and ``parent_confession`` and give
+    a reviewer two copies of one thing to read past.
+    """
+    author = make_user(db, "author")
+    reporter = make_user(db, "reporter")
+    confession_id = make_confession(db, author)
+    make_report(db, confession_id, reporter, kind="confession")
+
+    assert only_report(admin_client.get("/admin/confessions/reports"))["parent_confession"] is None
+
+
+def test_a_parent_that_has_already_been_removed_says_so(admin_client, db, moderator_client):
+    """A second report on a comment whose parent is already down still needs to say the parent is.
+
+    Otherwise a moderator sees the post in full and has no way to know it is no longer visible to
+    anyone else in the app.
+    """
+    author = make_user(db, "author")
+    commenter = make_user(db, "commenter")
+    reporter = make_user(db, "reporter")
+    confession_id = make_confession(db, author)
+    comment_id = make_comment(db, confession_id, commenter)
+    make_report(db, comment_id, reporter, kind="comment")
+    moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
+
+    parent = only_report(admin_client.get("/admin/confessions/reports"))["parent_confession"]
+
+    assert parent["content_removed"] is True
+
+
 # ---------------------------------------------------------------- reading the queue
 
 

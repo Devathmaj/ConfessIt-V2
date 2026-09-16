@@ -533,7 +533,15 @@ def get_confession_reports_data(
 
         # The author of an anonymous confession is deliberately absent from this set: the row
         # is never loaded, so the identity is not in this process to be filtered out later.
+        #
+        # The same rule applies to a *parent* confession reached through a reported comment. A
+        # comment report points at a post, and showing that post's author would make reporting a
+        # comment on an anonymous confession a way to de-anonymise it -- which is exactly the
+        # promise this codebase refuses to break anywhere else. So a non-anonymous parent's
+        # author is loaded and an anonymous one's is not, and the payload below reports the
+        # difference as ``author: None`` with ``anonymous: true`` rather than as a missing key.
         author_ids = {row.author_id for row in confessions.values() if not row.anonymous}
+        author_ids |= {row.author_id for row in parents.values() if not row.anonymous}
         author_ids |= {row.user_id for row in comments.values()}
         authors = {
             user.id: user for user in session.scalars(
@@ -581,12 +589,42 @@ def get_confession_reports_data(
         # exists -- see the note on ``content_removed``.
         target = comment if is_comment else confession
 
+        # The confession a reported comment sits on. Without it a moderator is judging a remark
+        # with no idea what it was a remark *about* -- and whether a comment is a threat or a
+        # joke often turns entirely on the post it answers. Present only for comment reports:
+        # for a confession report the parent is the reported content itself, already in
+        # ``content``, and repeating it would double the card for no information.
+        parent_confession = None
+        if is_comment and confession is not None:
+            parent_author = (
+                None if confession.anonymous else authors.get(str(confession.author_id))
+            )
+            parent_confession = {
+                "id": str(confession.id),
+                "body": confession.body,
+                "recipient_name": confession.recipient_name,
+                "created_at": serialize_datetime(confession.created_at),
+                # Denormalised on the confession already, so this costs no extra read, and it is
+                # what turns the comment from "a remark" into "the fourth of nine".
+                "comment_count": confession.comment_count,
+                "anonymous": bool(confession.anonymous),
+                "content_removed": bool(confession.removed_at),
+                # Withheld for an anonymous parent, as above. The key is still present so the
+                # client can tell "anonymous" from "author gone".
+                "author": None if parent_author is None else {
+                    "id": str(parent_author.id),
+                    "name": parent_author.name,
+                    "regno": parent_author.regno,
+                },
+            }
+
         items.append({
             "id": str(report.id),
             "target_type": "comment" if is_comment else "confession",
             "target_id": target_id,
             "confession_id": confession_id,
             "parent_recipient_name": confession.recipient_name if confession else None,
+            "parent_confession": parent_confession,
             "anonymous": bool(confession.anonymous) if confession else False,
             "content": content,
             "content_created_at": serialize_datetime(content_created_at),
@@ -612,9 +650,11 @@ def get_confession_reports_data(
             # from ``status``: a content admin can remove a confession without a report ever
             # existing, and a moderator has to see that before choosing between the two.
             #
-            # ``target`` rather than the two branches above: the content row can be missing
-            # even though the report exists, since deleting a confession cascades its reports
-            # but a comment's parent going away does not take the comment report with it.
+            # ``target`` rather than the two branches above, so the flag reads one attribute
+            # instead of repeating the branch. The ``is not None`` is defensive: both targets are
+            # reachable only through a cascade that would have taken the report with them, so in
+            # practice the row is always there. It costs one attribute check and keeps a future
+            # non-cascading delete from turning into a 500 on the moderation screen.
             "content_removed": bool(target.removed_at) if target is not None else False,
         })
 

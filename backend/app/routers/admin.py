@@ -693,17 +693,88 @@ async def get_message_reports(
         message_ids = {report.message_id for report in reports}
         messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
 
+        # Conversation context, in three bulk reads rather than three per row. A reported
+        # message without its thread is a sentence with nothing around it, and "who was this
+        # person talking to, and had anything else in there already come down" is the context
+        # that decides whether one message is a single lapse or a pattern.
+        conversation_ids = {
+            str(message.conversation_id) for message in messages.values() if message.conversation_id
+        }
+        conversations = {
+            str(row.id): row for row in session.scalars(
+                select(ConversationRecord).where(ConversationRecord.id.in_(conversation_ids))
+            ).all()
+        } if conversation_ids else {}
+
+        party_regnos: set = set()
+        for conversation in conversations.values():
+            party_regnos.add(conversation.initiator_regno)
+            party_regnos.add(conversation.receiver_regno)
+        # The sender and receiver of a reported message are already in ``users`` above; the other
+        # side of the thread may be nobody involved in this report at all, so they are read here.
+        party_regnos -= set(users)
+        parties = {user.regno: user for user in session.scalars(select(UserRecord).where(UserRecord.regno.in_(party_regnos))).all()} if party_regnos else {}
+
+        # Both figures in one grouped pass: how big the thread is, and how much of it has
+        # already been taken down. Counts include removed rows on purpose -- a moderator
+        # auditing a thread needs to know that two of its messages are already gone, which is
+        # invisible if removed rows are excluded from the total.
+        thread_totals: Dict[str, int] = {}
+        thread_removed: Dict[str, int] = {}
+        if conversation_ids:
+            counted = session.execute(
+                select(
+                    MessageRecord.conversation_id,
+                    func.count(MessageRecord.id),
+                    func.count(MessageRecord.id).filter(MessageRecord.removed_at.is_not(None)),
+                )
+                .where(MessageRecord.conversation_id.in_(conversation_ids))
+                .group_by(MessageRecord.conversation_id)
+            ).all()
+            thread_totals = {str(row[0]): row[1] for row in counted}
+            thread_removed = {str(row[0]): row[2] for row in counted}
+
+    def _party(regno: str) -> Dict[str, Any]:
+        person = users.get(regno) or parties.get(regno)
+        return {"regno": regno, "name": person.name if person else "Unknown"}
+
     enriched_reports = []
     for report in reports:
         reporter = users.get(report.reporter_regno)
         reported_user = users.get(report.reported_user_regno)
         message = messages.get(str(report.message_id))
 
+        conversation = conversations.get(str(message.conversation_id)) if message else None
+        conversation_context = None
+        if conversation is not None:
+            conversation_context = {
+                "id": str(conversation.id),
+                # Whether the thread is still open matters: a live conversation can be
+                # terminated as a consequence of this ruling, and a moderator deciding that
+                # cannot see from this card that it is still possible.
+                "status": conversation.status,
+                # The two parties, deduplicated by regno so a self-conversation would not render
+                # the same person twice.
+                "participants": [
+                    _party(regno)
+                    for regno in dict.fromkeys(
+                        [conversation.initiator_regno, conversation.receiver_regno]
+                    )
+                ],
+                "message_count": thread_totals.get(str(conversation.id), 0),
+                "removed_message_count": thread_removed.get(str(conversation.id), 0),
+            }
+
         enriched_reports.append({
             "id": str(report.id),
             "message_id": str(report.message_id),
             "body": message.body if message else "[Message not found]",
+            # When the message was sent. The screen previously showed only when it was
+            # *reported*, so a message could sit in the queue looking like it was sent moments
+            # ago however long ago it actually was.
+            "message_created_at": serialize_datetime(message.created_at) if message else None,
             "conversation_id": str(message.conversation_id) if message else None,
+            "conversation": conversation_context,
             "reporter": {
                 "regno": report.reporter_regno,
                 "name": reporter.name if reporter else "Unknown"
