@@ -59,6 +59,22 @@ export const containsUnstorableCharacter = (value: string): boolean =>
   UNSTORABLE_CHARACTERS.test(value) || ASTRAL_NON_CHARACTERS.test(value);
 
 export const COMMENT_BODY_MAX = 500;
-export const MESSAGE_BODY_MAX = 2000;
+export const MESSAGE_BODY_MAX = 100;
 export const REPORT_REASON_MAX = 1000;
 export const RECIPIENT_NAME_MAX = 160;
+
+/**
+ * How many messages one conversation holds, and how many of them one person may send.
+ *
+ * A cap on the conversation is a cap on its transcript, not on anybody's typing: the read
+ * endpoint returns the whole thread in one response, so a conversation long enough to
+ * overflow that window would hide its own newest messages from the two people in it.
+ *
+ * The per-person half is what makes that ceiling an exchange rather than a monologue --
+ * neither side can spend the whole allowance on its own.
+ *
+ * The server decides; this exists so the dialog can show what is left and stop offering a
+ * composer that would be refused. See `lib/messageQuota.ts` for how the numbers are read.
+ */
+export const CONVERSATION_MESSAGE_MAX = 200;
+export const CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100;

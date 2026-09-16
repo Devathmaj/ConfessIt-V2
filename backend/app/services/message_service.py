@@ -7,6 +7,7 @@ from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord, UserRecord
 from ..logger import get_logger
+from ..limits import CONVERSATION_MESSAGE_MAX, CONVERSATION_PARTICIPANT_MESSAGE_MAX
 from ..utils import isoformat_datetime
 from fastapi import HTTPException, status
 
@@ -24,6 +25,22 @@ READABLE_CONVERSATION_STATUSES = frozenset({"accepted", "terminated"})
 
 # Statuses a message may be sent into. A terminated conversation is not one of them.
 WRITABLE_CONVERSATION_STATUS = "accepted"
+
+# The two ways a conversation runs out of room. Which one stopped the send is worth knowing:
+# a participant at their own limit has a conversation they can still read and nothing more to
+# put in it, whereas a conversation at its ceiling is finished for both of them.
+PARTICIPANT_LIMIT_REACHED = "participant"
+CONVERSATION_LIMIT_REACHED = "conversation"
+
+# Built from the limits rather than written out, so the sentence a user reads cannot drift
+# away from the number the service is actually enforcing.
+MESSAGE_LIMIT_PARTICIPANT_DETAIL = (
+    f"You have sent all {CONVERSATION_PARTICIPANT_MESSAGE_MAX} messages you can send "
+    f"in this conversation"
+)
+MESSAGE_LIMIT_CONVERSATION_DETAIL = (
+    f"This conversation has reached its limit of {CONVERSATION_MESSAGE_MAX} messages"
+)
 
 
 class MessageService:
@@ -115,6 +132,97 @@ class MessageService:
                 session.scalar(select(UserRecord.is_blocked).where(UserRecord.regno == other_regno))
             )
     
+    def _message_usage(self, session, conversation_id: str, regno: str) -> Dict[str, Any]:
+        """How much of a conversation's message allowance is spent, read on an open session.
+
+        Counts every row in the conversation, removed ones included. A message a moderator
+        took down is still a message that was written: it is still in the archive, still in
+        the transcript the other party sees a hole where it was, and letting its removal hand
+        the allowance back would mean the ceiling depended on how many reports succeeded.
+
+        One note on what can still move the number: ``message_archival_service`` deletes rows
+        wholesale, and a conversation whose messages were archived reads as emptier than it
+        was. That is deliberate on its own terms -- the messages are gone -- and it is an
+        admin-only, manual action rather than something a participant can lean on.
+        """
+        total = session.scalar(
+            select(func.count())
+            .select_from(MessageRecord)
+            .where(MessageRecord.conversation_id == str(conversation_id))
+        ) or 0
+        from_this_participant = session.scalar(
+            select(func.count())
+            .select_from(MessageRecord)
+            .where(
+                MessageRecord.conversation_id == str(conversation_id),
+                MessageRecord.sender_regno == regno,
+            )
+        ) or 0
+        return {"conversation_count": int(total), "participant_count": int(from_this_participant)}
+
+    @staticmethod
+    def _quota(usage: Dict[str, Any], *, messages_just_sent: int = 0) -> Dict[str, Any]:
+        """The usage figures as sent to the client, with the refusals derived from them.
+
+        The derivation happens once, here, so that "how much is left", "may this person send"
+        and "which limit stopped them" cannot be three different readings of the same two
+        counts on three different surfaces. ``messages_just_sent`` lets the send path report
+        the state *after* its own insert without counting the table a second time.
+        """
+        conversation_count = usage["conversation_count"] + messages_just_sent
+        participant_count = usage["participant_count"] + messages_just_sent
+        conversation_remaining = max(0, CONVERSATION_MESSAGE_MAX - conversation_count)
+        participant_remaining = max(0, CONVERSATION_PARTICIPANT_MESSAGE_MAX - participant_count)
+
+        # The participant's own allowance is checked first because it is the limit that binds
+        # in normal use, and it is the more useful thing to be told: the conversation may
+        # have room in it that this person cannot use.
+        if participant_remaining == 0:
+            limit_reached = PARTICIPANT_LIMIT_REACHED
+        elif conversation_remaining == 0:
+            limit_reached = CONVERSATION_LIMIT_REACHED
+        else:
+            limit_reached = None
+
+        return {
+            "conversation_limit": CONVERSATION_MESSAGE_MAX,
+            "participant_limit": CONVERSATION_PARTICIPANT_MESSAGE_MAX,
+            "conversation_count": conversation_count,
+            "participant_count": participant_count,
+            "conversation_remaining": conversation_remaining,
+            "participant_remaining": participant_remaining,
+            "can_send": limit_reached is None,
+            "limit_reached": limit_reached,
+        }
+
+    @staticmethod
+    def _quota_refusal(quota: Dict[str, Any]) -> Optional[HTTPException]:
+        """The refusal a send has to make, or ``None`` when there is room for it."""
+        if quota["limit_reached"] == PARTICIPANT_LIMIT_REACHED:
+            return HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=MESSAGE_LIMIT_PARTICIPANT_DETAIL,
+            )
+        if quota["limit_reached"] == CONVERSATION_LIMIT_REACHED:
+            return HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=MESSAGE_LIMIT_CONVERSATION_DETAIL,
+            )
+        return None
+
+    def conversation_quota(self, db: Database, conversation_id: str, regno: str) -> Dict[str, Any]:
+        """The message allowance of a conversation, as it stands for one participant.
+
+        Read-only, and deliberately independent of the conversation's status: a thread that
+        is terminated, expired or blocked is just as finished at 200 messages as at 1, and the
+        read that returns this is the one the chat dialog opens with. The caller must already
+        be a participant -- ``get_messages`` has established that by the time the router asks
+        for this.
+        """
+        with db.sessions() as session:
+            usage = self._message_usage(session, conversation_id, regno)
+        return self._quota(usage)
+
     def send_message(
         self,
         db: Database,
@@ -124,12 +232,13 @@ class MessageService:
     ) -> Dict[str, Any]:
         """
         Send a message in a conversation
-        
+
         Enforces:
         - Sender is participant
         - Conversation is accepted
         - Conversation is not blocked
         - Conversation is not expired (4 hours)
+        - Sender is within their own message allowance, and the conversation is within its own
         """
         # Validate sender is participant (allows reading but not sending if blocked)
         conversation = self.validate_conversation_participant(
@@ -195,13 +304,30 @@ class MessageService:
         }
         
         # Insert into PostgreSQL
+        #
+        # The conversation row is taken FOR UPDATE before the counts are read. The cap is
+        # enforced by counting rows that already exist, so without the lock two sends racing
+        # past the same check would both see 99 and both insert -- the same reason
+        # matchmaking claims its cooldown window with a conditional UPDATE rather than a read
+        # followed by a write. The lock is on the conversation, so sends into *different*
+        # conversations do not contend.
         with db.sessions.begin() as session:
-            conversation_row = session.get(ConversationRecord, str(conversation_id))
+            conversation_row = session.scalar(
+                select(ConversationRecord)
+                .where(ConversationRecord.id == str(conversation_id))
+                .with_for_update()
+            )
             if conversation_row and conversation_row.blocked_by:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Cannot send messages: this conversation is blocked"
                 )
+
+            quota = self._quota(self._message_usage(session, conversation_id, sender.regno))
+            refusal = self._quota_refusal(quota)
+            if refusal is not None:
+                raise refusal
+
             row = MessageRecord(
                 conversation_id=str(conversation_id), sender_regno=sender.regno,
                 receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
@@ -212,6 +338,9 @@ class MessageService:
                 conversation_row.last_message_preview = body[:100]
             session.flush()
             message_doc["id"] = str(row.id)
+            # Reported after the insert rather than recounted, so the response describes the
+            # state this send actually left behind.
+            quota = self._quota(quota, messages_just_sent=1)
         
         # Publish to Redis for real-time delivery
         redis_message = {
@@ -236,7 +365,10 @@ class MessageService:
             "receiver_regno": receiver_id,
             "body": body,
             "created_at": isoformat_datetime(message_doc["created_at"]),
-            "is_read": False
+            "is_read": False,
+            # Sent with the message so a client that has just used up its allowance learns
+            # it here rather than by being refused on the next send.
+            "quota": quota,
         }
     
     def get_messages(
@@ -244,7 +376,7 @@ class MessageService:
         db: Database,
         conversation_id: str,
         user: UserDetails,
-        limit: int = 200
+        limit: int = CONVERSATION_MESSAGE_MAX
     ) -> List[Dict[str, Any]]:
         """
         Get messages for a conversation

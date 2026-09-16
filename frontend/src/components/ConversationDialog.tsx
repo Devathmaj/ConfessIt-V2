@@ -7,6 +7,14 @@ import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, 
 import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI, getConversationByMatch } from '@/services/api';
 import { messagingClient, sendMessage, fetchMessages, reportMessage } from '@/lib/messaging';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
+import {
+  canSendAnotherMessage,
+  emptyMessageQuota,
+  messageLimitNotice,
+  messageQuotaLabel,
+  quotaAfterIncomingMessage,
+} from '@/lib/messageQuota';
+import type { MessageQuota } from '@/lib/messageQuota';
 import { toast } from 'sonner';
 import { resolveProfilePictureUrl, parseTimestamp, timestampMs } from '@/lib/utils';
 import { ReportMessageDialog } from './ReportMessageDialog';
@@ -89,6 +97,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [rejecting, setRejecting] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  // How much of the conversation's message allowance is left, kept against the conversation it
+  // was read for. The pair matters because this component is re-used when the parent swaps
+  // `conversationData`: the allowance is per conversation, so one thread's remaining room shown
+  // over another's transcript would be worse than showing none at all. A reading for a
+  // conversation that is not on screen reads as `null` -- "not known yet" -- which
+  // canSendAnotherMessage treats as open.
+  const [quotaState, setQuotaState] = useState<{ conversationId: string; quota: MessageQuota } | null>(null);
 
   // Prevent body scroll when modal is open
   useEffect(() => {
@@ -239,11 +254,24 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         // Subscribe to new messages
         const unsubscribeMessage = messagingClient.onMessage((newMessage) => {
           console.log('📨 New message received:', newMessage);
+          const isFromCaller = newMessage.sender_regno === currentUserRef.current;
           const messageWithFlag = {
             ...newMessage,
-            is_sender: newMessage.sender_regno === currentUserRef.current
+            is_sender: isFromCaller
           };
           setMessages((prev) => [...prev, messageWithFlag]);
+          // The live socket is how a partner's message reaches this thread, so the allowance
+          // has to move here too or the composer keeps offering a room that is no longer
+          // there. Derived from the server's counts rather than recounted from the list, and
+          // only for the conversation this subscription was opened for.
+          setQuotaState((previous) =>
+            previous && previous.conversationId === newMessage.conversation_id
+              ? {
+                  conversationId: previous.conversationId,
+                  quota: quotaAfterIncomingMessage(previous.quota, isFromCaller) ?? previous.quota,
+                }
+              : previous
+          );
           scrollToBottom();
         });
         unsubscribeMessageRef.current = unsubscribeMessage;
@@ -286,7 +314,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     setLoadingMessages(true);
     try {
       console.log('🔄 Fetching messages for:', conversationData.conversation.id);
-      const messages = await fetchMessages(conversationData.conversation.id, token);
+      const { messages, quota: fetchedQuota } = await fetchMessages(conversationData.conversation.id, token);
       console.log('✅ Messages fetched:', messages.length);
       
       // Add is_sender flag to each message
@@ -296,6 +324,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       }));
 
       setMessages(messagesWithFlags);
+      // An allowance the server did not report falls back to the full one rather than to a
+      // closed composer: guessing "full" can cost one refused send, guessing "empty" would
+      // lock a conversation that has room in it.
+      recordQuota(fetchedQuota);
       scrollToBottom();
     } catch (error) {
       console.error('❌ Failed to load messages:', error);
@@ -470,22 +502,37 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       return;
     }
 
+    // Stopped before the request rather than after it. The server refuses this too, but the
+    // composer is disabled in this state, and a send that cannot succeed should not be the
+    // thing that says so.
+    if (!canSendAnotherMessage(quota)) {
+      toast.error(messageLimitNotice(quota) ?? 'This conversation has no messages left to send.');
+      return;
+    }
+
     const textToSend = messageText.trim();
     setMessageText('');
     setSending(true);
 
     try {
-      await sendMessage(
+      const sent = await sendMessage(
         conversationData.conversation.id,
         textToSend,
         token
       );
 
+      // The send reports the allowance as it left it, so the counter moves to the server's
+      // answer rather than to a guess made here.
+      recordQuota(sent.quota);
+
       // Message will appear via real-time WebSocket subscription
       scrollToBottom();
     } catch (error) {
       console.error('Error sending message:', error);
-      toast.error('Failed to send message');
+      // The server's own refusal is the useful text: a run-out-of-room answer arrives as a
+      // 403 whose detail says which allowance ran out, and a generic failure would throw it
+      // away. Anything else still falls back to the generic sentence.
+      toast.error(error instanceof Error ? error.message : 'Failed to send message');
       setMessageText(textToSend); // Restore message on error
     } finally {
       setSending(false);
@@ -607,13 +654,17 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             // If there were no messages, try to load them
             console.log('📥 No saved messages, loading from backend...');
             fetchMessages(newConversationData.conversation.id, token)
-              .then(fetchedMessages => {
+              .then(({ messages: fetchedMessages, quota: fetchedQuota }) => {
                 const messagesWithFlags = fetchedMessages.map((msg) => ({
                   ...msg,
                   is_sender: msg.sender_regno === currentUserRef.current
                 }));
                 setMessages(messagesWithFlags);
                 messagesBackupRef.current = messagesWithFlags;
+                // The allowance comes back with the history rather than being carried over:
+                // this reload is the freshest reading of it, and it is also the answer that
+                // may have moved while the thread was blocked.
+                recordQuota(fetchedQuota);
                 console.log('✅ Messages loaded:', fetchedMessages.length);
               })
               .catch(error => {
@@ -728,6 +779,23 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   // and it is spelled out because the whole point of the terminated state is that it must
   // not read as a live conversation.
   const canChat = isAccepted && !isExpired && !isTerminated;
+
+  const currentConversationId = conversationData?.conversation.id ?? null;
+  const quota = quotaState?.conversationId === currentConversationId ? quotaState.quota : null;
+
+  // Record an allowance against the conversation it was read for, so the derived `quota`
+  // above can tell a current reading from a previous thread's. Absent a server figure the
+  // full allowance is recorded rather than an absence: guessing "full" can cost one refused
+  // send, guessing "empty" would close a conversation that has room in it.
+  const recordQuota = (value: MessageQuota | null) => {
+    if (currentConversationId === null) return;
+    setQuotaState({ conversationId: currentConversationId, quota: value ?? emptyMessageQuota() });
+  };
+
+  // Two readings of the same allowance: whether there is room for another message, and the
+  // sentence that explains it when there is not. Both come from the server's counts.
+  const composerOpen = canSendAnotherMessage(quota);
+  const quotaNotice = messageLimitNotice(quota);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4 touch-none">
@@ -995,24 +1063,55 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
             {/* Message Input */}
             {canChat && !is_blocked && (
-              <div className="border-t p-2 sm:p-4 flex gap-2">
-                <input
-                  type="text"
-                  value={messageText}
-                  maxLength={MESSAGE_BODY_MAX}
-                  onChange={(e) => setMessageText(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                  placeholder="Type a message..."
-                  className="flex-1 px-3 sm:px-4 py-2 text-sm sm:text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary min-w-0"
-                  disabled={sending || !isConnected}
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  disabled={!messageText.trim() || sending || !isConnected}
-                  className="flex-shrink-0 px-3 sm:px-4 h-9 sm:h-10 text-sm"
-                >
-                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
-                </Button>
+              <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-[11px] sm:text-xs text-muted-foreground">
+                You can send up to 100 messages in this conversation.
+              </div>
+            )}
+
+            {canChat && !is_blocked && composerOpen && (
+              <div className="border-t p-2 sm:p-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={messageText}
+                    maxLength={MESSAGE_BODY_MAX}
+                    onChange={(e) => setMessageText(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Type a message..."
+                    className="flex-1 px-3 sm:px-4 py-2 text-sm sm:text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary min-w-0"
+                    disabled={sending || !isConnected}
+                  />
+                  <span className="whitespace-nowrap text-[11px] sm:text-xs text-muted-foreground">
+                    {messageText.length}/{MESSAGE_BODY_MAX}
+                  </span>
+                  <Button
+                    onClick={handleSendMessage}
+                    disabled={!messageText.trim() || sending || !isConnected}
+                    className="flex-shrink-0 px-3 sm:px-4 h-9 sm:h-10 text-sm"
+                  >
+                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
+                  </Button>
+                </div>
+                {/* How much of this person's own allowance is spent. Shown from the first
+                    message rather than near the end of the allowance: someone who has not
+                    been told the limit cannot plan around reaching it. */}
+                {messageQuotaLabel(quota) && (
+                  <p className="mt-1 text-right text-[11px] sm:text-xs text-muted-foreground">
+                    {messageQuotaLabel(quota)}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Message Allowance Spent. The thread is still readable, so this replaces the
+                composer with the reason rather than with a silence -- and the two reasons are
+                worded differently because they are different situations: an allowance of your
+                own is spent, or the conversation's. */}
+            {canChat && !is_blocked && !composerOpen && (
+              <div className="border-t p-3 sm:p-4 bg-gray-50">
+                <p className="text-center text-xs sm:text-base text-gray-900">
+                  {quotaNotice}
+                </p>
               </div>
             )}
 

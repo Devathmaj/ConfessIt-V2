@@ -487,9 +487,21 @@ def test_database_rejects_over_long_text_written_outside_the_api(db, table, limi
                 "(SELECT id FROM users WHERE regno = 'limits-owner'))"
             ),
             "messages": (
-                "INSERT INTO messages (id, conversation_id, sender_regno, receiver_regno, "
-                "body, created_at) VALUES (gen_random_uuid(), gen_random_uuid(), "
-                "'limits-owner', 'limits-peer', :body, now())"
+                "WITH ins AS ("
+                "INSERT INTO matches (id, user_1_regno, user_2_regno, created_at, expires_at) "
+                "VALUES (gen_random_uuid(), 'limits-owner', 'limits-peer', now(), now()+interval '4 hours') "
+                "ON CONFLICT DO NOTHING RETURNING id AS mid"
+                "), m2 AS ("
+                "SELECT COALESCE((SELECT mid FROM ins), gen_random_uuid()::text) AS mid"
+                "), conv AS ("
+                "INSERT INTO conversations (id, match_id, initiator_regno, receiver_regno, status, created_at, requested_at, accepted_at) "
+                "SELECT gen_random_uuid(), mid, 'limits-owner', 'limits-peer', 'accepted', now(), now(), now() FROM m2 "
+                "ON CONFLICT DO NOTHING RETURNING id AS cid"
+                "), c2 AS ("
+                "SELECT COALESCE((SELECT cid FROM conv), gen_random_uuid()::text) AS cid"
+                ") "
+                "INSERT INTO messages (id, conversation_id, sender_regno, receiver_regno, body, created_at) "
+                "SELECT gen_random_uuid(), cid, 'limits-owner', 'limits-peer', :body, now() FROM c2"
             ),
         }[table]
         with pytest.raises(IntegrityError) as excinfo:

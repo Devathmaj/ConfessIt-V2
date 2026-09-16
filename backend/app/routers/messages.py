@@ -13,9 +13,14 @@ from ..services.authorization import require_participant
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
 from ..logger import get_logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
-from ..limits import MESSAGE_BODY_MAX, REPORT_REASON_MAX, USER_REGNO_MAX
+from ..limits import (
+    CONVERSATION_MESSAGE_MAX,
+    MESSAGE_BODY_MAX,
+    REPORT_REASON_MAX,
+    USER_REGNO_MAX,
+)
 
 logger = get_logger(__name__)
 
@@ -28,6 +33,12 @@ router = APIRouter(
 class MessageCreate(BaseModel):
     conversation_id: str = Field(max_length=USER_REGNO_MAX)
     body: str = Field(max_length=MESSAGE_BODY_MAX)
+
+    @validator("body")
+    def _validate_body_characters(cls, value: str) -> str:
+        from ..models import _reject_unchangeable_characters
+
+        return _reject_unchangeable_characters(value, "body")
 
 
 class MessageReport(BaseModel):
@@ -49,6 +60,10 @@ def send_message(
     - Conversation is accepted
     - Conversation is not blocked
     - Conversation is not expired
+    - User is within their own message allowance, and the conversation is within its own
+
+    The response carries the message's `quota` so the client can show how much room is left
+    without a second request.
     """
     return message_service.send_message(
         db=db,
@@ -63,7 +78,11 @@ def get_messages(
     conversation_id: str,
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
-    limit: int = Query(200, ge=1, le=500)
+    # Upper-bounded by the conversation ceiling rather than by an arbitrary window: a
+    # conversation cannot hold more than this many messages, so a larger `limit` could only
+    # ever be a number that returns the same reply. Refusing it says so, where silently
+    # clamping would leave the caller believing it had asked for a window it cannot have.
+    limit: int = Query(CONVERSATION_MESSAGE_MAX, ge=1, le=CONVERSATION_MESSAGE_MAX)
 ):
     """
     Get messages for a conversation
@@ -71,6 +90,13 @@ def get_messages(
     Validates:
     - User is participant in conversation
     - Marks messages as read
+
+    Every message a conversation can hold fits in one response -- the ceiling on the
+    conversation is the same as this endpoint's default window -- so `limit` trims the reply
+    for a caller who asks for less and never hides the newest part of the thread.
+
+    `quota` is the message allowance as it stands for the caller, which is what the dialog
+    reads to decide whether to offer the composer at all.
     """
     messages = message_service.get_messages(
         db=db,
@@ -82,7 +108,10 @@ def get_messages(
     return {
         "conversation_id": conversation_id,
         "messages": messages,
-        "count": len(messages)
+        "count": len(messages),
+        "quota": message_service.conversation_quota(
+            db=db, conversation_id=conversation_id, regno=current_user.regno
+        ),
     }
 
 

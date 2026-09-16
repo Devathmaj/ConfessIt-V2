@@ -7,6 +7,8 @@
 // These three helpers talk to the API with fetch rather than the shared axios instance, so
 // they would otherwise miss the response interceptor that ends an expired session.
 import { endSessionIfTokenWasRejected } from './authEvents';
+import { CONVERSATION_MESSAGE_MAX } from './limits';
+import type { MessageQuota } from './messageQuota';
 
 
 interface Message {
@@ -18,6 +20,22 @@ interface Message {
   created_at: string;
   is_read: boolean;
   is_sender?: boolean;
+}
+
+/**
+ * A sent message, carrying the conversation's allowance as the send left it.
+ *
+ * The quota rides along so a client that has just used up its allowance is told in the
+ * response to the send that spent it, rather than finding out by being refused next time.
+ */
+export interface SentMessage extends Message {
+  quota: MessageQuota;
+}
+
+/** The transcript of a conversation, plus how much room is left in it. */
+export interface ConversationTranscript {
+  messages: Message[];
+  quota: MessageQuota | null;
 }
 
 interface WebSocketMessage {
@@ -222,7 +240,7 @@ export async function sendMessage(
   conversationId: string,
   body: string,
   token: string
-): Promise<Message> {
+): Promise<SentMessage> {
   const response = await fetch(`${API_URL}/messages/send`, {
     method: 'POST',
     headers: {
@@ -238,6 +256,9 @@ export async function sendMessage(
   if (!response.ok) {
     endSessionIfTokenWasRejected(response.status);
     const error = await response.json();
+    // The refusal is the message: a conversation or a participant that has run out of room
+    // answers with the reason, and replacing it with a generic failure would throw away the
+    // one sentence that tells the user what to do next.
     throw new Error(error.detail || 'Failed to send message');
   }
 
@@ -245,13 +266,17 @@ export async function sendMessage(
 }
 
 /**
- * Fetch message history
+ * Fetch message history, and the conversation's remaining allowance alongside it.
+ *
+ * The whole transcript fits in one response -- a conversation cannot hold more messages than
+ * this endpoint's default window -- so the limit is only there for a caller that wants less,
+ * and the returned array is the thread rather than a page of it.
  */
 export async function fetchMessages(
   conversationId: string,
   token: string,
-  limit: number = 200
-): Promise<Message[]> {
+  limit: number = CONVERSATION_MESSAGE_MAX
+): Promise<ConversationTranscript> {
   const url = `${API_URL}/messages/${conversationId}?limit=${limit}`;
   console.log('🌐 Fetching messages from:', url);
   console.log('🔑 Using token:', token ? 'TOKEN_EXISTS' : 'NO_TOKEN');
@@ -274,7 +299,10 @@ export async function fetchMessages(
 
     const data = await response.json();
     console.log('✅ Fetch response data:', data);
-    return data.messages;
+    // Null rather than a default: a response without the field means the server did not say,
+    // and `messageQuota` decides what an absent allowance means rather than this file
+    // inventing one.
+    return { messages: data.messages, quota: data.quota ?? null };
   } catch (error) {
     console.error('❌ Fetch exception:', error);
     throw error;
