@@ -353,6 +353,7 @@ def test_api_accepts_unicode_confessions(db, request):
     shared fixture mints a fresh id on every call.
     """
     client = request.getfixturevalue("_confession_author_client")
+    author_id = "33333333-3333-3333-3333-333333333333"
     for body in (
         "hi \U0001f495 there",
         "मेरे है",
@@ -360,6 +361,14 @@ def test_api_accepts_unicode_confessions(db, request):
         "أَشْتَاقُ إليك",
         "\U0001f468‍\U0001f469",
     ):
+        # One confession per participant every two hours, so the window is opened again
+        # between iterations. This test is about what the text layer accepts, and the
+        # cooldown is covered on its own in test_confession_cooldown.py.
+        with db.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE users SET last_confession_at = NULL WHERE id = :id"),
+                {"id": author_id},
+            )
         response = client.post(
             "/confessions",
             json={

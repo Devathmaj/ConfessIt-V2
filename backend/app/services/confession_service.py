@@ -1,5 +1,6 @@
 from ..logger import get_logger
-from sqlalchemy import func, or_, select
+from fastapi import HTTPException, status
+from sqlalchemy import func, or_, select, update
 from ..postgres import PostgresClient, get_postgres_client
 from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
@@ -10,6 +11,100 @@ from typing import Optional, List
 from .report_counters import CONFESSION, record_report_filed
 
 logger = get_logger(__name__)
+
+# A participant may post one confession every CONFESSION_COOLDOWN_HOURS. The feed is read in
+# full by every visitor on every page load, so the throttle is what stops one account from
+# filling it on its own.
+CONFESSION_COOLDOWN_HOURS = 2
+
+
+def _cooldown_message(seconds_remaining: float) -> str:
+    """The sentence a user is shown, from the number of seconds left.
+
+    Deliberately quotes the wait rather than a bare timestamp: the cooldown is the answer to
+    "why did my post fail", and a wall-clock instant is unreadable to a person who has
+    already closed the app for an hour.
+    """
+    hours, remainder = divmod(int(seconds_remaining), 3600)
+    minutes = remainder // 60
+    if hours > 0:
+        return (
+            f"You can post one confession every {CONFESSION_COOLDOWN_HOURS} hours. "
+            f"Please try again in {hours} hour{'s' if hours != 1 else ''} and {minutes} minutes."
+        )
+    return (
+        f"You can post one confession every {CONFESSION_COOLDOWN_HOURS} hours. "
+        f"Please try again in {minutes} minute{'s' if minutes != 1 else ''}."
+    )
+
+
+def _consume_confession_attempt(session, user_id: str, now: datetime.datetime) -> bool:
+    """Atomically claim the caller's one confession for this window.
+
+    The conditional UPDATE is the only thing serialising the cooldown. Concurrent callers
+    contend on the same row lock, and because PostgreSQL re-evaluates the predicate against
+    the committed version of the row, only the winner sees a row to update. Reading
+    ``last_confession_at`` and writing it in a later transaction instead would leave a window
+    in which every concurrent request observes "eligible" -- which is the same reasoning, and
+    the same mechanism, as ``matchmaking_service._consume_matchmaking_attempt``.
+
+    Returns True if this caller won the window.
+    """
+    cooldown_cutoff = now - datetime.timedelta(hours=CONFESSION_COOLDOWN_HOURS)
+    result = session.execute(
+        update(UserRecord)
+        .where(
+            UserRecord.id == str(user_id),
+            or_(
+                UserRecord.last_confession_at.is_(None),
+                UserRecord.last_confession_at < cooldown_cutoff,
+            ),
+        )
+        .values(last_confession_at=now)
+    )
+    return result.rowcount == 1
+
+
+def _seconds_until_confession_eligible(session, user_id: str, now: datetime.datetime) -> float:
+    """How long this caller still has to wait. Zero or less means they may post now.
+
+    Read through ``session`` when one is supplied so a caller that has just lost the claim
+    reports the wait against the committed row rather than a stale local copy.
+    """
+    if session is not None:
+        last = session.scalar(
+            select(UserRecord.last_confession_at).where(UserRecord.id == str(user_id))
+        )
+    else:
+        with get_postgres_client().sessions() as own_session:
+            last = own_session.scalar(
+                select(UserRecord.last_confession_at).where(UserRecord.id == str(user_id))
+            )
+
+    if last is None:
+        return 0.0
+    # The column is TIMESTAMPTZ, but a row written by a script or a hand-edited fixture can
+    # arrive naive. Cooldown arithmetic across a naive and an aware datetime raises, and
+    # refusing to post with a 500 because of a timezone is the wrong way to be strict.
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+
+    eligible_at = last + datetime.timedelta(hours=CONFESSION_COOLDOWN_HOURS)
+    return (eligible_at - now).total_seconds()
+
+
+def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
+    """429 with the wait in the message.
+
+    429 rather than 403: nothing is wrong with the caller's right to confess, only with the
+    time. A 403 would be indistinguishable from being refused for good.
+    """
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=_cooldown_message(max(seconds_remaining, 0)),
+        headers={"Retry-After": str(max(int(seconds_remaining), 0))},
+    )
+
 
 class ConfessionService:
     def __init__(self, client: Optional[PostgresClient] = None):
@@ -55,18 +150,54 @@ class ConfessionService:
         # recipient_name arrives already normalized: trimmed, or None when the confession
         # is not addressed to anyone. Both spellings mean the same thing, so both are NULL.
         confession_dict = confession_data.dict()
-        created_at = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        # One confession per participant every CONFESSION_COOLDOWN_HOURS. Read-then-write
+        # would leave a window in which two simultaneous posts both see "eligible" and both
+        # land, so the cooldown is claimed by the same conditional UPDATE that
+        # _consume_matchmaking_attempt uses: PostgreSQL re-evaluates the predicate against
+        # the committed row under the lock, so only one caller sees a row to update.
         with self.sessions.begin() as session:
+            if not _consume_confession_attempt(session, user_id, now):
+                raise _cooldown_rejection(
+                    _seconds_until_confession_eligible(session, user_id, now)
+                )
             row = ConfessionRecord(
                 body=confession_dict["body"], recipient_name=confession_dict.get("recipient_name"),
                 anonymous=confession_dict["anonymous"], comments_enabled=confession_dict["comments_enabled"],
-                created_at=created_at, author_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
+                created_at=now, author_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
             )
             session.add(row)
             session.flush()
             confession_id = str(row.id)
-        logger.info(f"Created confession {confession_id}")
+        logger.info(f"Created confession {confession_id} for user {user_id}")
         return self.get_confession(confession_id, user_id)
+
+    def get_confession_cooldown(self, user_id: str) -> dict:
+        """Advisory: may this participant confess right now, and if not, when can they?
+
+        The decision itself is made by the conditional UPDATE in ``create_confession``, which
+        is the only thing that serialises it. This exists so the compose screen can show the
+        wait before the user has typed anything, and it therefore must not be trusted as an
+        authorization check -- the write re-derives the answer itself.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        seconds = _seconds_until_confession_eligible(None, str(user_id), now)
+        if seconds <= 0:
+            return {
+                "status": "eligible",
+                "message": f"You can post one confession every {CONFESSION_COOLDOWN_HOURS} hours.",
+                "cooldown_hours": CONFESSION_COOLDOWN_HOURS,
+                "remaining_minutes": 0,
+                "remaining_seconds": 0,
+            }
+        return {
+            "status": "cooldown",
+            "message": _cooldown_message(seconds),
+            "cooldown_hours": CONFESSION_COOLDOWN_HOURS,
+            "remaining_minutes": int(seconds // 60),
+            "remaining_seconds": int(seconds),
+        }
 
     def get_confessions(self, sort_by: str = 'popularity', user_id: Optional[str] = None) -> List[Confession]:
         with self.sessions() as session:

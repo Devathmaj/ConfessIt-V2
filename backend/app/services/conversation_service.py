@@ -33,6 +33,7 @@ def _user_data(row):
         "last_login_ip": str(row.last_login_ip) if row.last_login_ip else None,
         "last_login_user_agent": row.last_login_user_agent,
         "last_matchmaking_at": row.last_matchmaking_at,
+        "last_confession_at": row.last_confession_at,
         # Rows here come from ``users`` and only from ``users``, so the table is fixed. It is
         # stated rather than left to the model default so that if a caller ever feeds this a
         # row from another table it fails validation instead of being silently relabelled as

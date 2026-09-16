@@ -84,6 +84,12 @@ interface AdminUserProfile {
   profile_picture_url?: string | null;
   interests?: string[] | null;
   last_matchmaking_at?: string | null;
+  /**
+   * When this participant last posted a confession of their own. Read by the server for the
+   * two-hour cooldown; carried here so the field is not silently dropped from an account
+   * payload. Optional because the API omits it when the participant has never confessed.
+   */
+  last_confession_at?: string | null;
 }
 
 type CreateUserForm = {

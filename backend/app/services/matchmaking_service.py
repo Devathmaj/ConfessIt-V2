@@ -167,6 +167,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         "last_login_at": matched_user_row.last_login_at, "last_login_ip": str(matched_user_row.last_login_ip) if matched_user_row.last_login_ip else None,
         "last_login_user_agent": matched_user_row.last_login_user_agent,
         "last_matchmaking_at": matched_user_row.last_matchmaking_at,
+        "last_confession_at": matched_user_row.last_confession_at,
     })
 
     # Create the match with current UTC time

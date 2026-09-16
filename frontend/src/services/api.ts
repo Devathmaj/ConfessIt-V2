@@ -34,6 +34,25 @@ export const getTotalConfessionsCount = async () => {
     return response.data;
 };
 
+/**
+ * Ask whether this account may post a confession right now.
+ *
+ * Advisory, and the server treats it as such: POST /confessions claims the window with a
+ * conditional UPDATE and answers for itself, so this is only so the compose screen can show
+ * the wait before anything is typed. `remaining_seconds` is here rather than something the
+ * client parses out of `message` because a countdown cannot round-trip through prose.
+ */
+export const getConfessionCooldown = async () => {
+  const response = await axios.get(`${API_URL}/confessions/cooldown`, { headers: getAuthHeaders() });
+  return response.data as {
+    status: string;
+    message: string;
+    cooldown_hours: number;
+    remaining_minutes: number;
+    remaining_seconds: number;
+  };
+};
+
 export const createConfession = async (confession: any) => {
   const response = await axios.post(`${API_URL}/confessions`, confession, { headers: getAuthHeaders() });
   return response.data;

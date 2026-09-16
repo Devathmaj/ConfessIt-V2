@@ -24,11 +24,18 @@ import {
   Edit,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getConfessions, createConfession, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
+import { getConfessions, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import {
+  formatCooldownRemaining,
+  readCooldownRejection,
+  readConfessionCooldown,
+  type ConfessionCooldown,
+} from '@/lib/confessionCooldown';
+import { serverNow } from '@/lib/serverClock';
 import {
   COMMENT_BODY_MAX,
   CONFESSION_BODY_MAX,
@@ -91,6 +98,64 @@ export const ConfessionsPage = () => {
   const [allowComments, setAllowComments] = useState(true);
   const [isPostDialogOpen, setIsPostDialogOpen] = useState(false);
   const { user, isAuthenticated } = useAuth();
+
+  /**
+   * The wait on posting, as the server described it, plus when that wait is over.
+   *
+   * Stored as an absolute deadline rather than a countdown that decrements itself, so a tab
+   * left in the background for ten minutes does not come back to a timer that thinks only
+   * one second passed, and so the number shown is derived from `serverNow()` instead of from
+   * a device clock the user can change.
+   */
+  const [cooldown, setCooldown] = useState<ConfessionCooldown | null>(null);
+  const [cooldownEndsAt, setCooldownEndsAt] = useState<number | null>(null);
+  const [cooldownTick, setCooldownTick] = useState(() => serverNow());
+
+  const startCooldown = (next: ConfessionCooldown) => {
+    setCooldown(next);
+    setCooldownEndsAt(serverNow() + next.seconds * 1000);
+    setCooldownTick(serverNow());
+  };
+
+  const clearCooldown = () => {
+    setCooldown(null);
+    setCooldownEndsAt(null);
+  };
+
+  const refreshCooldown = async () => {
+    if (!isAuthenticated) {
+      clearCooldown();
+      return;
+    }
+    try {
+      const next = readConfessionCooldown(await getConfessionCooldown());
+      if (next) startCooldown(next);
+      else clearCooldown();
+    } catch {
+      // Advisory only; the write enforces it regardless. Someone who sees no notice because
+      // this call failed gets the same explanation from the 429 instead.
+      clearCooldown();
+    }
+  };
+
+  const secondsUntilEligible = cooldownEndsAt
+    ? Math.max(0, Math.ceil((cooldownEndsAt - cooldownTick) / 1000))
+    : 0;
+  const isOnCooldown = secondsUntilEligible > 0;
+
+  // One tick drives the whole notice. The deadline is in server time, so this is the only
+  // thing re-rendering, and it stops as soon as there is no wait left.
+  useEffect(() => {
+    if (!isOnCooldown) return;
+    setCooldownTick(serverNow());
+    const timer = window.setInterval(() => setCooldownTick(serverNow()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isOnCooldown, cooldownEndsAt]);
+
+  useEffect(() => {
+    refreshCooldown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const [selectedConfession, setSelectedConfession] = useState<Confession | null>(null);
   const [newComment, setNewComment] = useState('');
@@ -310,6 +375,12 @@ export const ConfessionsPage = () => {
       toast.error('You must be logged in to post a confession.');
       return;
     }
+    // Checked before the request as well as after, so the wait is shown with the text still
+    // on screen instead of the user typing a confession only to be refused.
+    if (isOnCooldown) {
+      toast.error(cooldown?.message ?? 'You can post one confession every 2 hours.');
+      return;
+    }
 
     try {
       const confessionData = {
@@ -325,9 +396,26 @@ export const ConfessionsPage = () => {
       setNewConfession('');
       setConfessingTo('');
       setIsPostDialogOpen(false);
+      // A successful post starts this account's own two hours, so the notice appears
+      // immediately rather than on the next page load.
+      startCooldown({
+        message: 'You can post one confession every 2 hours.',
+        hours: 2,
+        minutes: 0,
+        seconds: 2 * 60 * 60,
+      });
       toast.success('Your confession has been shared! 💖');
     } catch (error) {
-       toast.error('Failed to share confession. Please try again.');
+      // The server is the authority: this dialog can have been open for an hour, and the
+      // write is what refuses. A 429 therefore starts the countdown from the server's own
+      // Retry-After rather than from the stale advisory answer this page loaded with.
+      const rejection = readCooldownRejection(error);
+      if (rejection) {
+        startCooldown(rejection);
+        toast.error(rejection.message);
+      } else {
+        toast.error('Failed to share confession. Please try again.');
+      }
     }
   };
 
@@ -476,6 +564,25 @@ export const ConfessionsPage = () => {
       <Navigation />
       <FloatingHearts />
       <div className="max-w-6xl mx-auto mb-8 px-2 sm:px-4">
+        {/*
+          The persistent notice, above the fold rather than inside the dialog. A user who has
+          just posted should not have to reopen the compose box to find out they have to wait,
+          and `role="status"` means it is announced without stealing focus mid-read.
+        */}
+        {isOnCooldown && (
+          <div role="status" className="mb-4 sm:mb-6 rounded-lg border border-romantic/30 bg-romantic/5 px-4 py-3">
+            <p className="flex items-center gap-2 text-sm sm:text-base text-foreground">
+              <Clock className="w-4 h-4 shrink-0 text-romantic" />
+              <span>
+                {cooldown?.message ?? 'You can post one confession every 2 hours.'}{' '}
+                <span className="font-medium tabular-nums">
+                  {formatCooldownRemaining(secondsUntilEligible)}
+                </span>{' '}
+                remaining.
+              </span>
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-2 sm:gap-4 mb-4 sm:mb-6">
           <CountdownTimer />
         </div>
@@ -530,6 +637,20 @@ export const ConfessionsPage = () => {
                   Express your feelings safely and anonymously. To someone, or just to get it out.
                 </DialogDescription>
               </DialogHeader>
+              {isOnCooldown && (
+                /* Repeated here as well as above the trigger: the dialog is reachable from
+                   the feed's own state and the wait has to be explained where the Share
+                   button is, not only where the person decided to press it. */
+                <div role="status" className="rounded-lg border border-romantic/30 bg-romantic/5 px-3 py-2 text-sm text-foreground">
+                  <p className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 shrink-0 text-romantic" />
+                    <span>{cooldown?.message ?? 'You can post one confession every 2 hours.'}</span>
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Time left: <span className="font-medium text-foreground tabular-nums">{formatCooldownRemaining(secondsUntilEligible)}</span>
+                  </p>
+                </div>
+              )}
               <div className="space-y-4">
                 <Textarea placeholder="Share what's in your heart..." value={newConfession} maxLength={CONFESSION_BODY_MAX} onChange={(e) => setNewConfession(e.target.value)} className="min-h-[120px] bg-background/80 border-romantic/30 focus:border-romantic" />
                 <p className="text-xs text-muted-foreground">
@@ -564,9 +685,13 @@ export const ConfessionsPage = () => {
                 </div>
               </div>
               <DialogFooter>
-                <Button onClick={handleSubmitConfession} className="btn-romantic w-full">
+                <Button
+                  onClick={handleSubmitConfession}
+                  disabled={isOnCooldown}
+                  className="btn-romantic w-full"
+                >
                   <Send className="w-4 h-4 mr-2" />
-                  Share Confession
+                  {isOnCooldown ? 'Waiting for your next confession' : 'Share Confession'}
                 </Button>
               </DialogFooter>
             </DialogContent>

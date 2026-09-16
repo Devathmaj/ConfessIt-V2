@@ -49,6 +49,7 @@ def _user_payload(user):
         "love_notes_send_enabled": user.love_notes_send_enabled,
         "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
         "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_at": user.last_matchmaking_at,
+        "last_confession_at": user.last_confession_at,
         "created_at": user.created_at, "updated_at": user.updated_at,
         "is_blocked": user.is_blocked,
     }
@@ -383,6 +384,7 @@ async def update_user_details(
             participant_only = (
                 "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
                 "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
+                "last_confession_at",
             )
             if account_type != AccountType.USERS.value:
                 update_payload = {

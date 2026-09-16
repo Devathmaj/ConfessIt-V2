@@ -4,7 +4,7 @@ from typing import List, Optional
 from ..dependencies import get_db
 from ..postgres import Database
 from ..services.confession_service import ConfessionService
-from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate
+from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ConfessionCooldown, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate
 from ..services.authorization import (
     get_current_participant_optional,
     require_participant,
@@ -30,6 +30,17 @@ def create_confession(confession_data: ConfessionCreate, service: ConfessionServ
 def get_confessions(sort_by: str = Query('popularity', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_participant_optional)):
     user_id = str(current_user.id) if current_user else None
     return service.get_confessions(sort_by, user_id)
+
+@router.get("/confessions/cooldown", response_model=ConfessionCooldown)
+def get_confession_cooldown(service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
+    """
+    Used by the compose screen to show the wait before anything is typed.
+
+    Advisory only. The write claims the window with a conditional UPDATE and re-derives the
+    answer itself, so this cannot be raced into a second post -- it just lets the UI say so
+    in advance instead of refusing after the fact.
+    """
+    return service.get_confession_cooldown(str(current_user.id))
 
 @router.get("/confessions/total_count", response_model=int)
 def get_total_confessions_count(service: ConfessionService = Depends(get_confession_service)):

@@ -178,6 +178,13 @@ class UserRecord(AccountColumns, Base):
     love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # When this participant last got a confession of their own into the feed. Nullable, and
+    # that is the whole state: a participant who has never confessed may confess now, so
+    # "no value" is eligibility rather than an uninitialised row. The same shape as
+    # ``last_matchmaking_at`` for the same reason -- a cooldown is a comparison against a
+    # stored instant, and it is claimed by a conditional UPDATE rather than read-then-written,
+    # so two simultaneous posts cannot both pass the check.
+    last_confession_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     confession_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     confession_removal_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     love_note_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))

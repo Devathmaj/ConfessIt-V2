@@ -240,6 +240,24 @@ class AdminUserCreate(BaseModel):
         return self
 
 
+class ConfessionCooldown(BaseModel):
+    """How long this participant has to wait before their next confession.
+
+    ``status`` is ``cooldown`` or ``eligible``, which is the same two-word vocabulary
+    ``GET /matchmaking/check`` uses, so a client reading either answer checks one field.
+
+    The seconds are in the response as well as the formatted sentence. The message is what a
+    user reads; the number is what a countdown needs, and a countdown cannot subtract
+    "1 hour and 58 minutes" out of a string that gets re-rounded on every render.
+    """
+
+    status: str
+    message: str
+    cooldown_hours: int
+    remaining_minutes: int = 0
+    remaining_seconds: int = 0
+
+
 class AdminUserUpdate(BaseModel):
     """Payload for editing an account that already exists.
 
@@ -376,6 +394,7 @@ class UserDetails(AccountDetails):
     love_notes_receive_enabled: bool = True
     love_notes_send_enabled: bool = False
     last_matchmaking_at: Optional[datetime] = None
+    last_confession_at: Optional[datetime] = None
 
 
 class LoginToken(BaseModel):

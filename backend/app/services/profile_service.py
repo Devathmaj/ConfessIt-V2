@@ -63,6 +63,7 @@ async def update_user_profile_service(
             "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
             "last_login_user_agent": user.last_login_user_agent,
             "last_matchmaking_at": user.last_matchmaking_at,
+            "last_confession_at": user.last_confession_at,
             "account_type": "users",
         }
 
