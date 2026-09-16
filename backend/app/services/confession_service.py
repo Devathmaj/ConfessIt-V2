@@ -199,7 +199,7 @@ class ConfessionService:
             "remaining_seconds": int(seconds),
         }
 
-    def get_confessions(self, sort_by: str = 'popularity', user_id: Optional[str] = None) -> List[Confession]:
+    def get_confessions(self, sort_by: str = 'time', user_id: Optional[str] = None) -> List[Confession]:
         with self.sessions() as session:
             # Both tables are filtered on removed_at rather than deleted: a confession taken
             # down by a moderator still has a report pointing at it, and the row has to stay

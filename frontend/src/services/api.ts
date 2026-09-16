@@ -24,7 +24,7 @@ axios.interceptors.response.use(
 
 // --- Confession Endpoints ---
 
-export const getConfessions = async (sortBy = 'popularity') => {
+export const getConfessions = async (sortBy = 'time') => {
   const response = await axios.get(`${API_URL}/confessions?sort_by=${sortBy}`, { headers: getAuthHeaders() });
   return response.data;
 };

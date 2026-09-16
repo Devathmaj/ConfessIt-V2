@@ -27,7 +27,7 @@ def create_confession(confession_data: ConfessionCreate, service: ConfessionServ
     return service.create_confession(confession_data, str(current_user.id))
 
 @router.get("/confessions", response_model=List[Confession], response_model_by_alias=False)
-def get_confessions(sort_by: str = Query('popularity', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_participant_optional)):
+def get_confessions(sort_by: str = Query('time', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_participant_optional)):
     user_id = str(current_user.id) if current_user else None
     return service.get_confessions(sort_by, user_id)
 

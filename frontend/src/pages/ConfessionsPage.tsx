@@ -91,7 +91,7 @@ interface Confession {
 
 export const ConfessionsPage = () => {
   const [confessions, setConfessions] = useState<Confession[]>([]);
-  const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('popularity');
+  const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('time');
   const [newConfession, setNewConfession] = useState('');
   const [confessingTo, setConfessingTo] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(true);
@@ -597,17 +597,17 @@ export const ConfessionsPage = () => {
         <div className="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-center w-full md:w-auto">
             <span className="text-xs sm:text-sm text-muted-foreground">Sort by:</span>
-            <Button variant={sortBy === 'popularity' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('popularity')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'popularity' ? 'btn-romantic' : 'btn-love'}`}>
-              <TrendingUp className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-              Popularity
+            <Button variant={sortBy === 'time' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('time')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'time' ? 'btn-romantic' : 'btn-love'}`}>
+              <Clock className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+              Recent
             </Button>
             <Button variant={sortBy === 'comments' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('comments')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'comments' ? 'btn-romantic' : 'btn-love'}`}>
               <MessageSquare className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
               Comments
             </Button>
-            <Button variant={sortBy === 'time' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('time')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'time' ? 'btn-romantic' : 'btn-love'}`}>
-              <Clock className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-              Recent
+            <Button variant={sortBy === 'popularity' ? 'default' : 'outline'} size="sm" onClick={() => setSortBy('popularity')} className={`text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3 ${sortBy === 'popularity' ? 'btn-romantic' : 'btn-love'}`}>
+              <TrendingUp className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+              Popularity
             </Button>
           </div>
           <Dialog
