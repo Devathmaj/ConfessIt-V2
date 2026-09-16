@@ -64,10 +64,15 @@ def override_get_admin_user():
     Staff are the shared model, not the participant one: an admin has no participant
     fields, and handing the routes a UserDetails carrying an ``account_type`` of ``admin``
     would describe a row that cannot exist in the schema.
+
+    ``email`` is set because it is required of every account now. It is not incidental to
+    these fixtures: the model validates it on construction, so an override without one raised
+    at import and took the whole suite down rather than failing one test.
     """
     return AccountDetails(
         regno="adminuser",
         name="Admin User",
+        email="admin@user.com",
         gender="other",
         notifications_enabled=True,
         account_type=AccountType.ADMIN.value,
@@ -78,11 +83,13 @@ def override_get_moderator_user():
     """A real AccountDetails for an account in the ``moderator`` table.
 
     Built from ``AccountType.MODERATOR`` rather than a literal, so the fixture cannot drift
-    from the vocabulary if the table names ever change.
+    from the vocabulary if the table names ever change. ``email`` is required on every
+    account, for the same reason the admin fixture carries one.
     """
     return AccountDetails(
         regno="moduser",
         name="Moderator User",
+        email="moderator@user.com",
         gender="other",
         notifications_enabled=True,
         account_type=AccountType.MODERATOR.value,

@@ -188,7 +188,20 @@ async def test_profile_upload_does_not_buffer_an_unbounded_body():
     error here.
     """
     stream = EndlessStream()
-    user = type("U", (), {"regno": "22CS045", "profile_picture_url": None})()
+    # ``id`` and ``account_type`` are both read while building the ``AccountRef`` for the
+    # delivery URL, which happens before the body is read. The 413 still comes from the
+    # bounded read -- that is the first thing the shared uploader does -- but without these
+    # attributes the test would be measuring an AttributeError instead.
+    user = type(
+        "U",
+        (),
+        {
+            "id": "22CS045-0000-0000-0000-000000000001",
+            "regno": "22CS045",
+            "profile_picture_url": None,
+            "account_type": "users",
+        },
+    )()
 
     with pytest.raises(HTTPException) as excinfo:
         await profile_service.upload_profile_picture_service(user, None, UndeclaredSizeUpload(stream))

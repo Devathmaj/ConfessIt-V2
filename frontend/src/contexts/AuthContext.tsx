@@ -6,6 +6,7 @@ import { getCurrentUser } from '../services/api';
 import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
+import type { UserGender } from '../lib/accountFields';
 
 
 // Used to define the structure of the User object
@@ -13,12 +14,14 @@ export interface User {
   id: string;
   name: string;
   regno: string;
-  email?: string;
+  /** Required on every account, so the server always sends one. */
+  email: string;
   emoji: string;
   bio?: string;
   class_name?: string;
   profile_picture_url?: string;
-  gender?: string;
+  /** One of `USER_GENDER_VALUES`, so the three are the only possibilities. */
+  gender: UserGender;
   interests?: string[];
   matchmaking_enabled?: boolean;
   notifications_enabled?: boolean;

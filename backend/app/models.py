@@ -1,23 +1,43 @@
 # app/models.py
 
 from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, model_validator, validator
-from typing import Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
 from .limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
+    INTEREST_MAX_SELECTED,
     REACTION_MAX,
     RECIPIENT_NAME_MAX,
     REPORT_REASON_MAX,
     USER_BIO_MAX,
     USER_CLASS_NAME_MAX,
     USER_EMOJI_MAX,
-    USER_GENDER_MAX,
+    USER_GENDER_VALUES,
     USER_NAME_MAX,
     USER_REGNO_MAX,
 )
 from .accounts import AccountType, capabilities_for, normalize_account_type
+
+# The closed gender vocabulary, as a Pydantic type rather than a validator.
+#
+# A ``Literal`` rather than a ``field_validator`` over a plain ``str`` so the constraint is
+# part of the field's declared type: the generated OpenAPI schema becomes an enum, so the
+# client is handed the three legal values instead of a free-text string it has to guess the
+# contents of, and a value outside the set is a 422 at validation rather than a check some
+# other layer might forget to run.
+#
+# Mirrors ``limits.USER_GENDER_VALUES``, which is what the CHECK constraint and the frontend
+# Select are generated from. All three must agree.
+Gender = Literal["male", "female", "other"]
+
+# Same treatment for interests: an enum on the array's members rather than a hand-written
+# membership test, so "not one of ours" is a validation error naming the offending value.
+Interest = Literal[
+    "Music", "Movies", "Reading", "Gaming", "Traveling", "Cooking",
+    "Sports", "Art", "Photography", "Dancing", "Writing", "Coding",
+]
 
 class Token(BaseModel):
     """
@@ -74,6 +94,40 @@ def _reject_unchangeable_characters(value: Optional[str], field_name: str) -> Op
         if _is_non_character(codepoint):
             raise ValueError(f"{field_name} contains a non-character code point.")
     return value
+
+
+def clean_interests(value: Optional[List[Interest]]) -> Optional[List[Interest]]:
+    """Normalise a submitted interest list, or refuse it.
+
+    Shared by every payload that accepts interests -- the admin create and update forms and the
+    participant's own profile update -- because a rule about what a participant may hold has to
+    hold identically no matter which door the write came through, and three copies of the same
+    three checks is three chances for one of them to drift.
+
+    Membership is already settled by the ``List[Interest]`` annotation on each field; what is
+    left is what a *list of* them has to mean:
+
+    * a repeat is collapsed rather than stored twice. ``["Music", "Music"]`` is one interest
+      the client sent twice, and storing it verbatim puts two identical badges on somebody's
+      profile and makes an interest count wrong for matchmaking scoring. First occurrence wins,
+      so the stored order stays the order the vocabulary declares.
+    * a list longer than the vocabulary is refused. ``INTEREST_MAX_SELECTED`` is the size of
+      ``INTEREST_VALUES``, so this cannot reject a real selection once the repeats above are
+      gone; it exists so a client posting the same twelve values four times over gets a
+      validation error rather than an array nobody has a sane way to render.
+
+    ``None`` passes through untouched so a caller can distinguish "no interests supplied" from
+    "the empty set"; which of the two reaches the column is decided by the caller.
+    """
+    if value is None:
+        return None
+    collapsed: list[Interest] = []
+    for item in value:
+        if item not in collapsed:
+            collapsed.append(item)
+    if len(collapsed) > INTEREST_MAX_SELECTED:
+        raise ValueError(f"At most {INTEREST_MAX_SELECTED} interests may be selected.")
+    return collapsed
 
 
 class ConfessionCreate(BaseModel):
@@ -198,45 +252,49 @@ class AdminUserCreate(BaseModel):
     becomes staff: there is no ``role`` to set, so a payload cannot half-create a staff
     account by naming a privilege instead of a table.
 
+    ``email`` and ``gender`` are required of *every* account type, so they are declared
+    unconditionally rather than through the validator below. Both are non-null columns on all
+    three tables, which is what makes them a property of being an account at all rather than
+    of being a particular kind of one; a moderator nobody can be contacted about is an account
+    that cannot be recovered when its holder leaves.
+
+    There is no ``profile_picture_url``. A picture is an upload, not a string: the bytes go to
+    object storage through ``PUT /admin/users/{id}/picture`` and the server writes the URL it
+    gets back. Accepting a URL here would let a caller point an account's picture at an
+    arbitrary address -- somebody else's asset, or a page that logs the reader out.
+
     The participant-only fields are optional here and required by the validator below only
     when ``account_type`` is ``users``. Declaring them conditionally in the type system is
     not something Pydantic can express without a discriminated union, and a union would
     make the OpenAPI schema unreadable for a payload that is, in practice, one form.
-
-    ``email`` sits with the shared fields rather than the participant-only ones, because every
-    account can have one and it is required only of a participant.
     """
     account_type: AccountType = AccountType.USERS
     regno: str = Field(max_length=USER_REGNO_MAX)
     name: str = Field(max_length=USER_NAME_MAX)
-    email: Optional[EmailStr] = None
-    profile_picture_url: Optional[str] = None
-    gender: str = Field(max_length=USER_GENDER_MAX)
+    email: EmailStr
+    gender: Gender
     notifications_enabled: bool = True
     is_blocked: bool = False
     # participants only
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
-    interests: Optional[List[str]] = None
+    interests: Optional[List[Interest]] = None
     matchmaking_enabled: bool = True
     love_notes_receive_enabled: bool = True
     love_notes_send_enabled: bool = False
+
+    @field_validator("interests")
+    @classmethod
+    def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
+        return clean_interests(value)
 
     @model_validator(mode="after")
     def _require_participant_fields(self) -> "AdminUserCreate":
         if self.account_type is not AccountType.USERS:
             return self
-        missing = [
-            name
-            for name in ("email", "class_name")
-            if getattr(self, name) in (None, "")
-        ]
-        if missing:
-            raise ValueError(
-                f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
-                f"required for a participant account."
-            )
+        if not self.class_name:
+            raise ValueError("class_name is required for a participant account.")
         return self
 
 
@@ -269,11 +327,17 @@ class AdminUserUpdate(BaseModel):
     relocating a row would either orphan them or require rewriting every reference under the
     hood. Which table an account lives in is therefore fixed when it is created; minting a
     staff account is a create, and demoting one is a matter of not using it.
+
+    There is deliberately no ``profile_picture_url`` either, for the reason given on
+    :class:`AdminUserCreate`: a picture arrives as an upload and the server writes the URL it
+    gets back, so no payload can name an address to point an account's face at.
+
+    ``gender`` and ``interests`` are narrowed to the closed vocabularies, so an edit cannot
+    write a value the create payload would have refused.
     """
     regno: Optional[str] = Field(default=None, max_length=USER_REGNO_MAX)
-    name: Optional[str] = Field(max_length=USER_NAME_MAX)
-    profile_picture_url: Optional[str] = None
-    gender: Optional[str] = Field(default=None, max_length=USER_GENDER_MAX)
+    name: Optional[str] = Field(default=None, max_length=USER_NAME_MAX)
+    gender: Optional[Gender] = None
     notifications_enabled: Optional[bool] = None
     is_blocked: Optional[bool] = None
     email: Optional[EmailStr] = None
@@ -281,12 +345,12 @@ class AdminUserUpdate(BaseModel):
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
-    interests: Optional[List[str]] = None
+    interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
     love_notes_send_enabled: Optional[bool] = None
 
-    @field_validator("name", "regno", "profile_picture_url", "gender", "class_name", "email")
+    @field_validator("name", "regno", "gender", "class_name", "email")
     @classmethod
     def _blank_is_not_a_value(cls, value):
         """Treat an empty string as "not supplied" rather than as a value to write.
@@ -294,10 +358,22 @@ class AdminUserUpdate(BaseModel):
         A form that submits every field sends ``""`` for the ones the admin left untouched.
         Without this, editing a staff account's name through the participant-shaped form
         would blank out fields that were never offered on that form at all.
+
+        It also keeps a cleared input from becoming a NULL in a column that cannot hold one.
+        ``name``, ``regno``, ``gender``, ``class_name`` and ``email`` are NOT NULL, so writing
+        the ``None`` this validator produces would be a 500 from PostgreSQL rather than a
+        validation message. Dropping the key is the honest reading: the admin left it empty,
+        which is not the same as asking to erase it. See ``update_user_details``, which drops
+        these keys outright as a second line of defence.
         """
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("interests")
+    @classmethod
+    def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
+        return clean_interests(value)
 
 
 class AccountDetails(BaseModel):
@@ -308,17 +384,24 @@ class AccountDetails(BaseModel):
     absent rather than null: an admin has no ``class_name``, and returning ``null`` for it
     would describe a value the row does not have.
 
-    ``email`` is shared and optional rather than participant-only and required. Every account
-    can be contacted, so a staff account that could not hold an address would be an account
-    nobody could reach. It is not required of a staff account, because creating one is a
-    deliberate act by someone who already knows the regno, and nothing in sign-in needs it.
+    ``email`` is shared and *required*, like the column underneath it. It used to be optional
+    for a staff account, on the reasoning that creating one is a deliberate act by somebody who
+    already knows the regno and nothing in sign-in needs an address. That turned out to be the
+    wrong trade: a staff row with no address is an account nobody can be contacted about when its
+    holder leaves or loses access, and the fix for that later is far harder than requiring an
+    address at the moment an operator is already typing one. It is NOT NULL on all three tables
+    for the same reason.
+
+    ``gender`` is shared and required for the same reason, and additionally because it is a
+    filter: matchmaking reads it, so a staff account that cannot hold one is a row every
+    query has to special-case.
     """
     id: str = Field(default_factory=new_id)
     regno: str
     name: str
-    email: Optional[EmailStr] = None
+    email: EmailStr
     profile_picture_url: Optional[str] = None
-    gender: str
+    gender: Gender
     notifications_enabled: bool = True
     is_blocked: bool = False
     last_login_at: Optional[datetime] = None
@@ -382,14 +465,20 @@ class UserDetails(AccountDetails):
     account cannot reach a participant feature not because a role string said so, but
     because there is no row for it in the table the feature reads.
 
-    ``email`` is narrowed from the shared optional to required: a participant is always
-    reachable, and the create payload enforces it.
+    Nothing is narrowed from ``AccountDetails`` any more: email and gender are required of
+    every account, so this model adds fields rather than tightening shared ones.
+
+    ``interests`` stays a plain list of strings rather than a list of the closed vocabulary,
+    deliberately. A CHECK constraint added by ``apply_check_constraints`` lands ``NOT VALID``,
+    so rows written before it existed keep whatever they held; if this response model refused
+    them, reading one such participant's profile would be a 500 on every request, which is the
+    worst possible place to discover a legacy value. The write paths -- every payload that
+    accepts interests -- enforce the vocabulary, which is where enforcing it does any good.
     """
-    email: EmailStr
     emoji: Optional[str] = None
     bio: Optional[str] = None
     class_name: str
-    interests: Optional[List[str]] = Field(default_factory=list)
+    interests: List[str] = Field(default_factory=list)
     matchmaking_enabled: bool = True
     love_notes_receive_enabled: bool = True
     love_notes_send_enabled: bool = False

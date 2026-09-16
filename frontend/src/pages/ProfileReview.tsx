@@ -5,13 +5,6 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   Dialog,
@@ -24,8 +17,17 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
-import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
+import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser, uploadAdminUserPicture } from '@/services/api';
+import type { AdminUserCreatePayload } from '@/services/api';
 import {
   Crown,
   Mail,
@@ -41,6 +43,13 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AccountType } from '@/lib/capabilities';
+import {
+  INTEREST_VALUES,
+  isUserGender,
+  toInterests,
+  USER_GENDER_OPTIONS,
+} from '@/lib/accountFields';
+import type { Interest, UserGender } from '@/lib/accountFields';
 
 /**
  * The three kinds of content a participant can be reported for. A confession and a comment on
@@ -136,10 +145,10 @@ type CreateUserForm = {
   name: string;
   email: string;
   class_name: string;
-  gender: string;
+  /** One of `USER_GENDER_OPTIONS`' values. The server accepts nothing else. */
+  gender: UserGender;
   emoji: string;
   bio: string;
-  profile_picture_url: string;
   matchmaking_enabled: boolean;
   notifications_enabled: boolean;
   love_notes_receive_enabled: boolean;
@@ -150,6 +159,54 @@ type CreateUserForm = {
    * created by writing to ``admin`` or ``moderator``, not by setting a flag on a participant.
    */
   account_type: AccountType;
+};
+
+/**
+ * The twelve interests a participant may hold, as a checkbox set.
+ *
+ * A checkbox grid rather than a comma-separated box because these are a closed list: the old
+ * text field let somebody type "music", "Music" or "musics" and store all three as different
+ * interests that no screen could tell apart. Choosing from a list makes that impossible rather
+ * than merely discouraged.
+ */
+const InterestCheckboxes = ({
+  value,
+  onChange,
+  idPrefix,
+}: {
+  value: Interest[];
+  onChange: (next: Interest[]) => void;
+  idPrefix: string;
+}) => {
+  const toggle = (interest: Interest) => {
+    onChange(
+      value.includes(interest) ? value.filter((item) => item !== interest) : [...value, interest]
+    );
+  };
+
+  return (
+    <div
+      className="grid grid-cols-2 gap-2 rounded-md border p-3 sm:grid-cols-3"
+      role="group"
+      aria-label="Interests"
+    >
+      {INTEREST_VALUES.map((interest) => {
+        const id = `${idPrefix}-${interest.toLowerCase()}`;
+        return (
+          <div key={interest} className="flex items-center gap-2">
+            <Checkbox
+              id={id}
+              checked={value.includes(interest)}
+              onCheckedChange={() => toggle(interest)}
+            />
+            <Label htmlFor={id} className="cursor-pointer font-normal">
+              {interest}
+            </Label>
+          </div>
+        );
+      })}
+    </div>
+  );
 };
 
 const formatDate = (value?: string | null) => {
@@ -166,6 +223,21 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   users: 'Participant',
   admin: 'Admin',
   moderator: 'Moderator',
+};
+
+/**
+ * How a rejected create field is named back to the operator.
+ *
+ * "Please fill in all required fields" was true and useless: a moderator form asking for a class
+ * said the same thing whether the class or the name was the one missing, and there is no class to
+ * fill in. Naming the field points at the input that needs attention.
+ */
+const CREATE_FIELD_LABELS: Partial<Record<keyof CreateUserForm, string>> = {
+  name: 'Full name',
+  regno: 'Register number',
+  email: 'Email',
+  class_name: 'Class / department',
+  gender: 'Gender',
 };
 
 const makeInitials = (name?: string | null) => {
@@ -191,6 +263,19 @@ const isStaffAccount = (profile: AdminUserProfile) =>
   profile.account_type === 'admin' || profile.account_type === 'moderator';
 
 /**
+ * How a staff row reads in a sentence.
+ *
+ * Uses the table name, the same discriminator as `isStaffAccount`, and falls back to "staff" for a
+ * value this app does not recognise. Narrowing it with `asAccountType` instead would resolve
+ * anything unknown to `users` and call an unknown row a participant, which is the one thing it is
+ * not.
+ */
+const staffNoun = (profile: AdminUserProfile): string =>
+  profile.account_type === 'admin' || profile.account_type === 'moderator'
+    ? ACCOUNT_TYPE_LABELS[profile.account_type].toLowerCase()
+    : 'staff';
+
+/**
  * Every upheld removal against this participant's content, across all three kinds.
  *
  * A confession and a comment on one already share a kind on the server, so summing the three
@@ -214,6 +299,20 @@ interface ProfileSection {
   icon: LucideIcon;
   badgeVariant: 'default' | 'secondary' | 'outline' | 'destructive';
   accounts: AdminUserProfile[];
+  /**
+   * Present only where an operator may create an account of this kind.
+   *
+   * The button lives in the section it creates into, rather than in one toolbar above all four,
+   * because "new account" was the wrong control to begin with: one button opened one form that
+   * asked for a participant's class and a moderator's regno in the same breath, and the operator
+   * had to remember which of the three kinds they were making. Sitting next to the group it
+   * belongs to, the button and the form it opens say the same thing twice.
+   *
+   * The Admins group has none. Only this screen creates accounts, so an admin cannot be made
+   * from it at all -- say so in the section description rather than leaving the absence to be
+   * discovered.
+   */
+  create?: { label: string; accountType: AccountType };
 }
 
 /**
@@ -378,20 +477,23 @@ const ProfileCard = ({
 };
 
 export const ProfileReview = () => {
-  const buildDefaultCreateForm = (): CreateUserForm => ({
+  const buildDefaultCreateForm = (accountType: AccountType): CreateUserForm => ({
     regno: '',
     name: '',
     email: '',
     class_name: '',
-    gender: '',
+    // `other` rather than an empty string. Gender is a non-null column on all three account
+    // tables and the select has no blank option, so an empty value here could only ever be a
+    // form the operator had not finished -- which the required-field check then reports by name
+    // instead of the select silently showing nothing.
+    gender: 'other',
     emoji: '',
     bio: '',
-    profile_picture_url: '',
     matchmaking_enabled: true,
     notifications_enabled: true,
     love_notes_receive_enabled: true,
     love_notes_send_enabled: false,
-    account_type: 'users',
+    account_type: accountType,
   });
 
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
@@ -401,11 +503,25 @@ export const ProfileReview = () => {
   const [selectedProfile, setSelectedProfile] = useState<AdminUserProfile | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Partial<AdminUserProfile> | null>(null);
-  const [interestsInput, setInterestsInput] = useState('');
+  /**
+   * The ticked interests, held separately from `editForm`.
+   *
+   * Separate because it is a set rather than a string: `editForm` is the shape the server
+   * returned, and threading `interests` through it as a comma-joined string would mean
+   * re-parsing a value the operator did not type. It is also what the save compares against the
+   * stored list to decide whether interests actually changed.
+   */
+  const [editInterests, setEditInterests] = useState<Interest[]>([]);
+  /**
+   * The file chosen in the editor, or null. Never a URL: the picture is uploaded to the
+   * server, which puts it in object storage and writes back the address it generated.
+   */
+  const [editPictureFile, setEditPictureFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState<CreateUserForm>(() => buildDefaultCreateForm());
-  const [createInterestsInput, setCreateInterestsInput] = useState('');
+  const [createForm, setCreateForm] = useState<CreateUserForm>(() => buildDefaultCreateForm('users'));
+  const [createInterests, setCreateInterests] = useState<Interest[]>([]);
+  const [createPictureFile, setCreatePictureFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -474,7 +590,7 @@ export const ProfileReview = () => {
         id: 'admins',
         title: 'Admins',
         description:
-          'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page.',
+          'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page. Admin accounts cannot be created here; this screen is the only place that creates them.',
         emptyNote: 'No admin accounts exist yet.',
         icon: Crown,
         badgeVariant: 'default',
@@ -484,11 +600,12 @@ export const ProfileReview = () => {
         id: 'moderators',
         title: 'Moderators',
         description:
-          'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own.',
+          'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own, so a moderator needs no class, bio or interests.',
         emptyNote: 'No moderator accounts exist yet.',
         icon: ShieldHalf,
         badgeVariant: 'secondary',
         accounts: moderators,
+        create: { label: 'Create moderator', accountType: 'moderator' },
       },
       {
         id: FLAGGED_SECTION_ID,
@@ -508,12 +625,34 @@ export const ProfileReview = () => {
         icon: Users,
         badgeVariant: 'outline',
         accounts: ordinary,
+        create: { label: 'Create participant', accountType: 'users' },
       },
     ];
   }, [filteredProfiles]);
 
   const flaggedCount =
     sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0;
+
+  /**
+   * Whether the create dialog is currently making a participant.
+   *
+   * The form is driven off the account type it was opened with rather than off a control inside
+   * it. A staff row has no class, bio, interests, matchmaking or love-note columns, so offering
+   * those inputs would be asking for values the server silently discards -- and the operator has no
+   * way to see that they were discarded. The dialog has one job per open, stated in its title.
+   */
+  const createIsParticipant = createForm.account_type === 'users';
+
+  /**
+   * Whether the account open in the editor is a participant.
+   *
+   * The same split the create form makes, and for the same reason. A moderator and an admin have
+   * no class, bio, interests, matchmaking or love-note columns, so the editor used to offer those
+   * inputs and the server silently dropped whatever came out of them: the operator moved a toggle,
+   * pressed save, was told it worked, and the change was gone on the next fetch. Not offering a
+   * field that cannot be saved is the whole fix.
+   */
+  const editingIsParticipant = selectedProfile !== null && !isStaffAccount(selectedProfile);
 
   const toggleBlock = async (profile: AdminUserProfile) => {
     if (!profile.id) return;
@@ -537,22 +676,44 @@ export const ProfileReview = () => {
   };
 
   const openProfileEditor = (profile: AdminUserProfile) => {
+    const isParticipant = !isStaffAccount(profile);
     setSelectedProfile(profile);
     setEditForm({
       name: profile.name ?? '',
       regno: profile.regno ?? '',
       email: profile.email ?? '',
-      class_name: profile.class_name ?? '',
-      gender: profile.gender ?? '',
-      bio: profile.bio ?? '',
-      emoji: profile.emoji ?? '',
-      profile_picture_url: profile.profile_picture_url ?? '',
-      matchmaking_enabled: profile.matchmaking_enabled ?? false,
-      notifications_enabled: profile.notifications_enabled ?? false,
-      love_notes_receive_enabled: profile.love_notes_receive_enabled ?? true,
-      love_notes_send_enabled: profile.love_notes_send_enabled ?? false,
+      // A stored value from before the gender vocabulary was closed will not match any option,
+      // and a select with no matching option displays the wrong thing as though it were chosen.
+      // Falling back keeps the dialog honest about what is stored instead of showing a blank
+      // control the operator would have to guess about.
+      gender: isUserGender(profile.gender ?? '') ? (profile.gender as UserGender) : 'other',
+      notifications_enabled: Boolean(profile.notifications_enabled),
+      // Seeded only for a participant. A staff row carries none of these, so putting defaults for
+      // them into the form would put values there that no visible field could ever be compared
+      // against -- and a toggle seeded to `false` on a moderator is a control that looks like it
+      // says something about matchmaking when it says nothing at all.
+      ...(isParticipant
+        ? {
+            class_name: profile.class_name ?? '',
+            bio: profile.bio ?? '',
+            emoji: profile.emoji ?? '',
+            // Read every toggle the way the change detector below reads it. Seeding one any other
+            // way makes an untouched field register as a change on save: a participant whose
+            // payload omits `love_notes_receive_enabled` would be shown the toggle on, then have
+            // it quietly written off the moment the operator changed something else.
+            matchmaking_enabled: Boolean(profile.matchmaking_enabled),
+            love_notes_receive_enabled: Boolean(profile.love_notes_receive_enabled),
+            love_notes_send_enabled: Boolean(profile.love_notes_send_enabled),
+          }
+        : {}),
     });
-    setInterestsInput(profile.interests?.join(', ') ?? '');
+    // Seeded from the stored list, filtered to the twelve the server accepts. A legacy value
+    // that is no longer in the vocabulary is dropped rather than shown as an unticked box the
+    // operator would have to recognise, and it stops appearing the next time they save.
+    setEditInterests(isParticipant ? toInterests(profile.interests) : []);
+    // Deliberately null on open. Re-opening the editor must not silently re-upload the file
+    // chosen last time; a picture is only sent when the operator picks one in this session.
+    setEditPictureFile(null);
     setEditOpen(true);
   };
 
@@ -560,7 +721,8 @@ export const ProfileReview = () => {
     setEditOpen(false);
     setSelectedProfile(null);
     setEditForm(null);
-    setInterestsInput('');
+    setEditInterests([]);
+    setEditPictureFile(null);
     setSaving(false);
   };
 
@@ -569,22 +731,27 @@ export const ProfileReview = () => {
       return;
     }
 
+    const isParticipant = !isStaffAccount(selectedProfile);
     const payload: Record<string, unknown> = {};
+
+    // Only the fields the target table actually has. The server drops the participant-only keys
+    // from a staff update, so sending them would either be ignored (the operator's change
+    // silently vanishes on the next fetch) or, worse, be sent with a value the form invented.
     const textFields: Array<keyof AdminUserProfile> = [
       'name',
       'regno',
       'email',
-      'class_name',
-      'gender',
-      'bio',
-      'emoji',
-      'profile_picture_url',
+      ...(isParticipant ? (['class_name', 'bio', 'emoji'] as const) : []),
     ];
     const booleanFields: Array<keyof AdminUserProfile> = [
-      'matchmaking_enabled',
       'notifications_enabled',
-      'love_notes_receive_enabled',
-      'love_notes_send_enabled',
+      ...(isParticipant
+        ? ([
+            'matchmaking_enabled',
+            'love_notes_receive_enabled',
+            'love_notes_send_enabled',
+          ] as const)
+        : []),
     ];
 
     textFields.forEach((field) => {
@@ -605,26 +772,71 @@ export const ProfileReview = () => {
       }
     });
 
-    const sanitizedInterests = interestsInput
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const currentInterests = selectedProfile.interests ?? [];
-    if (JSON.stringify(sanitizedInterests) !== JSON.stringify(currentInterests)) {
-      payload.interests = sanitizedInterests;
+    // Gender gets its own comparison because of how it is seeded. `openProfileEditor` puts a
+    // stored value that is not in the vocabulary into the form as `other`, so the form value is
+    // never blank and a naive comparison against the raw stored value would report a change on
+    // every save of an account that holds one -- rewriting a field the operator never touched,
+    // which is how a legacy `female` quietly became `other` on the first unrelated edit.
+    //
+    // Comparing against the same normalisation that seeded it means a gender is sent only when
+    // the operator actually picked a different one.
+    const genderBefore = isUserGender(selectedProfile.gender ?? '')
+      ? selectedProfile.gender
+      : 'other';
+    if (editForm.gender !== genderBefore) {
+      payload.gender = editForm.gender;
     }
 
-    if (Object.keys(payload).length === 0) {
+    // Interests are compared as a whole set rather than field by field, and compared against
+    // the vocabulary-filtered stored list -- the same list the boxes were seeded from. Comparing
+    // against the raw stored array would report a difference whenever a legacy value had been
+    // filtered out on open, and the save would then "change" interests the operator never touched.
+    if (isParticipant) {
+      const currentInterests = toInterests(selectedProfile.interests);
+      const changed =
+        editInterests.length !== currentInterests.length ||
+        editInterests.some((item) => !currentInterests.includes(item));
+      // An emptied list is sent as `[]` rather than being skipped: unticking the last box is a
+      // deliberate request to clear them, and omitting the key would mean "leave alone".
+      if (changed) {
+        payload.interests = editInterests;
+      }
+    }
+
+    // A chosen picture is not part of the JSON payload at all. It is a second request, sent
+    // after the field updates, because the endpoint takes multipart bytes and the other takes
+    // JSON. Both are needed before the dialog can report success.
+    const hasPicture = editPictureFile !== null;
+
+    if (Object.keys(payload).length === 0 && !hasPicture) {
       toast.info('No changes to save.');
       return;
     }
 
     try {
       setSaving(true);
-      const updatedProfile = await updateAdminUser(selectedProfile.id, payload);
+      // The update runs first and the upload second. The reverse order would mean a rejected
+      // name change left a new picture on an account whose other edits were refused, which is
+      // harder to notice and harder to undo than the other way round.
+      const updatedProfile =
+        Object.keys(payload).length > 0
+          ? await updateAdminUser(selectedProfile.id, payload)
+          : selectedProfile;
+
+const pictured = hasPicture
+        ? await uploadAdminUserPicture(selectedProfile.id, editPictureFile as File)
+        : updatedProfile;
+
+      // Both responses are merged, in order. Spreading `pictured` straight over the stored profile
+      // looked right and was wrong: the upload response carries only `profile_picture_url`, so it
+      // overrode nothing and the fields the update had just changed reverted to their old values
+      // on screen. An operator who renamed someone and added a picture at once saw the old name
+      // until the next refresh, from a save that had reported success.
       setProfiles((prev) =>
         prev.map((profile) =>
-          profile.id === updatedProfile.id ? { ...profile, ...updatedProfile } : profile
+          profile.id === selectedProfile.id
+            ? { ...profile, ...updatedProfile, ...pictured }
+            : profile,
         )
       );
       toast.success('Profile updated successfully.');
@@ -637,72 +849,112 @@ export const ProfileReview = () => {
     }
   };
 
-  const openCreateDialog = () => {
-    setCreateForm(buildDefaultCreateForm());
-    setCreateInterestsInput('');
+  const openCreateDialog = (accountType: AccountType) => {
+    setCreateForm(buildDefaultCreateForm(accountType));
+    setCreateInterests([]);
+    setCreatePictureFile(null);
     setCreateOpen(true);
   };
 
   const resetCreateDialog = () => {
     setCreateOpen(false);
-    setCreateForm(buildDefaultCreateForm());
-    setCreateInterestsInput('');
+    setCreateForm(buildDefaultCreateForm('users'));
+    setCreateInterests([]);
+    setCreatePictureFile(null);
     setCreating(false);
   };
 
   const handleCreateUser = async () => {
+    const isParticipant = createForm.account_type === 'users';
+
+    // Required fields are a function of the table being written to, not one list for all three.
+    // Name, regno and gender are non-null columns on every account table. Email and class are
+    // required of a participant only -- a moderator has no class, so demanding one was asking the
+    // operator for a value that has nowhere to be stored.
+    // Name, regno, email and gender are non-null columns on all three account tables, so all four
+    // are required of every account type. Email used to be a participant-only requirement --
+    // a staff account could be created with a regno and a name alone -- which left a moderator
+    // nobody could contact, and no error at the time to notice.
     const requiredFields: Array<[keyof CreateUserForm, string]> = [
       ['name', createForm.name],
       ['regno', createForm.regno],
       ['email', createForm.email],
-      ['class_name', createForm.class_name],
       ['gender', createForm.gender],
     ];
+    if (isParticipant) {
+      requiredFields.push(['class_name', createForm.class_name]);
+    }
 
     const missingField = requiredFields.find(([, value]) => !value.trim());
     if (missingField) {
-      toast.error('Please fill in all required fields before creating an account.');
+      toast.error(`${CREATE_FIELD_LABELS[missingField[0]]} is required for this account type.`);
       return;
     }
 
-    const sanitizedInterests = createInterestsInput
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    const payload: Record<string, unknown> = {
+    const payload: AdminUserCreatePayload = {
       regno: createForm.regno.trim(),
       name: createForm.name.trim(),
       email: createForm.email.trim(),
-      class_name: createForm.class_name.trim(),
-      gender: createForm.gender.trim(),
+      gender: createForm.gender,
       account_type: createForm.account_type,
-      matchmaking_enabled: createForm.matchmaking_enabled,
       notifications_enabled: createForm.notifications_enabled,
-      love_notes_receive_enabled: createForm.love_notes_receive_enabled,
-      love_notes_send_enabled: createForm.love_notes_send_enabled,
     };
 
-    if (createForm.emoji.trim()) {
-      payload.emoji = createForm.emoji.trim();
-    }
-    if (createForm.bio.trim()) {
-      payload.bio = createForm.bio.trim();
-    }
-    if (createForm.profile_picture_url.trim()) {
-      payload.profile_picture_url = createForm.profile_picture_url.trim();
-    }
-    if (sanitizedInterests.length > 0) {
-      payload.interests = sanitizedInterests;
+    // Participant columns. Sent only for a participant: the staff tables have no such columns and
+    // the server drops these keys for a staff row, so a form that never offered them must not
+    // send empty ones behind the operator's back either.
+    if (isParticipant) {
+      payload.class_name = createForm.class_name.trim();
+      payload.matchmaking_enabled = createForm.matchmaking_enabled;
+      payload.love_notes_receive_enabled = createForm.love_notes_receive_enabled;
+      payload.love_notes_send_enabled = createForm.love_notes_send_enabled;
+      if (createForm.emoji.trim()) {
+        payload.emoji = createForm.emoji.trim();
+      }
+      if (createForm.bio.trim()) {
+        payload.bio = createForm.bio.trim();
+      }
+      // Sent even when empty. An admin who ticked nothing has said "no interests", which is a
+      // different statement from staying silent, and the column is NOT NULL -- omitting the key
+      // would leave the server to guess.
+      payload.interests = createInterests;
     }
 
     try {
       setCreating(true);
-      const createdProfile = await createAdminUser(payload);
+      let createdProfile = await createAdminUser(payload);
+      let pictureFailed = false;
+
+      // The picture is a second request, after the account exists. It cannot be part of the
+      // create body: that is JSON, and this is bytes, and the row has to have an id before
+      // there is anything to attach an image to.
+      //
+      // A failure here does not undo the account, and that is deliberate. Rolling back would
+      // mean deleting a row an operator can see was created, to recover from a failed image
+      // upload -- so the account is kept, the toast says exactly what happened, and the
+      // operator can retry the picture from the editor.
+      if (createPictureFile) {
+        try {
+          createdProfile = await uploadAdminUserPicture(createdProfile.id, createPictureFile);
+        } catch (uploadError) {
+          console.error('Failed to upload picture for the new account', uploadError);
+          pictureFailed = true;
+          toast.warning(
+            'Account created, but the picture could not be uploaded. Open the profile to retry.',
+          );
+        }
+      }
+
       setProfiles((prev) => [createdProfile, ...prev]);
-      toast.success(
-        `${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`
-      );
+      // Confirmed by a flag set inside the upload block, not by `!createPictureFile`: when a file
+      // was chosen and the upload succeeded, that condition is false and the create reported
+      // nothing at all. The account was there, with the right picture, and the dialog closed in
+      // silence.
+      if (!pictureFailed) {
+        toast.success(
+          `${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`,
+        );
+      }
       resetCreateDialog();
     } catch (error: unknown) {
       console.error('Failed to create user', error);
@@ -740,16 +992,10 @@ export const ProfileReview = () => {
               className="pl-9"
             />
           </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="secondary" className="w-max gap-2">
-              <Users className="h-4 w-4" />
-              Showing {filteredProfiles.length} profiles
-            </Badge>
-            <Button size="sm" onClick={openCreateDialog}>
-              <Plus className="mr-2 h-4 w-4" />
-              New account
-            </Button>
-          </div>
+          <Badge variant="secondary" className="w-max gap-2">
+            <Users className="h-4 w-4" />
+            Showing {filteredProfiles.length} profiles
+          </Badge>
         </div>
 
         {loading ? (
@@ -758,10 +1004,12 @@ export const ProfileReview = () => {
               Loading user profiles...
             </CardContent>
           </Card>
-        ) : filteredProfiles.length === 0 ? (
+        ) : filteredProfiles.length === 0 && searchTerm.trim() ? (
           /* One message for the whole page rather than four empty sections. When a search matches
-             nothing, four headings over empty grids is four false impressions that the platform
-             has no admins, no moderators and no participants. */
+             nothing, four headings over empty grids is four false impressions that the platform has
+             no admins, no moderators and no participants. Reachable only with a search in the box:
+             on a genuinely empty platform the sections must still render, or the create buttons
+             living in them would be the one thing missing. */
           <Card>
             <CardHeader className="flex flex-col gap-1">
               <CardTitle className="text-lg">No accounts match</CardTitle>
@@ -774,6 +1022,7 @@ export const ProfileReview = () => {
           sections.map((section) => {
             const Icon = section.icon;
             const accountCount = section.accounts.length;
+            const create = section.create;
             return (
               <section key={section.id} aria-labelledby={`profile-section-${section.id}`}>
                 <Card>
@@ -786,9 +1035,23 @@ export const ProfileReview = () => {
                         <Icon className="h-4 w-4" />
                         {section.title}
                       </CardTitle>
-                      <Badge variant={section.badgeVariant}>
-                        {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={section.badgeVariant}>
+                          {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
+                        </Badge>
+                        {/* Sits with the group it creates into, so the control and the form it
+                            opens name the same kind of account. */}
+                        {create && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openCreateDialog(create.accountType)}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            {create.label}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <CardDescription>{section.description}</CardDescription>
                   </CardHeader>
@@ -837,12 +1100,15 @@ export const ProfileReview = () => {
               <DialogHeader>
                 <DialogTitle>Edit profile</DialogTitle>
                 <DialogDescription>
-                  Update the selected user&apos;s information. Leave a field untouched to keep the current value.
+                  {editingIsParticipant
+                    ? "Update the selected user's information. Leave a field untouched to keep the current value."
+                    : `A ${staffNoun(selectedProfile)} account has no class, bio, interests, matchmaking or love-note settings, so those are not offered here.`}
                 </DialogDescription>
               </DialogHeader>
 
               <ScrollArea className="max-h-[65vh] pr-2">
                 <div className="grid gap-6 py-4">
+                {/* Shared columns: every account table has these five. */}
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
                     <Label htmlFor="edit-name">Full name</Label>
@@ -879,98 +1145,103 @@ export const ProfileReview = () => {
                     />
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="edit-class">Class / department</Label>
-                    <Input
-                      id="edit-class"
-                      value={editForm.class_name ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, class_name: event.target.value } : prev))
-                      }
-                      placeholder="CSE, ECE, Year, etc."
-                    />
-                  </div>
-                  <div className="grid gap-2">
                     <Label htmlFor="edit-gender">Gender</Label>
-                    <Input
-                      id="edit-gender"
-                      value={editForm.gender ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, gender: event.target.value } : prev))
-                      }
-                      placeholder="Enter gender"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label htmlFor="edit-emoji">Emoji tag</Label>
-                    <Input
-                      id="edit-emoji"
-                      value={editForm.emoji ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, emoji: event.target.value } : prev))
-                      }
-                      placeholder="e.g. 😄"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="edit-avatar">Profile picture ID</Label>
-                    <Input
-                      id="edit-avatar"
-                      value={editForm.profile_picture_url ?? ''}
-                      onChange={(event) =>
+                    <Select
+                      value={(editForm.gender as UserGender) ?? 'other'}
+                      onValueChange={(value) =>
                         setEditForm((prev) =>
-                          prev ? { ...prev, profile_picture_url: event.target.value } : prev
+                          prev ? { ...prev, gender: value as UserGender } : prev
                         )
                       }
-                      placeholder="Optional asset identifier"
+                    >
+                      <SelectTrigger id="edit-gender">
+                        <SelectValue placeholder="Select a gender" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {USER_GENDER_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-avatar">Profile picture</Label>
+                    <Input
+                      id="edit-avatar"
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => setEditPictureFile(event.target.files?.[0] ?? null)}
                     />
+                    <p className="text-[11px] text-muted-foreground">
+                      The file is uploaded to the server and stored there; the address is written
+                      by the server. {selectedProfile.profile_picture_url
+                        ? 'Saving with a file chosen replaces the current picture.'
+                        : 'No picture is set yet.'}
+                    </p>
                   </div>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-bio">Bio</Label>
-                  <Textarea
-                    id="edit-bio"
-                    rows={4}
-                    value={editForm.bio ?? ''}
-                    onChange={(event) =>
-                      setEditForm((prev) => (prev ? { ...prev, bio: event.target.value } : prev))
-                    }
-                    placeholder="Short description that appears on their profile"
-                  />
-                </div>
+                {/* Participant columns. */}
+                {editingIsParticipant && (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label htmlFor="edit-class">Class / department</Label>
+                        <Input
+                          id="edit-class"
+                          value={editForm.class_name ?? ''}
+                          onChange={(event) =>
+                            setEditForm((prev) =>
+                              prev ? { ...prev, class_name: event.target.value } : prev
+                            )
+                          }
+                          placeholder="CSE, ECE, Year, etc."
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="edit-emoji">Emoji tag</Label>
+                        <Input
+                          id="edit-emoji"
+                          value={editForm.emoji ?? ''}
+                          onChange={(event) =>
+                            setEditForm((prev) => (prev ? { ...prev, emoji: event.target.value } : prev))
+                          }
+                          placeholder="e.g. 😄"
+                        />
+                      </div>
+                    </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-interests">Interests</Label>
-                  <Textarea
-                    id="edit-interests"
-                    rows={3}
-                    value={interestsInput}
-                    onChange={(event) => setInterestsInput(event.target.value)}
-                    placeholder="Comma-separated interests (e.g. music, movies, travel)"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Interests help matchmaking results. Separate values with commas.
-                  </p>
-                </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-bio">Bio</Label>
+                      <Textarea
+                        id="edit-bio"
+                        rows={4}
+                        value={editForm.bio ?? ''}
+                        onChange={(event) =>
+                          setEditForm((prev) => (prev ? { ...prev, bio: event.target.value } : prev))
+                        }
+                        placeholder="Short description that appears on their profile"
+                      />
+                    </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Allow matchmaking</p>
+                    <div className="grid gap-2">
+                      <Label>Interests</Label>
+                      <InterestCheckboxes
+                        value={editInterests}
+                        onChange={setEditInterests}
+                        idPrefix="edit-interest"
+                      />
                       <p className="text-xs text-muted-foreground">
-                        Enable to include this user in matchmaking suggestions.
+                        Interests help matchmaking results. These are the only values the server
+                        accepts, and the participant can change them afterwards.
                       </p>
                     </div>
-                    <Switch
-                      checked={Boolean(editForm.matchmaking_enabled)}
-                      onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, matchmaking_enabled: checked } : prev))
-                      }
-                    />
-                  </div>
+                  </>
+                )}
+
+                <div className="grid gap-3 md:grid-cols-2">
                   <div className="flex items-center justify-between rounded-md border px-3 py-2">
                     <div className="space-y-1">
                       <p className="text-sm font-medium">Email notifications</p>
@@ -985,34 +1256,54 @@ export const ProfileReview = () => {
                       }
                     />
                   </div>
-                  <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Receive love notes</p>
-                      <p className="text-xs text-muted-foreground">
-                        When off, other students cannot send new love notes.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={Boolean(editForm.love_notes_receive_enabled)}
-                      onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, love_notes_receive_enabled: checked } : prev))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Send love notes</p>
-                      <p className="text-xs text-muted-foreground">
-                        Disable if the user is restricted from sending notes.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={Boolean(editForm.love_notes_send_enabled)}
-                      onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, love_notes_send_enabled: checked } : prev))
-                      }
-                    />
-                  </div>
+                  {/* A switch that cannot be written is worse than no switch: it reads as a
+                      setting the operator has just set. */}
+                  {editingIsParticipant && (
+                    <>
+                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Allow matchmaking</p>
+                          <p className="text-xs text-muted-foreground">
+                            Enable to include this user in matchmaking suggestions.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={Boolean(editForm.matchmaking_enabled)}
+                          onCheckedChange={(checked) =>
+                            setEditForm((prev) => (prev ? { ...prev, matchmaking_enabled: checked } : prev))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Receive love notes</p>
+                          <p className="text-xs text-muted-foreground">
+                            When off, other students cannot send new love notes.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={Boolean(editForm.love_notes_receive_enabled)}
+                          onCheckedChange={(checked) =>
+                            setEditForm((prev) => (prev ? { ...prev, love_notes_receive_enabled: checked } : prev))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Send love notes</p>
+                          <p className="text-xs text-muted-foreground">
+                            Disable if the user is restricted from sending notes.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={Boolean(editForm.love_notes_send_enabled)}
+                          onCheckedChange={(checked) =>
+                            setEditForm((prev) => (prev ? { ...prev, love_notes_send_enabled: checked } : prev))
+                          }
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
                 </div>
               </ScrollArea>
@@ -1042,9 +1333,13 @@ export const ProfileReview = () => {
       >
         <DialogContent className="max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Create new account</DialogTitle>
+            <DialogTitle>
+              Create {ACCOUNT_TYPE_LABELS[createForm.account_type].toLowerCase()} account
+            </DialogTitle>
             <DialogDescription>
-              Provision a fresh student or administrator profile. Required fields are marked and the account is active immediately.
+              {createIsParticipant
+                ? 'Provision a fresh student profile. Required fields are marked and the account is active immediately.'
+                : 'Provision a fresh staff profile. A staff account holds no participant content of its own, so only the shared fields are asked for.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1074,6 +1369,28 @@ export const ProfileReview = () => {
                   />
                 </div>
                 <div className="grid gap-2">
+                  <Label htmlFor="create-gender">Gender *</Label>
+                  <Select
+                    value={createForm.gender}
+                    onValueChange={(value) =>
+                      setCreateForm((prev) => ({ ...prev, gender: value as UserGender }))
+                    }
+                  >
+                    <SelectTrigger id="create-gender">
+                      <SelectValue placeholder="Select a gender" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {USER_GENDER_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  {/* Required for every account type. It used to be marked optional for staff,
+                      which left a moderator with no address anybody could reach. */}
                   <Label htmlFor="create-email">Email *</Label>
                   <Input
                     id="create-email"
@@ -1085,118 +1402,78 @@ export const ProfileReview = () => {
                     placeholder="user@example.com"
                   />
                 </div>
+                {createIsParticipant && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="create-class">Class / department *</Label>
+                    <Input
+                      id="create-class"
+                      value={createForm.class_name}
+                      onChange={(event) =>
+                        setCreateForm((prev) => ({ ...prev, class_name: event.target.value }))
+                      }
+                      placeholder="CSE, ECE, Year, etc."
+                    />
+                  </div>
+                )}
+                {createIsParticipant && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="create-emoji">Emoji tag</Label>
+                    <Input
+                      id="create-emoji"
+                      value={createForm.emoji}
+                      onChange={(event) =>
+                        setCreateForm((prev) => ({ ...prev, emoji: event.target.value }))
+                      }
+                      placeholder="eg. 😄"
+                    />
+                  </div>
+                )}
                 <div className="grid gap-2">
-                  <Label htmlFor="create-class">Class / department *</Label>
-                  <Input
-                    id="create-class"
-                    value={createForm.class_name}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, class_name: event.target.value }))
-                    }
-                    placeholder="CSE, ECE, Year, etc."
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="create-gender">Gender *</Label>
-                  <Input
-                    id="create-gender"
-                    value={createForm.gender}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, gender: event.target.value }))
-                    }
-                    placeholder="Enter gender"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="create-emoji">Emoji tag</Label>
-                  <Input
-                    id="create-emoji"
-                    value={createForm.emoji}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, emoji: event.target.value }))
-                    }
-                    placeholder="eg. 😄"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="create-avatar">Profile picture URL</Label>
+                  <Label htmlFor="create-avatar">Profile picture</Label>
                   <Input
                     id="create-avatar"
-                    value={createForm.profile_picture_url}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, profile_picture_url: event.target.value }))
-                    }
-                    placeholder="Optional asset identifier"
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => setCreatePictureFile(event.target.files?.[0] ?? null)}
                   />
+                  <p className="text-[11px] text-muted-foreground">
+                    Optional. The file is uploaded to the server after the account is created, so
+                    the address stored is one the server generated.
+                  </p>
                 </div>
               </div>
 
-              <div className="grid gap-2">
-                <Label htmlFor="create-bio">Bio</Label>
-                <Textarea
-                  id="create-bio"
-                  rows={4}
-                  value={createForm.bio}
-                  onChange={(event) =>
-                    setCreateForm((prev) => ({ ...prev, bio: event.target.value }))
-                  }
-                  placeholder="Short description that appears on their profile"
-                />
-              </div>
+              {createIsParticipant && (
+                <>
+                  <div className="grid gap-2">
+                    <Label htmlFor="create-bio">Bio</Label>
+                    <Textarea
+                      id="create-bio"
+                      rows={4}
+                      value={createForm.bio}
+                      onChange={(event) =>
+                        setCreateForm((prev) => ({ ...prev, bio: event.target.value }))
+                      }
+                      placeholder="Short description that appears on their profile"
+                    />
+                  </div>
 
-              <div className="grid gap-2">
-                <Label htmlFor="create-interests">Interests</Label>
-                <Textarea
-                  id="create-interests"
-                  rows={3}
-                  value={createInterestsInput}
-                  onChange={(event) => setCreateInterestsInput(event.target.value)}
-                  placeholder="Comma-separated interests (e.g. music, movies, travel)"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Interests enrich matchmaking recommendations. Separate multiple values with commas.
-                </p>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="create-account-type">Account type *</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Decides which table the account is created in. A participant can post
-                    confessions and be matched; a staff account cannot, and a moderator sees
-                    fewer moderation screens than an admin.
-                  </p>
-                  <Select
-                  value={createForm.account_type}
-                  onValueChange={(value) =>
-                    setCreateForm((prev) => ({ ...prev, account_type: value as AccountType }))
-                  }
-                >
-                  <SelectTrigger id="create-account-type">
-                    <SelectValue placeholder="Choose an account type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="users">Participant</SelectItem>
-                    <SelectItem value="moderator">Moderator</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">Allow matchmaking</p>
+                  <div className="grid gap-2">
+                    <Label>Interests</Label>
+                    <InterestCheckboxes
+                      value={createInterests}
+                      onChange={setCreateInterests}
+                      idPrefix="create-interest"
+                    />
                     <p className="text-xs text-muted-foreground">
-                      Enable to include the new account in matchmaking results.
+                      Interests enrich matchmaking recommendations. Tick any that apply; the
+                      participant can change them afterwards.
                     </p>
                   </div>
-                  <Switch
-                    checked={createForm.matchmaking_enabled}
-                    onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, matchmaking_enabled: checked }))
-                    }
-                  />
-                </div>
+                </>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2">
                 <div className="flex items-center justify-between rounded-md border px-3 py-2">
                   <div className="space-y-1">
                     <p className="text-sm font-medium">Email notifications</p>
@@ -1211,34 +1488,55 @@ export const ProfileReview = () => {
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">Receive love notes</p>
-                    <p className="text-xs text-muted-foreground">
-                      When disabled, other students cannot send love notes to this user.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={createForm.love_notes_receive_enabled}
-                    onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, love_notes_receive_enabled: checked }))
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">Send love notes</p>
-                    <p className="text-xs text-muted-foreground">
-                      Disable to prevent the account from sending love notes.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={createForm.love_notes_send_enabled}
-                    onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, love_notes_send_enabled: checked }))
-                    }
-                  />
-                </div>
+                {/* Matchmaking and love notes are participant columns. They are not shown as
+                    disabled controls for a staff account either: a switch that cannot be turned on
+                    is a switch that reads as a setting the operator has not set yet. */}
+                {createIsParticipant && (
+                  <>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">Allow matchmaking</p>
+                        <p className="text-xs text-muted-foreground">
+                          Enable to include the new account in matchmaking results.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={createForm.matchmaking_enabled}
+                        onCheckedChange={(checked) =>
+                          setCreateForm((prev) => ({ ...prev, matchmaking_enabled: checked }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">Receive love notes</p>
+                        <p className="text-xs text-muted-foreground">
+                          When disabled, other students cannot send love notes to this user.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={createForm.love_notes_receive_enabled}
+                        onCheckedChange={(checked) =>
+                          setCreateForm((prev) => ({ ...prev, love_notes_receive_enabled: checked }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">Send love notes</p>
+                        <p className="text-xs text-muted-foreground">
+                          Disable to prevent the account from sending love notes.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={createForm.love_notes_send_enabled}
+                        onCheckedChange={(checked) =>
+                          setCreateForm((prev) => ({ ...prev, love_notes_send_enabled: checked }))
+                        }
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </ScrollArea>
@@ -1248,7 +1546,9 @@ export const ProfileReview = () => {
               Cancel
             </Button>
             <Button onClick={handleCreateUser} disabled={creating}>
-              {creating ? 'Creating...' : 'Create account'}
+              {creating
+                ? 'Creating...'
+                : `Create ${ACCOUNT_TYPE_LABELS[createForm.account_type].toLowerCase()} account`}
             </Button>
           </DialogFooter>
         </DialogContent>

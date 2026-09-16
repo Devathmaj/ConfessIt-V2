@@ -3,28 +3,51 @@
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
-from ..postgres import Database
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
+
 from ..db_models import UserRecord
 from ..logger import get_logger
+from ..postgres import Database
 
-from ..models import UserDetails
-from ..services.storage_service import storage_service
-from ..services import asset_delivery_service
+from ..models import Interest, UserDetails, clean_interests
+from ..services.account_picture_service import (
+    retire_previous_picture,
+    upload_account_picture,
+)
 from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
 
 class UserProfileUpdate(BaseModel):
-    """Allowed fields for updating profile."""
+    """Allowed fields for updating profile.
+
+    ``interests`` is typed with the closed vocabulary rather than left as free text for the
+    same reason the admin payload is: this is the route a participant uses to uncheck the boxes
+    an admin ticked for them, so it is exactly the path through which a bad value -- "music",
+    "Music", or a typo -- would otherwise get in and become a value nothing can match. The
+    validator collapses duplicates and applies the cap.
+    """
     emoji: Optional[str] = None
     bio: Optional[str] = None
-    interests: Optional[List[str]] = None
+    interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
     notifications_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
+
+    @field_validator("interests")
+    @classmethod
+    def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
+        """De-duplicate and bound the list, sharing one rule with the admin write path.
+
+        Returns ``None`` for ``None`` rather than coercing it to a list, because ``None`` is
+        how ``exclude_unset`` distinguishes "left this field alone" from "set it to nothing";
+        collapsing the two here would let an unrelated profile edit clear somebody's interests.
+        """
+        if value is None:
+            return None
+        return list(clean_interests(value))
 
 
 async def update_user_profile_service(
@@ -79,76 +102,34 @@ async def upload_profile_picture_service(
     db: Database,
     file: UploadFile = File(...)
 ):
-    """Service to upload and set a new profile picture."""
-    # Read through the bounded reader rather than ``await file.read()``, which would
-    # buffer the whole body before anything had looked at it.
-    contents = await storage_service.read_upload_capped(file)
+    """Service to upload and set a new profile picture for the signed-in participant."""
+    # The upload itself -- capped read, validation, Cloudinary -- lives in
+    # ``account_picture_service`` because an admin performing the same upload on a moderator's
+    # row needs those rules too, and the row this needs is in the ``users`` table only. What
+    # stays here is the part that *is* participant-specific: which row to write.
+    result = await upload_account_picture(
+        file=file,
+        owner_regno=current_user.regno,
+        account=AccountRef.of(current_user),
+        previous_picture_url=current_user.profile_picture_url,
+        actor_regno=current_user.regno,
+    )
 
-    try:
-        storage_service.validate_image_file(file, contents, max_size_mb=storage_service.max_image_size_mb)
-    except HTTPException as exc:
-
-        raise exc
-    except Exception as exc:
-        logger.error(f"Unexpected error while validating profile image: {exc}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
-
-    upload_target_name = current_user.regno or "user"
-    try:
-        upload_result = storage_service.upload_profile_image(
-            file=file,
-            content=contents,
-            user_folder=upload_target_name,
-        )
-        storage_service.verify_uploaded_asset("profile", upload_result["object_path"])
-    except HTTPException as exc:
-        logger.error(f"Cloudinary upload failed for user {current_user.regno}: {exc.detail}")
-        raise exc
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error(f"Unexpected error uploading profile image for {current_user.regno}: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload profile picture")
-
-
-    # Store the full Cloudinary URL in the database (not just the object path)
-    cloudinary_url = upload_result["cloudinary_url"]
+    # Written after the upload succeeded and committed, and only then is the old object retired.
+    # The order is the whole point: a row that still names a deleted object is worse than a
+    # leftover one, because nothing the owner does can bring the picture back.
     with db.sessions.begin() as session:
         user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
         if user:
-            user.profile_picture_url = cloudinary_url
+            user.profile_picture_url = result["stored_identifier"]
 
-    # Hand back the proxy URL rather than the raw Cloudinary URL, so the frontend never
-    # learns an address it could reuse outside the proxy's authorisation check.
-    delivery_url = asset_delivery_service.build_delivery_url(
-        kind="profile", stored_identifier=cloudinary_url, account=AccountRef.of(current_user)
+    # Outside the transaction. If the write above rolled back, the row would be pointing at the old
+    # object, and deleting it here is what would make that unrecoverable.
+    retire_previous_picture(
+        previous_picture_url=current_user.profile_picture_url,
+        owner_regno=current_user.regno,
+        new_stored_identifier=result["stored_identifier"],
+        actor_regno=current_user.regno,
     )
 
-    # Only now that the replacement is stored do we retire the old object. Deleting it
-    # before the upload was attempted meant a failed upload left the account pointing at
-    # an asset that had already been destroyed, which no retry could recover from.
-    # ``delete_profile_asset`` re-checks that the path is under this account's folder, so
-    # a stored value naming somebody else's object is refused rather than acted on.
-    previous_identifier = current_user.profile_picture_url
-    if previous_identifier:
-        previous_path = storage_service.normalize_stored_path(previous_identifier, "profile")
-        new_path = storage_service.normalize_stored_path(cloudinary_url, "profile")
-        if previous_path and previous_path != new_path:
-            try:
-                storage_service.delete_profile_asset(
-                    previous_identifier, owner_regno=current_user.regno
-                )
-            except HTTPException as exc:
-                # The new picture is already saved, so a stale object is a cleanup
-                # problem, not a reason to fail the request.
-                logger.warning(
-                    f"Failed to delete previous profile asset for {current_user.regno}: {exc.detail}"
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    f"Unexpected error deleting previous profile asset for {current_user.regno}: {exc}"
-                )
-
-    return {
-        "profile_picture_url": delivery_url or cloudinary_url,
-        "url": delivery_url or cloudinary_url,
-        "message": "Profile picture uploaded successfully",
-    }
+    return result["response"]

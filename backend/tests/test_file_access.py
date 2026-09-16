@@ -125,7 +125,7 @@ def user_details(regno: str, user_id: str) -> UserDetails:
 
 def staff_details(regno: str, account_id: str, account_type: str) -> AccountDetails:
     return AccountDetails(
-        id=account_id, regno=regno, name=regno.title(), gender="male",
+        id=account_id, regno=regno, name=regno.title(), email=f"{regno}@test.com", gender="male",
         notifications_enabled=True, account_type=account_type,
     )
 

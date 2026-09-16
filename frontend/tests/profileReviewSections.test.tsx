@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,13 +31,22 @@ const api = vi.hoisted(() => ({
   setAdminUserBlocked: vi.fn(),
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
+  uploadAdminUserPicture: vi.fn(),
+}));
+
+/** Hoisted alongside the API so a rejected create can be asserted on by its message. */
+const toast = vi.hoisted(() => ({
+  info: vi.fn(),
+  error: vi.fn(),
+  success: vi.fn(),
+  // `warning` is the one the create flow uses to say "the account is there, the picture is not".
+  // Leaving it out of the mock made that toast throw, which aborted the handler before the new
+  // account was added to the list -- so the row silently vanished from the screen.
+  warning: vi.fn(),
 }));
 
 vi.mock('@/services/api', () => api);
-vi.mock('sonner', () => ({
-  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
-  Toaster: () => null,
-}));
+vi.mock('sonner', () => ({ toast, Toaster: () => null }));
 
 const ADMIN = '11111111-1111-1111-1111-111111111111';
 const MODERATOR = '22222222-2222-2222-2222-222222222222';
@@ -122,6 +131,27 @@ function renderRows(rows: unknown[], expected: string) {
 /** The group an account is rendered in, found through the heading that labels the section. */
 const groupNamed = (heading: string) =>
   screen.getByRole('heading', { name: heading }).closest('section') as HTMLElement;
+
+/**
+ * Picks `option` from the gender <Select> labelled `label`.
+ *
+ * Gender stopped being a text box when the vocabulary was closed, and the old
+ * `fireEvent.change(trigger, { value: 'female' })` has no meaning against a Radix trigger: a
+ * <div role="combobox"> holds no value to change, so the test would pass a click that went
+ * nowhere and then assert against a control that never moved. The trigger opens on pointer down
+ * and the option is a separate element in a portal, so both steps are needed.
+ */
+async function chooseGender(dialog: HTMLElement, option: string, label = 'Gender *') {
+  // `pointerType` is not decoration. Radix reads it to decide whether this is a mouse-like
+  // interaction, and without it the trigger stays shut -- leaving "unable to find option" as the
+  // only symptom, with no hint that the first click never reached the control.
+  fireEvent.pointerDown(within(dialog).getByLabelText(label), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: 'mouse',
+  });
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
 
 const ADMINS = 'Admins';
 const MODERATORS = 'Moderators';
@@ -307,5 +337,603 @@ describe('ProfileReview: accounts as cards', () => {
 
     const card = screen.getByRole('button', { name: 'View profile for Ordinary' });
     expect(within(card).queryByText('Repeated removals')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileReview: creating an account from its own group', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers no single create button above the groups', async () => {
+    await renderRows([admin(), moderator()], 'Ada Admin');
+
+    // One button used to open one form that asked for a participant's class and a moderator's
+    // regno in the same breath. The operator had to remember which of the three kinds they were
+    // making before they could fill it in.
+    expect(screen.queryByRole('button', { name: 'New account' })).not.toBeInTheDocument();
+  });
+
+  it('puts each create button in the group it creates into', async () => {
+    await renderRows([admin(), moderator(), participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    expect(within(groupNamed(ADMINS)).queryByRole('button', { name: /Create/ })).not.toBeInTheDocument();
+    expect(
+      within(groupNamed(MODERATORS)).getByRole('button', { name: 'Create moderator' }),
+    ).toBeInTheDocument();
+    expect(
+      within(groupNamed(PARTICIPANTS)).getByRole('button', { name: 'Create participant' }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps a create button reachable when its group is empty', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    // The most likely moment to need the button is before any moderator exists. A control that
+    // lives inside the grid it fills would be unreachable exactly then.
+    expect(within(groupNamed(MODERATORS)).getByText('No moderator accounts exist yet.'))
+      .toBeInTheDocument();
+    expect(
+      within(groupNamed(MODERATORS)).getByRole('button', { name: 'Create moderator' }),
+    ).toBeInTheDocument();
+  });
+
+  it('asks a moderator for nothing a moderator has no column for', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // The `moderator` table has no class, bio, interests, emoji, matchmaking or love-note
+    // columns. Offering those inputs asked for values the server silently dropped.
+    expect(
+      within(dialog).getByRole('heading', { name: 'Create moderator account' }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Full name *')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Register number *')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Gender *')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Class / department *')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Receive love notes')).not.toBeInTheDocument();
+  });
+
+  it('offers no account-type choice inside the form', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    // Which kind of account is being made is decided by the button that opened the form, so the
+    // form cannot contradict it. This is also why an admin cannot be created from here.
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByLabelText(/Account type/)).not.toBeInTheDocument();
+  });
+
+  it('creates a moderator from the shared fields alone', async () => {
+    api.createAdminUser.mockResolvedValue({
+      id: '55555555-5555-5555-5555-555555555555',
+      regno: 'staff-9',
+      name: 'New Mod',
+      account_type: 'moderator',
+    });
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Mod' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: 'staff-9' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'newmod@school.test' },
+    });
+    await chooseGender(dialog, 'Female');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    await waitFor(() => expect(api.createAdminUser).toHaveBeenCalledTimes(1));
+    const payload = api.createAdminUser.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      name: 'New Mod',
+      regno: 'staff-9',
+      // Email is required of a staff account too. It used to be omitted here, which is how a
+      // moderator ended up with no address anybody could reach.
+      email: 'newmod@school.test',
+      gender: 'female',
+      account_type: 'moderator',
+    });
+    // Nothing participant-only was sent, because nothing participant-only was collected. Sending
+    // empty values would rely on the server dropping them, which is how they got sent at all.
+    for (const key of [
+      'class_name',
+      'bio',
+      'emoji',
+      'interests',
+      'matchmaking_enabled',
+      'love_notes_receive_enabled',
+      'love_notes_send_enabled',
+    ]) {
+      expect(payload).not.toHaveProperty(key);
+    }
+  });
+
+  it('still requires a class from a participant, and names the field when it is missing', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Email *')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Class / department *')).toBeInTheDocument();
+    expect(within(dialog).getByText('Allow matchmaking')).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Student' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: '21CS999' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Gender *'), { target: { value: 'other' } });
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
+
+    // Class is required of a participant and there is no column for it on a moderator, so the
+    // same form cannot ask for both. "Please fill in all required fields" was true and useless:
+    // it could not say which of the five fields was the one missing.
+    expect(api.createAdminUser).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      'Class / department is required for this account type.',
+    );
+  });
+
+  it('creates a participant once its own fields are filled in', async () => {
+    api.createAdminUser.mockResolvedValue({
+      id: '66666666-6666-6666-6666-666666666666',
+      regno: '21CS999',
+      name: 'New Student',
+      account_type: 'users',
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Student' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: '21CS999' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Gender *'), { target: { value: 'other' } });
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Class / department *'), {
+      target: { value: 'CSE' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
+
+    await waitFor(() => expect(api.createAdminUser).toHaveBeenCalledTimes(1));
+    expect(api.createAdminUser.mock.calls[0][0]).toMatchObject({
+      name: 'New Student',
+      regno: '21CS999',
+      gender: 'other',
+      email: 'new@school.test',
+      class_name: 'CSE',
+      account_type: 'users',
+    });
+  });
+});
+
+describe('ProfileReview: editing a staff account', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers only the columns a moderator actually has', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // The `moderator` table has five columns this form can write. The seven below live on
+    // `users` and nowhere else, so offering them asked the operator to type something that had no
+    // destination.
+    expect(within(dialog).getByLabelText('Full name')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Register number')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Email')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Gender')).toBeInTheDocument();
+    // A file, not a text box holding a Cloudinary identifier. The URL is produced by the server
+    // from an upload now, so an editable box here could only ever hold something it would refuse.
+    expect(within(dialog).getByLabelText('Profile picture')).toHaveAttribute('type', 'file');
+    expect(within(dialog).getByText('Email notifications')).toBeInTheDocument();
+
+    expect(within(dialog).queryByLabelText('Class / department')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Receive love notes')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Send love notes')).not.toBeInTheDocument();
+  });
+
+  it('says why the missing fields are missing rather than leaving a silent gap', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    // A shorter form reads as the screen having less to say, not as the account having less on it.
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/A moderator account has no class, bio, interests/i))
+      .toBeInTheDocument();
+  });
+
+  it('sends no participant-only key when a moderator is saved', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: MODERATOR,
+      name: 'Mo Renamed',
+      account_type: 'moderator',
+    });
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name'), {
+      target: { value: 'Mo Renamed' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    const [id, payload] = api.updateAdminUser.mock.calls[0];
+    expect(id).toBe(MODERATOR);
+    // The server strips these keys from a staff update, so sending them was a value that could
+    // only be ignored. It also meant a toggle on the form could report a change that no amount of
+    // saving would ever keep.
+    expect(payload).toEqual({ name: 'Mo Renamed' });
+  });
+
+  it('still saves the shared toggles for a moderator', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: MODERATOR,
+      name: 'A Moderator',
+      account_type: 'moderator',
+      notifications_enabled: false,
+    });
+    await renderRows([moderator({ notifications_enabled: true })], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    // `notifications_enabled` is on all three account tables, so it is not a participant field.
+    // It is also the only switch on the form: the others have no column to be written to.
+    expect(within(dialog).getAllByRole('switch')).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('switch'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ notifications_enabled: false });
+  });
+
+  it('offers every participant field when a participant is edited', async () => {
+    await renderRows(
+      [participant(ORDINARY, 'Ordinary', {}, { bio: 'hello', interests: ['Music', 'Bogus'] })],
+      'Ordinary',
+    );
+
+    // The fix must not narrow the participant form by accident: these are the fields the whole
+    // reason a participant row carries a class.
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Class / department')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Emoji tag')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Bio')).toHaveValue('hello');
+    // Interests are twelve tickable boxes, not a comma-separated string the operator has to know
+    // the spelling of. `Bogus` is what a row from before the vocabulary was closed holds: there is
+    // no box for it, rather than an unticked one that looks like a choice the operator could make.
+    expect(within(dialog).getByRole('checkbox', { name: 'Music' })).toBeChecked();
+    expect(within(dialog).queryByRole('checkbox', { name: 'Bogus' })).not.toBeInTheDocument();
+    expect(within(dialog).getAllByRole('checkbox')).toHaveLength(12);
+    expect(within(dialog).getByText('Allow matchmaking')).toBeInTheDocument();
+    expect(within(dialog).getByText('Receive love notes')).toBeInTheDocument();
+    expect(within(dialog).getByText('Send love notes')).toBeInTheDocument();
+  });
+
+  it('still saves a participant edit', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: ORDINARY,
+      name: 'Renamed',
+      account_type: 'users',
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Bio'), {
+      target: { value: 'a short bio' },
+    });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Music' }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Traveling' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({
+      bio: 'a short bio',
+      interests: ['Music', 'Traveling'],
+    });
+  });
+
+  it('drops a legacy interest from the payload the first time the row is edited', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: ORDINARY,
+      name: 'Ordinary',
+      account_type: 'users',
+    });
+    // Untouched interests. The stored list holds a value the server no longer accepts, and the
+    // operator has changed nothing about interests -- only their name.
+    await renderRows(
+      [participant(ORDINARY, 'Ordinary', {}, { interests: ['Bogus', 'Music'] })],
+      'Ordinary',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name'), {
+      target: { value: 'Renamed' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    // `interests` is absent, not `['Music']`. Sending it would be a silent edit of a field nobody
+    // looked at -- but the next save that does touch interests will send `['Music']` on its own,
+    // which is why this is a no-op here rather than a correction.
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ name: 'Renamed' });
+  });
+
+  it('sends a changed gender once, and not on every later save', async () => {
+    api.updateAdminUser.mockImplementation((_id: string, payload: Record<string, unknown>) =>
+      Promise.resolve({
+        id: MODERATOR,
+        name: 'Mo Moderator',
+        account_type: 'moderator',
+        gender: 'male',
+        ...payload,
+      }),
+    );
+    await renderRows([moderator({ gender: 'male' })], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    await chooseGender(dialog, 'Female', 'Gender');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ gender: 'female' });
+
+    // Reopening on the value just written must report no change. If the form kept comparing the
+    // displayed value against the row it was fetched with, a moderator edited for any other reason
+    // would have their gender rewritten on that save instead.
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const reopened = await screen.findByRole('dialog');
+    await chooseGender(reopened, 'Female', 'Gender');
+    fireEvent.click(within(reopened).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(api.updateAdminUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('never offers an interest outside the twelve the server accepts', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    const labels = within(dialog)
+      .getAllByRole('checkbox')
+      .map((box) => box.getAttribute('aria-label') ?? document.querySelector(`label[for="${box.id}"]`)?.textContent?.trim());
+    expect(labels).toEqual([
+      'Music',
+      'Movies',
+      'Reading',
+      'Gaming',
+      'Traveling',
+      'Cooking',
+      'Sports',
+      'Art',
+      'Photography',
+      'Dancing',
+      'Writing',
+      'Coding',
+    ]);
+  });
+});
+
+describe('ProfileReview: profile pictures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uploads a chosen file, and skips the JSON call when nothing else changed', async () => {
+    // An explicit log rather than `invocationCallOrder`, which this vitest build does not expose.
+    // The order is the point of the test, so it is recorded where it can be asserted.
+    const calls: string[] = [];
+    api.updateAdminUser.mockImplementation(() => {
+      calls.push('update');
+      return Promise.resolve({ id: ORDINARY, name: 'Ordinary', account_type: 'users' });
+    });
+    api.uploadAdminUserPicture.mockImplementation(() => {
+      calls.push('upload');
+      return Promise.resolve({ profile_picture_url: '/media/profile/ordinary.png' });
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    const file = new File(['bytes'], 'me.png', { type: 'image/png' });
+    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
+      target: { files: [file] },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.uploadAdminUserPicture).toHaveBeenCalledTimes(1));
+    expect(api.uploadAdminUserPicture).toHaveBeenCalledWith(ORDINARY, file);
+    // No field changed, so there is no JSON request to make. The picture is a multipart upload and
+    // cannot ride along in an update body, so it is the only call here.
+    expect(calls).toEqual(['upload']);
+  });
+
+  it('keeps both halves of the result when a rename and a picture are saved together', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: ORDINARY,
+      name: 'Renamed',
+      account_type: 'users',
+    });
+    api.uploadAdminUserPicture.mockResolvedValue({
+      profile_picture_url: '/media/profile/ordinary.png',
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name'), {
+      target: { value: 'Renamed' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
+      target: { files: [new File(['bytes'], 'me.png', { type: 'image/png' })] },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    // The upload response carries only the new URL. Merging it over the stored profile would have
+    // reverted the name this save had just changed, while still reporting success.
+    expect(await screen.findByText('Renamed')).toBeInTheDocument();
+  });
+
+  it('keeps the saved edit when the picture upload is rejected', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: ORDINARY,
+      name: 'Ordinary',
+      account_type: 'users',
+    });
+    api.uploadAdminUserPicture.mockRejectedValue(new Error('not an image'));
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Bio'), {
+      target: { value: 'a short bio' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
+      target: { files: [new File(['x'], 'me.txt', { type: 'text/plain' })] },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    // The dialog closes and the edit stands. A wrong file is a mistake about one field, not a
+    // reason to discard the bio the operator wrote in the same sitting.
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ bio: 'a short bio' });
+  });
+
+  it('creates the account first and only then uploads, so a rejected picture leaves a usable row', async () => {
+    api.createAdminUser.mockResolvedValue({
+      id: '77777777-7777-7777-7777-777777777777',
+      regno: '21CS777',
+      name: 'New Student',
+      email: 'new@school.test',
+      gender: 'other',
+      class_name: 'CSE',
+      account_type: 'users',
+    });
+    api.uploadAdminUserPicture.mockRejectedValue(new Error('too large'));
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Student' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: '21CS777' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Class / department *'), {
+      target: { value: 'CSE' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
+      target: { files: [new File(['x'], 'huge.png', { type: 'image/png' })] },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
+
+    // `warning`, not `error`: the account was created. The operator needs to know the picture is
+    // missing without being told the whole thing failed.
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(api.createAdminUser).toHaveBeenCalledTimes(1);
+    expect(api.uploadAdminUserPicture).toHaveBeenCalledWith(
+      '77777777-7777-7777-7777-777777777777',
+      expect.any(File),
+    );
+    // The new participant is still listed. There is no id to upload against until the row exists,
+    // so the other order is not available.
+    expect(await screen.findByText('New Student')).toBeInTheDocument();
+    // Only the warning. A success toast alongside it would tell the operator the picture is done.
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('confirms the create when the chosen picture uploads cleanly', async () => {
+    api.createAdminUser.mockResolvedValue({
+      id: '88888888-8888-8888-8888-888888888888',
+      regno: 'staff-8',
+      name: 'New Mod',
+      email: 'newmod@school.test',
+      gender: 'other',
+      account_type: 'moderator',
+    });
+    api.uploadAdminUserPicture.mockResolvedValue({
+      id: '88888888-8888-8888-8888-888888888888',
+      profile_picture_url: '/media/profile/newmod.png',
+    });
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Mod' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: 'staff-8' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'newmod@school.test' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
+      target: { files: [new File(['bytes'], 'me.png', { type: 'image/png' })] },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    // The upload succeeded, so this is a plain success. Skipping it because a file had been chosen
+    // left a create that did everything right reporting nothing at all.
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Moderator account created successfully.'),
+    );
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('refuses a staff account with no email, and names the field', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Mod' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: 'staff-9' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    // Email is required of every account type. A moderator could once be created with a regno and
+    // a name, and nobody noticed because nothing on the way to the database complained.
+    expect(api.createAdminUser).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Email is required for this account type.');
   });
 });

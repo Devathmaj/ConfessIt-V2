@@ -83,3 +83,62 @@ USER_EMOJI_MAX = 16
 USER_GENDER_MAX = 24
 USER_ROLE_MAX = 20
 USER_REGNO_MAX = 100
+
+# The closed set of genders an account may carry, and the one place the list is written down.
+#
+# Closed rather than free text because gender is a *filter*, not a description: matchmaking
+# pairs candidates by it, and a value outside the set is not a gender nobody has, it is a typo
+# that silently excludes the account from every pool the opposite gender draws from. The old
+# column accepted any string up to 24 characters, so "Male", "male " and "M" were three
+# different people to that query and none of them matched each other.
+#
+# ``other`` is a real value rather than a null: "not one of the two" is the answer, and storing
+# it as NULL would make it indistinguishable from an account that predates the column.
+#
+# Enforced three times, because each one covers a different hole: Pydantic so the caller gets a
+# 422 naming the field, the frontend Select so there is no invalid value to send in the first
+# place, and a CHECK constraint so a write that bypasses the API cannot store anything else.
+USER_GENDER_VALUES: tuple[str, ...] = ("male", "female", "other")
+
+# The closed set of interests a participant may hold, and the one place the list is written down.
+#
+# Closed for the same reason gender is: interests feed matchmaking scoring, and an interest
+# outside the set has no counterpart on the other participant's profile to be compared against.
+# It used to be free text, entered as a comma-separated string, which meant "music", "Music" and
+# "musics" were three interests that never matched each other and no screen could tell the
+# difference.
+#
+# Capitalised, and matched exactly. These strings are stored, displayed and compared, so they
+# are values rather than labels: normalising case on the way in would make the stored value
+# disagree with the one the browser offered, and the checkbox a participant unchecks would come
+# back ticked.
+#
+# ``frontend/src/lib/interests.ts`` restates the whole set so the browser can render the same
+# checkbox grid the server will accept. Change both.
+INTEREST_VALUES: tuple[str, ...] = (
+    "Music",
+    "Movies",
+    "Reading",
+    "Gaming",
+    "Traveling",
+    "Cooking",
+    "Sports",
+    "Art",
+    "Photography",
+    "Dancing",
+    "Writing",
+    "Coding",
+)
+
+# A participant cannot hold every interest at once and still be telling a matchmaker anything,
+# and an unbounded array is a payload no screen has a sane way to render. The ceiling is the
+# size of the whole vocabulary, so it is a backstop against a client sending the list twice
+# over rather than a limit that ever rejects a real selection.
+#
+# There is deliberately no separate per-interest length cap. `INTEREST_MAX` used to sit here for
+# the `ARRAY(String(80))` column, but with the vocabulary closed every value is one of twelve
+# known strings, so the column's width is a database detail rather than something the API has to
+# police -- and a second number to keep in step with the first is one more thing to drift.
+# Widening an array element is a migration; refusing a value that is not in `INTEREST_VALUES` is
+# a 422.
+INTEREST_MAX_SELECTED = len(INTEREST_VALUES)

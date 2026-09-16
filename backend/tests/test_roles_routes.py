@@ -52,6 +52,11 @@ SAMPLE_ROUTES = [
     ("POST", "/admin/users"),
     ("PUT", "/admin/users/{user_id}/block"),
     ("PUT", "/admin/users/{user_id}"),
+    # The picture upload replaced the ``profile_picture_url`` field that used to be part of
+    # the create and update payloads. It is listed here so that a future route inventory
+    # cannot quietly lose it -- the field's removal from the JSON bodies is only meaningful
+    # while this route exists to do the job.
+    ("PUT", "/admin/users/{user_id}/picture"),
     ("GET", "/admin/stats"),
     ("GET", "/admin/stats/active-sessions"),
     ("GET", "/admin/config"),

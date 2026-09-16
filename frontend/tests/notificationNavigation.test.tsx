@@ -44,7 +44,20 @@ const authValue = {
   signInPath: '/login',
 };
 
-const notice = (over: Record<string, unknown> = {}) => ({
+/**
+ * One notification row as `getNotifications` delivers it. Naming the fields instead of using a
+ * loose record is what lets `row.heading` be read as the string it is.
+ */
+type Notice = {
+  id: string;
+  heading: string;
+  body: string;
+  created_at: string;
+  target_kind?: string | null;
+  target_id?: string | null;
+};
+
+const notice = (over: Partial<Notice> = {}): Notice => ({
   id: 'n1',
   heading: 'You received a Love Note!',
   body: 'Ada sent you a love note!',
@@ -61,7 +74,7 @@ const notice = (over: Record<string, unknown> = {}) => ({
  * state; the rows below are the only thing on screen, which is what makes "this card came from
  * this row" checkable rather than merely likely.
  */
-const renderInbox = async (row: Record<string, unknown>) => {
+const renderInbox = async (row: Notice) => {
   api.getNotifications.mockResolvedValue({ notifications: [row] });
   api.getCurrentConversation.mockResolvedValue({ status: 'no_active_match' });
   api.getReceivedConversations.mockResolvedValue({

@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 
 from ..postgres import new_id, is_valid_id
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from ..postgres import Database
 
 from ..dependencies import get_db
@@ -10,8 +10,12 @@ from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate
 from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
     MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
-from ..accounts import AccountType, Capability, normalize_account_type
+from ..accounts import AccountRef, AccountType, Capability, normalize_account_type
 from ..services.authorization import require_capability
+from ..services.account_picture_service import (
+    retire_previous_picture,
+    upload_account_picture,
+)
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
@@ -250,6 +254,11 @@ async def create_user(
     a staff account: there is no separate admin-creation form or endpoint to fall out of
     step with this one. Participant-only fields are rejected by the payload validator for a
     staff account, so a caller cannot smuggle an email onto an admin row.
+
+    The picture is not accepted here either: ``profile_picture_url`` is gone from the payload,
+    and bytes go through ``PUT /users/{id}/picture`` instead. A URL in a JSON body is a string
+    anybody can point at any host, and an admin screen that accepts one is an SSRF-shaped hole
+    with a form wrapped round it.
     """
     account_type = payload.account_type
     model = ACCOUNT_MODELS[account_type.value]
@@ -271,32 +280,34 @@ async def create_user(
         # An address is unique within one account table and never across the three, for the
         # same reason regno is: the value identifies a person for contact, not a route into an
         # account, so nothing has to resolve one. The check is against the target table only.
-        normalized_email = payload.email.strip().lower() if payload.email else None
-        if normalized_email is not None:
-            email_conflict = session.scalar(select(model.id).where(
-                model.email == normalized_email
-            ).limit(1))
-            if email_conflict:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="An account with this email already exists for this account type.",
-                )
+        normalized_email = payload.email.strip().lower()
+        email_conflict = session.scalar(select(model.id).where(
+            model.email == normalized_email
+        ).limit(1))
+        if email_conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email already exists for this account type.",
+            )
 
-    interests_value: Optional[List[str]] = None
-    if payload.interests:
-        normalized_interests = [item.strip() for item in payload.interests if item and item.strip()]
-        if normalized_interests:
-            interests_value = normalized_interests
+    # ``clean_interests`` has already de-duplicated and bounded the list, and the
+    # ``Interest`` type has already refused anything outside the vocabulary, so there is
+    # nothing left to normalise here beyond the round trip through the model's own ordering.
+    interests_value: List[str] = list(payload.interests or [])
 
     # Only the fields the target table actually has are passed to the constructor. Building
     # the kwargs from the payload with the participant keys removed -- rather than branching
     # into two constructors -- means a field added to AccountColumns lands in all three
     # tables at once, and a participant-only field can never reach a staff row.
+    #
+    # ``profile_picture_url`` is absent from this dict on purpose: it is set only by the
+    # upload route, so it starts NULL and is filled in by bytes that passed through
+    # Cloudinary rather than by whatever URL a caller typed into a form.
     account_fields: Dict[str, Any] = {
         "regno": normalized_regno,
         "name": payload.name.strip(),
         "email": normalized_email,
-        "profile_picture_url": payload.profile_picture_url.strip() if payload.profile_picture_url else None,
+        "profile_picture_url": None,
         "gender": payload.gender.strip(),
         "notifications_enabled": payload.notifications_enabled,
         "is_blocked": payload.is_blocked,
@@ -373,14 +384,14 @@ async def update_user_details(
             account_type, account = found
             # Participant-only keys are dropped for a staff account. The participant-shaped
             # form submits every field it knows about, and without this an edit to a
-            # moderator's name would also try to write an email onto a table with no email
+            # moderator's name would also try to write a bio onto a table that has no bio
             # column -- and, more insidiously, would write one if the column were ever added
             # for an unrelated reason.
-            # ``email`` is absent on purpose: it is a shared column, so a moderator's address
-            # is editable the same way a participant's is. The rest still describe a
-            # participant, and without this an edit to a moderator's name would also try to
-            # write a bio onto a table that has no bio column -- and, more insidiously, would
-            # write one if the column were ever added for an unrelated reason.
+            #
+            # ``email`` is *not* on this list. It is a shared column now, required on every
+            # account, so a moderator's address is edited exactly as a participant's is; the
+            # note that once stood here to explain its absence is what would have led to
+            # staff rows being left without one.
             participant_only = (
                 "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
                 "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
@@ -398,6 +409,100 @@ async def update_user_details(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return serialize_user_doc(updated_doc)
+
+
+@router.put("/users/{user_id}/picture", response_model=Dict[str, Any])
+async def set_user_profile_picture(
+    user_id: str,
+    db: Database = Depends(get_db),
+    current_admin: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE)),
+    file: UploadFile = File(...)
+) -> Dict[str, Any]:
+    """Upload and store a profile picture for an account in any of the three tables.
+
+    This is the replacement for the ``profile_picture_url`` field that used to be part of the
+    create and update payloads, and the reason it is a separate endpoint rather than a field is
+    the whole point of the change: a URL in a JSON body is an arbitrary string. Nothing checks
+    where it points, nothing verifies the bytes behind it are an image, and an admin form that
+    accepts one is a way to make the server hold a link to anywhere. Receiving the image as
+    multipart means the bytes pass through the size cap and the image validation in
+    ``storage_service`` before they are stored anywhere, and the URL that ends up in the
+    database is one the server generated.
+
+    The target is resolved by id across all three tables, for the same reason
+    ``PUT /users/{id}/block`` does: a moderator's picture is exactly as editable as a
+    participant's, and a route that only looked in ``users`` would quietly not work on half the
+    accounts this screen lists.
+
+    ``USERS_UPDATE`` is the capability required, not ``USERS_CREATE``: setting a picture edits
+    an existing account, and it is the same permission as any other edit to it.
+
+    Uploading is not undone if a later step fails. The upload succeeds or raises before the
+    database is touched, and the write that follows is a single column on one row, so there is no
+    window where the account is left pointing at an object that does not exist. Note that this is
+    a two-transaction route rather than one locked transaction on purpose: holding a database
+    transaction open across a Cloudinary round trip would pin a connection for the length of a
+    network call. The cost is that the row can be deleted between the two, which the second read
+    turns into a 404 -- the object uploaded in between is then orphaned, which is the lesser
+    failure next to the alternative.
+    """
+    if not is_valid_id(user_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
+
+    if str(current_admin.id) == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own profile picture from Profile Review",
+        )
+
+    # Resolved before the upload rather than after it: a bad id should fail immediately, and
+    # uploading first would leave an orphaned object in Cloudinary for an account that does not
+    # exist. The row is read here only to learn the owner regno and the previous URL, both of
+    # which the upload needs; the write is a separate transaction so the network round trip is
+    # not held open across it.
+    with db.sessions() as session:
+        found = resolve_account_by_id(session, user_id)
+        if not found:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account_type, account = found
+        owner_ref = AccountRef.from_row(account, account_type)
+        previous_picture_url = account.profile_picture_url
+
+    upload = await upload_account_picture(
+        file=file,
+        owner_regno=owner_ref.regno,
+        account=owner_ref,
+        previous_picture_url=previous_picture_url,
+        actor_regno=current_admin.regno,
+    )
+
+    # Serialised inside the transaction, not after it. `db.sessions.begin()` commits and closes on
+    # the way out, and a commit expires every attribute on the instance, so reading `account`
+    # afterwards raises DetachedInstanceError -- a 500 on the successful path of a route whose
+    # upload had already worked. The other write routes here build their document inside the
+    # block for the same reason.
+    with db.sessions.begin() as session:
+        found = resolve_account_by_id(session, user_id)
+        if not found:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        account_type, account = found
+        account.profile_picture_url = upload["stored_identifier"]
+        updated_doc = serialize_user_doc(_account_row_payload(account_type, account))
+
+    # The old object is retired only now that the row names the new one and the write has
+    # committed. Doing it inside the transaction would mean a rollback there leaves the account
+    # pointing at bytes that have already been deleted, with no way to get them back.
+    retire_previous_picture(
+        previous_picture_url=previous_picture_url,
+        owner_regno=owner_ref.regno,
+        new_stored_identifier=upload["stored_identifier"],
+        actor_regno=current_admin.regno,
+    )
+
+    return {
+        **updated_doc,
+        "message": "Profile picture uploaded successfully",
+    }
 
 
 @router.get("/stats", response_model=Dict[str, Any])

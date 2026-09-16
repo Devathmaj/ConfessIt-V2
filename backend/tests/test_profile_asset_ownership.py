@@ -18,7 +18,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException, UploadFile
 
-from app.services import profile_service
+from app.services import account_picture_service, profile_service
 from app.services.storage_service import storage_service
 
 OWNER = "22CS045"
@@ -156,9 +156,15 @@ def _upload_stub(monkeypatch, *, fail: bool):
 
 
 def _user_details(regno, picture_url):
+    # ``account_type`` is needed because the upload builds an ``AccountRef`` for the delivery
+    # URL, and building one reads it. These rules moved out of ``profile_service`` into
+    # ``account_picture_service`` so the admin upload could share them, and the patch targets
+    # below follow them there -- ``profile_service`` still owns only the participant-specific
+    # part, which is writing the ``users`` row.
     return Mock(
         regno=regno,
         profile_picture_url=picture_url,
+        account_type="users",
     )
 
 
@@ -175,15 +181,23 @@ def _fake_db():
 
 async def _run_upload(monkeypatch, *, fail: bool, current):
     _upload_stub(monkeypatch, fail=fail)
+    # Patched on ``account_picture_service``, which is where the capped read, the validation,
+    # the Cloudinary call and the deletion ordering now live. ``profile_service`` kept only the
+    # part that is participant-specific, and patching names there would silently do nothing --
+    # monkeypatch on a module attribute nobody reads is not a failure, it is a no-op, which is
+    # the worse outcome because the test still passes.
     monkeypatch.setattr(
-        profile_service.asset_delivery_service,
+        account_picture_service.asset_delivery_service,
         "build_delivery_url",
         lambda **kwargs: "http://proxy/delivery",
         raising=True,
     )
     upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
     monkeypatch.setattr(
-        profile_service.storage_service, "validate_image_file", lambda *a, **k: "png", raising=True
+        account_picture_service.storage_service,
+        "validate_image_file",
+        lambda *a, **k: "png",
+        raising=True,
     )
     return await profile_service.upload_profile_picture_service(current, _fake_db(), upload)
 
@@ -235,10 +249,114 @@ async def test_delete_failure_does_not_fail_the_upload(monkeypatch, enabled):
     def _boom(*args, **kwargs):
         raise HTTPException(status_code=500, detail="Failed to delete file")
 
-    monkeypatch.setattr(profile_service.storage_service, "delete_profile_asset", _boom, raising=True)
+    monkeypatch.setattr(
+        account_picture_service.storage_service, "delete_profile_asset", _boom, raising=True
+    )
 
     result = await _run_upload(monkeypatch, fail=False, current=current)
     assert result["message"] == "Profile picture uploaded successfully"
+
+
+@pytest.mark.asyncio
+async def test_the_old_object_survives_a_failed_database_write(monkeypatch, enabled, destroyed):
+    """The ordering rule, tested at the step that can actually break it.
+
+    The upload helper used to delete the previous object itself, on the strength of a comment
+    claiming the replacement had already been stored. It had not: the caller persists the new URL
+    *after* the helper returns. So a database failure between the two left the row still naming
+    the old object, which the helper had already destroyed -- a broken image with no retry able to
+    recover it, because the bytes were gone.
+
+    Making the database write fail is the only way to observe the difference. Both previous tests
+    pass either way, which is why this one exists.
+    """
+    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
+
+    class _FailingSession:
+        """Stands in for a commit that fails after the upload has already succeeded."""
+
+        def scalar(self, *args, **kwargs):
+            return Mock(profile_picture_url=None)
+
+    class _FailingContext:
+        def __enter__(self):
+            return _FailingSession()
+
+        def __exit__(self, exc_type, exc, tb):
+            if exc_type is not None:
+                return False
+            raise RuntimeError("commit failed")
+
+    db = Mock()
+    db.sessions.begin.return_value = _FailingContext()
+
+    _upload_stub(monkeypatch, fail=False)
+    monkeypatch.setattr(
+        account_picture_service.asset_delivery_service,
+        "build_delivery_url",
+        lambda **kwargs: "http://proxy/delivery",
+        raising=True,
+    )
+    monkeypatch.setattr(
+        account_picture_service.storage_service,
+        "validate_image_file",
+        lambda *a, **k: "png",
+        raising=True,
+    )
+
+    upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
+
+    with pytest.raises(RuntimeError):
+        await profile_service.upload_profile_picture_service(current, db, upload)
+
+    assert destroyed == [], (
+        "the previous asset was destroyed even though the write that should have replaced it "
+        "never landed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_old_object_goes_only_after_the_write(enabled, monkeypatch):
+    """Not just "deleted eventually" -- deleted after the stored value changed."""
+    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
+    order = []
+
+    _upload_stub(monkeypatch, fail=False)
+    monkeypatch.setattr(
+        account_picture_service.asset_delivery_service,
+        "build_delivery_url",
+        lambda **kwargs: "http://proxy/delivery",
+        raising=True,
+    )
+    monkeypatch.setattr(
+        account_picture_service.storage_service,
+        "validate_image_file",
+        lambda *a, **k: "png",
+        raising=True,
+    )
+    monkeypatch.setattr(
+        account_picture_service.storage_service,
+        "delete_profile_asset",
+        lambda *a, **k: order.append("delete"),
+        raising=True,
+    )
+
+    db = _fake_db()
+    # The write is recorded where it actually happens -- the assignment of the new stored URL --
+    # rather than by wrapping the context manager, which is fiddly to do on a Mock and would be
+    # testing the wrapper rather than the ordering.
+    original_scalar = db.sessions.begin.return_value.__enter__.return_value.scalar
+
+    def _scalar(*args, **kwargs):
+        order.append("write")
+        return original_scalar(*args, **kwargs)
+
+    db.sessions.begin.return_value.__enter__.return_value.scalar = _scalar
+
+    upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
+    await profile_service.upload_profile_picture_service(current, db, upload)
+
+    assert order == ["write", "delete"]
 
 
 def test_error_detail_no_longer_leaks_the_public_id(enabled, monkeypatch):

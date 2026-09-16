@@ -46,6 +46,30 @@ def _server_default_sql(column, dialect) -> str | None:
     return None
 
 
+# The SQL expression that turns a row's ``regno`` into the placeholder address written by
+# :meth:`PostgresClient.apply_not_null_constraints`. Named and module-level so it can be read,
+# reviewed and tested as one thing rather than found inline in a long f-string.
+#
+# It has to be injective in ``regno``, because ``email`` carries a unique index per table and a
+# collision would abort the UPDATE -- taking the application down on boot, the one outcome that
+# method exists to avoid. A plain sanitise is not injective: it maps every illegal character to
+# ``-``, so ``a/b`` and ``a?b`` both become ``a-b``, and truncating to 64 characters collides on
+# anything longer.
+#
+# So a regno that is already a legal local part is used verbatim -- which keeps the ordinary case
+# readable, ``22CS0455@unassigned.invalid`` -- and anything that sanitising or truncating would
+# alter gets a hash of the *original* regno appended. Distinct regnos therefore cannot produce the
+# same address. 47 + 1 + 16 is the 64-character local-part ceiling, and 16 hex digits of md5 is
+# 64 bits, which is not a birthday-bound risk at any plausible row count.
+PLACEHOLDER_EMAIL_SQL = (
+    "CASE WHEN regno ~ '^[A-Za-z0-9._%+-]{1,64}$' "
+    "THEN regno || '@unassigned.invalid' "
+    "ELSE left(regexp_replace(regno, '[^A-Za-z0-9._%+-]', '-', 'g'), 47) "
+    "|| '+' || substr(md5(regno), 1, 16) "
+    "|| '@unassigned.invalid' END"
+)
+
+
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
 
@@ -92,6 +116,9 @@ class PostgresClient:
         self.apply_missing_columns()
         self.apply_unique_indexes()
         self.apply_check_constraints()
+        # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
+        # unlike the others it may have to *rewrite rows* before it can be applied.
+        self.apply_not_null_constraints()
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.
@@ -266,6 +293,106 @@ class PostgresClient:
                         table.name,
                     )
 
+    def apply_not_null_constraints(self) -> None:
+        """Tighten a column the models declare NOT NULL but the table still allows to be null.
+
+        The same gap as :meth:`apply_check_constraints`, and the one thing it cannot do on its
+        own. ``create_all`` skips a table that exists, and the ``NOT NULL`` in ``db_models``
+        is a fact about a *newly created* table; on a database that predates it the column
+        stays nullable forever while the models claim otherwise. Nothing warns about that gap,
+        because a CHECK constraint is satisfied by NULL and so cannot express "and not null"
+        without the awkward ``col IS NOT NULL`` arm -- which would be wrong anyway: it would
+        leave already-stored NULLs in place and only block new ones.
+
+        So the two halves are done together, per column, in the order that makes both succeed:
+
+        1. **Backfill.** Every row where the column is NULL is given a placeholder derived
+           from the row's own ``regno``. Nothing is fabricated that looks like real data --
+           ``.invalid`` is a reserved TLD (RFC 2606) that can never resolve, so a placeholder
+           is visibly a placeholder rather than quietly becoming somebody's real inbox -- and
+           the address is unique per table, so the ``email`` unique index still holds. The
+           count is logged, because a row that had to be invented an address is something an
+           operator should go and fix.
+        2. **Set the constraint.** Only once no NULL remains.
+
+        The alternative to step 1 is refusing to boot and naming the offending rows, which
+        keeps every byte of real data and costs a deploy until somebody has done it by hand.
+        That was the other option and it was not taken: the failure mode of an account with a
+        placeholder address is an admin correcting one field, while the failure mode of a boot
+        loop is an application that does not start at all.
+        """
+        # Which column on which table gets a regno-derived placeholder. Every column being
+        # tightened here is on an account table, so ``regno`` is always available to derive
+        # one from.
+        backfills: dict[str, tuple[str, ...]] = {
+            "users": ("email",),
+            "admin": ("email",),
+            "moderator": ("email",),
+        }
+
+        with self.engine.begin() as connection:
+            for table_name, columns in backfills.items():
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": table_name},
+                    )
+                }
+                if not present:
+                    continue
+                for column_name in columns:
+                    if column_name not in present:
+                        continue
+
+                    # Is the column already NOT NULL? information_schema reports it, and
+                    # asking first means the common case -- an already-migrated database --
+                    # costs one catalogue lookup and no table scan.
+                    already_not_null = connection.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :table "
+                            "AND column_name = :column"
+                        ),
+                        {"table": table_name, "column": column_name},
+                    ).scalar()
+                    if already_not_null == "NO":
+                        continue
+
+                    missing = connection.execute(
+                        text(
+                            f'SELECT count(*) FROM "{table_name}" '
+                            f'WHERE "{column_name}" IS NULL'
+                        )
+                    ).scalar_one()
+                    if missing:
+                        # See ``PLACEHOLDER_EMAIL_SQL`` for why the local part is built this way.
+                        connection.execute(
+                            text(
+                                f'UPDATE "{table_name}" SET "{column_name}" = '
+                                f"{PLACEHOLDER_EMAIL_SQL} "
+                                f'WHERE "{column_name}" IS NULL'
+                            )
+                        )
+                        logger.warning(
+                            "Backfilled %s null %s values on %s with placeholder "
+                            "addresses; correct them from the Profile Review screen",
+                            missing, column_name, table_name,
+                        )
+
+                    connection.execute(
+                        text(
+                            f'ALTER TABLE "{table_name}" '
+                            f'ALTER COLUMN "{column_name}" SET NOT NULL'
+                        )
+                    )
+                    logger.info(
+                        "Tightened %s.%s to NOT NULL", table_name, column_name
+                    )
+
     @staticmethod
     def _superseded_constraints(
         table: Table, installed: set[tuple[str, str]]
@@ -278,10 +405,19 @@ class PostgresClient:
         ``ck_confessions_body_length_2000`` -- and it needs no registry of old names to
         forget: tightening the constant and restarting is the whole migration.
 
-        Only a *numeric* suffix qualifies. A rule that changes its SQL without changing its
-        name cannot be detected this way, which is why rules that grow are written under a
-        new name instead. Matching on arbitrary prefixes would be worse than not cleaning up
-        at all, since it would eventually drop an unrelated constraint.
+        The unsuffixed name is superseded too, because it is the shape this convention is
+        replacing. A constraint called ``ck_messages_body_length`` cannot be detected as stale
+        by the numeric rule alone -- it has no numeric suffix -- so on any database that already
+        has one, renaming the model to ``ck_messages_body_length_100`` would *add* the tight rule
+        and leave the loose one beside it. Both would then apply to the same column, and
+        PostgreSQL enforces each independently: the 2000 ceiling would keep permitting writes
+        the API rejects, which is exactly the drift this method exists to prevent. Dropping it
+        is safe because the replacement is added in the same transaction.
+
+        Only a *numeric* suffix qualifies for the value-bearing rule, and only an exact
+        family-key match qualifies for the unsuffixed one. Matching on arbitrary prefixes would
+        be worse than not cleaning up at all, since it would eventually drop an unrelated
+        constraint.
         """
         families: dict[str, set[str]] = {}
         for constraint in table.constraints:
@@ -300,6 +436,13 @@ class PostgresClient:
             prefix, _, suffix = name.rpartition("_")
             known = families.get(prefix)
             if known and suffix.isdigit() and name not in known:
+                superseded.append(name)
+            elif name in families:
+                # The whole installed name is a family declared by this table, e.g.
+                # "ck_messages_body_length" against a declared family "ck_messages_body_length"
+                # (from ``ck_messages_body_length_100``). Its own suffix is the word "length"
+                # rather than a number, so the rule above cannot see it -- and leaving it in place
+                # is how a 2000-character ceiling survives alongside a 100-character one.
                 superseded.append(name)
         return superseded
 

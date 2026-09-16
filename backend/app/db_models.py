@@ -18,8 +18,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from .limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
+    INTEREST_VALUES,
     MESSAGE_BODY_MAX,
     REPORT_REASON_MAX,
+    USER_GENDER_VALUES,
 )
 from .accounts import (
     ACCOUNT_TYPE_VALUES,
@@ -28,11 +30,32 @@ from .accounts import (
     normalize_account_type,
 )
 
-# Rendered into the CHECK below. The values are literals in trusted source, not user input,
-# and quoting them here rather than passing them as bind parameters keeps the constraint a
-# single self-contained DDL expression that survives the NOT VALID re-add in
+# Rendered into the CHECK constraints below. The values are literals in trusted source, not
+# user input, and quoting them here rather than passing them as bind parameters keeps each
+# constraint a single self-contained DDL expression that survives the NOT VALID re-add in
 # ``PostgresClient.apply_check_constraints``.
 _ACCOUNT_TYPE_SQL_LIST = ", ".join(f"'{value}'" for value in ACCOUNT_TYPE_VALUES)
+_GENDER_SQL_LIST = ", ".join(f"'{value}'" for value in USER_GENDER_VALUES)
+
+# The interest vocabulary as a SQL array literal, for the containment check on
+# ``users.interests``. Built the same way and for the same reason as the lists above.
+#
+# The ``::varchar[]`` cast is not decoration. PostgreSQL types a bare ``ARRAY['a', 'b']`` as
+# ``text[]``, and there is no ``varchar[] <@ text[]`` operator -- the run fails at startup with
+# "operator does not exist" on the very first boot against a fresh database. Casting to
+# ``varchar[]`` matches the column, which SQLAlchemy maps to ``VARCHAR(80)[]``; an unconstrained
+# ``varchar[]`` is the same family, so the containment resolves.
+_INTEREST_SQL_ARRAY = (
+    "ARRAY[" + ", ".join(f"'{value}'" for value in INTEREST_VALUES) + "]::varchar[]"
+)
+
+# NULL is excluded explicitly wherever a CHECK would otherwise be trivially satisfied by it.
+# In SQL a CHECK passes when it evaluates to NULL, so ``gender IN (...)`` alone accepts a
+# NULL gender -- which is precisely the value the constraint exists to prevent. ``gender IS NOT
+# NULL AND gender IN (...)`` is the form that actually refuses it.
+_GENDER_CHECK_SQL = (
+    f"gender IS NOT NULL AND gender IN ({_GENDER_SQL_LIST})"
+)
 
 def _non_character_code_points() -> list[int]:
     """Every code point Unicode reserves forever, in ascending order.
@@ -91,11 +114,29 @@ class AccountColumns:
     love-note toggles. Those describe a participant, and a staff account is not a participant,
     so storing them would only create columns nothing writes and nothing reads.
 
-    ``email`` *is* here, on all three tables, and it is the one column worth spelling out. It
-    is how a person is reached, and that is true of a moderator as much as a student -- a staff
-    account with no address on it is an account nobody can be contacted about. It is nullable,
-    because a staff account can legitimately be created with only a regno and a name, and
-    because the sign-in flow does not need it.
+    ``email`` *is* here, on all three tables, and it is NOT NULL. It is how a person is
+    reached, and that is true of a moderator as much as a student: a staff account with no
+    address on it is an account nobody can be contacted about, and the moment that is
+    discovered is long after the row was written -- usually when the holder has left and the
+    address has to be recovered from somewhere else. The column was nullable on the reasoning
+    that creating a staff account is a deliberate act by somebody who already knows the regno,
+    which is true and irrelevant: the person filling in the form has an email address in front
+    of them, and requiring it costs nothing at that moment. ``PostgresClient.apply_not_null_
+    constraints`` backfills any legacy NULL with a visibly-fake placeholder and logs what it
+    touched, so an already-deployed database reaches the same state rather than refusing to
+    boot.
+
+    ``gender`` is here for the same reason and is also NOT NULL, with ``ck_accounts_gender``
+    holding it to the three values in ``limits.USER_GENDER_VALUES``. It is a *filter* --
+    matchmaking pairs candidates by it -- so "Male" and "male" being different people to that
+    query is not untidiness, it is a participant who never appears in a single pool.
+
+    The constraint on ``gender`` lives in ``_ACCOUNT_TABLE_ARGS`` below and is attached to
+    each of the three tables explicitly. It cannot simply sit here: SQLAlchemy treats
+    ``__table_args__`` as a single replaceable attribute, so a concrete class that declares
+    its own -- as ``UserRecord`` does, for its interests check -- silently drops the mixin's
+    rather than merging the two. The first version of this did exactly that and left ``users``,
+    the table with the most accounts on it, as the only one without the constraint.
 
     Uniqueness is per table, and that is the same rule ``regno`` follows: the constraint is
     declared on the column, so PostgreSQL enforces it within one table and never across the
@@ -108,7 +149,7 @@ class AccountColumns:
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
-    email: Mapped[Optional[str]] = mapped_column(String(320), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
     gender: Mapped[str] = mapped_column(String(24))
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
@@ -125,6 +166,15 @@ class AccountColumns:
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
+
+
+# Attached to all three account tables by hand rather than declared on ``AccountColumns``.
+# See that class's docstring for why a mixin declaration is not enough: SQLAlchemy replaces
+# ``__table_args__`` rather than merging, so the moment any concrete table needs a constraint
+# of its own the mixin's disappears from that table without a word.
+_ACCOUNT_TABLE_ARGS: tuple = (
+    CheckConstraint(_GENDER_CHECK_SQL, name="ck_accounts_gender"),
+)
 
 
 class UserRecord(AccountColumns, Base):
@@ -170,10 +220,33 @@ class UserRecord(AccountColumns, Base):
 
     __tablename__ = "users"
 
+    # Every element must be one of the twelve values in ``limits.INTEREST_VALUES``, expressed as
+    # array containment. Interests used to be free text typed into a comma-separated box, which
+    # made "music", "Music" and "musics" three interests that never matched each other and no
+    # screen could tell apart; matchmaking scores on them, so a typo is not cosmetic.
+    #
+    # ``<@`` is "is contained by", so this is the one operator that reads the way the rule
+    # does. NULL is excluded explicitly because a CHECK passes when it evaluates to NULL, and
+    # ``NULL <@ ARRAY[...]`` is NULL rather than false.
+    __table_args__ = _ACCOUNT_TABLE_ARGS + (
+        CheckConstraint(
+            f"interests IS NOT NULL AND interests <@ {_INTEREST_SQL_ARRAY}",
+            name="ck_users_interests_known",
+        ),
+    )
+
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
     class_name: Mapped[str] = mapped_column(String(80), index=True)
-    interests: Mapped[list[str]] = mapped_column(ARRAY(String(80)), default=list, server_default=text("'{}'"))
+    # The element width is the length of the longest entry in the vocabulary, and it is derived
+    # from that rather than written as a bare 80 -- so a longer interest cannot be added to
+    # ``limits.INTEREST_VALUES`` and then be rejected by the column as an unexplained 500. The
+    # CHECK constraint is the real rule; this is just enough room to hold what it permits.
+    interests: Mapped[list[str]] = mapped_column(
+        ARRAY(String(max(len(value) for value in INTEREST_VALUES))),
+        default=list,
+        server_default=text("'{}'"),
+    )
     matchmaking_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
@@ -197,12 +270,14 @@ class AdminRecord(AccountColumns, Base):
     """A staff account with the account-lifecycle capabilities. No participant fields."""
 
     __tablename__ = "admin"
+    __table_args__ = _ACCOUNT_TABLE_ARGS
 
 
 class ModeratorRecord(AccountColumns, Base):
     """A staff account with the content-moderation capabilities. No participant fields."""
 
     __tablename__ = "moderator"
+    __table_args__ = _ACCOUNT_TABLE_ARGS
 
 
 # The one place a table name becomes a model. ``AccountType`` is a plain string enum with no
@@ -323,7 +398,12 @@ class ConfessionCommentRecord(RemovedContentColumns, Base):
     __table_args__ = (
         CheckConstraint(
             f"length(body) <= {COMMENT_BODY_MAX}",
-            name="ck_confession_comments_body_length",
+            # The limit is part of the name, as ``ck_confessions_body_length_500`` does it. It
+            # has to be: reconciliation works by name, so a constraint called
+            # ``ck_confession_comments_body_length`` is added once and then never checked again.
+            # Changing ``COMMENT_BODY_MAX`` afterwards would leave the old ceiling in force
+            # forever, and the API would reject a length the database still permitted.
+            name=f"ck_confession_comments_body_length_{COMMENT_BODY_MAX}",
         ),
     )
     report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -540,7 +620,12 @@ class MessageRecord(RemovedContentColumns, Base):
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
         CheckConstraint(
             f"length(body) <= {MESSAGE_BODY_MAX}",
-            name="ck_messages_body_length",
+            # Value in the name, for the same reason as the comment-body constraint above. A
+            # stable name here meant the installed constraint was accepted as-is however stale
+            # its definition: this database was holding ``length(body) <= 2000`` against a model
+            # that says 100, and a direct write of 101 characters was accepted while the API
+            # refused it.
+            name=f"ck_messages_body_length_{MESSAGE_BODY_MAX}",
         ),
     )
 

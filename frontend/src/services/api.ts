@@ -2,6 +2,8 @@
 
 import axios from 'axios';
 import { endSessionIfTokenWasRejected } from '@/lib/authEvents';
+import type { AccountType } from '@/lib/capabilities';
+import type { Interest, UserGender } from '@/lib/accountFields';
 
 const API_URL = 'http://localhost:8001';
 
@@ -480,7 +482,52 @@ export const getAdminUsers = async () => {
     return response.data;
 };
 
-export const createAdminUser = async (payload: Record<string, unknown>) => {
+/**
+ * The fields `POST /admin/users` accepts.
+ *
+ * Every field except the participant-only block is required of *every* account type, which is
+ * why `email` and `gender` are not optional here: the server refuses a payload without them,
+ * and a type that said otherwise would let a dialog submit one.
+ *
+ * There is no `profile_picture_url`. A picture is an upload, not a string, and it goes through
+ * `uploadAdminUserPicture` after the account exists -- see that function for why it is a second
+ * request rather than part of this one.
+ */
+export interface AdminUserCreatePayload {
+    account_type: AccountType;
+    regno: string;
+    name: string;
+    email: string;
+    gender: UserGender;
+    notifications_enabled?: boolean;
+    is_blocked?: boolean;
+    /** Participants only. Ignored for staff, which has no such columns. */
+    class_name?: string;
+    interests?: Interest[];
+    emoji?: string;
+    bio?: string;
+}
+
+/**
+ * The fields `PUT /admin/users/{id}` accepts. All optional.
+ *
+ * Omitting `interests` leaves them alone; sending `[]` clears them. The two are different and
+ * the difference is deliberate -- an editor that submits the whole form must not wipe a list
+ * just because the admin was tidying up a name.
+ */
+export interface AdminUserUpdatePayload {
+    name?: string;
+    email?: string;
+    gender?: UserGender;
+    interests?: Interest[];
+    notifications_enabled?: boolean;
+    is_blocked?: boolean;
+    class_name?: string;
+    emoji?: string;
+    bio?: string;
+}
+
+export const createAdminUser = async (payload: AdminUserCreatePayload) => {
     const response = await axios.post(
         `${API_URL}/admin/users`,
         payload,
@@ -501,10 +548,34 @@ export const setAdminUserBlocked = async (userId: string, blocked: boolean) => {
     return response.data;
 };
 
-export const updateAdminUser = async (userId: string, payload: Record<string, unknown>) => {
+export const updateAdminUser = async (userId: string, payload: AdminUserUpdatePayload) => {
     const response = await axios.put(
         `${API_URL}/admin/users/${userId}`,
         payload,
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Upload a profile picture for an account the admin is editing.
+ *
+ * Separate from the create and update bodies because a picture is bytes and those are JSON.
+ * The two-step is deliberate for a newly created account: the row has to exist before there is
+ * an id to attach the image to, so a create-with-picture is `createAdminUser` followed by this.
+ *
+ * `Content-Type` is deliberately left to axios. Setting it by hand is the classic multipart
+ * mistake -- the browser adds a `boundary` parameter to the header it generates, and a manual
+ * `multipart/form-data` without one produces a body the server cannot parse. Passing the
+ * `FormData` object itself is what lets the browser set it correctly.
+ */
+export const uploadAdminUserPicture = async (userId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await axios.put(
+        `${API_URL}/admin/users/${userId}/picture`,
+        formData,
         { headers: getAuthHeaders() }
     );
     return response.data;

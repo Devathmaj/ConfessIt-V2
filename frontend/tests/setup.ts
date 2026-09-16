@@ -17,3 +17,28 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: vi.fn(),
   })),
 });
+
+// jsdom implements neither PointerEvent nor the capture APIs, and Radix's Select opens on
+// pointer down and tracks selection with `hasPointerCapture`. Without these it throws on the
+// first interaction rather than failing an assertion, so any test that touches a <Select> dies
+// before it can say what it meant to say. `scrollIntoView` is the third of the set: Radix
+// scrolls the highlighted item into view when the list opens.
+//
+// Scoped to the elements rather than the window, and `addEventListener` is left alone -- Radix
+// passes these functions as callbacks and expects the browser's own event object back.
+Object.defineProperty(Element.prototype, 'hasPointerCapture', {
+  writable: true,
+  value: vi.fn().mockReturnValue(false),
+});
+Object.defineProperty(Element.prototype, 'setPointerCapture', {
+  writable: true,
+  value: vi.fn(),
+});
+Object.defineProperty(Element.prototype, 'releasePointerCapture', {
+  writable: true,
+  value: vi.fn(),
+});
+Object.defineProperty(Element.prototype, 'scrollIntoView', {
+  writable: true,
+  value: vi.fn(),
+});

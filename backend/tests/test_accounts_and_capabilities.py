@@ -29,7 +29,8 @@ from app.accounts import (
     is_valid_account_type,
     normalize_account_type,
 )
-from app.db_models import ACCOUNT_MODELS, AdminRecord, ModeratorRecord, UserRecord
+from app.db_models import (ACCOUNT_MODELS, AdminRecord, ModeratorRecord, UserRecord,
+                          find_account_in_table)
 from app.models import AccountDetails, AdminUserCreate, AdminUserUpdate, UserDetails
 
 
@@ -213,12 +214,14 @@ def test_staff_tables_do_not_hold_participant_columns():
 
 
 def test_every_account_table_can_hold_an_email():
-    """All three tables carry an address, and none of them requires one."""
+    """All three tables carry an address, and all three require one."""
     for model in (UserRecord, AdminRecord, ModeratorRecord):
         assert "email" in model.__table__.columns, model.__tablename__
-        # Nullable on every table, including ``users``: a row written by a script or a
-        # migration must not fail on a column that only the API insists is present.
-        assert model.__table__.columns["email"].nullable, model.__tablename__
+        # NOT NULL on every table, staff included. It was nullable before, on the reasoning
+        # that minting a staff account is a deliberate act by somebody who already knows the
+        # regno; the column is how the holder is contacted, and the cost of requiring it is
+        # one field on a form the operator is already filling in.
+        assert not model.__table__.columns["email"].nullable, model.__tablename__
 
 
 def test_email_uniqueness_is_declared_per_table_not_across_tables():
@@ -363,7 +366,7 @@ def _details_payload(**overrides):
 
 def test_user_details_exposes_capabilities_for_a_moderator():
     details = AccountDetails(
-        regno="m", name="M", gender="other", account_type=AccountType.MODERATOR.value
+        regno="m", name="M", email="m@example.com", gender="other", account_type=AccountType.MODERATOR.value
     )
     assert details.account_type == "moderator"
     assert set(details.capabilities) == MODERATION_CAPABILITIES
@@ -385,7 +388,7 @@ def test_account_details_normalises_a_corrupted_stored_type():
     cannot retain authority.
     """
     details = AccountDetails(
-        regno="u", name="U", gender="other", account_type="Admin"
+        regno="u", name="U", email="u@example.com", gender="other", account_type="Admin"
     )
     assert details.account_type == "users"
     assert details.capabilities == []
@@ -426,8 +429,8 @@ def test_cross_table_regno_uniqueness_is_not_a_database_constraint(db):
     ``test_sign_in_categories.py``.
     """
     with db.sessions.begin() as session:
-        session.add(ModeratorRecord(regno="cross-table", name="M", gender="other"))
-        session.add(AdminRecord(regno="cross-table", name="A", gender="other"))
+        session.add(ModeratorRecord(regno="cross-table", name="M", email="cross-mod@example.com", gender="other"))
+        session.add(AdminRecord(regno="cross-table", name="A", email="cross-admin@example.com", gender="other"))
         session.flush()
 
 
@@ -506,8 +509,8 @@ def test_a_staff_account_can_be_created_with_an_email(admin_client, db):
     assert response.json()["email"] == "mod.contact@example.com"
 
 
-def test_a_staff_account_can_be_created_without_an_email(admin_client, db):
-    """Optional on staff: minting one is deliberate, and sign-in does not need an address."""
+def test_a_staff_account_cannot_be_created_without_an_email(admin_client, db):
+    """Email is required of staff too, so the create payload refuses to omit it."""
     response = admin_client.post(
         "/admin/users",
         json={
@@ -518,8 +521,9 @@ def test_a_staff_account_can_be_created_without_an_email(admin_client, db):
         },
     )
 
-    assert response.status_code == 201, response.text
-    assert response.json()["email"] is None
+    assert response.status_code == 422, response.text
+    with db.sessions.begin() as session:
+        assert find_account_in_table(session, "admin", "admin-without-email") is None
 
 
 def test_the_same_email_is_refused_within_one_table_but_allowed_across_tables(admin_client, db):
@@ -572,11 +576,14 @@ def test_a_staff_email_is_editable(admin_client, db):
             "account_type": "moderator",
             "regno": "mod-email-edit",
             "name": "Editable",
+            "email": "before@example.com",
             "gender": "other",
         },
     )
+    assert created.status_code == 201, created.text
+
     account_id = created.json()["id"]
-    assert created.json()["email"] is None
+    assert created.json()["email"] == "before@example.com"
 
     # `name` is sent alongside because the update model inherits a required `name`; the
     # point of the test is the email, and this keeps the payload valid.
@@ -592,7 +599,7 @@ def test_a_staff_email_is_editable(admin_client, db):
 def test_a_staff_regno_is_absent_from_users(db):
     """The invariant the participant gates rely on: staff have no ``users`` row."""
     with db.sessions.begin() as session:
-        session.add(AdminRecord(regno="only-admin", name="A", gender="other"))
+        session.add(AdminRecord(regno="only-admin", name="A", email="only-admin@example.com", gender="other"))
         session.flush()
     with db.sessions.begin() as session:
         assert session.scalar(select(UserRecord.id).where(UserRecord.regno == "only-admin")) is None

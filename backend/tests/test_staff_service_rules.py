@@ -61,7 +61,10 @@ def make_staff(db, regno, account_type, gender="other"):
     """
     model = AdminRecord if account_type == AccountType.ADMIN.value else ModeratorRecord
     with db.sessions.begin() as session:
-        row = model(regno=regno, name=f"Staff {regno}", gender=gender)
+        # Email is required of every account, so the helper supplies one derived from the
+        # regno: derived rather than constant so two staff rows in the same table stay unique
+        # under the per-table unique index.
+        row = model(regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com", gender=gender)
         session.add(row)
         session.flush()
         return str(row.id)
@@ -85,6 +88,7 @@ def staff_details_for(regno, account_type, *, account_id=None):
         id=account_id or regno,
         regno=regno,
         name=f"Staff {regno}",
+        email=f"{regno}@test.com",
         gender="other",
         notifications_enabled=True,
         account_type=account_type,

@@ -23,15 +23,16 @@ import { ModeToggle } from '@/components/ui/ModeToggle';
 import { Navigation } from '@/components/Navigation';
 import { isEqual } from 'lodash';
 import { resolveProfilePictureUrl } from '@/lib/utils';
+import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
 
 // Used for the emoji selector
 const avatarOptions = ['💕', '🌟', '🎨', '🌺', '🦋', '✨', '🌸', '💖', '🌙', '🎵'];
 
-// Used for the interest checklist
-const interestOptions = [
-  'Music', 'Movies', 'Reading', 'Gaming', 'Traveling', 'Cooking', 
-  'Sports', 'Art', 'Photography', 'Dancing', 'Writing', 'Coding'
-];
+// The interest checklist is the shared vocabulary, not a local copy. It used to be spelled out
+// here as well as in Profile Review, which meant the two screens could disagree about what an
+// interest is -- and the server holds a third, authoritative copy that refuses anything else.
+// A tick here that the server rejects would fail the whole profile save, including the bio the
+// participant had just written.
 
 export const ProfilePage = () => {
   const { user, token, fetchAndSetUser } = useAuth();
@@ -39,7 +40,11 @@ export const ProfilePage = () => {
   // State for form fields
   const [emoji, setEmoji] = useState(user?.emoji || '💕');
   const [bio, setBio] = useState(user?.bio || '');
-  const [interests, setInterests] = useState<string[]>(user?.interests || []);
+  // Seeded through `toInterests`, not straight from the server. A stored interest from before
+  // the vocabulary was closed would otherwise sit in this state, invisible (there is no box for
+  // it), and then be sent back on the next save -- where the server would reject the whole
+  // profile update, including the bio this participant had just written.
+  const [interests, setInterests] = useState<string[]>(toInterests(user?.interests));
   const [matchmaking_enabled, setMatchmakingEnabled] = useState(user?.matchmaking_enabled || false);
   const [notifications_enabled, setNotificationsEnabled] = useState(user?.notifications_enabled || false);
   const [love_notes_receive_enabled, setLoveNotesReceiveEnabled] = useState(user?.love_notes_receive_enabled ?? true);
@@ -55,7 +60,7 @@ export const ProfilePage = () => {
     return {
       emoji: user.emoji || '💕',
       bio: user.bio || '',
-      interests: user.interests || [],
+      interests: toInterests(user.interests),
       matchmaking_enabled: user.matchmaking_enabled || false,
       notifications_enabled: user.notifications_enabled || false,
       love_notes_receive_enabled: user.love_notes_receive_enabled ?? true,
@@ -67,7 +72,7 @@ export const ProfilePage = () => {
     if (user) {
       setEmoji(user.emoji || '💕');
       setBio(user.bio || '');
-      setInterests(user.interests || []);
+      setInterests(toInterests(user.interests));
       setMatchmakingEnabled(user.matchmaking_enabled || false);
       setNotificationsEnabled(user.notifications_enabled || false);
       setLoveNotesReceiveEnabled(user.love_notes_receive_enabled ?? true);
@@ -272,7 +277,7 @@ export const ProfilePage = () => {
             <div>
               <Label className="text-romantic font-semibold">Interests</Label>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mt-2">
-                {interestOptions.map((interest) => (
+                {INTEREST_VALUES.map((interest) => (
                   <div key={interest} className="flex items-center">
                     <input 
                       type="checkbox"

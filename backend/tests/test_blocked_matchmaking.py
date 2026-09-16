@@ -50,7 +50,9 @@ def make_staff(db, regno, account_type, *, gender="other"):
     conversation insert here and resolve through ``as_staff``.
     """
     with db.sessions.begin() as session:
-        row = ACCOUNT_MODELS[account_type](regno=regno, name=f"Staff {regno}", gender=gender)
+        row = ACCOUNT_MODELS[account_type](
+            regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com", gender=gender
+        )
         session.add(row)
         session.flush()
         return str(row.id)
@@ -74,7 +76,7 @@ def as_staff(db, regno, account_type) -> AccountDetails:
             select(ACCOUNT_MODELS[account_type]).where(ACCOUNT_MODELS[account_type].regno == regno)
         )
     return AccountDetails(
-        id=str(row.id), regno=row.regno, name=row.name, gender=row.gender,
+        id=str(row.id), regno=row.regno, name=row.name, email=f"{row.regno}@test.com", gender=row.gender,
         notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
         account_type=account_type,
     )
