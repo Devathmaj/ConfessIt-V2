@@ -26,12 +26,19 @@ Capabilities rather than table equality are what makes that enforceable: a route
 the one capability it needs, and :func:`has_capability` decides. Adding a fourth account
 table later cannot accidentally inherit or lose access, because no route ever asks "is this
 an admin?".
+
+The per-table capacity ceilings live here for the same reason. "How many of this kind may
+exist" is a question about the account tables, so it is answered by adding one entry to
+:data:`ACCOUNT_CAP_SETTING_NAMES` next to the kinds themselves rather than by teaching an
+endpoint about three specific account types.
 """
 
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any, NamedTuple
+
+from .config import settings
 
 
 class AccountType(str, Enum):
@@ -182,6 +189,50 @@ def has_capability(account_type: object, capability: Capability | str) -> bool:
 def is_staff(account_type: object) -> bool:
     """Whether this kind of account is staff rather than a participant account."""
     return normalize_account_type(account_type) in STAFF_ACCOUNT_TYPES
+
+
+# Which ``Settings`` field carries the ceiling for each account table. Expressed as a name and
+# resolved through ``getattr`` below rather than as three ``if`` branches over the values, so
+# that adding an account table is one entry here and one field on ``Settings`` -- there is no
+# second switch that can be left describing the old set of tables.
+#
+# The mapping is keyed by *table name* rather than by ``Settings`` field name deliberately: the
+# question a caller asks is "how many of this kind may exist", and the table is what it has.
+ACCOUNT_CAP_SETTING_NAMES: dict[str, str] = {
+    AccountType.USERS.value: "MAX_USER_COUNT",
+    AccountType.ADMIN.value: "MAX_ADMIN_COUNT",
+    AccountType.MODERATOR.value: "MAX_MODERATOR_COUNT",
+}
+
+# Stable advisory-lock keys, one per account table, so the "is there room" count and the insert
+# that depends on it can be serialised against each other. See ``app.routers.admin.create_user``
+# for why a bare SELECT-then-INSERT is not enough.
+#
+# Arbitrary but fixed: an advisory lock is a number the callers agree on, and these must not be
+# reused for an unrelated lock or the two would block each other for no reason. They are namespaced
+# by being large and adjacent rather than by sharing a range with anything else.
+ACCOUNT_CAP_LOCK_KEYS: dict[str, int] = {
+    AccountType.USERS.value: 7_240_001,
+    AccountType.ADMIN.value: 7_240_002,
+    AccountType.MODERATOR.value: 7_240_003,
+}
+
+
+def account_cap(account_type: object) -> int:
+    """The maximum number of accounts of this kind that may exist.
+
+    Read from settings on every call rather than captured at import, so a test that sets a cap is
+    obeyed immediately and a value changed in the environment does not need a module reload to
+    take effect. An unrecognised account type resolves, like every other question here, to the
+    least-privileged kind -- so it gets the participant ceiling rather than an unbounded answer.
+    """
+    field = ACCOUNT_CAP_SETTING_NAMES[normalize_account_type(account_type)]
+    return int(getattr(settings, field))
+
+
+def account_cap_lock_key(account_type: object) -> int:
+    """The advisory-lock key that serialises cap enforcement for this account table."""
+    return ACCOUNT_CAP_LOCK_KEYS[normalize_account_type(account_type)]
 
 
 class AccountRef(NamedTuple):

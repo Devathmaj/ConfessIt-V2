@@ -63,6 +63,32 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379"
     CLOUD: bool = False
 
+    # --- Hard ceilings on how many accounts of each kind may ever exist ---
+    #
+    # A cap on *total rows per account table*, enforced when an account is created. It is a
+    # capacity limit rather than a rate limit: the number is about how many accounts the
+    # platform is licensed/expected to hold, not about how fast somebody is creating them.
+    #
+    # **Blocked accounts count.** The ceiling is on rows in the table, not on accounts that are
+    # currently allowed to sign in, so ``MAX_USER_COUNT`` counts every row in ``users``
+    # including the blocked ones. The alternative -- excluding blocked rows -- would make the
+    # ceiling a function of a mutable moderation flag: an admin could block somebody to free a
+    # slot, and the cap would stop being a cap on how many accounts exist and become a cap on
+    # how many are polite. Blocking is reversible and is not deletion, so it must not be a way
+    # around a limit.
+    #
+    # Each is independent: one table reaching its ceiling says nothing about the others, which
+    # is what lets a deployment raise MAX_USER_COUNT for a new cohort without also minting
+    # another admin.
+    #
+    # Zero is a legitimate value and means "this kind of account cannot be created at all",
+    # which is a real configuration for a deployment that provisions staff out of band. It is
+    # deliberately not treated as "unset" -- there is no sentinel for that, because a missing
+    # variable falls back to the default below rather than to zero.
+    MAX_USER_COUNT: int = 500
+    MAX_ADMIN_COUNT: int = 10
+    MAX_MODERATOR_COUNT: int = 25
+
     class Config:
         env_file = ".env"
         extra = "allow"

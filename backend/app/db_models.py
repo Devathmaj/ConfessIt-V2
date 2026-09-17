@@ -270,7 +270,28 @@ class AdminRecord(AccountColumns, Base):
     """A staff account with the account-lifecycle capabilities. No participant fields."""
 
     __tablename__ = "admin"
-    __table_args__ = _ACCOUNT_TABLE_ARGS
+
+    # An admin row can never be blocked, and that is a fact about the *table* rather than about
+    # any one code path -- so it is a CHECK constraint and not a guard in a route. A route-level
+    # check is only as good as the number of routes that remember it: `set_user_block_state`
+    # resolves its target by id across all three tables, and a raw UPDATE, a future endpoint, a
+    # script or an operator at a psql prompt would all walk straight past an `if` statement. The
+    # rule that an administrator cannot be silenced by another administrator is exactly the kind
+    # of rule that must not depend on everybody remembering it, because the day it is forgotten
+    # is the day the last admin who can undo it locks everyone out of account recovery.
+    #
+    # ``IS NOT TRUE`` rather than ``= false`` because ``is_blocked`` is nullable and a CHECK
+    # passes when it evaluates to NULL. ``= false`` would therefore also let a NULL through
+    # without saying so; this states the actual rule -- the value may not be true -- and lets a
+    # legacy NULL stay put instead of failing a boot over it.
+    #
+    # Added ``NOT VALID`` on a pre-existing database by ``PostgresClient.apply_check_constraints``,
+    # which enforces it on every insert and update from that point on while leaving already-stored
+    # rows alone. A blocked admin left over from before this rule therefore survives boot and is
+    # reported rather than being silently repaired, and the first write to that row fails loudly.
+    __table_args__ = _ACCOUNT_TABLE_ARGS + (
+        CheckConstraint("is_blocked IS NOT TRUE", name="ck_admin_not_blockable"),
+    )
 
 
 class ModeratorRecord(AccountColumns, Base):

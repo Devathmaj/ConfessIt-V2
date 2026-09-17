@@ -314,10 +314,109 @@ describe('ProfileReview: accounts as cards', () => {
     // The card body is the click target and the block button is outside it. When the button lived
     // inside the clickable row, one press both suspended the account and opened its editor.
     fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Block account' }));
 
-    expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ORDINARY, true);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ORDINARY, true),
+    );
     expect(await screen.findByText('Blocked')).toBeInTheDocument();
+  });
+
+  it('asks before blocking, and does nothing until the warning is confirmed', async () => {
+    api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: true });
+    await renderRows([participant(ORDINARY, 'One')], 'One');
+
+    fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
+
+    // The whole point: one click warns and stops. Nothing has been sent yet, so a mis-click on a
+    // list being read through quickly cannot end somebody's access to the platform.
+    expect(await screen.findByText('Block this account?')).toBeInTheDocument();
+    expect(api.setAdminUserBlocked).not.toHaveBeenCalled();
+
+    // The warning has to say what actually happens, not just ask. Blocking revokes a live
+    // session immediately, which is the part an operator is most likely not to expect.
+    const warning = screen.getByText(/signed out immediately/i);
+    expect(warning).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Block account' }));
+
+    await waitFor(() =>
+      expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ORDINARY, true),
+    );
+  });
+
+  it('sends nothing at all when the block warning is cancelled', async () => {
+    api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: true });
+    await renderRows([participant(ORDINARY, 'One')], 'One');
+
+    fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() =>
+      expect(screen.queryByText('Block this account?')).not.toBeInTheDocument(),
+    );
+    expect(api.setAdminUserBlocked).not.toHaveBeenCalled();
+    // Still unblocked on screen, so a cancelled warning leaves nothing behind.
+    expect(screen.queryByText('Blocked')).not.toBeInTheDocument();
+  });
+
+  it('confirms unblocking separately, and says it restores access', async () => {
+    api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: false });
+    await renderRows(
+      [participant(ORDINARY, 'One', {}, { is_blocked: true })],
+      'One',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Unblock user/ }));
+
+    // Wording is not shared with blocking: the two are opposite outcomes, and an operator who
+    // misread which one they were about to confirm should have been told first.
+    expect(await screen.findByText('Unblock this account?')).toBeInTheDocument();
+    expect(screen.queryByText('Block this account?')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unblock account' })).toBeInTheDocument();
+    expect(api.setAdminUserBlocked).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unblock account' }));
+
+    await waitFor(() =>
+      expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ORDINARY, false),
+    );
+  });
+
+  it('offers no block button for an admin, because the database refuses it', async () => {
+    await renderRows([admin()], 'Ada Admin');
+
+    // Not merely disabled: absent, with the reason stated. The rule is a CHECK constraint on the
+    // admin table, so there is no call this page could make that would succeed.
+    expect(screen.queryByRole('button', { name: /Block user/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Admins cannot be blocked/i)).toBeInTheDocument();
+    expect(api.setAdminUserBlocked).not.toHaveBeenCalled();
+  });
+
+  it('still offers unblock for an admin, since a legacy blocked admin has to be recoverable', async () => {
+    api.setAdminUserBlocked.mockResolvedValue({ id: ADMIN, is_blocked: false });
+    await renderRows([admin({ is_blocked: true })], 'Ada Admin');
+
+    fireEvent.click(screen.getByRole('button', { name: /Unblock user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Unblock account' }));
+
+    await waitFor(() =>
+      expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ADMIN, false),
+    );
+  });
+
+  it('still offers block for a moderator, who is not an admin', async () => {
+    api.setAdminUserBlocked.mockResolvedValue({ id: MODERATOR, is_blocked: true });
+    await renderRows([moderator()], 'Mo Moderator');
+
+    // Folding moderators in with admins would hide a control that the server does allow.
+    fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Block account' }));
+
+    await waitFor(() =>
+      expect(api.setAdminUserBlocked).toHaveBeenCalledWith(MODERATOR, true),
+    );
   });
 
   it('marks a card above the threshold on the card itself', async () => {

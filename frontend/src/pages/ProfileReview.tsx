@@ -14,6 +14,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
@@ -263,6 +273,17 @@ const isStaffAccount = (profile: AdminUserProfile) =>
   profile.account_type === 'admin' || profile.account_type === 'moderator';
 
 /**
+ * Whether this row is an administrator, and so cannot be blocked at all.
+ *
+ * Narrower than `isStaffAccount` on purpose: moderators are blockable by an admin, so folding
+ * them in here would hide a control that works. The server refuses to block an admin with a
+ * CHECK constraint on the `admin` table (`ck_admin_not_blockable`), so this is the UI agreeing
+ * with the database rather than a second, weaker copy of the rule -- if the two ever disagreed,
+ * the database would be the one that held and this button would be the thing that was wrong.
+ */
+const isAdminAccount = (profile: AdminUserProfile) => profile.account_type === 'admin';
+
+/**
  * How a staff row reads in a sentence.
  *
  * Uses the table name, the same discriminator as `isStaffAccount`, and falls back to "staff" for a
@@ -443,29 +464,40 @@ const ProfileCard = ({
       </div>
 
       <div className="mt-auto flex flex-col gap-2 border-t border-border p-3">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          className={
-            blocked
-              ? 'border-green-500 text-green-500 hover:bg-green-500 hover:text-white'
-              : 'border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground'
-          }
-          onClick={() => onToggleBlock(profile)}
-        >
-          {blocked ? (
-            <>
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Unblock user
-            </>
-          ) : (
-            <>
-              <ShieldX className="mr-2 h-4 w-4" />
-              Block user
-            </>
-          )}
-        </Button>
+        {/* An unblocked admin gets no block button rather than a disabled one. A permanently
+            greyed-out control with no explanation reads as a bug or a permissions problem, and
+            the reason is not obvious from the row; saying so is more honest than showing a
+            dead button. An admin that is somehow already blocked still gets the button, because
+            unblocking is permitted and may be the thing that has to be done. */}
+        {blocked || !isAdminAccount(profile) ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            className={
+              blocked
+                ? 'border-green-500 text-green-500 hover:bg-green-500 hover:text-white'
+                : 'border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground'
+            }
+            onClick={() => onToggleBlock(profile)}
+          >
+            {blocked ? (
+              <>
+                <ShieldCheck className="mr-2 h-4 w-4" />
+                Unblock user
+              </>
+            ) : (
+              <>
+                <ShieldX className="mr-2 h-4 w-4" />
+                Block user
+              </>
+            )}
+          </Button>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            Admins cannot be blocked, so that another admin always retains access.
+          </p>
+        )}
         <div className="text-[11px] text-muted-foreground">
           Matchmaking: {profile.matchmaking_enabled ? 'Enabled' : 'Disabled'} · Notifications:{' '}
           {profile.notifications_enabled ? 'On' : 'Off'} · Love notes receive:{' '}
@@ -500,6 +532,18 @@ export const ProfileReview = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [blocking, setBlocking] = useState<string | null>(null);
+  /**
+   * The block/unblock awaiting confirmation, or null when no dialog is open.
+   *
+   * Held as the profile *and* the state being moved to, rather than just the profile, so the
+   * dialog and the request cannot disagree: the action is decided once, at the point the button
+   * was pressed, and everything afterwards describes that decision. Deriving `!profile.is_blocked`
+   * again at confirm time would read a list that may have been refetched in between.
+   */
+  const [pendingBlock, setPendingBlock] = useState<{
+    profile: AdminUserProfile;
+    nextState: boolean;
+  } | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<AdminUserProfile | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Partial<AdminUserProfile> | null>(null);
@@ -654,12 +698,39 @@ export const ProfileReview = () => {
    */
   const editingIsParticipant = selectedProfile !== null && !isStaffAccount(selectedProfile);
 
-  const toggleBlock = async (profile: AdminUserProfile) => {
-    if (!profile.id) return;
+  /**
+   * Opening the confirmation is deliberately separate from performing the action.
+   *
+   * Blocking is not a cosmetic toggle: it revokes the account's existing session immediately --
+   * the backend rejects a blocked account's bearer token on every request, so there is no grace
+   * period and no undo from the other end. Unblocking is likewise immediate and hands the
+   * person their account back. Both were one click away on a button that sits in a list of
+   * profiles being clicked through quickly, which is exactly the context in which a mis-click
+   * locks somebody out of the platform.
+   *
+   * So `toggleBlock` only opens the dialog and the request is made in `confirmBlock`. The
+   * account is held in state rather than recomputed, so the dialog describes the action that
+   * was actually asked for even if the list is refetched underneath it.
+   */
+  const toggleBlock = (profile: AdminUserProfile) => {
+    // An admin cannot be blocked -- the database refuses it outright (`ck_admin_not_blockable`),
+    // so there is nothing to confirm and nothing this dialog could usefully ask. The button is
+    // also not rendered for an admin; this is the belt to that braces, so a stale row or a
+    // keyboard-reachable remnant cannot open a dialog whose only outcome is a 400.
+    if (!profile.id || (profile.is_blocked === false && isAdminAccount(profile))) return;
+    setPendingBlock({ profile, nextState: !profile.is_blocked });
+  };
+
+  const confirmBlock = async () => {
+    if (!pendingBlock) return;
+    const { profile, nextState } = pendingBlock;
+    if (!profile.id) {
+      setPendingBlock(null);
+      return;
+    }
 
     try {
       setBlocking(profile.id);
-      const nextState = !profile.is_blocked;
       await setAdminUserBlocked(profile.id, nextState);
       setProfiles((prev) =>
         prev.map((item) =>
@@ -672,6 +743,7 @@ export const ProfileReview = () => {
       toast.error('Unable to update block status for this user.');
     } finally {
       setBlocking(null);
+      setPendingBlock(null);
     }
   };
 
@@ -1553,6 +1625,62 @@ const pictured = hasPicture
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Destructive and hard to reverse, so it is confirmed rather than performed on click.
+          Block and unblock are worded separately because they are not two states of one benign
+          toggle: one ends somebody's access to the platform immediately and the other restores
+          it, and an operator who misread which they were about to do should be told before they
+          do it, not after. */}
+      <AlertDialog
+        open={pendingBlock !== null}
+        onOpenChange={(open) => {
+          // Only a dismissal closes it. While the request is in flight the dialog stays put and
+          // its action is disabled, so a second click cannot fire the same request twice.
+          if (!open && blocking === null) setPendingBlock(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingBlock?.nextState ? 'Block this account?' : 'Unblock this account?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingBlock?.nextState ? (
+                <>
+                  <strong className="text-foreground">
+                    {pendingBlock.profile.name || pendingBlock.profile.regno}
+                  </strong>{' '}
+                  will be signed out immediately and refused sign-in, and will be excluded from
+                  matchmaking and messaging. Any session they already hold stops working at once
+                  &mdash; there is no grace period.
+                </>
+              ) : (
+                <>
+                  <strong className="text-foreground">
+                    {pendingBlock?.profile.name || pendingBlock?.profile.regno}
+                  </strong>{' '}
+                  will be able to sign in and message again immediately, and will reappear in
+                  matchmaking.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={blocking !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmBlock}
+              disabled={blocking !== null}
+              className={
+                pendingBlock?.nextState
+                  ? 'bg-destructive hover:bg-destructive/90'
+                  : 'bg-green-600 hover:bg-green-600/90'
+              }
+            >
+              {pendingBlock?.nextState ? 'Block account' : 'Unblock account'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

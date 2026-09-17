@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -10,7 +10,10 @@ from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate
 from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
     MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
-from ..accounts import AccountRef, AccountType, Capability, normalize_account_type
+from ..accounts import (
+    AccountRef, AccountType, Capability, account_cap, account_cap_lock_key,
+    normalize_account_type,
+)
 from ..services.authorization import require_capability
 from ..services.account_picture_service import (
     retire_previous_picture,
@@ -295,6 +298,17 @@ async def create_user(
     # nothing left to normalise here beyond the round trip through the model's own ordering.
     interests_value: List[str] = list(payload.interests or [])
 
+    # An admin row is never blocked -- ``ck_admin_not_blockable`` in ``db_models`` is what
+    # actually enforces that, at the database, for every writer including raw SQL. This check
+    # exists only so that asking for one produces a 400 that says why, instead of letting the
+    # constraint fire as an IntegrityError the client sees as a 500. The database remains the
+    # enforcement point; removing this line would not make an admin blockable.
+    if account_type is AccountType.ADMIN and payload.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An admin account cannot be blocked.",
+        )
+
     # Only the fields the target table actually has are passed to the constructor. Building
     # the kwargs from the payload with the participant keys removed -- rather than branching
     # into two constructors -- means a field added to AccountColumns lands in all three
@@ -324,6 +338,38 @@ async def create_user(
         })
 
     with db.sessions.begin() as session:
+        # The cap is checked here, inside the same transaction as the insert, and behind an
+        # advisory lock -- not in the `db.sessions()` block above with the duplicate checks.
+        #
+        # A SELECT count(*) followed by an INSERT is not atomic: two admins submitting the create
+        # form at the same moment both read "499 of 500", both decide there is room, and both
+        # insert. The cap would then be exceeded by exactly as many simultaneous requests as the
+        # deployment can serve at once, which is the one situation a cap exists to prevent.
+        # `pg_advisory_xact_lock` serialises account creation *per account table* for the rest of
+        # this transaction, so the second request blocks until the first has committed and then
+        # counts the row it just added. It is transaction-scoped, so it is released by the commit
+        # or the rollback without any cleanup to forget, and the three tables use different keys
+        # so creating a participant never waits on an admin.
+        #
+        # This is the only place a row is added through the API, which is what makes the lock
+        # sufficient: there is no second writer that could slip past it.
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": account_cap_lock_key(account_type.value)},
+        )
+        existing_count = session.scalar(select(func.count()).select_from(model)) or 0
+        cap = account_cap(account_type.value)
+        if existing_count >= cap:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"The {account_type.value} account limit has been reached "
+                    f"({existing_count} of {cap}). No further {account_type.value} accounts "
+                    f"can be created. Blocked accounts count towards this limit, so unblocking "
+                    f"or blocking an existing account will not free a slot."
+                ),
+            )
+
         user = model(**account_fields)
         session.add(user)
         session.flush()
@@ -342,6 +388,16 @@ async def set_user_block_state(
 
     Resolved by id across all tables rather than against ``users``, because a moderator can
     be blocked by an admin and the moderator's row is not in ``users``.
+
+    **An admin is never blockable, and the database is what enforces it.**
+    ``ck_admin_not_blockable`` (``db_models.AdminRecord``) is a CHECK constraint on the
+    ``admin`` table, so the rule holds for raw SQL, a script, an operator at a psql prompt and
+    any endpoint added later -- not just for this one. The check below is a courtesy that turns
+    a would-be ``IntegrityError`` into a 400 explaining itself; it is not the enforcement, and
+    deleting it would not make an admin blockable, only make the refusal a 500.
+
+    Unblocking is unaffected and still allowed: the constraint permits any value that is not
+    true, so this only ever refuses ``blocked=true`` on an admin.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
@@ -351,7 +407,14 @@ async def set_user_block_state(
 
     with db.sessions.begin() as session:
         found = resolve_account_by_id(session, user_id)
-        if found: found[1].is_blocked = blocked
+        if found:
+            target_type, row = found
+            if blocked and normalize_account_type(target_type) == AccountType.ADMIN.value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="An admin account cannot be blocked.",
+                )
+            row.is_blocked = blocked
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return {"id": user_id, "is_blocked": blocked}
@@ -377,6 +440,18 @@ async def update_user_details(
 
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
+
+    # ``AdminUserUpdate`` carries ``is_blocked``, so this route is a second way to reach the
+    # block column and has to refuse an admin for the same reason the block route does. The
+    # CHECK constraint is still what enforces it -- this is the courtesy 400, not the rule.
+    if update_payload.get("is_blocked") is True:
+        with db.sessions() as session:
+            target = resolve_account_by_id(session, user_id)
+        if target and normalize_account_type(target[0]) == AccountType.ADMIN.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An admin account cannot be blocked.",
+            )
 
     with db.sessions.begin() as session:
         found = resolve_account_by_id(session, user_id)
