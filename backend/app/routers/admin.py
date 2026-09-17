@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select, text
 
 from ..postgres import new_id, is_valid_id
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Body
 from ..postgres import Database
 
 from ..dependencies import get_db
@@ -610,17 +610,54 @@ async def list_active_sessions(
 
 @router.get("/config", response_model=Dict[str, Any])
 async def read_app_configuration(
-    _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
+    _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ)),
+    db: Database = Depends(get_db)
 ) -> Dict[str, Any]:
     """Return the application's operator-settable configuration.
 
     Deliberately empty for now. Platform settings are still environment variables read by
-    ``app.config`` at import time, so there is nothing stored to report yet; the key exists so
+    ``app/config.py`` at import time, so there is nothing stored to report yet; the key exists so
     the App Configuration screen has a place to read from and to grow settings into. Declaring
     it here is also what makes ``APP_CONFIG_READ`` a capability an admin can actually exercise
     rather than a name with nothing behind it.
     """
-    return {"settings": {}}
+    from ..services.matchmaking_slot_service import get_all_classes_service, get_all_slots_service
+
+    classes = await get_all_classes_service(db)
+    slots = await get_all_slots_service(db)
+
+    return {
+        "settings": {},
+        "classes": classes,
+        "slots": slots,
+    }
+
+
+@router.post("/config/matchmaking-slot", response_model=Dict[str, Any])
+async def create_matchmaking_slot(
+    class_a: str = Body(...),
+    class_b: str = Body(...),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
+) -> Dict[str, Any]:
+    """Create a new matchmaking slot where class_a can match with class_b."""
+    from ..services.matchmaking_slot_service import create_matchmaking_slot_service
+
+    slot = await create_matchmaking_slot_service(db, class_a, class_b)
+    return slot
+
+
+@router.delete("/config/matchmaking-slot", response_model=Dict[str, Any])
+async def delete_matchmaking_slot(
+    slot_id: str = Body(...),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
+) -> Dict[str, Any]:
+    """Delete a matchmaking slot by ID."""
+    from ..services.matchmaking_slot_service import delete_matchmaking_slot_service
+
+    result = await delete_matchmaking_slot_service(db, slot_id)
+    return result
 
 
 # ----------------------

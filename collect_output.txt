@@ -1,0 +1,10 @@
+﻿docker : ImportError while loading conftest '/app/tests/conftest.py'.
+At line:1 char:1
++ docker compose -f "D:\ConfessIt_V2\docker-compose.yml" exec backend p ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ImportError whi...s/conftest.py'.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+tests/conftest.py:5: in <module>
+    from app.config import settings
+E   ModuleNotFoundError: No module named 'app'

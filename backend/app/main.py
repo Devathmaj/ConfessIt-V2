@@ -274,6 +274,15 @@ async def on_startup():
     # act with a deliberate owner, so it lives in app/test.py and runs when asked for.
     logger.info("PostgreSQL storage initialized.")
 
+    # Initialize matchmaking slots: fetch all classes and create initial slot
+    from .services.matchmaking_slot_service import init_matchmaking_slot_service
+    init_result = await init_matchmaking_slot_service(postgres)
+    logger.info(
+        "Matchmaking slots initialized: %s - %s",
+        init_result.get("message"),
+        init_result.get("classes_count", 0),
+    )
+
     # Last, so the schema work above is not traced against no request.
     _init_dependency_instrumentation(postgres)
 

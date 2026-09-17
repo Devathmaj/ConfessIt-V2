@@ -684,6 +684,25 @@ class NotificationRecord(Base):
     target_id: Mapped[Optional[str]] = mapped_column(String(100))
 
 
+class MatchmakingSlotRecord(Base):
+    __tablename__ = "matchmaking_slots"
+
+    # A slot defines which classes may match with which. A slot with class_a and class_b means
+    # class_a can match with class_b. Multiple slots can overlap (e.g. A-B and B-C means A can
+    # match B and C, but A and C cannot match unless there is a separate slot A-C).
+    # A slot with a single class (class_a == class_b) means that class can match with itself.
+    # Initially there will be a single slot with all classes, meaning any class can match with any.
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    class_a: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    class_b: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    # No constraint - self-matching (class_a == class_b) is allowed for single-class slots
+
+
 class MessageReportRecord(Base):
     __tablename__ = "message_reports"
 
