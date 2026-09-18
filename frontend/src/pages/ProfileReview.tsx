@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -112,6 +112,16 @@ export const FLAGGED_REMOVAL_THRESHOLD = 5;
  * `sections[2]` means, and the header would report the wrong number.
  */
 const FLAGGED_SECTION_ID = 'flagged';
+
+/**
+ * The id of the ordinary participants section, where the filter controls sit directly above it.
+ *
+ * A named constant for the same reason as `FLAGGED_SECTION_ID`: the render places the controls by
+ * comparing against this, and an inline `'participants'` literal in that comparison would be one
+ * more place the id has to be kept correct, and one more place a rename would silently leave the
+ * controls somewhere else on the page.
+ */
+const PARTICIPANTS_SECTION_ID = 'participants';
 
 interface AdminUserProfile {
   id: string;
@@ -336,6 +346,143 @@ const totalRemovalsFor = (profile: AdminUserProfile) =>
     (sum, kind) => sum + (profile.report_history?.[kind]?.removals ?? 0),
     0,
   );
+
+/**
+ * The orders the ordinary participants can be laid out in.
+ *
+ * There is deliberately no "most removals" option here. That order is not a choice for this screen
+ * to offer: it is how the flagged section is always arranged, and offering it as one option among
+ * several would let an operator sort the flagged section away from the order they are meant to work
+ * through it in. Equally, these orders are not applied to the staff sections -- a moderator list
+ * sorted by year would be sorted by a column those rows do not have.
+ *
+ * Name ascending is the default because it is what the server already sends, so loading the page
+ * and touching nothing lays the ordinary participants out exactly as they were before the picker
+ * existed.
+ */
+type ProfileSortOption = 'name' | 'name-desc' | 'year' | 'year-desc';
+
+/**
+ * The value the year filter carries for "do not filter by year".
+ *
+ * A year is a number on the wire, so a bare `'all'` cannot be one -- the option list holds years
+ * the participants are actually in, and none of them stringify to this.
+ */
+const ALL_YEARS = 'all';
+
+/**
+ * What a department filter's `<Select>` value looks like, and how the name goes into one and comes
+ * back out.
+ *
+ * Prefixed rather than carried bare because `department` has no closed vocabulary -- it is free
+ * text belonging to the institution, which is the whole argument in `accountFields.ts` for it not
+ * having one. So "all" is a department somebody could genuinely have typed, and a bare value would
+ * let that department and the "do not filter" option be the same string; picking the real
+ * department would then read as "show me everybody". The prefix is not something a name can begin
+ * with by accident of typing, because it ends in a colon.
+ */
+const DEPARTMENT_VALUE_PREFIX = 'department:';
+
+/**
+ * The value the department filter carries for "do not filter by department".
+ *
+ * Read through `departmentFromValue`, which only recognises the prefixed form, so this cannot be
+ * mistaken for a department however it is spelled.
+ */
+const ALL_DEPARTMENTS = 'all';
+
+const departmentValue = (department: string) => `${DEPARTMENT_VALUE_PREFIX}${department}`;
+
+/** The department a filter value names, or null when it is the "do not filter" sentinel. */
+const departmentFromValue = (value: string): string | null =>
+  value.startsWith(DEPARTMENT_VALUE_PREFIX) ? value.slice(DEPARTMENT_VALUE_PREFIX.length) : null;
+
+/**
+ * Compares two optional values, putting the ones that are absent last in whichever direction is
+ * being sorted.
+ *
+ * Absent is not zero and not the empty string: an admin has no year, and a row can have no name.
+ * Neither is a value anybody sorts on, so neither is treated as the smallest of anything --
+ * reading a missing year as 0 would put an admin ahead of every first-year on a year sort, and
+ * `0` is outside the column's own bounds anyway. The direction is a parameter rather than a
+ * negation at the call site because `-1` applied to the "absent goes last" result would turn it
+ * into "absent goes first", which is the opposite of what was meant.
+ */
+const compareWithMissingLast = <T,>(
+  a: T | null,
+  b: T | null,
+  compare: (a: T, b: T) => number,
+  direction: 1 | -1 = 1
+): number => {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return direction * compare(a, b);
+};
+
+/**
+ * Names, alphabetically.
+ *
+ * `sensitivity: 'base'` so `Ada` and `ada` land next to each other rather than being split by
+ * everything that sorts between them in code-point order, and `numeric` so a name holding a number
+ * is ordered by that number rather than by spelling it out.
+ */
+const compareByName = (a: AdminUserProfile, b: AdminUserProfile, direction: 1 | -1 = 1) =>
+  compareWithMissingLast(
+    a.name?.trim() || null,
+    b.name?.trim() || null,
+    (left, right) => left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true }),
+    direction
+  );
+
+/**
+ * A row's year as a number, or null when it has none: a staff account, or a participant whose
+ * year is missing or is not a number.
+ */
+const yearOf = (profile: AdminUserProfile): number | null =>
+  typeof profile.year === 'number' && Number.isFinite(profile.year) ? profile.year : null;
+
+const compareByYear = (a: AdminUserProfile, b: AdminUserProfile, direction: 1 | -1 = 1) =>
+  compareWithMissingLast(yearOf(a), yearOf(b), (left, right) => left - right, direction);
+
+/**
+ * Most removals first.
+ *
+ * The order the flagged section is always in, and not something the sort picker can talk it out
+ * of. That section is a work queue: the person with the most content taken down is the one a
+ * moderator opens first, and reordering the queue by surname would defeat the reason the section
+ * is separated from the ordinary participants in the first place.
+ */
+const byMostRemovals = (a: AdminUserProfile, b: AdminUserProfile) =>
+  totalRemovalsFor(b) - totalRemovalsFor(a);
+
+/**
+ * One comparator per offered order, keyed by the option that chooses it.
+ *
+ * A record rather than a switch so that the compiler checks the two against each other: an option
+ * added to `ProfileSortOption` without a comparator here fails to build, where a `switch` would
+ * quietly fall through to whatever its `default` happened to be.
+ */
+const SORT_COMPARATORS: Record<ProfileSortOption, (a: AdminUserProfile, b: AdminUserProfile) => number> =
+  {
+    'name': (a, b) => compareByName(a, b),
+    'name-desc': (a, b) => compareByName(a, b, -1),
+    'year': (a, b) => compareByYear(a, b),
+    'year-desc': (a, b) => compareByYear(a, b, -1),
+  };
+
+/**
+ * Orders one section's accounts, copying the list first.
+ *
+ * The copy is the point. Each list handed here is built by a `filter`, but `sort` mutates in
+ * place, and `profiles` is component state: sorting one of those in place would reorder the state
+ * array itself, so the next render would show the order the operator happened to pick as though it
+ * were the fetched order, and every other memo reading that array would see it move under them.
+ */
+const sortProfiles = (
+  accounts: AdminUserProfile[],
+  sort: ProfileSortOption
+): AdminUserProfile[] => [...accounts].sort(SORT_COMPARATORS[sort]);
 
 interface ProfileSection {
   id: string;
@@ -572,6 +719,21 @@ export const ProfileReview = () => {
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  /**
+   * The year and the department the cards are narrowed to, or the sentinel for "not narrowed".
+   *
+   * Two filters rather than one combined cohort, because they are two axes and an operator reaches
+   * for them separately: "every second-year in the department I am reviewing" and "everyone in my
+   * department, whatever year they are in" are both real questions, and a single cohort picker can
+   * only ask the first. Choosing both is the combined cohort, so nothing is lost by splitting them.
+   *
+   * Strings rather than a number and a department, because Radix `Select` carries a string and
+   * coercing at the edge would mean the state could hold something the option list never offered.
+   */
+  const [yearFilter, setYearFilter] = useState(ALL_YEARS);
+  const [departmentFilter, setDepartmentFilter] = useState(ALL_DEPARTMENTS);
+  /** Which order the ordinary participants are laid out in. See `ProfileSortOption`. */
+  const [sortOption, setSortOption] = useState<ProfileSortOption>('name');
   const [blocking, setBlocking] = useState<string | null>(null);
   /**
    * The block/unblock awaiting confirmation, or null when no dialog is open.
@@ -626,26 +788,97 @@ export const ProfileReview = () => {
     fetchProfiles();
   }, []);
 
+  /**
+   * The years and departments the cards can be filtered to, read off the accounts already loaded.
+   *
+   * Derived from the rows rather than from `USER_YEAR_OPTIONS` or a second request, because an
+   * option for a cohort nobody is in can only ever produce an empty list: an operator who picks
+   * "Year 5" and is shown nothing is told the platform has no fifth-years, when the truth is that
+   * the filter was narrower than they thought. One memo over data the page already has is also one
+   * request fewer than asking the server for its own cohort list.
+   *
+   * Staff are skipped, for the same reason the filters below skip them: there is no year or
+   * department on an `admin` or `moderator` row for an option to be built out of.
+   */
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    for (const profile of profiles) {
+      const year = yearOf(profile);
+      if (year !== null && !isStaffAccount(profile)) years.add(year);
+    }
+    return [...years].sort((a, b) => a - b);
+  }, [profiles]);
+
+  const availableDepartments = useMemo(() => {
+    // Keyed case-insensitively so a department registered two ways at different times is one
+    // option and not two that each hide half the people in it. `trim` first, so the same name
+    // typed with a trailing space collapses too.
+    const byLowerCase = new Map<string, string>();
+    for (const profile of profiles) {
+      if (isStaffAccount(profile)) continue;
+      const department = profile.department?.trim();
+      if (!department) continue;
+      const key = department.toLowerCase();
+      if (!byLowerCase.has(key)) byLowerCase.set(key, department);
+    }
+    return [...byLowerCase.values()].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+  }, [profiles]);
+
+  /**
+   * The accounts left after the search box and the two cohort filters.
+   *
+   * All three are applied here rather than in parallel memos feeding the sections, because the
+   * header count, the "no accounts match" message and the sections themselves all have to be
+   * describing the same set of rows. Three memos that each filtered independently would agree
+   * until the day one of them was not wired into all three places.
+   */
   const filteredProfiles = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
-    if (!query) return profiles;
+    const year = yearFilter === ALL_YEARS ? null : Number(yearFilter);
+    const department = departmentFromValue(departmentFilter);
+    const narrowing = year !== null || department !== null;
+
     return profiles.filter((profile) => {
-      const haystack = [
-        profile.name,
-        profile.regno,
-        profile.email,
-        // Both halves, so searching "CSE" and searching 2 both find the participant. A
-        // single joined string would make the second of those depend on the order the server
-        // happened to render the two halves in.
-        profile.department,
-        profile.year,
-      ]
-        .filter(Boolean)
-        .join(' ') // join to single string
-        .toLowerCase();
-      return haystack.includes(query);
+      if (query) {
+        const haystack = [
+          profile.name,
+          profile.regno,
+          profile.email,
+          // Both halves, so searching "CSE" and searching 2 both find the participant. A
+          // single joined string would make the second of those depend on the order the server
+          // happened to render the two halves in.
+          profile.department,
+          profile.year,
+        ]
+          .filter(Boolean)
+          .join(' ') // join to single string
+          .toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+
+      if (!narrowing) return true;
+
+      // Admins and moderators are not narrowed by cohort. They have no year or department to
+      // match on, so there is nothing to compare -- and dropping them would hide the one account
+      // class an operator must never lose sight of behind a filter they set to find somebody else.
+      if (isStaffAccount(profile)) return true;
+
+      if (year !== null && profile.year !== year) return false;
+      if (
+        department !== null &&
+        (profile.department ?? '').trim().toLowerCase() !== department.toLowerCase()
+      ) {
+        return false;
+      }
+      return true;
     });
-  }, [profiles, searchTerm]);
+  }, [profiles, searchTerm, yearFilter, departmentFilter]);
+
+  /** Whether anything at all is narrowing the list, which is what the clear button is for. */
+  const filtersNarrowed =
+    searchTerm.trim() !== '' || yearFilter !== ALL_YEARS || departmentFilter !== ALL_DEPARTMENTS;
 
   /**
    * The four groups this screen shows, in the order an operator should meet them.
@@ -660,18 +893,21 @@ export const ProfileReview = () => {
    * overlap; the two participant sections are complements of the same predicate, so a participant
    * is in one or the other and never both.
    *
-   * Within the flagged section, most removals first: that is the order in which a moderator
-   * should work through them. The other sections keep the server's ordering, which is by name.
+   * Only the ordinary participants are handed to the sort picker, and the staff sections keep the
+   * server's by-name order untouched: a year or a surname is not what an operator is reading a list
+   * of administrators for, and a staff row has no year to order by in the first place.
    */
   const sections = useMemo<ProfileSection[]>(() => {
     const admins = filteredProfiles.filter((profile) => profile.account_type === 'admin');
     const moderators = filteredProfiles.filter((profile) => profile.account_type === 'moderator');
     const participants = filteredProfiles.filter((profile) => !isStaffAccount(profile));
+    // Most removals first, unconditionally. This is a work queue and the order a moderator works
+    // through it in is not theirs to rearrange, so `sortOption` is deliberately not consulted.
     const flagged = participants
       .filter((profile) => totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD)
-      .sort((a, b) => totalRemovalsFor(b) - totalRemovalsFor(a));
+      .sort(byMostRemovals);
     const ordinary = participants.filter(
-      (profile) => totalRemovalsFor(profile) <= FLAGGED_REMOVAL_THRESHOLD,
+      (profile) => totalRemovalsFor(profile) <= FLAGGED_REMOVAL_THRESHOLD
     );
 
     return [
@@ -680,7 +916,9 @@ export const ProfileReview = () => {
         title: 'Admins',
         description:
           'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page. Admin accounts cannot be created here; this screen is the only place that creates them.',
-        emptyNote: 'No admin accounts exist yet.',
+        emptyNote: filtersNarrowed
+          ? 'No admin accounts match the current search.'
+          : 'No admin accounts exist yet.',
         icon: Crown,
         badgeVariant: 'default',
         accounts: admins,
@@ -690,7 +928,9 @@ export const ProfileReview = () => {
         title: 'Moderators',
         description:
           'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own, so a moderator needs no year, department, bio or interests.',
-        emptyNote: 'No moderator accounts exist yet.',
+        emptyNote: filtersNarrowed
+          ? 'No moderator accounts match the current search.'
+          : 'No moderator accounts exist yet.',
         icon: ShieldHalf,
         badgeVariant: 'secondary',
         accounts: moderators,
@@ -700,24 +940,37 @@ export const ProfileReview = () => {
         id: FLAGGED_SECTION_ID,
         title: `Participants with more than ${FLAGGED_REMOVAL_THRESHOLD} removals`,
         description: `Participants whose content has been taken down more than ${FLAGGED_REMOVAL_THRESHOLD} times in total, counting confessions and their comments together, love notes and chat messages. Complaints that were dismissed do not count towards this.`,
-        emptyNote: `No participant is above ${FLAGGED_REMOVAL_THRESHOLD} upheld removals.`,
+        emptyNote: filtersNarrowed
+          ? `No participant above ${FLAGGED_REMOVAL_THRESHOLD} removals matches the current filters.`
+          : `No participant is above ${FLAGGED_REMOVAL_THRESHOLD} upheld removals.`,
         icon: ShieldAlert,
         badgeVariant: 'destructive',
         accounts: flagged,
       },
       {
-        id: 'participants',
+        id: PARTICIPANTS_SECTION_ID,
         title: 'Participants',
         description:
           'Everyone else on the platform, at or below the removal threshold. Blocked accounts stay here unless removals put them in the section above.',
-        emptyNote: 'No participants match.',
+        emptyNote: filtersNarrowed
+          ? 'No participant matches the current filters.'
+          : 'No participants match.',
         icon: Users,
         badgeVariant: 'outline',
-        accounts: ordinary,
+        accounts: sortProfiles(ordinary, sortOption),
         create: { label: 'Create participant', accountType: 'users' },
       },
     ];
-  }, [filteredProfiles]);
+  }, [filteredProfiles, filtersNarrowed, sortOption]);
+
+  /**
+   * Whether a filter has hidden every account on the platform.
+   *
+   * Distinguishes "the filters matched nothing" from "the platform is empty", which look identical
+   * in the row count and need to be rendered differently: the first is a dead end the operator has
+   * to be able to back out of, the second is a page whose create buttons are the point.
+   */
+  const nothingMatches = filteredProfiles.length === 0 && filtersNarrowed;
 
   const flaggedCount =
     sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0;
@@ -1111,6 +1364,196 @@ const pictured = hasPicture
     }
   };
 
+  /**
+   * One section: its heading, its count, the button that creates into it, and its grid of cards.
+   *
+   * A function rather than inline in the `sections.map` it used to live in, because the filter
+   * controls are inserted into that map -- immediately above the ordinary participants -- and so
+   * each section and the controls have to be emitted together in one pass.
+   */
+  const renderSection = (section: ProfileSection) => {
+    const Icon = section.icon;
+    const accountCount = section.accounts.length;
+    const create = section.create;
+    return (
+      <section aria-labelledby={`profile-section-${section.id}`}>
+        <Card>
+          <CardHeader className="gap-2 pb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle
+                id={`profile-section-${section.id}`}
+                className="flex items-center gap-2 text-lg"
+              >
+                <Icon className="h-4 w-4" />
+                {section.title}
+              </CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={section.badgeVariant}>
+                  {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
+                </Badge>
+                {/* Sits with the group it creates into, so the control and the form it
+                    opens name the same kind of account. */}
+                {create && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openCreateDialog(create.accountType)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    {create.label}
+                  </Button>
+                )}
+              </div>
+            </div>
+            <CardDescription>{section.description}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {accountCount === 0 ? (
+              /* Said in words rather than left blank. An operator who expected a moderator
+                 to be on this screen needs to see that the group was checked and is empty,
+                 which an empty grid does not tell them. */
+              <p className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
+                {section.emptyNote}
+              </p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {section.accounts.map((profile) => (
+                  <ProfileCard
+                    key={profile.id}
+                    profile={profile}
+                    blocked={Boolean(profile.is_blocked)}
+                    busy={blocking === profile.id}
+                    flagged={section.id === FLAGGED_SECTION_ID}
+                    onOpen={openProfileEditor}
+                    onToggleBlock={toggleBlock}
+                  />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+    );
+  };
+
+  /**
+   * The search box, the two cohort filters, the sort picker and the way back out of all of them.
+   *
+   * Held as a value rather than written into the tree so the same controls can be emitted in the
+   * two places that need them: immediately above the ordinary participants, which is where they
+   * belong, and above the no-match card when a filter has hidden everything, where they are the
+   * only way back.
+   */
+  const filterControls = (
+    <>
+      <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-4">
+        <div className="relative w-full lg:max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by name, register number, email, or class"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            className="pl-9"
+          />
+        </div>
+
+        {/* `htmlFor` onto the trigger's `id` rather than an `aria-label` on the trigger: the
+            visible word is then the accessible name, so a screen reader announces "Year" and not
+            something the operator cannot see. */}
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="profile-year-filter"
+            className="text-xs font-medium uppercase text-muted-foreground"
+          >
+            Year
+          </Label>
+          <Select value={yearFilter} onValueChange={setYearFilter}>
+            <SelectTrigger id="profile-year-filter" className="w-32">
+              <SelectValue placeholder="Year" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_YEARS}>All years</SelectItem>
+              {availableYears.map((year) => (
+                <SelectItem key={year} value={String(year)}>
+                  {year}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="profile-department-filter"
+            className="text-xs font-medium uppercase text-muted-foreground"
+          >
+            Department
+          </Label>
+          <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+            <SelectTrigger id="profile-department-filter" className="w-48">
+              <SelectValue placeholder="Department" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_DEPARTMENTS}>All departments</SelectItem>
+              {availableDepartments.map((department) => (
+                <SelectItem key={department} value={departmentValue(department)}>
+                  {department}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="profile-sort"
+            className="text-xs font-medium uppercase text-muted-foreground"
+          >
+            Sort
+          </Label>
+          <Select
+            value={sortOption}
+            onValueChange={(value) => setSortOption(value as ProfileSortOption)}
+          >
+            <SelectTrigger id="profile-sort" className="w-48">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="name">Name (A-Z)</SelectItem>
+              <SelectItem value="name-desc">Name (Z-A)</SelectItem>
+              <SelectItem value="year">Year (low to high)</SelectItem>
+              <SelectItem value="year-desc">Year (high to low)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Only rendered when something is actually narrowing the list, so a control that
+            clears nothing is not sitting there implying that something is. */}
+        {filtersNarrowed && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearchTerm('');
+              setYearFilter(ALL_YEARS);
+              setDepartmentFilter(ALL_DEPARTMENTS);
+            }}
+          >
+            Clear filters
+          </Button>
+        )}
+      </div>
+
+      {/* Said rather than left for the operator to infer. Three sections are above these
+          controls and one is below, and only two of the three are narrowed by them, so without
+          this the placement reads as an arbitrary split rather than as a deliberate one. */}
+      <p className="-mt-4 text-xs text-muted-foreground">
+        These controls apply to both participant sections. Admins and moderators have no year or
+        department to filter on, so the sections above always list every account of their kind.
+      </p>
+    </>
+  );
+
   return (
     <div className="relative min-h-screen bg-background">
       <AdminNavigation />
@@ -1122,27 +1565,19 @@ const pictured = hasPicture
             Every account on the platform, grouped by who it is and by how much of its content has
             been taken down. Click a card to edit an account, or block one to suspend it instantly.
           </p>
-          <p className="text-xs text-muted-foreground/80">
-            Total users: {profiles.length} · Blocked: {profiles.filter((p) => p.is_blocked).length} ·
-            Over {FLAGGED_REMOVAL_THRESHOLD} removals: {flaggedCount}
-          </p>
-        </header>
-
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="relative w-full max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by name, register number, email, or class"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              className="pl-9"
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-muted-foreground/80">
+              Total users: {profiles.length} · Blocked: {profiles.filter((p) => p.is_blocked).length} ·
+              Over {FLAGGED_REMOVAL_THRESHOLD} removals: {flaggedCount}
+            </p>
+            {/* Kept up here rather than travelling with the controls, because it answers a
+                question about the whole platform and not about the participants below them. */}
+            <Badge variant="secondary" className="w-max gap-2">
+              <Users className="h-4 w-4" />
+              Showing {filteredProfiles.length} of {profiles.length} profiles
+            </Badge>
           </div>
-          <Badge variant="secondary" className="w-max gap-2">
-            <Users className="h-4 w-4" />
-            Showing {filteredProfiles.length} profiles
-          </Badge>
-        </div>
+        </header>
 
         {loading ? (
           <Card>
@@ -1150,85 +1585,51 @@ const pictured = hasPicture
               Loading user profiles...
             </CardContent>
           </Card>
-        ) : filteredProfiles.length === 0 && searchTerm.trim() ? (
-          /* One message for the whole page rather than four empty sections. When a search matches
-             nothing, four headings over empty grids is four false impressions that the platform has
-             no admins, no moderators and no participants. Reachable only with a search in the box:
-             on a genuinely empty platform the sections must still render, or the create buttons
-             living in them would be the one thing missing. */
-          <Card>
-            <CardHeader className="flex flex-col gap-1">
-              <CardTitle className="text-lg">No accounts match</CardTitle>
-              <CardDescription>
-                No account matches this search. Clear the search to see every group again.
-              </CardDescription>
-            </CardHeader>
-          </Card>
+        ) : nothingMatches ? (
+          /* Every section is replaced by the one message rather than left rendering an empty grid.
+             A search that has just filtered out the only admin on the platform must not leave a
+             heading behind reading "No admin accounts exist yet" -- that is a false claim about
+             the platform, and it is the reading the original note on this screen was written to
+             prevent. The controls come with the message, so this is a dead end the operator can
+             undo rather than one they have to reload out of. On a genuinely empty platform nothing
+             is filtered, so the sections still render and the create buttons living in them are
+             not the one thing missing from the page. */
+          <>
+            {filterControls}
+            <Card>
+              <CardHeader className="flex flex-col gap-1">
+                <CardTitle className="text-lg">No accounts match</CardTitle>
+                <CardDescription>
+                  No account matches the current search and filters.
+                </CardDescription>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-max"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setYearFilter(ALL_YEARS);
+                    setDepartmentFilter(ALL_DEPARTMENTS);
+                  }}
+                >
+                  Show all accounts
+                </Button>
+              </CardHeader>
+            </Card>
+          </>
         ) : (
-          sections.map((section) => {
-            const Icon = section.icon;
-            const accountCount = section.accounts.length;
-            const create = section.create;
-            return (
-              <section key={section.id} aria-labelledby={`profile-section-${section.id}`}>
-                <Card>
-                  <CardHeader className="gap-2 pb-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <CardTitle
-                        id={`profile-section-${section.id}`}
-                        className="flex items-center gap-2 text-lg"
-                      >
-                        <Icon className="h-4 w-4" />
-                        {section.title}
-                      </CardTitle>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={section.badgeVariant}>
-                          {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
-                        </Badge>
-                        {/* Sits with the group it creates into, so the control and the form it
-                            opens name the same kind of account. */}
-                        {create && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openCreateDialog(create.accountType)}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            {create.label}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    <CardDescription>{section.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {accountCount === 0 ? (
-                      /* Said in words rather than left blank. An operator who expected a moderator
-                         to be on this screen needs to see that the group was checked and is empty,
-                         which an empty grid does not tell them. */
-                      <p className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-                        {section.emptyNote}
-                      </p>
-                    ) : (
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                        {section.accounts.map((profile) => (
-                          <ProfileCard
-                            key={profile.id}
-                            profile={profile}
-                            blocked={Boolean(profile.is_blocked)}
-                            busy={blocking === profile.id}
-                            flagged={section.id === FLAGGED_SECTION_ID}
-                            onOpen={openProfileEditor}
-                            onToggleBlock={toggleBlock}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </section>
-            );
-          })
+          /* One pass, so a section inserted above the participants would push the controls down
+             with them rather than leave them stranded in the middle of the page. */
+          sections.map((section) => (
+            <Fragment key={section.id}>
+              {/* Directly above the ordinary participants: the section these controls exist to
+                  narrow and order. Sitting higher up the page it would have appeared to filter
+                  the work queue and the staff lists above it as well, and it filters neither --
+                  the queue's own order is fixed, and a staff row has no year to match on. */}
+              {section.id === PARTICIPANTS_SECTION_ID && filterControls}
+              {renderSection(section)}
+            </Fragment>
+          ))
         )}
       </div>
 
