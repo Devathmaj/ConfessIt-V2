@@ -38,7 +38,7 @@ def make_user(db, regno, name=None):
             regno=regno,
             name=name or f"User {regno}",
             email=f"{regno}@test.com",
-            class_name="Test_Class",
+            year=2, department="Test_Class",
             gender="other",
         )
         session.add(row)
@@ -105,7 +105,7 @@ def login_as(db):
         previous = app.dependency_overrides.get(get_current_user)
         app.dependency_overrides[get_current_user] = lambda: UserDetails(
             id=str(row.id), regno=row.regno, name=row.name, email=row.email,
-            class_name=row.class_name, gender=row.gender,
+            year=row.year, department=row.department, gender=row.gender,
             matchmaking_enabled=row.matchmaking_enabled,
             notifications_enabled=row.notifications_enabled,
             account_type=AccountType.USERS.value,

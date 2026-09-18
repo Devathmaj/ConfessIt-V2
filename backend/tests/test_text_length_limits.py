@@ -64,7 +64,7 @@ def _admin_user(**overrides):
         "regno": "r1",
         "name": "Name",
         "email": "admin-create@user.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
     }
     payload.update(overrides)
@@ -75,8 +75,8 @@ def _insert_user(connection, regno):
     """Insert the minimum a confession needs to satisfy its author foreign key."""
     return connection.execute(
         text(
-            "INSERT INTO users (id, regno, name, email, class_name, gender) "
-            "VALUES (gen_random_uuid(), :regno, 'Owner', :email, 'Class', 'other') "
+            "INSERT INTO users (id, regno, name, email, year, department, gender) "
+            "VALUES (gen_random_uuid(), :regno, 'Owner', :email, 2, 'Class', 'other') "
             "ON CONFLICT (regno) DO NOTHING"
         ),
         {"regno": regno, "email": f"{regno}@user.com"},
@@ -236,7 +236,7 @@ def test_whitespace_is_not_a_character_requirement():
     [
         ("name", 160),
         ("regno", 100),
-        ("class_name", 80),
+        ("department", 80),
         ("bio", 500),
         ("emoji", 16),
     ],
@@ -270,6 +270,39 @@ def test_gender_is_bounded_by_value_rather_than_by_length():
     for value in ("Male", "MALE", "nonbinary", "m", "x" * 24):
         with pytest.raises(ValidationError):
             AdminUserCreate(**_admin_user(gender=value))
+
+
+def test_year_is_bounded_by_range_rather_than_by_length():
+    """Year is a whole number in a range, so it gets the by-value treatment for the same reason.
+
+    It is the field the old ``class_name`` limit of 80 used to cover, so leaving it out of the
+    parametrised test above is a deliberate omission rather than an oversight. There is no length
+    left to enforce: the column is an ``Integer``, so the only question is whether the number is in
+    range, and a year cannot be "too long" in the way a department can.
+
+    The near-misses are the values a stale client would still be sending. Before the split this
+    field was free text and every one of these was merely a different cohort; now the column holds
+    numbers, and all of them are refused -- which is the property that makes the range meaningful
+    rather than advisory.
+    """
+    from app.limits import USER_YEAR_MAX, USER_YEAR_MIN
+    from app.models import AdminUserCreate
+
+    for value in range(USER_YEAR_MIN, USER_YEAR_MAX + 1):
+        assert AdminUserCreate(**_admin_user(year=value)).year == value
+
+    for value in (USER_YEAR_MIN - 1, USER_YEAR_MAX + 1, 0, -1, 2.5, "2.5", "2nd Year", "2nd year", ""):
+        with pytest.raises(ValidationError):
+            AdminUserCreate(**_admin_user(year=value))
+
+    # A string of digits is the one near-miss the range cannot catch, because it is not out of
+    # range once parsed: Pydantic coerces `"2"` to 2 and the model hands back a year. That is
+    # deliberate -- a client whose JSON holds a quoted number gets the number it meant rather than
+    # an error -- but it is worth stating, because the type is only half closed. A value with a
+    # fractional part has nothing to round to a year and is refused above; `"2"` has an exact
+    # integer in it and is not.
+    assert AdminUserCreate(**_admin_user(year="2")).year == 2
+    assert AdminUserCreate(**_admin_user(year="12")).year == 12
 
 
 # ------------------------------------------------------------------------- openapi

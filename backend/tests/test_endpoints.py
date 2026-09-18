@@ -35,7 +35,7 @@ SIGNED_IN_READ_ROUTES = [
     "/auth/me",
     "/matchmaking/check",
     "/love-notes/users",
-    "/love-notes/classes",
+    "/love-notes/cohorts",
     "/love-notes/inbox",
     "/conversations/current",
     "/conversations/received",

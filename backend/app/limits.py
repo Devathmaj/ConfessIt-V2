@@ -78,11 +78,16 @@ REACTION_MAX = 24
 # Admin-supplied profile fields, sized to the columns they are stored in.
 USER_NAME_MAX = 160
 USER_BIO_MAX = 500
-USER_CLASS_NAME_MAX = 80
 USER_EMOJI_MAX = 16
 USER_GENDER_MAX = 24
 USER_ROLE_MAX = 20
 USER_REGNO_MAX = 100
+
+# A participant's department. Free text and deliberately *not* a closed set: the departments that
+# exist are a property of the institution this deployment serves, not of this codebase, so a list
+# written here would be a guess that is wrong the day another one is introduced. It is a display
+# field and a matchmaking grouping, not a filter anything is required to match against.
+USER_DEPARTMENT_MAX = 80
 
 # The closed set of genders an account may carry, and the one place the list is written down.
 #
@@ -99,6 +104,28 @@ USER_REGNO_MAX = 100
 # 422 naming the field, the frontend Select so there is no invalid value to send in the first
 # place, and a CHECK constraint so a write that bypasses the API cannot store anything else.
 USER_GENDER_VALUES: tuple[str, ...] = ("male", "female", "other")
+
+# The range of years of study a participant may be in, and the one place the bounds are written
+# down. A number rather than a closed list of names, because the same schema has to serve
+# institutions that number a cohort differently: an undergraduate programme runs 1st-4th Year, a
+# school runs Class 1 to Class 12. Storing the *name* would bake one institution's vocabulary into
+# the column, and serving the other one would need a second column and a second set of endpoints.
+# The bounds are chosen to hold the longer of the two.
+#
+# Still a closed range, closed for the same reason gender is, and it is worth saying out loud why:
+# matchmaking groups participants by year, so "2", "02" and "second year" would be three cohorts
+# that never match each other and no screen could tell them apart. Storing an int makes the first
+# two unwritable rather than merely discouraged, which is strictly stronger than the closed list
+# this replaced.
+#
+# Enforced in exactly the three places ``USER_GENDER_VALUES`` is: Pydantic (a 422 naming the
+# field), the frontend select (no invalid value to offer in the first place), and a CHECK
+# constraint (so a write that bypasses the API cannot store anything else).
+#
+# ``frontend/src/lib/accountFields.ts`` restates the bounds so the browser offers the same range
+# the server accepts. Change both.
+USER_YEAR_MIN = 1
+USER_YEAR_MAX = 12
 
 # The closed set of interests a participant may hold, and the one place the list is written down.
 #

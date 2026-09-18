@@ -11,14 +11,14 @@ from datetime import datetime, timezone
 
 from ..dependencies import get_db
 from ..accounts import AccountRef
-from ..models import UserDetails
+from ..models import Cohort, UserDetails
 from ..services import asset_delivery_service
 from ..services.authorization import require_participant
 from ..services.love_note_service import (
     LoveNoteCreate,
     LoveNoteReportCreate,
     get_all_users_service,
-    get_all_classes_service,
+    get_all_cohorts_service,
     send_love_note_service,
     report_love_note_service
 )
@@ -35,7 +35,14 @@ class UserRecipient(BaseModel):
     id: str
     name: str
     emoji: Optional[str] = None
-    class_name: str
+    # Both NOT NULL on ``users``. Kept as separate fields rather than one display string so the
+    # cohort filter on this screen can compare either half independently -- which it could not do
+    # when they were one ``class_name`` column.
+    # ``year`` is an ``int`` because that is what ``users.year`` holds. Declaring it ``str`` here
+    # does not quietly stringify it -- Pydantic v2 refuses int->str -- so it fails response
+    # validation and takes the whole recipient list down with a 500.
+    year: int
+    department: str
     gender: str
     interests: Optional[List[str]] = None
     profile_picture_url: Optional[str] = None
@@ -53,15 +60,20 @@ async def get_all_users(
     """
     return await get_all_users_service(db, AccountRef.of(current_user))
 
-@router.get("/classes", response_model=List[str])
-async def get_all_classes(
+@router.get("/cohorts", response_model=List[Cohort])
+async def get_all_cohorts(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
-    Fetch all unique classes from the users table.
+    Every ``(year, department)`` pair a recipient on this screen belongs to.
+
+    Renamed from ``/classes`` along with the column it was derived from. The old name described a
+    single column that no longer exists, and the filter on the client is now genuinely over two
+    fields -- the year and "CSE" are chosen separately rather than by picking one pre-joined
+    string that happened to contain both.
     """
-    return await get_all_classes_service(db)
+    return await get_all_cohorts_service(db)
 
 @router.post("/send", status_code=status.HTTP_201_CREATED)
 async def send_love_note(

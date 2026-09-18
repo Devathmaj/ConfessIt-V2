@@ -96,7 +96,8 @@ const participant = (
   regno: `student-${name}`,
   name,
   email: `${name.toLowerCase()}@school.test`,
-  class_name: 'Class_9',
+  year: 2,
+  department: 'Class_9',
   account_type: 'users',
   is_blocked: false,
   report_history: tally(history),
@@ -133,15 +134,19 @@ const groupNamed = (heading: string) =>
   screen.getByRole('heading', { name: heading }).closest('section') as HTMLElement;
 
 /**
- * Picks `option` from the gender <Select> labelled `label`.
+ * Picks `option` from the <Select> labelled `label`.
  *
- * Gender stopped being a text box when the vocabulary was closed, and the old
+ * Gender and year both stopped being text boxes when their vocabularies were closed, and the old
  * `fireEvent.change(trigger, { value: 'female' })` has no meaning against a Radix trigger: a
  * <div role="combobox"> holds no value to change, so the test would pass a click that went
  * nowhere and then assert against a control that never moved. The trigger opens on pointer down
  * and the option is a separate element in a portal, so both steps are needed.
+ *
+ * The gender calls that skipped this did not fail, which is the trap: gender defaults to 'other',
+ * so a change that never happened was indistinguishable from the one the test meant to make. Year
+ * has no such default, so the same mistake fails loudly there instead.
  */
-async function chooseGender(dialog: HTMLElement, option: string, label = 'Gender *') {
+async function chooseOption(dialog: HTMLElement, option: string, label = 'Gender *') {
   // `pointerType` is not decoration. Radix reads it to decide whether this is a mouse-like
   // interaction, and without it the trigger stays shut -- leaving "unable to find option" as the
   // only symptom, with no hint that the first click never reached the control.
@@ -483,15 +488,18 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has no class, bio, interests, emoji, matchmaking or love-note
-    // columns. Offering those inputs asked for values the server silently dropped.
+    // The `moderator` table has no year, department, bio, interests, emoji, matchmaking or
+    // love-note columns. Offering those inputs asked for values the server silently dropped.
     expect(
       within(dialog).getByRole('heading', { name: 'Create moderator account' }),
     ).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Full name *')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Register number *')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Gender *')).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText('Class / department *')).not.toBeInTheDocument();
+    // Both halves of the split, not just the one that used to be asked for: a moderator needs
+    // neither, and offering the department alone would invite an answer with nowhere to go.
+    expect(within(dialog).queryByLabelText('Year *')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Department/Division *')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
@@ -529,7 +537,7 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'newmod@school.test' },
     });
-    await chooseGender(dialog, 'Female');
+    await chooseOption(dialog, 'Female');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
 
     await waitFor(() => expect(api.createAdminUser).toHaveBeenCalledTimes(1));
@@ -546,7 +554,8 @@ describe('ProfileReview: creating an account from its own group', () => {
     // Nothing participant-only was sent, because nothing participant-only was collected. Sending
     // empty values would rely on the server dropping them, which is how they got sent at all.
     for (const key of [
-      'class_name',
+      'year',
+      'department',
       'bio',
       'emoji',
       'interests',
@@ -558,13 +567,14 @@ describe('ProfileReview: creating an account from its own group', () => {
     }
   });
 
-  it('still requires a class from a participant, and names the field when it is missing', async () => {
+  it('still requires a year and a department from a participant, and names the field when it is missing', async () => {
     await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByLabelText('Email *')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Class / department *')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Year *')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Department/Division *')).toBeInTheDocument();
     expect(within(dialog).getByText('Allow matchmaking')).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText('Full name *'), {
@@ -577,14 +587,19 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
+    // Year left blank on purpose. It has no default, so this is the state an operator who filled
+    // in everything else but forgot the year is actually in.
+    fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
+      target: { value: 'CSE' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
 
-    // Class is required of a participant and there is no column for it on a moderator, so the
-    // same form cannot ask for both. "Please fill in all required fields" was true and useless:
-    // it could not say which of the five fields was the one missing.
+    // Year and department are required of a participant and there is no column for either on a
+    // moderator, so the same form cannot ask for both. "Please fill in all required fields" was
+    // true and useless: it could not say which of the six fields was the one missing.
     expect(api.createAdminUser).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith(
-      'Class / department is required for this account type.',
+      'Year is required for this account type.',
     );
   });
 
@@ -609,7 +624,10 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Class / department *'), {
+    // The two halves sent as two keys. A single joined "2nd Year / CSE" string would have needed
+    // splitting again on the server to fill the two NOT NULL columns it has.
+      await chooseOption(dialog, '3', 'Year *');
+    fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
       target: { value: 'CSE' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
@@ -620,9 +638,11 @@ describe('ProfileReview: creating an account from its own group', () => {
       regno: '21CS999',
       gender: 'other',
       email: 'new@school.test',
-      class_name: 'CSE',
+      year: 3,
+      department: 'CSE',
       account_type: 'users',
     });
+    expect(api.createAdminUser.mock.calls[0][0]).not.toHaveProperty('class_name');
   });
 });
 
@@ -637,8 +657,8 @@ describe('ProfileReview: editing a staff account', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has five columns this form can write. The seven below live on
-    // `users` and nowhere else, so offering them asked the operator to type something that had no
+    // The `moderator` table has these columns and no others, so the seven below live on `users`
+    // and nowhere else. Offering them asked the operator to type something that had no
     // destination.
     expect(within(dialog).getByLabelText('Full name')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Register number')).toBeInTheDocument();
@@ -649,7 +669,8 @@ describe('ProfileReview: editing a staff account', () => {
     expect(within(dialog).getByLabelText('Profile picture')).toHaveAttribute('type', 'file');
     expect(within(dialog).getByText('Email notifications')).toBeInTheDocument();
 
-    expect(within(dialog).queryByLabelText('Class / department')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Year')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Department/Division')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
@@ -664,7 +685,7 @@ describe('ProfileReview: editing a staff account', () => {
     // A shorter form reads as the screen having less to say, not as the account having less on it.
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/A moderator account has no class, bio, interests/i))
+    expect(within(dialog).getByText(/A moderator account has no year, department, bio, interests/i))
       .toBeInTheDocument();
   });
 
@@ -720,10 +741,15 @@ describe('ProfileReview: editing a staff account', () => {
     );
 
     // The fix must not narrow the participant form by accident: these are the fields the whole
-    // reason a participant row carries a class.
+    // reason a participant row carries a year and a department.
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByLabelText('Class / department')).toBeInTheDocument();
+    // Both halves present, and the stored year is shown rather than dropped: `2nd Year` came from
+    // the fixture, so a select sitting empty here would mean the editor refused a valid stored
+    // value.
+    expect(within(dialog).getByLabelText('Year')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('Year')).toHaveTextContent('2');
+    expect(within(dialog).getByLabelText('Department/Division')).toHaveValue('Class_9');
     expect(within(dialog).getByLabelText('Emoji tag')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Bio')).toHaveValue('hello');
     // Interests are twelve tickable boxes, not a comma-separated string the operator has to know
@@ -802,7 +828,7 @@ describe('ProfileReview: editing a staff account', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
-    await chooseGender(dialog, 'Female', 'Gender');
+    await chooseOption(dialog, 'Female', 'Gender');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
@@ -813,7 +839,7 @@ describe('ProfileReview: editing a staff account', () => {
     // would have their gender rewritten on that save instead.
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const reopened = await screen.findByRole('dialog');
-    await chooseGender(reopened, 'Female', 'Gender');
+    await chooseOption(reopened, 'Female', 'Gender');
     fireEvent.click(within(reopened).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
@@ -938,7 +964,8 @@ describe('ProfileReview: profile pictures', () => {
       name: 'New Student',
       email: 'new@school.test',
       gender: 'other',
-      class_name: 'CSE',
+      year: 2,
+      department: 'CSE',
       account_type: 'users',
     });
     api.uploadAdminUserPicture.mockRejectedValue(new Error('too large'));
@@ -955,7 +982,8 @@ describe('ProfileReview: profile pictures', () => {
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Class / department *'), {
+      await chooseOption(dialog, '2', 'Year *');
+    fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
       target: { value: 'CSE' },
     });
     fireEvent.change(within(dialog).getByLabelText('Profile picture'), {

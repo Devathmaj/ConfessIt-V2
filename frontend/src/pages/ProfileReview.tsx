@@ -54,12 +54,15 @@ import type { LucideIcon } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { AccountType } from '@/lib/capabilities';
 import {
+  cohortLabel,
   INTEREST_VALUES,
   isUserGender,
+  isUserYear,
   toInterests,
   USER_GENDER_OPTIONS,
+  USER_YEAR_OPTIONS,
 } from '@/lib/accountFields';
-import type { Interest, UserGender } from '@/lib/accountFields';
+import type { Interest, UserGender, UserYear } from '@/lib/accountFields';
 
 /**
  * The three kinds of content a participant can be reported for. A confession and a comment on
@@ -115,7 +118,19 @@ interface AdminUserProfile {
   regno?: string | null;
   name?: string | null;
   email?: string | null;
-  class_name?: string | null;
+  /**
+   * Which year of the programme this participant is in, and which department they are in. Two
+   * fields where there was one `class_name`, because matchmaking groups by them independently and
+   * a single free-text column could be grouped by neither.
+   *
+   * `year` is a number: the server stores an integer bounded by its own limits, and one
+   * deployment's "2nd Year" is another's "Class 2", so the wire format is the number they share.
+   *
+   * Both are absent on a staff row: there is no year or department on `admin` or `moderator`, and
+   * the server omits the keys rather than sending null for a value the row does not have.
+   */
+  year?: number | null;
+  department?: string | null;
   gender?: string | null;
   /**
    * Which account table the row came from. There is no role: a staff account has no row in
@@ -154,7 +169,18 @@ type CreateUserForm = {
   regno: string;
   name: string;
   email: string;
-  class_name: string;
+  /**
+   * One of `USER_YEAR_OPTIONS`' values, or `''` for "not chosen yet".
+   *
+   * The empty string rather than a number, because a `<select>` has no "nothing selected" value of
+   * its own and this is the state the operator is in when the dialog opens. It is a union with the
+   * vocabulary rather than a cast of `''` to it: the old cast made an empty string type-check as a
+   * year, so a form submitted before anybody picked one carried a value the compiler believed was
+   * valid. The required-field check is what actually stops that, and it reads `''` as missing.
+   */
+  year: UserYear | '';
+  /** Free text. The departments that exist belong to the institution, so there is no list. */
+  department: string;
   /** One of `USER_GENDER_OPTIONS`' values. The server accepts nothing else. */
   gender: UserGender;
   emoji: string;
@@ -238,15 +264,16 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
 /**
  * How a rejected create field is named back to the operator.
  *
- * "Please fill in all required fields" was true and useless: a moderator form asking for a class
- * said the same thing whether the class or the name was the one missing, and there is no class to
- * fill in. Naming the field points at the input that needs attention.
+ * "Please fill in all required fields" was true and useless: a moderator form asking for a
+ * department said the same thing whether the department or the name was the one missing, and there
+ * is no department to fill in. Naming the field points at the input that needs attention.
  */
 const CREATE_FIELD_LABELS: Partial<Record<keyof CreateUserForm, string>> = {
   name: 'Full name',
   regno: 'Register number',
   email: 'Email',
-  class_name: 'Class / department',
+  year: 'Year',
+  department: 'Department',
   gender: 'Gender',
 };
 
@@ -405,7 +432,11 @@ const ProfileCard = ({
                   {profile.regno}
                 </span>
               )}
-              {profile.class_name && <Badge variant="outline">{profile.class_name}</Badge>}
+              {cohortLabel(profile.year, profile.department) && (
+                <Badge variant="outline">
+                  {cohortLabel(profile.year, profile.department)}
+                </Badge>
+              )}
             </div>
             {profile.email && (
               <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
@@ -513,7 +544,17 @@ export const ProfileReview = () => {
     regno: '',
     name: '',
     email: '',
-    class_name: '',
+    // Empty rather than the first year option. `year` is a NOT NULL column held to a closed
+    // vocabulary by a CHECK constraint, and the select has no blank option, so an empty value
+    // here could only ever be a form the operator had not finished -- which the required-field
+    // check then reports by name. Preselecting 1 would submit a claim about this
+    // participant that nobody made, so the select stays empty until one is actually picked.
+    //
+    // The cast is gone: the field is a union of the vocabulary and `''`, so an unselected year is
+    // representable without pretending to be a year. `department` beside it is `''` for the same
+    // reason and needed no cast either.
+    year: '',
+    department: '',
     // `other` rather than an empty string. Gender is a non-null column on all three account
     // tables and the select has no blank option, so an empty value here could only ever be a
     // form the operator had not finished -- which the required-field check then reports by name
@@ -593,7 +634,11 @@ export const ProfileReview = () => {
         profile.name,
         profile.regno,
         profile.email,
-        profile.class_name,
+        // Both halves, so searching "CSE" and searching 2 both find the participant. A
+        // single joined string would make the second of those depend on the order the server
+        // happened to render the two halves in.
+        profile.department,
+        profile.year,
       ]
         .filter(Boolean)
         .join(' ') // join to single string
@@ -644,7 +689,7 @@ export const ProfileReview = () => {
         id: 'moderators',
         title: 'Moderators',
         description:
-          'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own, so a moderator needs no class, bio or interests.',
+          'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own, so a moderator needs no year, department, bio or interests.',
         emptyNote: 'No moderator accounts exist yet.',
         icon: ShieldHalf,
         badgeVariant: 'secondary',
@@ -681,9 +726,10 @@ export const ProfileReview = () => {
    * Whether the create dialog is currently making a participant.
    *
    * The form is driven off the account type it was opened with rather than off a control inside
-   * it. A staff row has no class, bio, interests, matchmaking or love-note columns, so offering
-   * those inputs would be asking for values the server silently discards -- and the operator has no
-   * way to see that they were discarded. The dialog has one job per open, stated in its title.
+   * it. A staff row has no year, department, bio, interests, matchmaking or love-note columns, so
+   * offering those inputs would be asking for values the server silently discards -- and the
+   * operator has no way to see that they were discarded. The dialog has one job per open, stated
+   * in its title.
    */
   const createIsParticipant = createForm.account_type === 'users';
 
@@ -691,10 +737,10 @@ export const ProfileReview = () => {
    * Whether the account open in the editor is a participant.
    *
    * The same split the create form makes, and for the same reason. A moderator and an admin have
-   * no class, bio, interests, matchmaking or love-note columns, so the editor used to offer those
-   * inputs and the server silently dropped whatever came out of them: the operator moved a toggle,
-   * pressed save, was told it worked, and the change was gone on the next fetch. Not offering a
-   * field that cannot be saved is the whole fix.
+   * no year, department, bio, interests, matchmaking or love-note columns, so the editor used to
+   * offer those inputs and the server silently dropped whatever came out of them: the operator
+   * moved a toggle, pressed save, was told it worked, and the change was gone on the next fetch.
+   * Not offering a field that cannot be saved is the whole fix.
    */
   const editingIsParticipant = selectedProfile !== null && !isStaffAccount(selectedProfile);
 
@@ -766,7 +812,12 @@ export const ProfileReview = () => {
       // says something about matchmaking when it says nothing at all.
       ...(isParticipant
         ? {
-            class_name: profile.class_name ?? '',
+            // Same normalisation as gender below: a stored year from before the range was
+            // closed matches no option, and a select with no matching option displays the wrong
+            // thing as though it were chosen. `null` rather than `''` because the field is a
+            // number here, and null is a value it can actually hold.
+            year: isUserYear(profile.year) ? profile.year : null,
+            department: profile.department ?? '',
             bio: profile.bio ?? '',
             emoji: profile.emoji ?? '',
             // Read every toggle the way the change detector below reads it. Seeding one any other
@@ -813,7 +864,7 @@ export const ProfileReview = () => {
       'name',
       'regno',
       'email',
-      ...(isParticipant ? (['class_name', 'bio', 'emoji'] as const) : []),
+      ...(isParticipant ? (['department', 'bio', 'emoji'] as const) : []),
     ];
     const booleanFields: Array<keyof AdminUserProfile> = [
       'notifications_enabled',
@@ -857,6 +908,17 @@ export const ProfileReview = () => {
       : 'other';
     if (editForm.gender !== genderBefore) {
       payload.gender = editForm.gender;
+    }
+
+    // Year joins gender in needing its own comparison, for the same reason: `openProfileEditor`
+    // puts a stored year outside the range into the form as null, so the form value is never the
+    // raw stored value and a naive comparison would report a change on every save of such an
+    // account -- rewriting a field the operator never touched.
+    if (isParticipant) {
+      const yearBefore = isUserYear(selectedProfile.year) ? selectedProfile.year : null;
+      if ((editForm.year ?? null) !== yearBefore) {
+        payload.year = editForm.year;
+      }
     }
 
     // Interests are compared as a whole set rather than field by field, and compared against
@@ -940,24 +1002,32 @@ const pictured = hasPicture
     const isParticipant = createForm.account_type === 'users';
 
     // Required fields are a function of the table being written to, not one list for all three.
-    // Name, regno and gender are non-null columns on every account table. Email and class are
-    // required of a participant only -- a moderator has no class, so demanding one was asking the
-    // operator for a value that has nowhere to be stored.
     // Name, regno, email and gender are non-null columns on all three account tables, so all four
     // are required of every account type. Email used to be a participant-only requirement --
     // a staff account could be created with a regno and a name alone -- which left a moderator
     // nobody could contact, and no error at the time to notice.
-    const requiredFields: Array<[keyof CreateUserForm, string]> = [
+    const requiredFields: Array<[keyof CreateUserForm, string | number]> = [
       ['name', createForm.name],
       ['regno', createForm.regno],
       ['email', createForm.email],
       ['gender', createForm.gender],
     ];
     if (isParticipant) {
-      requiredFields.push(['class_name', createForm.class_name]);
+      // Both halves of the old `class_name`, and both required: the database holds them as NOT
+      // NULL, so a create that omitted either would be a 500 from the insert rather than
+      // something the operator could be told about.
+      requiredFields.push(['year', createForm.year], ['department', createForm.department]);
     }
 
-    const missingField = requiredFields.find(([, value]) => !value.trim());
+    // Not one `.trim()` call across the whole list, because the list is no longer all strings.
+    // A whitespace-only name is missing and so is a year the server would refuse, and they are
+    // different tests on different types. Year is checked against the vocabulary rather than for
+    // emptiness: `''` is the unselected state, but 0 and 13 are not "not chosen", they are wrong,
+    // and a truthiness test would wave 0 through to a 422.
+    const isMissing = (value: string | number): boolean =>
+      typeof value === 'number' ? !isUserYear(value) : !value.trim();
+
+    const missingField = requiredFields.find(([, value]) => isMissing(value));
     if (missingField) {
       toast.error(`${CREATE_FIELD_LABELS[missingField[0]]} is required for this account type.`);
       return;
@@ -976,7 +1046,11 @@ const pictured = hasPicture
     // the server drops these keys for a staff row, so a form that never offered them must not
     // send empty ones behind the operator's back either.
     if (isParticipant) {
-      payload.class_name = createForm.class_name.trim();
+      // Narrowed rather than cast. The required-field check above has already returned unless
+      // this is a real year, but the compiler cannot see that through `find`, so the vocabulary is
+      // re-checked here instead of asserted. It is the same check, so the two cannot disagree.
+      payload.year = isUserYear(createForm.year) ? createForm.year : undefined;
+      payload.department = createForm.department.trim();
       payload.matchmaking_enabled = createForm.matchmaking_enabled;
       payload.love_notes_receive_enabled = createForm.love_notes_receive_enabled;
       payload.love_notes_send_enabled = createForm.love_notes_send_enabled;
@@ -1174,7 +1248,7 @@ const pictured = hasPicture
                 <DialogDescription>
                   {editingIsParticipant
                     ? "Update the selected user's information. Leave a field untouched to keep the current value."
-                    : `A ${staffNoun(selectedProfile)} account has no class, bio, interests, matchmaking or love-note settings, so those are not offered here.`}
+                    : `A ${staffNoun(selectedProfile)} account has no year, department, bio, interests, matchmaking or love-note settings, so those are not offered here.`}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1258,31 +1332,63 @@ const pictured = hasPicture
                 {/* Participant columns. */}
                 {editingIsParticipant && (
                   <>
+                    {/* Year is a select and department is a text box, not two text boxes and not
+                        one joined field. Year is held to a closed vocabulary on the server, so a
+                        free-text box could only ever produce a value it refuses; department has no
+                        such list, because the departments that exist belong to the institution
+                        rather than to this codebase. */}
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="grid gap-2">
-                        <Label htmlFor="edit-class">Class / department</Label>
-                        <Input
-                          id="edit-class"
-                          value={editForm.class_name ?? ''}
-                          onChange={(event) =>
+                        <Label htmlFor="edit-year">Year</Label>
+                        <Select
+                          value={
+                            editForm.year == null
+                              ? ''
+                              : String(editForm.year)
+                          }
+                          onValueChange={(value) =>
                             setEditForm((prev) =>
-                              prev ? { ...prev, class_name: event.target.value } : prev
+                              prev ? { ...prev, year: Number(value) } : prev
                             )
                           }
-                          placeholder="CSE, ECE, Year, etc."
-                        />
+                        >
+                          <SelectTrigger id="edit-year">
+                            <SelectValue placeholder="Select a year" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {USER_YEAR_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={String(option.value)}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="edit-emoji">Emoji tag</Label>
+                        <Label htmlFor="edit-department">Department/Division</Label>
                         <Input
-                          id="edit-emoji"
-                          value={editForm.emoji ?? ''}
+                          id="edit-department"
+                          value={editForm.department ?? ''}
                           onChange={(event) =>
-                            setEditForm((prev) => (prev ? { ...prev, emoji: event.target.value } : prev))
+                            setEditForm((prev) =>
+                              prev ? { ...prev, department: event.target.value } : prev
+                            )
                           }
-                          placeholder="e.g. 😄"
+                          placeholder="CSE, ECE, MECH, etc."
                         />
                       </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-emoji">Emoji tag</Label>
+                      <Input
+                        id="edit-emoji"
+                        value={editForm.emoji ?? ''}
+                        onChange={(event) =>
+                          setEditForm((prev) => (prev ? { ...prev, emoji: event.target.value } : prev))
+                        }
+                        placeholder="e.g. ??"
+                      />
                     </div>
 
                     <div className="grid gap-2">
@@ -1475,17 +1581,47 @@ const pictured = hasPicture
                   />
                 </div>
                 {createIsParticipant && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="create-class">Class / department *</Label>
-                    <Input
-                      id="create-class"
-                      value={createForm.class_name}
-                      onChange={(event) =>
-                        setCreateForm((prev) => ({ ...prev, class_name: event.target.value }))
-                      }
-                      placeholder="CSE, ECE, Year, etc."
-                    />
-                  </div>
+                  <>
+                    <div className="grid gap-2">
+                      <Label htmlFor="create-year">Year *</Label>
+                      {/* No default. The server refuses any year outside its range, so the select
+                          is the whole set of legal answers and picking one is the only way to
+                          produce a valid value. A preselected year would be a claim about this
+                          participant that nobody made. */}
+                      {/* The empty string is the control's "nothing selected" value, not a
+                          stand-in for "leave undefined": Radix renders the placeholder for `''`,
+                          and passing `undefined` instead would make the control uncontrolled,
+                          which React then warns about the moment the first year is picked. */}
+                      <Select
+                        value={createForm.year === '' ? '' : String(createForm.year)}
+                        onValueChange={(value) =>
+                          setCreateForm((prev) => ({ ...prev, year: Number(value) }))
+                        }
+                      >
+                        <SelectTrigger id="create-year">
+                          <SelectValue placeholder="Select a year" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {USER_YEAR_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={String(option.value)}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="create-department">Department/Division *</Label>
+                      <Input
+                        id="create-department"
+                        value={createForm.department}
+                        onChange={(event) =>
+                          setCreateForm((prev) => ({ ...prev, department: event.target.value }))
+                        }
+                        placeholder="CSE, ECE, MECH, etc."
+                      />
+                    </div>
+                  </>
                 )}
                 {createIsParticipant && (
                   <div className="grid gap-2">
@@ -1496,7 +1632,7 @@ const pictured = hasPicture
                       onChange={(event) =>
                         setCreateForm((prev) => ({ ...prev, emoji: event.target.value }))
                       }
-                      placeholder="eg. 😄"
+                      placeholder="eg. ??"
                     />
                   </div>
                 )}

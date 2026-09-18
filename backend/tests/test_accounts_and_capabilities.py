@@ -205,7 +205,7 @@ def test_staff_tables_do_not_hold_participant_columns():
     imply.
     """
     participant_only = {
-        "emoji", "bio", "class_name", "interests",
+        "emoji", "bio", "year", "department", "interests",
         "matchmaking_enabled", "love_notes_receive_enabled",
         "love_notes_send_enabled", "last_matchmaking_at",
     }
@@ -294,7 +294,7 @@ def _create_payload(**overrides):
         "regno": "r1",
         "name": "Someone",
         "email": "someone@user.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
     }
     payload.update(overrides)
@@ -327,9 +327,9 @@ def test_staff_account_create_does_not_require_participant_fields():
 
 
 def test_participant_create_requires_participant_fields():
-    """A ``users`` row without an email or class name would be unusable and unreadable."""
+    """A ``users`` row without an email, year or department would be unusable and unreadable."""
     with pytest.raises(ValueError):
-        AdminUserCreate(**_create_payload(email=None, class_name=None))
+        AdminUserCreate(**_create_payload(email=None, year=None, department=None))
 
 
 def test_user_update_has_no_account_type_field():
@@ -355,7 +355,7 @@ def _details_payload(**overrides):
         "regno": "u",
         "name": "U",
         "email": "u@user.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
         "matchmaking_enabled": True,
         "notifications_enabled": True,
@@ -404,7 +404,7 @@ def _insert_user(db, regno):
                 regno=regno,
                 name=f"User {regno}",
                 email=f"{regno}@test.com",
-                class_name="Test_Class",
+                year=2, department="Test_Class",
                 gender="other",
             )
         )
@@ -449,7 +449,7 @@ def test_cross_table_email_uniqueness_is_not_a_database_constraint(db):
                 regno="shared-email-user",
                 name="Participant",
                 email="shared-address@example.com",
-                class_name="Test_Class",
+                year=2, department="Test_Class",
                 gender="other",
             )
         )

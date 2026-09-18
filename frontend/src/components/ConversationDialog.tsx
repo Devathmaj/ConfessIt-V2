@@ -17,6 +17,7 @@ import {
 import type { MessageQuota } from '@/lib/messageQuota';
 import { toast } from 'sonner';
 import { resolveProfilePictureUrl, parseTimestamp, timestampMs } from '@/lib/utils';
+import { cohortLabel } from '@/lib/accountFields';
 import { ReportMessageDialog } from './ReportMessageDialog';
 import { BlockUserDialog } from './BlockUserDialog';
 import { useAuth } from '@/contexts/AuthContext';
@@ -63,7 +64,8 @@ interface ConversationData {
     regno: string;
     name: string;
     profile_picture_url: string;
-    class_name: string;
+    year: number;
+    department: string;
     bio: string;
     interests: string[];
   };
@@ -811,7 +813,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base sm:text-xl truncate">{conversationData.other_user.name}</CardTitle>
-                  <CardDescription className="text-xs sm:text-sm truncate">{conversationData.other_user.name} • {conversationData.other_user.class_name}</CardDescription>
+                  <CardDescription className="text-xs sm:text-sm truncate">{conversationData.other_user.name} • {cohortLabel(conversationData.other_user.year, conversationData.other_user.department)}</CardDescription>
                 </div>
                 <div className="hidden sm:block flex-shrink-0">
                   {getStatusBadge(conversationData.conversation.status, isExpired)}

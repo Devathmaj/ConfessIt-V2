@@ -54,9 +54,9 @@ async def verify_magic_link(token: str, request: Request, db: Database = Depends
 # Deliberately not a response_model. The response is a ``UserDetails`` for a participant and
 # an ``AccountDetails`` for a staff account, and a single model would have to declare every
 # participant field optional to be valid for both -- which would let a staff response
-# quietly carry a class_name the row does not have, and would stop the client from being
-# able to tell a missing field from a null one. Declaring no model keeps the response equal
-# to what the account actually is.
+# quietly carry a year and department the row does not have, and would stop the client from
+# being able to tell a missing field from a null one. Declaring no model keeps the response
+# equal to what the account actually is.
 @router.get("/me")
 async def read_users_me(current_user: Annotated[AccountDetails, Depends(get_current_user)]):
     """

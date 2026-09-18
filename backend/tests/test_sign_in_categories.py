@@ -84,7 +84,7 @@ def _seed_shared(db):
     with db.sessions.begin() as session:
         participant = UserRecord(
             regno=SHARED, name="Participant", email="shared@example.com",
-            class_name="Test_Class", gender="other",
+            year=2, department="Test_Class", gender="other",
         )
         moderator = ModeratorRecord(regno=SHARED, name="Moderator", email="shared-mod@example.com", gender="other")
         admin = AdminRecord(regno=SHARED, name="Admin", email="shared-admin@example.com", gender="other")
@@ -311,7 +311,7 @@ def test_the_create_endpoint_allows_a_regno_reused_from_another_table(admin_clie
     with db.sessions.begin() as session:
         session.add(UserRecord(
             regno=SHARED, name="Participant", email="shared@example.com",
-            class_name="Test_Class", gender="other",
+            year=2, department="Test_Class", gender="other",
         ))
 
     response = admin_client.post(

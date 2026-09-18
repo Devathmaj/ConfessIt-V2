@@ -66,7 +66,12 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
 PARTICIPANT_ONLY_COLUMNS: tuple[str, ...] = (
     "emoji",
     "bio",
-    "class_name",
+    # Two columns where there was once one ``class_name``. Both are NOT NULL on ``users`` and both
+    # describe only a participant, so both are dropped from a staff row rather than being carried
+    # across as empty strings -- a moderator is not in a year and a department, and a row that
+    # said so would be a cohort of one.
+    "year",
+    "department",
     "interests",
     "matchmaking_enabled",
     "love_notes_receive_enabled",

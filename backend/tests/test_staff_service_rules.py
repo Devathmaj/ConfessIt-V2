@@ -45,7 +45,7 @@ def make_user(db, regno, gender="other"):
             regno=regno,
             name=f"User {regno}",
             email=f"{regno}@test.com",
-            class_name="Test_Class",
+            year=2, department="Test_Class",
             gender=gender,
         )
         session.add(row)
@@ -75,7 +75,7 @@ def details_for(regno):
         regno=regno,
         name=f"User {regno}",
         email=f"{regno}@test.com",
-        class_name="Test_Class",
+        year=2, department="Test_Class",
         gender="other",
         matchmaking_enabled=True,
         notifications_enabled=True,

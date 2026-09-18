@@ -16,7 +16,14 @@ PARTICIPANTS_PER_GENDER = 50
 
 # Seeded profile variety, cycled through so the list, profile and matchmaking screens have
 # more than one distinct value to render. Nothing here is load-bearing for the application.
-CLASS_NAMES = ("Test_Class_A", "Test_Class_B", "Test_Class_C")
+#
+# Year and department are two fields rather than one joined string, because that is what the
+# column is now: seeding a pre-joined "2nd Year CSE" would exercise a shape the schema can no
+# longer store. ``YEARS`` spans the ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX`` range the CHECK
+# constraint holds the column to, and holds numbers because the column is an ``Integer`` -- an
+# invented year here would be refused by the database rather than stored.
+YEARS = tuple(range(1, 13))
+DEPARTMENTS = ("Test_Department_A", "Test_Department_B", "Test_Department_C")
 INTERESTS = ("music", "games", "films", "books", "sports")
 EMOJIS = ("🎧", "📚", "🎮", "🎬", "⚽")
 
@@ -55,7 +62,8 @@ def _participants() -> list[dict]:
                     "name": f"Test User {prefix}{index:02d}",
                     "email": f"{regno.lower()}@test.com",
                     "gender": gender,
-                    "class_name": CLASS_NAMES[index % len(CLASS_NAMES)],
+                    "year": YEARS[index % len(YEARS)],
+                    "department": DEPARTMENTS[index % len(DEPARTMENTS)],
                     "emoji": EMOJIS[index % len(EMOJIS)],
                     "bio": f"Seeded {gender} participant {regno}.",
                     "interests": list(INTERESTS[index % len(INTERESTS) : index % len(INTERESTS) + 2]),

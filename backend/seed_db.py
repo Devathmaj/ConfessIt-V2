@@ -4,7 +4,7 @@ Accounts are spread over three tables -- ``users``, ``admin`` and ``moderator`` 
 table a row is written to *is* its account type. There is no ``role`` column to set, and no
 privilege that can be named in a payload: an account is staff or it is not, by existing.
 
-Four things about the current schema are easy to get wrong from memory, and each of them is a
+Five things about the current schema are easy to get wrong from memory, and each of them is a
 crash rather than a slightly wrong row:
 
 * **No ``role`` column.** The previous version of this script passed ``role="user"``, which the
@@ -19,9 +19,15 @@ crash rather than a slightly wrong row:
   edit here and cannot drift out of step with it.
 * **Email is required and unique.** Every account table has a NOT NULL, uniquely indexed
   ``email``, so a seed that omits it is rejected by the column rather than defaulted.
-* **Staff rows have no participant columns.** ``class_name``, ``bio``, ``emoji``, ``interests``
-  and the matchmaking toggles exist only on ``users``. Passing one to ``ModeratorRecord`` is a
-  ``TypeError``, so staff seeds carry only the shared columns.
+* **Staff rows have no participant columns.** ``year``, ``department``, ``bio``, ``emoji``,
+  ``interests`` and the matchmaking toggles exist only on ``users``. Passing one to
+  ``ModeratorRecord`` is a ``TypeError``, so staff seeds carry only the shared columns.
+* **Year is a bounded number, like interests are a closed set.** ``users.year`` is an ``Integer`` and
+  ``ck_users_year_known`` holds it between ``limits.USER_YEAR_MIN`` and ``limits.USER_YEAR_MAX``. A
+  hand-written year outside that range is a ``CheckViolation`` on the first insert, which aborts the
+  transaction and leaves the database empty, so the years here are derived from those bounds rather
+  than typed. Department has no such constraint and stays free text -- the departments that exist
+  belong to the institution, not to this schema.
 
 Re-running is the normal case while working on a schema, so an account that already exists is
 left untouched rather than overwritten, and uniqueness is checked *per table* -- which is how
@@ -38,18 +44,33 @@ from sqlalchemy import select
 
 from app.accounts import AccountType
 from app.db_models import ACCOUNT_MODELS
-from app.limits import INTEREST_VALUES
+from app.limits import INTEREST_VALUES, USER_YEAR_MAX, USER_YEAR_MIN
 from app.postgres import PostgresClient
 
 # A school run of this app has a real gender mix, and the matchmaking and filtering screens sort
 # and group by gender, so a seed that is all one value hides layout and filter bugs. Each year is
 # given a slightly different split for the same reason.
-CLASS_DISTRIBUTIONS = (
-    ("1st year", 12, 13),
-    ("2nd year", 13, 12),
-    ("3rd year", 12, 13),
-    ("4th year", 13, 12),
-)
+#
+# Derived from the year rather than written out as a twelve-row table, which is what the previous
+# four-row version was. A table that has to be kept in step with the range is a second place to
+# forget: raising the bounds to thirteen would have left the seed silently filling twelve years,
+# with no error and one year that simply had nobody in it. Deriving it means widening the range in
+# ``limits.py`` is the only edit, and this follows.
+def _year_gender_counts(year: int) -> tuple[int, int]:
+    """Male and female participants to seed in ``year``.
+
+    The variation is real rather than cosmetic: a seed where every year holds the same number of
+    people hides the sort order and the row count of every year-grouped screen, and a cohort filter
+    where all twelve options have identical counts looks like a rendering bug when it is not.
+    """
+    return (10 + year % 3, 11 + (year + 1) % 3)
+
+
+# Departments are free text, so these are typed here and only here. Three is enough for the
+# matchmaking palette and the cohort filter to have something to group by, and with twelve years
+# they give thirty-six cohorts -- enough that the cohort filter is a real filter rather than a
+# lookup.
+SEED_DEPARTMENTS = ("CSE", "ECE", "MECH")
 
 # How many interests a seeded participant holds. Two is enough for a profile to show something
 # and for matchmaking to have something to match on, without making the seed data look curated.
@@ -105,6 +126,48 @@ def _interests_for(index: int) -> list[str]:
     return [INTEREST_VALUES[(start + offset) % size] for offset in range(SEED_INTEREST_COUNT)]
 
 
+def _split_count(count: int, parts: int, rotate: int) -> list[int]:
+    """``count`` divided across ``parts`` buckets, as evenly as the number divides at all.
+
+    ``divmod`` keeps the split exact: the parts always sum back to ``count``, so widening
+    ``SEED_DEPARTMENTS`` thins out the cohorts instead of changing how many participants the
+    year was supposed to hold. The remainder goes to consecutive buckets starting at ``rotate``
+    rather than always to the first, so the uneven cohorts do not all pile into CSE and leave
+    MECH uniformly short in every year.
+    """
+    base, remainder = divmod(count, parts)
+    counts = [base] * parts
+    for offset in range(remainder):
+        counts[(rotate + offset) % parts] += 1
+    return counts
+
+
+def _cohort_distributions() -> list[tuple[int, str, int, int]]:
+    """Every ``(year, department, male_count, female_count)`` cohort the seed fills.
+
+    The full cross-product of the year range and the departments, so each year holds every
+    department and each department spans every year. That is what makes the two fields worth having
+    separate: with one joined ``class_name`` there was no way to ask either question, and a seed
+    that only ever paired a year with a single department could not answer them either. It is also
+    the only shape that exercises the filtering it exists for -- a cohort filter over a handful of
+    non-overlapping cohorts is a lookup, not a filter, and would pass while the pair comparison
+    were wrong.
+
+    The two halves are rotated differently so a cohort is not systematically the male-heavy one.
+    """
+    size = len(SEED_DEPARTMENTS)
+    distributions: list[tuple[int, str, int, int]] = []
+    for year_index, year in enumerate(range(USER_YEAR_MIN, USER_YEAR_MAX + 1)):
+        male_count, female_count = _year_gender_counts(year)
+        male_counts = _split_count(male_count, size, year_index)
+        female_counts = _split_count(female_count, size, year_index + 1)
+        for department_index, department in enumerate(SEED_DEPARTMENTS):
+            distributions.append(
+                (year, department, male_counts[department_index], female_counts[department_index])
+            )
+    return distributions
+
+
 def _participant_seeds() -> list[dict]:
     """Build the participant rows, one dict per row, keyed to the ``users`` columns.
 
@@ -114,29 +177,30 @@ def _participant_seeds() -> list[dict]:
     """
     seeds: list[dict] = []
     counters = {"male": 0, "female": 0}
-    for class_name, male_count, female_count in CLASS_DISTRIBUTIONS:
-        # The two halves of a year are described by one tuple each rather than by two near
+    for year, department, male_count, female_count in _cohort_distributions():
+        # The two halves of a cohort are described by one tuple each rather than by two near
         # identical blocks, so a field added to ``_participant`` cannot be added to one gender
         # and forgotten in the other.
         for gender, prefix, count in (("male", "MA", male_count), ("female", "FE", female_count)):
             for _ in range(count):
-                # Numbering continues across years rather than restarting per class, so a regno
-                # identifies the account rather than the class it happened to be drawn in.
+                # Numbering continues across cohorts rather than restarting per year, so a regno
+                # identifies the account rather than the cohort it happened to be drawn in.
                 counters[gender] += 1
                 regno = f"{prefix}{counters[gender]}"
-                seeds.append(_participant(regno, gender, class_name, len(seeds)))
+                seeds.append(_participant(regno, gender, year, department, len(seeds)))
     return seeds
 
 
-def _participant(regno: str, gender: str, class_name: str, index: int) -> dict:
+def _participant(regno: str, gender: str, year: int, department: str, index: int) -> dict:
     return {
         "regno": regno,
         "name": f"Test User {regno}",
         "email": f"{regno.lower()}@test.com",
         "gender": gender,
-        "class_name": class_name,
+        "year": year,
+        "department": department,
         "emoji": None,
-        "bio": f"Seeded {class_name} {gender} participant.",
+        "bio": f"Seeded {department} {year} {gender} participant.",
         "interests": _interests_for(index),
         "profile_picture_url": None,
         "matchmaking_enabled": True,

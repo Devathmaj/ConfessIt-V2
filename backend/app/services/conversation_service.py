@@ -23,8 +23,9 @@ def _user_data(row):
         return None
     return {
         "id": str(row.id), "regno": row.regno, "name": row.name,
-        "email": row.email, "emoji": row.emoji, "bio": row.bio,
-        "class_name": row.class_name, "profile_picture_url": row.profile_picture_url,
+"email": row.email, "emoji": row.emoji, "bio": row.bio,
+        "year": row.year, "department": row.department,
+        "profile_picture_url": row.profile_picture_url,
         "gender": row.gender, "interests": row.interests or [],
         "matchmaking_enabled": row.matchmaking_enabled, "notifications_enabled": row.notifications_enabled,
         "love_notes_receive_enabled": row.love_notes_receive_enabled, "love_notes_send_enabled": row.love_notes_send_enabled,
@@ -528,7 +529,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
                 "name": other_user.name if other_user else None,
                 "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
-                "class_name": other_user.class_name if other_user else None,
+                "year": other_user.year if other_user else None,
+                "department": other_user.department if other_user else None,
                 "bio": other_user.bio if other_user else None,
                 "interests": other_user.interests if other_user else []
             },
@@ -566,7 +568,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
             "name": other_user.name if other_user else None,
             "profile_picture_url": profile_picture_url,
             "profile_picture": profile_picture_url,
-            "class_name": other_user.class_name if other_user else None,
+            "year": other_user.year if other_user else None,
+                "department": other_user.department if other_user else None,
             "bio": other_user.bio if other_user else None,
             "interests": other_user.interests if other_user else []
         },
@@ -685,7 +688,8 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
                 "name": initiator_user.name,
                 "profile_picture_url": profile_picture_url,
                 "profile_picture": profile_picture_url,
-                "class_name": initiator_user.class_name,
+                "year": initiator_user.year,
+                "department": initiator_user.department,
                 "bio": initiator_user.bio,
                 "interests": initiator_user.interests or []
             },
@@ -773,7 +777,8 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
                 "regno": other_user.regno,
                 "name": other_user.name,
                 "profile_picture_url": profile_picture_url,
-                "class_name": other_user.class_name,
+                "year": other_user.year,
+                "department": other_user.department,
                 "bio": other_user.bio,
                 "interests": other_user.interests or []
             },

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from ..postgres import Database
 
 from ..dependencies import get_db
-from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate
+from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate, Year
 from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
     MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
@@ -48,7 +48,8 @@ def _user_payload(user):
     if user is None: return None
     return {
         "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-        "emoji": user.emoji, "bio": user.bio, "class_name": user.class_name, "gender": user.gender,
+        "emoji": user.emoji, "bio": user.bio, "year": user.year, "department": user.department,
+        "gender": user.gender,
         "profile_picture_url": user.profile_picture_url, "interests": user.interests or [],
         "account_type": AccountType.USERS.value,
         "matchmaking_enabled": user.matchmaking_enabled,
@@ -330,7 +331,11 @@ async def create_user(
         account_fields.update({
             "emoji": payload.emoji.strip() if payload.emoji else None,
             "bio": payload.bio.strip() if payload.bio else None,
-            "class_name": payload.class_name.strip(),
+            # Written from the two fields separately rather than by joining them back into one
+            # string. The columns are what matchmaking groups by, and a stored "CSE 2" would
+            # be groupable by neither half.
+            "year": payload.year,
+            "department": payload.department.strip(),
             "interests": interests_value or [],
             "matchmaking_enabled": payload.matchmaking_enabled,
             "love_notes_receive_enabled": payload.love_notes_receive_enabled,
@@ -432,11 +437,30 @@ async def update_user_details(
     The account is found by id across all three tables and edited in place. Its table is not
     editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
     moderator into a participant and strand the content that references it.
+
+    A field the operator cleared is dropped rather than written. ``AdminUserUpdate``'s validator
+    turns a blank string into ``None`` so the *model* is valid, but ``exclude_unset`` keeps the key
+    -- the field was sent, it just held nothing -- and writing that ``None`` to a NOT NULL column
+    is a 500 from PostgreSQL rather than anything the caller could act on. Dropping the key is
+    also the honest reading of what a cleared input means: the operator left it empty, which is not
+    a request to erase a value the row is required to have. This is the second line of defence the
+    validator's docstring refers to.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
-    update_payload = update.dict(exclude_unset=True)
+    # NOT NULL columns on the account tables, so a ``None`` here is never a value to write. Year
+    # and department are on the list for the same reason name and regno are: they are two halves
+    # of what used to be one ``class_name``, and a participant without either cannot be placed in
+    # a matchmaking cohort.
+    not_null_fields = frozenset({
+        "regno", "name", "email", "gender", "year", "department",
+    })
+    update_payload = {
+        key: value
+        for key, value in update.dict(exclude_unset=True).items()
+        if not (value is None and key in not_null_fields)
+    }
 
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
@@ -468,7 +492,7 @@ async def update_user_details(
             # note that once stood here to explain its absence is what would have led to
             # staff rows being left without one.
             participant_only = (
-                "emoji", "bio", "class_name", "interests", "matchmaking_enabled",
+                "emoji", "bio", "year", "department", "interests", "matchmaking_enabled",
                 "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
                 "last_confession_at",
             )
@@ -615,45 +639,68 @@ async def read_app_configuration(
 ) -> Dict[str, Any]:
     """Return the application's operator-settable configuration.
 
-    Deliberately empty for now. Platform settings are still environment variables read by
-    ``app/config.py`` at import time, so there is nothing stored to report yet; the key exists so
-    the App Configuration screen has a place to read from and to grow settings into. Declaring
-    it here is also what makes ``APP_CONFIG_READ`` a capability an admin can actually exercise
-    rather than a name with nothing behind it.
-    """
-    from ..services.matchmaking_slot_service import get_all_classes_service, get_all_slots_service
+    ``settings`` is deliberately empty for now: platform settings are still environment variables
+    read by ``app/config.py`` at import time, so there is nothing stored to report yet.
 
-    classes = await get_all_classes_service(db)
+    ``cohorts`` is every ``(year, department)`` pair at least one participant occupies, and
+    ``slots`` the pairings between them. The key was ``classes`` while the participants it was
+    derived from had one ``class_name`` column; it is a list of two-field objects now, and a key
+    called ``classes`` returning that would be the kind of name that outlives its meaning.
+    """
+    from ..services.matchmaking_slot_service import get_all_slots_service, list_participant_cohorts
+
+    cohorts = await list_participant_cohorts(db)
     slots = await get_all_slots_service(db)
 
     return {
         "settings": {},
-        "classes": classes,
+        "cohorts": cohorts,
         "slots": slots,
     }
 
 
 @router.post("/config/matchmaking-slot", response_model=Dict[str, Any])
 async def create_matchmaking_slot(
-    class_a: str = Body(...),
-    class_b: str = Body(...),
+    year_a: Year = Body(..., description="Year of the first cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
+    department_a: str = Body(..., description="Department or division of the first cohort. Required."),
+    year_b: Year = Body(..., description="Year of the second cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
+    department_b: str = Body(..., description="Department or division of the second cohort. Required."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
 ) -> Dict[str, Any]:
-    """Create a new matchmaking slot where class_a can match with class_b."""
+    """Record that one cohort is allowed to match with another.
+
+    Both sides are sent as a ``(year, department)`` pair rather than as one name, because a slot is
+    the rule *these* participants may match with *those* participants and a joined string could not
+    be compared against either half of a participant's own row. Two identical sides are allowed and
+    mean the cohort may match within itself.
+
+    ``year_a``/``year_b`` are typed as ``Year``, the same bounded int the participant payload uses,
+    so a year outside the range is a 422 naming the field. Without it the value would reach
+    the table and be refused by a CHECK constraint as a 500, or -- on a write that somehow skipped
+    that -- become a cohort that matches nobody.
+    """
     from ..services.matchmaking_slot_service import create_matchmaking_slot_service
 
-    slot = await create_matchmaking_slot_service(db, class_a, class_b)
+    slot = await create_matchmaking_slot_service(db, year_a, department_a, year_b, department_b)
     return slot
 
 
 @router.delete("/config/matchmaking-slot", response_model=Dict[str, Any])
 async def delete_matchmaking_slot(
-    slot_id: str = Body(...),
+    slot_id: str = Body(..., embed=True),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
 ) -> Dict[str, Any]:
-    """Delete a matchmaking slot by ID."""
+    """Delete a matchmaking slot by ID.
+
+    ``embed=True`` so the id arrives as ``{"slot_id": "..."}`` rather than as a bare JSON string.
+    Without it FastAPI reads the *whole body* as this one scalar, so a client sending the obvious
+    object -- which is what the POST above takes, and what every other endpoint in this router
+    takes -- is refused with a 422 that names ``body`` and not ``slot_id``, which reads as a server
+    fault rather than a shape mismatch. Embedding it makes the two halves of this resource speak
+    the same dialect.
+    """
     from ..services.matchmaking_slot_service import delete_matchmaking_slot_service
 
     result = await delete_matchmaking_slot_service(db, slot_id)

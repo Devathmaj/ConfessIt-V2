@@ -105,7 +105,7 @@ def stored_url(kind: str, object_path: str) -> str:
 def make_user_row(regno: str, user_id: str, **overrides) -> UserRecord:
     values = dict(
         id=user_id, regno=regno, name=regno.title(), email=f"{regno}@example.com",
-        emoji=None, bio=None, class_name="Test_Class", profile_picture_url=None,
+        emoji=None, bio=None, year=2, department="Test_Class", profile_picture_url=None,
         gender="male", interests=[], matchmaking_enabled=True, notifications_enabled=True,
         love_notes_receive_enabled=True, love_notes_send_enabled=False, is_blocked=False,
         last_login_at=None, last_login_ip=None, last_login_user_agent=None,
@@ -118,7 +118,7 @@ def make_user_row(regno: str, user_id: str, **overrides) -> UserRecord:
 def user_details(regno: str, user_id: str) -> UserDetails:
     return UserDetails(
         id=user_id, regno=regno, name=regno.title(), email=f"{regno}@e.com",
-        class_name="C", gender="male", matchmaking_enabled=True,
+        year=2, department="C", gender="male", matchmaking_enabled=True,
         notifications_enabled=True, account_type=AccountType.USERS.value,
     )
 

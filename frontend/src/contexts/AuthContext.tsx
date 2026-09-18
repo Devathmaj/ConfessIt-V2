@@ -18,7 +18,12 @@ export interface User {
   email: string;
   emoji: string;
   bio?: string;
-  class_name?: string;
+  /**
+   * Year of study and department. Participant-only: a staff account has no row in `users`, so the
+   * server omits both rather than sending nulls for values the row does not have.
+   */
+    year?: number;
+  department?: string;
   profile_picture_url?: string;
   /** One of `USER_GENDER_VALUES`, so the three are the only possibilities. */
   gender: UserGender;

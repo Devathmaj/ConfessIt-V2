@@ -20,7 +20,10 @@ import { LoveNotesPage } from '@/pages/LoveNotesPage';
 
 const api = vi.hoisted(() => ({
   getAllUsers: vi.fn(),
-  getClasses: vi.fn(),
+  // `getCohorts`, not the `getClasses` this replaced. A mock missing an export the page imports
+  // makes the whole `Promise.all` at mount reject, which the page catches and logs -- so the
+  // tests still went green while users, cohorts and received notes all silently failed to load.
+  getCohorts: vi.fn(),
   getReceivedLoveNotes: vi.fn(),
   sendLoveNote: vi.fn(),
   markLoveNoteRead: vi.fn(),
@@ -60,7 +63,7 @@ const authValue = {
 
 const renderAt = async (url: string, notes = [note()]) => {
   api.getAllUsers.mockResolvedValue([]);
-  api.getClasses.mockResolvedValue([]);
+  api.getCohorts.mockResolvedValue([]);
   api.getReceivedLoveNotes.mockResolvedValue(notes);
 
   render(

@@ -159,7 +159,8 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     matched_user = UserDetails(**{
         "id": str(matched_user_row.id), "regno": matched_user_row.regno, "name": matched_user_row.name,
         "email": matched_user_row.email, "emoji": matched_user_row.emoji, "bio": matched_user_row.bio,
-        "class_name": matched_user_row.class_name, "profile_picture_url": matched_user_row.profile_picture_url,
+        "year": matched_user_row.year, "department": matched_user_row.department,
+        "profile_picture_url": matched_user_row.profile_picture_url,
         "gender": matched_user_row.gender, "interests": matched_user_row.interests or [],
         "matchmaking_enabled": matched_user_row.matchmaking_enabled, "notifications_enabled": matched_user_row.notifications_enabled,
         "love_notes_receive_enabled": matched_user_row.love_notes_receive_enabled, "love_notes_send_enabled": matched_user_row.love_notes_send_enabled,
@@ -248,7 +249,8 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         "name": matched_user.name,
         "profile_picture_url": matched_user_picture_url,
         "profile_picture": matched_user_picture_url,
-        "class_name": matched_user.class_name,
+        "year": matched_user.year,
+        "department": matched_user.department,
         "interests": getattr(matched_user, "interests", []) or []
     }
 

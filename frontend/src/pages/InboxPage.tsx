@@ -47,7 +47,8 @@ interface ConversationData {
     regno: string;
     name: string;
     profile_picture_url: string;
-    class_name: string;
+    year: number;
+    department: string;
     bio: string;
     interests: string[];
   };

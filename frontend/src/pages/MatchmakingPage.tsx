@@ -8,6 +8,7 @@ import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
 import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
+import { cohortLabel } from '@/lib/accountFields';
 import { ConversationDialog } from '@/components/ConversationDialog';
 import {
   Heart,
@@ -205,9 +206,9 @@ export const notifyCooldown = (remaining: CooldownRemaining | null, { force = fa
 
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
-    { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', class_name: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
-    { id: 'mock2', name: 'Jordan', regno: '456', emoji: '😎', class_name: 'ECE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
-    { id: 'mock3', name: 'Taylor', regno: '789', emoji: '🤩', class_name: 'MECH', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
+    { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', year: 2, department: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
+    { id: 'mock2', name: 'Jordan', regno: '456', emoji: '😎', year: 3, department: 'ECE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
+    { id: 'mock3', name: 'Taylor', regno: '789', emoji: '🤩', year: 1, department: 'MECH', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
 ];
 
 /**
@@ -681,7 +682,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
             className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg"
         />
         <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.name}</CardTitle>
-        <CardDescription>{profile.class_name}</CardDescription>
+        <CardDescription>{cohortLabel(profile.year, profile.department)}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
@@ -856,7 +857,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                                 className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg mx-auto mb-4"
                             />
                             <h3 className="text-xl font-dancing text-romantic">{slotMachineUser.name}</h3>
-                            <p className="text-sm text-muted-foreground">{slotMachineUser.class_name}</p>
+                            <p className="text-sm text-muted-foreground">{cohortLabel(slotMachineUser.year, slotMachineUser.department)}</p>
                         </div>
                         <div className="absolute inset-0 bg-gradient-to-b from-card via-transparent to-card z-10" />
                     </div>

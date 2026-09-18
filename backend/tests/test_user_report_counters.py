@@ -83,7 +83,7 @@ def make_user(db, regno, name=None):
             regno=regno,
             name=name,
             email=f"{regno}@test.com",
-            class_name="Test_Class",
+            year=2, department="Test_Class",
             gender="other",
         )
         session.add(row)
@@ -112,7 +112,7 @@ def as_participant(account):
         name=account["name"],
         email=f"{account['regno']}@test.com",
         gender="other",
-        class_name="Test_Class",
+        year=2, department="Test_Class",
         account_type=AccountType.USERS.value,
     )
 

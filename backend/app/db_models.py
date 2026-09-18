@@ -21,7 +21,10 @@ from .limits import (
     INTEREST_VALUES,
     MESSAGE_BODY_MAX,
     REPORT_REASON_MAX,
+    USER_DEPARTMENT_MAX,
     USER_GENDER_VALUES,
+    USER_YEAR_MAX,
+    USER_YEAR_MIN,
 )
 from .accounts import (
     ACCOUNT_TYPE_VALUES,
@@ -56,6 +59,18 @@ _INTEREST_SQL_ARRAY = (
 _GENDER_CHECK_SQL = (
     f"gender IS NOT NULL AND gender IN ({_GENDER_SQL_LIST})"
 )
+
+# The same form for a participant's year of study. It is a CHECK rather than a plain column because
+# year is a *grouping*, not a description: the matchmaking slot configuration pairs cohorts by it,
+# so "2" and "02" would be two cohorts that can never match each other and an operator who typed the
+# second would get no error and a silently empty pool. Same reason, same three enforcement points,
+# same generated-from-limits.py rule as the gender list above.
+#
+# A range rather than an ``IN (...)`` list, because the column is an integer now: the bounds are
+# interpolated as bare numbers so the constraint reads as the range it is, and a value outside it
+# is caught by the same NOT NULL-excluding form used for gender.
+_YEAR_RANGE_SQL = f"BETWEEN {USER_YEAR_MIN} AND {USER_YEAR_MAX}"
+_YEAR_CHECK_SQL = f"year IS NOT NULL AND year {_YEAR_RANGE_SQL}"
 
 def _non_character_code_points() -> list[int]:
     """Every code point Unicode reserves forever, in ascending order.
@@ -110,7 +125,7 @@ class AccountColumns:
     absent for staff would be a bug no type checker would catch, and the whole point of
     splitting the tables is that the shared shape stays honest.
 
-    Deliberately *not* here: emoji, bio, class_name, interests, matchmaking_enabled and the
+    Deliberately *not* here: emoji, bio, year, department, interests, matchmaking_enabled and the
     love-note toggles. Those describe a participant, and a staff account is not a participant,
     so storing them would only create columns nothing writes and nothing reads.
 
@@ -228,16 +243,53 @@ class UserRecord(AccountColumns, Base):
     # ``<@`` is "is contained by", so this is the one operator that reads the way the rule
     # does. NULL is excluded explicitly because a CHECK passes when it evaluates to NULL, and
     # ``NULL <@ ARRAY[...]`` is NULL rather than false.
+    #
+    # ``ck_users_year_known_{USER_YEAR_MAX}`` follows the same NULL-excluding form for the same
+    # reason, but it exists for the different reason that year is a grouping key rather than a
+    # description -- see ``_YEAR_CHECK_SQL`` above.
+    # The ``_12`` suffix is not decoration: it is what makes this constraint supersede the one it
+    # replaced. ``apply_check_constraints`` drops an installed constraint when the models declare
+    # one in the same numeric family, and it recognises the old ``ck_users_year_known`` -- the name
+    # the four-ordinal-vocabulary check carried -- as the unsuffixed member of the
+    # ``ck_users_year_known`` family. Without the suffix the name is unchanged, the old check is
+    # still "installed" under the name the model declares, and it is silently kept: a database
+    # would go on enforcing ``year IN ('1st Year', ...)`` against a column the models call an
+    # integer, with nothing to report it. Raising USER_YEAR_MAX to 13 renames this to ``_13`` and
+    # supersedes it by the same rule.
     __table_args__ = _ACCOUNT_TABLE_ARGS + (
         CheckConstraint(
             f"interests IS NOT NULL AND interests <@ {_INTEREST_SQL_ARRAY}",
             name="ck_users_interests_known",
         ),
+        CheckConstraint(
+            _YEAR_CHECK_SQL, name=f"ck_users_year_known_{USER_YEAR_MAX}"
+        ),
     )
 
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
-    class_name: Mapped[str] = mapped_column(String(80), index=True)
+
+    # Which year of study this participant is in, and which department or division they belong to.
+    #
+    # These two used to be one column called ``class_name``, holding whatever a person or an
+    # admin typed -- "CSE 2nd Year", "2nd Year CSE", "cse-2". Splitting them is not cosmetic:
+    # matchmaking groups by both, and a single free-text column cannot be grouped by either,
+    # because "CSE 2nd Year" and "2nd Year CSE" are the same cohort to a human and two unrelated
+    # strings to a query. The three fields are indexed because all three are now real lookup
+    # values rather than decoration.
+    #
+    # ``year`` is an ``Integer`` bounded by ``limits.USER_YEAR_MIN``/``USER_YEAR_MAX`` and held to
+    # that range by ``ck_users_year_known_{USER_YEAR_MAX}``. It is a number and not a name on
+    # purpose: an
+    # undergraduate programme and a school both need a "which year is this person in" field, they
+    # simply spell it differently and the school one runs to twelve, so storing "2nd Year" would
+    # have baked one institution's vocabulary into the column and needed a second column to serve
+    # the other. ``department`` is deliberately free text for the mirror-image reason: the
+    # departments that exist are a property of the institution, not of this schema, so a closed
+    # list here would be a guess that goes stale the moment a new one is introduced. Both are NOT
+    # NULL -- a participant with neither is not a participant this app can place in a cohort.
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    department: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True)
     # The element width is the length of the longest entry in the vocabulary, and it is derived
     # from that rather than written as a bare 80 -- so a longer interest cannot be added to
     # ``limits.INTEREST_VALUES`` and then be rejected by the column as an unexplained 500. The
@@ -685,22 +737,60 @@ class NotificationRecord(Base):
 
 
 class MatchmakingSlotRecord(Base):
+    """A pair of participant cohorts that are allowed to match with each other.
+
+    A slot means *this cohort may match with that cohort*. Multiple slots can overlap -- A-B and
+    B-C means A can match B and C, but A cannot match C unless there is a separate A-C slot -- and
+    a slot whose two sides are identical is what permits self-matching.
+
+    **Each side is a ``(year, department)`` pair, not a name.** This used to be two string columns
+    holding a ``class_name`` the operator had typed, which made the grouping exactly as precise as
+    their typing: "CSE 2nd Year" and "2nd Year CSE" are one cohort to a person and two unrelated
+    strings to a query, so an operator could configure a rule that silently matched nobody. Four
+    columns rather than one composite string, because a composite would have to be re-parsed to
+    answer "who is in the 2nd year" and there is no separator that cannot appear in a department
+    name.
+
+    ``year_a``/``year_b`` are ``Integer`` and held to the ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX``
+    range by a CHECK constraint for the same reason ``users.year`` is: a year outside the range is a
+    cohort that can never match anybody, and an operator deserves to be told rather than left
+    wondering. ``department_a`` and ``department_b`` are free text, because departments are a
+    property of the institution rather than of this schema.
+
+    There is no uniqueness constraint on the pair. The service checks for a duplicate before
+    inserting and answers 409, which is the behaviour a caller can rely on; a database-level
+    unique index would be the belt to that braces, but it would also make a race between two
+    simultaneous requests a 500 rather than the 409 the second one is already promised.
+    """
+
     __tablename__ = "matchmaking_slots"
 
-    # A slot defines which classes may match with which. A slot with class_a and class_b means
-    # class_a can match with class_b. Multiple slots can overlap (e.g. A-B and B-C means A can
-    # match B and C, but A and C cannot match unless there is a separate slot A-C).
-    # A slot with a single class (class_a == class_b) means that class can match with itself.
-    # Initially there will be a single slot with all classes, meaning any class can match with any.
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    class_a: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
-    class_b: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    year_a: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    department_a: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
+    year_b: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    department_b: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 
-    # No constraint - self-matching (class_a == class_b) is allowed for single-class slots
+    # A self-pair (year_a, department_a) == (year_b, department_b) is allowed: it is how a cohort
+    # is permitted to match within itself. So the constraints here bound each field to its range
+    # and say nothing about the two sides differing.
+    # Same numeric-suffix reasoning as ``ck_users_year_known_{USER_YEAR_MAX}``: these two replaced
+    # text-equality checks that carried these exact unsuffixed names, so the bound has to be in the
+    # name for them to be recognised as superseded rather than silently kept.
+    __table_args__ = (
+        CheckConstraint(
+            f"year_a {_YEAR_RANGE_SQL}", name=f"ck_matchmaking_slot_year_a_known_{USER_YEAR_MAX}"
+        ),
+        CheckConstraint(
+            f"year_b {_YEAR_RANGE_SQL}", name=f"ck_matchmaking_slot_year_b_known_{USER_YEAR_MAX}"
+        ),
+        CheckConstraint("department_a IS NOT NULL", name="ck_matchmaking_slot_department_a_present"),
+        CheckConstraint("department_b IS NOT NULL", name="ck_matchmaking_slot_department_b_present"),
+    )
 
 
 class MessageReportRecord(Base):

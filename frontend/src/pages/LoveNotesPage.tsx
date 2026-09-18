@@ -40,7 +40,15 @@ import {
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
 import { ReportLoveNoteDialog } from '@/components/ReportLoveNoteDialog';
-import { getAllUsers, getClasses, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
+import { getAllUsers, getCohorts, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
+import type { Cohort } from '@/lib/accountFields';
+import {
+  ALL_COHORTS,
+  cohortFromKey,
+  cohortKey,
+  cohortLabel,
+  isSameCohort,
+} from '@/lib/accountFields';
 import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
 
 // Used to define the structure for a template's field
@@ -117,15 +125,17 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
     // State for recipient selection modal
     const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
     const [allUsers, setAllUsers] = useState<Recipient[]>([]);
-    const [classes, setClasses] = useState<string[]>([]);
+const [cohorts, setCohorts] = useState<Cohort[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedClass, setSelectedClass] = useState('All');
+    // A cohort key rather than a cohort, because the Select it drives carries a string. `ALL_COHORTS`
+    // is the sentinel for "show everybody", which is not the same as "show one cohort".
+    const [selectedCohortKey, setSelectedCohortKey] = useState(ALL_COHORTS);
     const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
     const [isUnavailableConfirmOpen, setIsUnavailableConfirmOpen] = useState(false);
     const [isSending, setIsSending] = useState(false);
 
 
-    // Used to fetch templates, users, classes, and inbox count
+// Used to fetch templates, users, cohorts, and inbox count
     useEffect(() => {
         const fetchInitialData = async () => {
             try {
@@ -137,14 +147,14 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
                 setTemplates(loadedTemplates);
                 setSelectedTemplate(loadedTemplates[0]);
 
-                // Fetch users, classes, and received notes count in parallel
-                const [usersData, classesData, notesData] = await Promise.all([
+                // Fetch users, cohorts, and received notes count in parallel
+                const [usersData, cohortsData, notesData] = await Promise.all([
                     getAllUsers(),
-                    getClasses(),
+                    getCohorts(),
                     getReceivedLoveNotes()
                 ]);
                 setAllUsers(usersData);
-                setClasses(['All', ...classesData]);
+                setCohorts(cohortsData);
                 setReceivedNotes(notesData);
 
             } catch (error) {
@@ -414,8 +424,8 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
             setNoteMessage('');
             setSelectedEmoji(null);
             setSelectedRecipient(null);
-            setSearchTerm('');
-            setSelectedClass('All');
+setSearchTerm('');
+            setSelectedCohortKey(ALL_COHORTS);
             // Used to refresh user data to get the updated love_notes_send_enabled status
             if (token) {
                 fetchAndSetUser(token);
@@ -447,14 +457,18 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
         }
     };
 
-    // Used to filter users based on search term and class
+// Used to filter users based on search term and cohort
     const filteredUsers = useMemo(() => {
+        // Resolved once per filter change rather than per user: the key is a string, so the
+        // comparison has to be turned back into a pair somewhere, and doing it per row would
+        // repeat that parse for every recipient on the list.
+        const selected = cohortFromKey(selectedCohortKey);
         return allUsers.filter(u => {
             const nameMatch = u.name.toLowerCase().includes(searchTerm.toLowerCase());
-            const classMatch = selectedClass === 'All' || u.class_name === selectedClass;
-            return nameMatch && classMatch;
+            const cohortMatch = selected === null || isSameCohort(u, selected);
+            return nameMatch && cohortMatch;
         });
-    }, [allUsers, searchTerm, selectedClass]);
+    }, [allUsers, searchTerm, selectedCohortKey]);
 
     return (
         <>
@@ -791,14 +805,20 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
                                     className="pl-10"
                                 />
                             </div>
-                            <Select value={selectedClass} onValueChange={setSelectedClass}>
+<Select value={selectedCohortKey} onValueChange={setSelectedCohortKey}>
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Filter by class" />
+                                    <SelectValue placeholder="Filter by cohort" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    {classes.map(c => (
-                                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                                    ))}
+                                    <SelectItem value={ALL_COHORTS}>All</SelectItem>
+                                    {cohorts.map(c => {
+                                        const key = cohortKey(c);
+                                        return (
+                                            <SelectItem key={key} value={key}>
+                                                {cohortLabel(c.year, c.department)}
+                                            </SelectItem>
+                                        );
+                                    })}
                                 </SelectContent>
                             </Select>
                         </div>
@@ -820,7 +840,7 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
                                         />
                                         <div>
                                             <p className="font-semibold">{u.name}</p>
-                                            <p className="text-sm text-muted-foreground">{u.class_name}</p>
+                                            <p className="text-sm text-muted-foreground">{cohortLabel(u.year, u.department)}</p>
                                         </div>
                                         {u.is_blocked && (
                                             <Badge variant="secondary" className="ml-auto">Not available</Badge>

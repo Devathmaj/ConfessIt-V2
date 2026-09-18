@@ -230,8 +230,18 @@ export const ProfilePage = () => {
                 <Input value={user?.email || ''} disabled className="bg-muted" />
               </div>
               <div>
-                <Label className="text-romantic font-semibold">Class</Label>
-                <Input value={user?.class_name || ''} disabled className="bg-muted" />
+                <Label className="text-romantic font-semibold">Year</Label>
+                {/* Stringified rather than dropped in as a number: an `<input>` carries a string,
+                    and `user?.year` is now an integer. */}
+                <Input
+                  value={user?.year != null ? String(user.year) : ''}
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+              <div>
+                <Label className="text-romantic font-semibold">Department/Division</Label>
+                <Input value={user?.department || ''} disabled className="bg-muted" />
               </div>
                <div>
                 <Label className="text-romantic font-semibold">Gender</Label>

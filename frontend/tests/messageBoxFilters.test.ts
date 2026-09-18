@@ -30,7 +30,7 @@ const conversation = (status: (typeof STATUSES)[number], offsetMs: number) =>
       receiver_regno: 'B',
       created_at: new Date().toISOString(),
     },
-    other_user: { regno: 'B', name: 'Bob', class_name: 'CSE' },
+    other_user: { regno: 'B', name: 'Bob', year: 2, department: 'CSE' },
     is_initiator: true,
   }) as any;
 

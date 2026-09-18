@@ -15,6 +15,7 @@ from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
 from ..services.report_resolution_service import resolve_status_filter
 from ..accounts import AccountRef
+from ..services.matchmaking_slot_service import list_participant_cohorts
 from .report_counters import LOVE_NOTE, record_report_filed
 
 # Logger
@@ -68,17 +69,21 @@ async def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
         )).all()
         return [_user_payload(row, account=viewer) for row in rows]
 
-async def get_all_classes_service(db: Database) -> List[str]:
+async def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
+    """Every ``(year, department)`` pair a love note recipient can be filtered by.
+
+    Delegates to :func:`matchmaking_slot_service.list_participant_cohorts` rather than repeating
+    the query. It used to be a second, identical copy of this function in this module, and the
+    filter list and the matchmaking palette answering differently for the same database was a
+    question nobody needed to be asking. One query, one answer.
     """
-    Service to fetch all distinct 'class_name' values.
-    """
-    with db.sessions() as session:
-        return list(session.scalars(select(UserRecord.class_name).distinct().where(UserRecord.class_name.is_not(None))))
+    return await list_participant_cohorts(db)
+
 
 def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
     payload = {
         "id": str(user.id), "name": user.name, "emoji": user.emoji,
-        "class_name": user.class_name, "gender": user.gender,
+        "year": user.year, "department": user.department, "gender": user.gender,
         "interests": user.interests or [],
         "profile_picture_url": asset_delivery_service.profile_image_url(
             user.profile_picture_url, account=account

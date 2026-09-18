@@ -78,7 +78,8 @@ async def update_user_profile_service(
         updated_user_doc = {
             "id": str(user.id), "regno": user.regno, "name": user.name,
             "email": user.email, "emoji": user.emoji, "bio": user.bio,
-            "class_name": user.class_name, "profile_picture_url": user.profile_picture_url,
+            "year": user.year, "department": user.department,
+            "profile_picture_url": user.profile_picture_url,
             "gender": user.gender, "interests": user.interests or [],
             "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
             "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,

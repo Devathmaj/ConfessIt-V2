@@ -23,6 +23,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.accounts import AccountType
 from app.db_models import AdminRecord, ModeratorRecord, UserRecord
+from app.limits import USER_YEAR_MAX
 from app.main import app
 from app.models import AdminUserCreate, AdminUserUpdate
 from app.postgres import PLACEHOLDER_EMAIL_SQL
@@ -133,7 +134,7 @@ def test_the_three_genders_are_accepted(gender):
         "regno": f"g-{gender}",
         "name": "Someone",
         "email": f"g-{gender}@example.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": gender,
     }
     assert AdminUserCreate(**payload).gender == gender
@@ -147,7 +148,7 @@ def test_anything_outside_the_gender_vocabulary_is_refused(gender):
         "regno": "r",
         "name": "Someone",
         "email": "e@example.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": gender,
     }
     with pytest.raises(ValueError):
@@ -171,7 +172,7 @@ def test_interests_outside_the_vocabulary_are_refused(interests):
         "regno": "r",
         "name": "Someone",
         "email": "e@example.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
         "interests": interests,
     }
@@ -192,7 +193,7 @@ def test_duplicate_interests_collapse_rather_than_failing():
         "regno": "r",
         "name": "Someone",
         "email": "e@example.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
         "interests": ["Music", "Music", "Coding", "Music"],
     }
@@ -238,7 +239,7 @@ def test_no_interests_is_allowed_and_means_none():
         "regno": "r",
         "name": "Someone",
         "email": "e@example.com",
-        "class_name": "Class",
+        "year": 2, "department": "Class",
         "gender": "other",
         "interests": [],
     }
@@ -277,12 +278,12 @@ def test_postgresql_refuses_a_null_email_on_every_account_table(db, model, table
 
 @pytest.mark.parametrize("table", ["users", "admin", "moderator"])
 def test_postgresql_refuses_a_gender_outside_the_vocabulary(db, table):
-    # ``class_name`` is supplied for every table even though only ``users`` has it. It is
-    # NOT NULL there, and a NOT NULL violation is raised before the table's CHECK
-    # constraints are evaluated -- so omitting it would prove nothing about gender at all,
+    # ``year`` and ``department`` are supplied for ``users`` even though only ``users`` has them.
+    # They are NOT NULL there, and a NOT NULL violation is raised before the table's CHECK
+    # constraints are evaluated -- so omitting them would prove nothing about gender at all,
     # and this test would keep passing if the gender constraint were deleted.
-    extra = ", class_name" if table == "users" else ""
-    values = "'Class'" if table == "users" else ""
+    extra = ", year, department" if table == "users" else ""
+    values = "2, 'Class'" if table == "users" else ""
     with pytest.raises(DBAPIError) as excinfo:
         with db.engine.begin() as connection:
             connection.execute(
@@ -300,12 +301,137 @@ def test_postgresql_refuses_an_interest_outside_the_vocabulary(db):
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO users (id, regno, name, email, class_name, gender, interests) "
+                    "INSERT INTO users (id, regno, name, email, year, department, gender, interests) "
                     "VALUES (gen_random_uuid(), 'bad-interest', 'X', 'bad-int@example.com', "
-                    "'Class', 'other', ARRAY['Music', 'skydiving']::varchar[])"
+                    "2, 'Class', 'other', ARRAY['Music', 'skydiving']::varchar[])"
                 )
             )
     assert "ck_users_interests_known" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("year", [0, -1, 13, 99])
+def test_postgresql_refuses_a_year_outside_the_range(db, year):
+    """The range is the backstop, whatever got past the request layer.
+
+    Read alongside ``test_year_is_bounded_by_range_rather_than_by_length`` in
+    ``test_text_length_limits.py``: that one shows the API refuses these, and this one shows what
+    happens if something reaches the database without going through the API -- a seed script, a
+    migration, a psql session.
+
+    ``0`` and ``13`` are the interesting cases. Both are integers, so a column with no range at
+    all would store them happily, and either one names a cohort that can never match anybody: the
+    operator would be told the save worked and left with a silently empty pool.
+    """
+    with pytest.raises(DBAPIError) as excinfo:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                    "VALUES (gen_random_uuid(), :regno, 'X', :email, :year, 'Class', 'other')"
+                ),
+                {"regno": f"bad-year-{year}", "email": f"bad-year-{year}@example.com", "year": year},
+            )
+    assert f"ck_users_year_known_{USER_YEAR_MAX}" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("year", ["2nd Year", "2nd year", ""])
+def test_postgresql_refuses_a_year_that_is_not_a_number_at_all(db, year):
+    """The column is an ``int``, so the vocabulary it used to hold cannot be stored at all.
+
+    These are all readable as a year to somebody, which is exactly why they are worth a test: they
+    are what a stale client, an old seed script or a hand-edited migration would send now that the
+    column holds numbers. They are refused by the *type*, before ``ck_users_year_known_{USER_YEAR_MAX}`` is ever
+    consulted, which is why this test asserts the constraint is not mentioned -- a check that
+    caught these would be a check on the wrong thing, and would stop being the thing it was written
+    to be the moment the type changed.
+    """
+    with pytest.raises(DBAPIError) as excinfo:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                    "VALUES (gen_random_uuid(), :regno, 'X', :email, :year, 'Class', 'other')"
+                ),
+                {"regno": f"bad-year2-{year}", "email": f"bad-year2-{year}@example.com", "year": year},
+            )
+    message = str(excinfo.value)
+    assert "integer" in message
+    assert f"ck_users_year_known_{USER_YEAR_MAX}" not in message
+
+
+@pytest.mark.parametrize(
+    ("year", "stored"),
+    [("2", 2), (2.5, 2)],
+)
+def test_postgresql_silently_coerces_a_numeric_year_rather_than_refusing_it(db, year, stored):
+    """The near-misses the database does *not* catch, which is why the API type check matters.
+
+    A string of digits and a float both survive the trip into an ``integer`` column, because
+    PostgreSQL casts on assignment rather than rejecting. Nothing here raises,
+    ``ck_users_year_known_{USER_YEAR_MAX}`` is satisfied, and the row is stored.
+
+    That is a trap worth pinning down rather than leaving to a reading of the PostgreSQL manual. A
+    stale client that sends ``year: "2"`` gets no error and a plausible answer, and one that sends
+    ``year: 2.5`` gets a participant filed under a year nobody chose.
+
+    The stored value for 2.5 is 2, and that is a property of the *driver* rather than of the
+    column: psycopg sends a Python float as ``float8``, and the float-to-integer cast truncates.
+    The same literal typed as ``numeric`` rounds to 3 instead (``2.5::numeric::integer`` is 3,
+    ``2.5::float8::integer`` is 2). So which year a fractional value lands in is decided by the
+    parameter type the client happened to use, and nothing in the database reports that choice.
+
+    This is not a claim that the database is doing its job. It is the reason the closed ``Year``
+    type in ``models.py`` is load-bearing rather than decorative: the request layer is what
+    refuses a fractional or string year, and these values are exactly what it refuses on the way in.
+    """
+    with db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                "VALUES (gen_random_uuid(), :regno, 'X', :email, :year, 'Class', 'other')"
+            ),
+            {"regno": f"coerced-year-{year}", "email": f"coerced-year-{year}@example.com", "year": year},
+        )
+        stored_year = connection.execute(
+            text("SELECT year FROM users WHERE regno = :regno"),
+            {"regno": f"coerced-year-{year}"},
+        ).scalar_one()
+    assert stored_year == stored
+
+
+def test_postgresql_accepts_every_year_in_the_range(db):
+    """A constraint that rejected the legal values would pass the tests above for the wrong reason."""
+    from app.limits import USER_YEAR_MAX, USER_YEAR_MIN
+
+    with db.engine.begin() as connection:
+        for year in range(USER_YEAR_MIN, USER_YEAR_MAX + 1):
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                    "VALUES (gen_random_uuid(), :regno, 'X', :email, :year, 'Class', 'other')"
+                ),
+                {
+                    "regno": f"good-year-{year}",
+                    "email": f"good-year-{year}@example.com",
+                    "year": year,
+                },
+            )
+
+
+def test_a_department_is_free_text(db):
+    """Unlike year, the department has no list, because the list belongs to the institution.
+
+    Asserted explicitly so that tightening this later is a deliberate change with a test to
+    update, rather than a drive-by edit that quietly starts refusing real departments.
+    """
+    with db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                "VALUES (gen_random_uuid(), 'odd-dept', 'X', 'odd@example.com', "
+                "1, 'Electrical & Communication Engineering', 'other')"
+            )
+        )
 
 
 def test_postgresql_refuses_a_null_interest_list(db):
@@ -326,9 +452,9 @@ def test_postgresql_refuses_a_null_interest_list(db):
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO users (id, regno, name, email, class_name, gender, interests) "
+                    "INSERT INTO users (id, regno, name, email, year, department, gender, interests) "
                     "VALUES (gen_random_uuid(), 'null-interests', 'X', "
-                    "'null-int@example.com', 'Class', 'other', NULL)"
+                    "'null-int@example.com', 2, 'Class', 'other', NULL)"
                 )
             )
     assert "interests" in str(excinfo.value)
@@ -341,9 +467,9 @@ def test_the_full_vocabulary_is_accepted_by_the_column(db):
     with db.engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO users (id, regno, name, email, class_name, gender, interests) "
+                "INSERT INTO users (id, regno, name, email, year, department, gender, interests) "
                 "VALUES (gen_random_uuid(), 'all-interests', 'X', 'all-int@example.com', "
-                "'Class', 'other', CAST(:interests AS varchar[]))"
+                "2, 'Class', 'other', CAST(:interests AS varchar[]))"
             ),
             {"interests": list(INTEREST_VALUES)},
         )
@@ -354,9 +480,9 @@ def test_an_empty_interest_list_is_accepted(db):
     with db.engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO users (id, regno, name, email, class_name, gender, interests) "
+                "INSERT INTO users (id, regno, name, email, year, department, gender, interests) "
                 "VALUES (gen_random_uuid(), 'no-interests', 'X', 'no-int@example.com', "
-                "'Class', 'other', ARRAY[]::varchar[])"
+                "2, 'Class', 'other', ARRAY[]::varchar[])"
             )
         )
 
@@ -378,7 +504,7 @@ def test_interests_an_admin_sets_are_visible_and_still_uncheckable(admin_client,
             "regno": "interest-user",
             "name": "Interested",
             "email": "interested@example.com",
-            "class_name": "Class",
+            "year": 2, "department": "Class",
             "gender": "other",
             "interests": ["Music", "Coding"],
         },
@@ -409,7 +535,7 @@ def test_clearing_every_interest_is_allowed(db, admin_client):
             "regno": "clear-interests",
             "name": "Clearer",
             "email": "clearer@example.com",
-            "class_name": "Class",
+            "year": 2, "department": "Class",
             "gender": "other",
             "interests": ["Music"],
         },
@@ -436,7 +562,7 @@ def test_an_update_that_omits_interests_leaves_them_alone(db, admin_client):
             "regno": "omit-interests",
             "name": "Omitter",
             "email": "omitter@example.com",
-            "class_name": "Class",
+            "year": 2, "department": "Class",
             "gender": "other",
             "interests": ["Music", "Art"],
         },
@@ -494,7 +620,7 @@ def test_a_created_account_starts_with_no_picture(admin_client):
             "regno": "no-picture",
             "name": "Faceless",
             "email": "faceless@example.com",
-            "class_name": "Class",
+            "year": 2, "department": "Class",
             "gender": "other",
         },
     )

@@ -6,7 +6,7 @@ This document describes the active schema defined in `backend/app/db_models.py`.
 
 | Table | Purpose and principal fields |
 |---|---|
-| `users` | User identity and preferences. `id` UUID primary key; `regno` unique registration key; `name`, `email`, `class_name`, `profile_picture_url`, `role`, boolean preference fields, and typed login/matchmaking timestamps. |
+| `users` | User identity and preferences. `id` UUID primary key; `regno` unique registration key; `name`, `email`, `profile_picture_url`, boolean preference fields, and typed login/matchmaking timestamps. `year` and `department` are both NOT NULL and indexed, replacing one free-text `class_name`; `year` is an `Integer` held between `limits.USER_YEAR_MIN` and `limits.USER_YEAR_MAX` by `CHECK ck_users_year_known_12`, and `department` is free text bounded to 80 characters. |
 | `confessions` | Posts with `body`, optional `recipient_name`, `anonymous`, `comments_enabled`, `author_id`, `created_at`, moderation state, JSONB reactions, and integer reaction/comment counters. |
 | `confession_comments` | `confession_id`, commenter `user_id`, `body`, `created_at`, UUID arrays for likes/dislikes, and counters. |
 | `reports` | Confession or comment reports. `confession_id` and `comment_id` are nullable UUID foreign keys with a check requiring exactly one; `reported_by_id`, reporter snapshot, reason, and `created_at`. |

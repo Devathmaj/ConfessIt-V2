@@ -43,7 +43,7 @@ def make_user(db, regno: str) -> str:
     with db.sessions.begin() as session:
         row = UserRecord(
             regno=regno, name=f"User {regno}", email=f"{regno.lower()}@test.com",
-            class_name="Test_Class", gender="other",
+            year=2, department="Test_Class", gender="other",
         )
         session.add(row)
         session.flush()

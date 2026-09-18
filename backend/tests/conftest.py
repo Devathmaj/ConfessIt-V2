@@ -50,7 +50,8 @@ def override_get_current_user():
         regno="testuser",
         name="Test User",
         email="test@user.com",
-        class_name="Test Class",
+        year=2,
+        department="Test Class",
         gender="other",
         matchmaking_enabled=True,
         notifications_enabled=True,
@@ -133,8 +134,8 @@ def _confession_author_client(db):
     with test_db.engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO users (id, regno, name, email, class_name, gender) "
-                "VALUES (:id, 'authoruser', 'Author', 'author@user.com', 'Class', 'other') "
+                "INSERT INTO users (id, regno, name, email, year, department, gender) "
+                "VALUES (:id, 'authoruser', 'Author', 'author@user.com', 2, 'Class', 'other') "
                 "ON CONFLICT (regno) DO NOTHING"
             ),
             {"id": author_id},
@@ -144,7 +145,8 @@ def _confession_author_client(db):
         regno="authoruser",
         name="Author",
         email="author@user.com",
-        class_name="Class",
+        year=2,
+        department="Class",
         gender="other",
         account_type=AccountType.USERS.value,
     )

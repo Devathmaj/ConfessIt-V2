@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { parseTimestamp, resolveProfilePictureUrl, timestampMs } from '@/lib/utils';
+import { cohortLabel } from '@/lib/accountFields';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -43,7 +44,8 @@ interface ConversationData {
     regno: string;
     name: string;
     profile_picture_url: string;
-    class_name: string;
+    year: number;
+    department: string;
     bio: string;
     interests: string[];
   };
@@ -520,7 +522,7 @@ export const MessageBoxPage = () => {
                                 {conversation.other_user.name}
                               </h3>
                               <p className="text-sm text-muted-foreground">
-                                {conversation.other_user.name} • {conversation.other_user.class_name}
+                                {conversation.other_user.name} • {cohortLabel(conversation.other_user.year, conversation.other_user.department)}
                               </p>
                             </div>
                             <div className="flex items-center space-x-2">

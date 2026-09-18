@@ -14,7 +14,7 @@ def _make_user(db, name: str) -> str:
     with db.sessions.begin() as session:
         session.add(UserRecord(
             id=user_id, regno=f"reg-{user_id}", name=name, email=f"{user_id}@test.com",
-            class_name="Test", gender="other",
+            year=2, department="Test", gender="other",
         ))
     return user_id
 

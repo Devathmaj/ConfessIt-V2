@@ -1,7 +1,7 @@
 # app/models.py
 
 from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, model_validator, validator
-from typing import Literal, Optional, List, Dict, Any
+from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
 from .limits import (
@@ -12,11 +12,13 @@ from .limits import (
     RECIPIENT_NAME_MAX,
     REPORT_REASON_MAX,
     USER_BIO_MAX,
-    USER_CLASS_NAME_MAX,
+    USER_DEPARTMENT_MAX,
     USER_EMOJI_MAX,
     USER_GENDER_VALUES,
     USER_NAME_MAX,
     USER_REGNO_MAX,
+    USER_YEAR_MAX,
+    USER_YEAR_MIN,
 )
 from .accounts import AccountType, capabilities_for, normalize_account_type
 
@@ -32,12 +34,47 @@ from .accounts import AccountType, capabilities_for, normalize_account_type
 # Select are generated from. All three must agree.
 Gender = Literal["male", "female", "other"]
 
+# Same treatment for a participant's year of study, and closed for the same reason: matchmaking
+# groups participants by it, so "2" and "02" would be two cohorts that never meet and no screen
+# could tell them apart.
+#
+# A bounded ``int`` rather than a ``Literal`` of names, because the bounds have to hold a school as
+# well as an undergraduate programme: 1-12 covers Class 1 through Class 12, where a list written
+# out would have had to be extended -- and re-extended in three mirrored places -- for a deployment
+# that differs only in how it spells the same field. The CHECK constraint and the frontend select
+# are generated from the same ``limits`` bounds. All three must agree.
+#
+# ``ge``/``le`` rather than ``Field(..., multiple_of=1)`` or a hand-written membership test because
+# the error they produce names the field and the offending value, which is the whole reason
+# ``Gender`` above is a type and not a validator.
+#
+# Unlike ``department``, which stays a plain string: the departments that exist belong to the
+# institution rather than to this codebase, so enumerating them here would be a guess.
+Year = Annotated[int, Field(ge=USER_YEAR_MIN, le=USER_YEAR_MAX)]
+
 # Same treatment for interests: an enum on the array's members rather than a hand-written
 # membership test, so "not one of ours" is a validation error naming the offending value.
 Interest = Literal[
     "Music", "Movies", "Reading", "Gaming", "Traveling", "Cooking",
     "Sports", "Art", "Photography", "Dancing", "Writing", "Coding",
 ]
+
+class Cohort(BaseModel):
+    """A ``(year, department)`` pair, as returned by ``/love-notes/cohorts``.
+
+    Modelled rather than left as ``Dict[str, str]`` because that annotation is what hid the type
+    change: Pydantic v2 does not coerce ``int`` into ``str``, so a heterogeneous pair returned under
+    a homogeneous annotation is a ``ResponseValidationError`` -- a 500 on a screen whose only job is
+    to list cohorts. Naming the halves also stops the next caller from re-deriving "which field is
+    the number" from a dictionary.
+
+    ``year`` is a plain ``int`` and not the bounded ``Year`` for the reason ``UserDetails.year`` is:
+    this is a response, and a row that predates the CHECK constraint being validated would turn a
+    legacy out-of-range value into a 500 on a read. Refusing to *write* such a row is the
+    constraint's job; describing one that already exists must not be able to take the endpoint down.
+    """
+    year: int
+    department: str
 
 class Token(BaseModel):
     """
@@ -278,7 +315,8 @@ class AdminUserCreate(BaseModel):
     # participants only
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
-    class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
+    year: Optional[Year] = None
+    department: Optional[str] = Field(default=None, max_length=USER_DEPARTMENT_MAX)
     interests: Optional[List[Interest]] = None
     matchmaking_enabled: bool = True
     love_notes_receive_enabled: bool = True
@@ -293,8 +331,15 @@ class AdminUserCreate(BaseModel):
     def _require_participant_fields(self) -> "AdminUserCreate":
         if self.account_type is not AccountType.USERS:
             return self
-        if not self.class_name:
-            raise ValueError("class_name is required for a participant account.")
+        # Both halves of what used to be one ``class_name``. Storing "CSE 2nd Year" in a single
+        # column meant the value could only be grouped by whatever a person typed, so two
+        # spellings of the same cohort were two cohorts; requiring them separately is what makes
+        # them independently addressable. The database holds both as NOT NULL, so letting one
+        # through here would be a 500 from the insert rather than a validation message.
+        if not self.year:
+            raise ValueError("year is required for a participant account.")
+        if not self.department:
+            raise ValueError("department is required for a participant account.")
         return self
 
 
@@ -344,13 +389,14 @@ class AdminUserUpdate(BaseModel):
     # participants only
     emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
-    class_name: Optional[str] = Field(default=None, max_length=USER_CLASS_NAME_MAX)
+    year: Optional[Year] = None
+    department: Optional[str] = Field(default=None, max_length=USER_DEPARTMENT_MAX)
     interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
     love_notes_receive_enabled: Optional[bool] = None
     love_notes_send_enabled: Optional[bool] = None
 
-    @field_validator("name", "regno", "gender", "class_name", "email")
+    @field_validator("name", "regno", "gender", "year", "department", "email")
     @classmethod
     def _blank_is_not_a_value(cls, value):
         """Treat an empty string as "not supplied" rather than as a value to write.
@@ -360,11 +406,16 @@ class AdminUserUpdate(BaseModel):
         would blank out fields that were never offered on that form at all.
 
         It also keeps a cleared input from becoming a NULL in a column that cannot hold one.
-        ``name``, ``regno``, ``gender``, ``class_name`` and ``email`` are NOT NULL, so writing
-        the ``None`` this validator produces would be a 500 from PostgreSQL rather than a
+        ``name``, ``regno``, ``gender``, ``year``, ``department`` and ``email`` are NOT NULL, so
+        writing the ``None`` this validator produces would be a 500 from PostgreSQL rather than a
         validation message. Dropping the key is the honest reading: the admin left it empty,
         which is not the same as asking to erase it. See ``update_user_details``, which drops
         these keys outright as a second line of defence.
+
+        ``year`` needs this more than any of the others. The participant-shaped editor submits a
+        ``<select>`` with no blank option, so the only way an empty string arrives is a client
+        that has not caught up with the split; letting it through would fail the year CHECK
+        constraint as a 500 rather than being read as "leave it alone".
         """
         if isinstance(value, str) and not value.strip():
             return None
@@ -381,8 +432,8 @@ class AccountDetails(BaseModel):
 
     This is the shape every authenticated caller is resolved to, because the three tables
     share exactly these columns and nothing more. Participant-only fields are deliberately
-    absent rather than null: an admin has no ``class_name``, and returning ``null`` for it
-    would describe a value the row does not have.
+    absent rather than null: an admin has no ``year`` or ``department``, and returning ``null``
+    for them would describe a value the row does not have.
 
     ``email`` is shared and *required*, like the column underneath it. It used to be optional
     for a staff account, on the reasoning that creating one is a deliberate act by somebody who
@@ -477,7 +528,14 @@ class UserDetails(AccountDetails):
     """
     emoji: Optional[str] = None
     bio: Optional[str] = None
-    class_name: str
+    # Both NOT NULL on ``users``, so both are required here. ``year`` is a plain ``int`` rather
+    # than narrowed to ``Year`` for the reason ``interests`` is: a CHECK constraint added by
+    # ``apply_check_constraints`` lands ``NOT VALID``, so a row written before it existed can hold a
+    # year outside the range, and refusing it here would turn reading that participant's profile
+    # into a 500 on every request. The write paths enforce the range, which is where enforcing it
+    # does any good.
+    year: int
+    department: str
     interests: List[str] = Field(default_factory=list)
     matchmaking_enabled: bool = True
     love_notes_receive_enabled: bool = True

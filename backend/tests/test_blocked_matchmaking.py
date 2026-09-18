@@ -34,7 +34,7 @@ def make_user(db, regno, gender, *, is_blocked=False, love_notes_receive_enabled
     with db.sessions.begin() as session:
         row = UserRecord(
             regno=regno, name=f"User {regno}", email=f"{regno.lower()}@test.com",
-            class_name="Test_Class", gender=gender,
+            year=2, department="Test_Class", gender=gender,
             is_blocked=is_blocked,
             love_notes_receive_enabled=love_notes_receive_enabled,
         )
@@ -63,7 +63,7 @@ def as_user(db, regno) -> UserDetails:
         row = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
     return UserDetails(
         id=str(row.id), regno=row.regno, name=row.name, email=row.email,
-        class_name=row.class_name, gender=row.gender,
+        year=row.year, department=row.department, gender=row.gender,
         matchmaking_enabled=row.matchmaking_enabled,
         notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
         account_type=AccountType.USERS.value,

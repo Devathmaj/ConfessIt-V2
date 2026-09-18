@@ -43,7 +43,7 @@ def make_user(db, regno, name=None):
             regno=regno,
             name=name,
             email=f"{regno}@test.com",
-            class_name="Test_Class",
+            year=2, department="Test_Class",
             gender="other",
         )
         session.add(row)

@@ -3,7 +3,7 @@
 import axios from 'axios';
 import { endSessionIfTokenWasRejected } from '@/lib/authEvents';
 import type { AccountType } from '@/lib/capabilities';
-import type { Interest, UserGender } from '@/lib/accountFields';
+import type { Cohort, Interest, UserGender, UserYear } from '@/lib/accountFields';
 
 const API_URL = 'http://localhost:8001';
 
@@ -261,9 +261,15 @@ export const getAllUsers = async () => {
     return response.data;
 };
 
-// Used to get all unique classes for filtering
-export const getClasses = async () => {
-    const response = await axios.get(`${API_URL}/love-notes/classes`, { headers: getAuthHeaders() });
+/**
+ * Every `(year, department)` pair at least one participant occupies, for the recipient filter.
+ *
+ * Renamed from `getClasses` along with the route it calls. The old name and the old shape -- a
+ * list of one pre-joined string per participant -- described a single column that no longer
+ * exists, and a filter over it could not ask "show me every 2nd yearer" without string matching.
+ */
+export const getCohorts = async (): Promise<Cohort[]> => {
+    const response = await axios.get(`${API_URL}/love-notes/cohorts`, { headers: getAuthHeaders() });
     return response.data;
 };
 
@@ -492,6 +498,11 @@ export const getAdminUsers = async () => {
  * There is no `profile_picture_url`. A picture is an upload, not a string, and it goes through
  * `uploadAdminUserPicture` after the account exists -- see that function for why it is a second
  * request rather than part of this one.
+ *
+ * `year` and `department` are required of a participant and refused for staff, like the rest of
+ * the participant-only block. They are two fields rather than one because the server stores two
+ * fields: a payload joining them into a single `class_name`-shaped string would have nowhere to
+ * go, and would re-create the ambiguity the split exists to remove.
  */
 export interface AdminUserCreatePayload {
     account_type: AccountType;
@@ -502,7 +513,8 @@ export interface AdminUserCreatePayload {
     notifications_enabled?: boolean;
     is_blocked?: boolean;
     /** Participants only. Ignored for staff, which has no such columns. */
-    class_name?: string;
+    year?: UserYear;
+    department?: string;
     interests?: Interest[];
     emoji?: string;
     bio?: string;
@@ -522,7 +534,8 @@ export interface AdminUserUpdatePayload {
     interests?: Interest[];
     notifications_enabled?: boolean;
     is_blocked?: boolean;
-    class_name?: string;
+    year?: UserYear;
+    department?: string;
     emoji?: string;
     bio?: string;
 }

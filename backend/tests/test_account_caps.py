@@ -71,7 +71,8 @@ def _payload(regno: str, account_type: str, **overrides):
         "gender": "other",
     }
     if account_type == AccountType.USERS.value:
-        payload["class_name"] = "Cap Class"
+        payload["year"] = 2
+        payload["department"] = "Cap Class"
     payload.update(overrides)
     return payload
 
@@ -100,7 +101,7 @@ def _seed_rows(db, account_type: str, how_many: int, blocked: bool = False) -> N
                     email=f"fill-{account_type}-{index}@example.com",
                     gender="other",
                     is_blocked=blocked,
-                    **({"class_name": "Fill Class"} if account_type == AccountType.USERS.value else {}),
+                    **({"year": 2, "department": "Fill Class"} if account_type == AccountType.USERS.value else {}),
                 )
             )
 
