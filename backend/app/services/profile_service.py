@@ -3,10 +3,11 @@
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from ..db_models import UserRecord
+from ..limits import USER_BIO_MAX, USER_EMOJI_MAX
 from ..logger import get_logger
 from ..postgres import Database
 
@@ -24,13 +25,17 @@ class UserProfileUpdate(BaseModel):
     """Allowed fields for updating profile.
 
     ``interests`` is typed with the closed vocabulary rather than left as free text for the
-    same reason the admin payload is: this is the route a participant uses to uncheck the boxes
-    an admin ticked for them, so it is exactly the path through which a bad value -- "music",
-    "Music", or a typo -- would otherwise get in and become a value nothing can match. The
-    validator collapses duplicates and applies the cap.
+    same reason it is on the participant's own account: this is a list that something has to
+    match on, so a bad value becomes a value nothing can match.
+
+    ``emoji`` and ``bio`` are capped against the column widths, and the cap lives here rather
+    than on the admin payload because this is now the only path that writes them. Without it
+    the ``String(16)``/``String(500)`` columns would be the only limit, which means the
+    participant gets a 500 from the database instead of a 422 naming the field -- and a
+    response that says "Internal Server Error" for a 17th emoji is not a useful one.
     """
-    emoji: Optional[str] = None
-    bio: Optional[str] = None
+    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
+    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
     notifications_enabled: Optional[bool] = None

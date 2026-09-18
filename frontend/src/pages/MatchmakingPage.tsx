@@ -31,6 +31,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { serverNow } from '@/lib/serverClock';
+import { describeApiError } from '@/lib/apiError';
 
 // Pre-written messages for quick chat options
 const prewrittenMessages = [
@@ -483,7 +484,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         setConversationStatus('requested');
         await refreshConversationStatus(); // Refresh to get updated status
     } catch (error: any) {
-        toast.error(error.response?.data?.detail || "Failed to send message request.");
+        toast.error(describeApiError(error, "Failed to send message request."));
     }
   };
 
@@ -573,7 +574,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     } catch (error: any) {
       if (error.response?.status === 429) {
         // The draw endpoint is the last word on the wait, so its own message is what is shown.
-        toast.info(error.response.data.detail);
+        toast.info(describeApiError(error, "You have drawn recently. Please try again later."));
       } else {
         toast.error("An error occurred. Please try again later.");
       }
@@ -638,7 +639,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               console.log('Setting matched profile:', newMatchedProfile);
             })
             .catch(async error => {
-              toast.error(error.response?.data?.detail || 'Could not find a match.');
+              toast.error(describeApiError(error, 'Could not find a match.'));
               // A failed draw still spends the attempt, so the server is now on a cooldown
               // even though nothing was matched. Ask it what the wait is rather than leaving
               // the page offering a heart that cannot do anything.

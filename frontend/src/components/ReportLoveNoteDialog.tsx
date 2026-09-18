@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { AlertTriangle } from 'lucide-react';
 import { reportLoveNote } from '@/services/api';
 import { REPORT_REASONS } from '@/lib/reportReasons';
+import { describeApiError } from '@/lib/apiError';
 import { toast } from 'sonner';
 
 interface ReportLoveNoteDialogProps {
@@ -58,7 +59,6 @@ export const ReportLoveNoteDialog: React.FC<ReportLoveNoteDialogProps> = ({
       setSelectedReason('');
     } catch (error: any) {
       console.error('Error reporting love note:', error);
-      const detail = error?.response?.data?.detail;
 
       // The server owns the duplicate rule, so it is the one that decides whether this
       // account has already reported the note; the client just reflects the answer.
@@ -67,7 +67,10 @@ export const ReportLoveNoteDialog: React.FC<ReportLoveNoteDialogProps> = ({
         onReported(noteId);
         onClose();
       } else {
-        toast.error(detail || 'Failed to report this love note. Please try again.');
+        // `detail` is a plain string for an HTTPException and an array of Pydantic error
+        // objects for a 422, and a 422 is what an over-long reason produces. Rendering that
+        // array as a toast child crashes the tree, so it goes through the shared describer.
+        toast.error(describeApiError(error, 'Failed to report this love note. Please try again.'));
       }
     } finally {
       setIsSubmitting(false);

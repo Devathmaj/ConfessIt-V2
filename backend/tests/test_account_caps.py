@@ -426,10 +426,12 @@ def test_the_block_route_refuses_an_admin_with_a_readable_error(
 
 
 def test_the_edit_route_refuses_to_block_an_admin_either(restore_caps, admin_client, db):
-    """``AdminUserUpdate`` carries ``is_blocked``, so it is a second door to the same column.
+    """``is_blocked`` is no longer a field on the update payload at all.
 
-    Easy to miss: the block route is where the rule is obvious, and this payload can reach the
-    same field without going near it.
+    This used to be a second door to the same column, answered with a 400 from the router's
+    own guard. That guard is gone because the field is: with ``extra="forbid"`` the request is
+    refused by Pydantic, by name, before the route runs -- which is a stronger position, since
+    it no longer depends on every write path remembering to check.
     """
     created = admin_client.post("/admin/users", json=_payload("edited-admin", AccountType.ADMIN.value))
     assert created.status_code == 201, created.text
@@ -437,21 +439,23 @@ def test_the_edit_route_refuses_to_block_an_admin_either(restore_caps, admin_cli
 
     response = admin_client.put(f"/admin/users/{admin_id}", json={"is_blocked": True})
 
-    assert response.status_code == 400, response.text
+    assert response.status_code == 422, response.text
+    assert "is_blocked" in response.text
     with db.sessions() as session:
         assert session.get(AdminRecord, admin_id).is_blocked is False
 
 
 def test_creating_an_admin_with_is_blocked_is_refused(restore_caps, admin_client, db):
-    """The create payload can also ask for a blocked admin, and is refused without writing."""
+    """Same on the way in: ``is_blocked`` is not a creatable field, so it cannot be asked for."""
     response = admin_client.post(
         "/admin/users",
         json=_payload("blocked-admin", AccountType.ADMIN.value, is_blocked=True),
     )
 
-    assert response.status_code == 400, response.text
-    # Nothing was written. A 400 that left a row behind would mean the constraint had been relied
-    # on to reject the insert and merely reported afterwards.
+    assert response.status_code == 422, response.text
+    assert "is_blocked" in response.text
+    # Nothing was written. A refusal that left a row behind would mean the constraint had been
+    # relied on to reject the insert and merely reported afterwards.
     with db.sessions() as session:
         assert session.scalar(
             select(AdminRecord).where(AdminRecord.regno == "blocked-admin")

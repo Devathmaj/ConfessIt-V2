@@ -64,6 +64,21 @@ export const REPORT_REASON_MAX = 1000;
 export const RECIPIENT_NAME_MAX = 160;
 
 /**
+ * The identity fields an admin writes, capped to the column they land in.
+ *
+ * These mirror `USER_NAME_MAX` / `USER_REGNO_MAX` / `USER_DEPARTMENT_MAX` in
+ * `backend/app/limits.py`, which is where the server enforces them. They exist on this side
+ * only to put `maxLength` on the inputs: without it the operator can type past the cap and
+ * discover the rule as a 422 after submitting, rather than as the field refusing the
+ * keystroke. `maxLength` counts UTF-16 units and the column counts characters, so a name in an
+ * astral script can still be refused by the server -- the cap here narrows that window, it
+ * does not close it, which is why the error path has to be readable too.
+ */
+export const ADMIN_NAME_MAX = 160;
+export const ADMIN_REGNO_MAX = 100;
+export const ADMIN_DEPARTMENT_MAX = 80;
+
+/**
  * How many messages one conversation holds, and how many of them one person may send.
  *
  * A cap on the conversation is a cap on its transcript, not on anybody's typing: the read

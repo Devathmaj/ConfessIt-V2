@@ -22,6 +22,7 @@ import { ReportMessageDialog } from './ReportMessageDialog';
 import { BlockUserDialog } from './BlockUserDialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { serverNow } from '@/lib/serverClock';
+import { describeApiError } from '@/lib/apiError';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -706,10 +707,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       onRefresh(); // Refresh parent
     } catch (error: any) {
       console.error('Error unblocking user:', error);
-      if (error.response?.data?.detail?.includes('only unblock if you were')) {
+      // `detail` is a plain string for an HTTPException and an array of Pydantic error objects for a
+      // 422. `Array.prototype.includes` exists too, so the old `.includes(...)` on a 422
+      // answered false rather than throwing, and the operator was told "Failed to unblock user"
+      // for a reason the server had actually spelled out. Reading it through the shared
+      // describer turns the array into text first, so the match is against what is displayed.
+      const detail = describeApiError(error, 'Failed to unblock user');
+      if (detail.includes('only unblock if you were')) {
         toast.error('Only the person who blocked can unblock');
       } else {
-        toast.error('Failed to unblock user');
+        toast.error(detail);
       }
     }
   };

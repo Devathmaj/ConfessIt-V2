@@ -3,7 +3,7 @@
 import axios from 'axios';
 import { endSessionIfTokenWasRejected } from '@/lib/authEvents';
 import type { AccountType } from '@/lib/capabilities';
-import type { Cohort, Interest, UserGender, UserYear } from '@/lib/accountFields';
+import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
 const API_URL = 'http://localhost:8001';
 
@@ -491,13 +491,15 @@ export const getAdminUsers = async () => {
 /**
  * The fields `POST /admin/users` accepts.
  *
- * Every field except the participant-only block is required of *every* account type, which is
- * why `email` and `gender` are not optional here: the server refuses a payload without them,
- * and a type that said otherwise would let a dialog submit one.
+ * An admin mints an identity and nothing else: regno, name, email, gender, and for a
+ * participant the year and department that place them in a cohort. Every field the account
+ * owns about itself -- picture, emoji, bio, interests, and the four preference flags -- is
+ * absent, and the server forbids those names outright rather than ignoring them, so a payload
+ * carrying one is a 422 and not a silent no-op. There is nothing to upload here either: a
+ * participant sets their own picture through their profile once the account exists.
  *
- * There is no `profile_picture_url`. A picture is an upload, not a string, and it goes through
- * `uploadAdminUserPicture` after the account exists -- see that function for why it is a second
- * request rather than part of this one.
+ * `email` and `gender` are not optional because the server refuses a payload without them on
+ * any account type, and a type that said otherwise would let a dialog submit one.
  *
  * `year` and `department` are required of a participant and refused for staff, like the rest of
  * the participant-only block. They are two fields rather than one because the server stores two
@@ -510,34 +512,25 @@ export interface AdminUserCreatePayload {
     name: string;
     email: string;
     gender: UserGender;
-    notifications_enabled?: boolean;
-    is_blocked?: boolean;
-    /** Participants only. Ignored for staff, which has no such columns. */
+    /** Participants only. Accepted but not written for staff, which has no such columns. */
     year?: UserYear;
     department?: string;
-    interests?: Interest[];
-    emoji?: string;
-    bio?: string;
 }
 
 /**
  * The fields `PUT /admin/users/{id}` accepts. All optional.
  *
- * Omitting `interests` leaves them alone; sending `[]` clears them. The two are different and
- * the difference is deliberate -- an editor that submits the whole form must not wipe a list
- * just because the admin was tidying up a name.
+ * The same identity set as the create payload, minus `account_type` (which table an account
+ * lives in is fixed at creation) and minus every field the account owns itself. Omitting a
+ * field leaves it alone; there is no longer any list that `[]` could clear.
  */
 export interface AdminUserUpdatePayload {
+    regno?: string;
     name?: string;
     email?: string;
     gender?: UserGender;
-    interests?: Interest[];
-    notifications_enabled?: boolean;
-    is_blocked?: boolean;
     year?: UserYear;
     department?: string;
-    emoji?: string;
-    bio?: string;
 }
 
 export const createAdminUser = async (payload: AdminUserCreatePayload) => {
@@ -565,30 +558,6 @@ export const updateAdminUser = async (userId: string, payload: AdminUserUpdatePa
     const response = await axios.put(
         `${API_URL}/admin/users/${userId}`,
         payload,
-        { headers: getAuthHeaders() }
-    );
-    return response.data;
-};
-
-/**
- * Upload a profile picture for an account the admin is editing.
- *
- * Separate from the create and update bodies because a picture is bytes and those are JSON.
- * The two-step is deliberate for a newly created account: the row has to exist before there is
- * an id to attach the image to, so a create-with-picture is `createAdminUser` followed by this.
- *
- * `Content-Type` is deliberately left to axios. Setting it by hand is the classic multipart
- * mistake -- the browser adds a `boundary` parameter to the header it generates, and a manual
- * `multipart/form-data` without one produces a body the server cannot parse. Passing the
- * `FormData` object itself is what lets the browser set it correctly.
- */
-export const uploadAdminUserPicture = async (userId: string, file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const response = await axios.put(
-        `${API_URL}/admin/users/${userId}/picture`,
-        formData,
         { headers: getAuthHeaders() }
     );
     return response.data;

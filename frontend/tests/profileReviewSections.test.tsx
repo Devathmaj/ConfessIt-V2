@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthContext } from '@/contexts/AuthContext';
 import { ProfileReview } from '@/pages/ProfileReview';
+import {
+  ADMIN_DEPARTMENT_MAX,
+  ADMIN_NAME_MAX,
+  ADMIN_REGNO_MAX,
+} from '@/lib/limits';
 
 /**
  * How accounts are grouped and laid out on the admin user review screen.
@@ -31,17 +36,19 @@ const api = vi.hoisted(() => ({
   setAdminUserBlocked: vi.fn(),
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
-  uploadAdminUserPicture: vi.fn(),
 }));
 
-/** Hoisted alongside the API so a rejected create can be asserted on by its message. */
+/**
+ * Hoisted alongside the API so a rejected create can be asserted on by its message.
+ *
+ * `warning` is unused now that an admin cannot upload a picture: a profile photo is the owner's
+ * own business and goes through `/profile/upload-picture`. It stays mocked because a toast the
+ * component does not call should still be assertable as *not* called.
+ */
 const toast = vi.hoisted(() => ({
   info: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
-  // `warning` is the one the create flow uses to say "the account is there, the picture is not".
-  // Leaving it out of the mock made that toast throw, which aborted the handler before the new
-  // account was added to the list -- so the row silently vanished from the screen.
   warning: vi.fn(),
 }));
 
@@ -142,9 +149,10 @@ const groupNamed = (heading: string) =>
  * nowhere and then assert against a control that never moved. The trigger opens on pointer down
  * and the option is a separate element in a portal, so both steps are needed.
  *
- * The gender calls that skipped this did not fail, which is the trap: gender defaults to 'other',
- * so a change that never happened was indistinguishable from the one the test meant to make. Year
- * has no such default, so the same mistake fails loudly there instead.
+ * The gender calls that skipped this did not fail, which was the trap: gender used to default to
+ * 'other', so a change that never happened was indistinguishable from the one the test meant to
+ * make. It now defaults to nothing, so the same mistake fails loudly -- the form stays invalid
+ * and the request is never sent.
  */
 async function chooseOption(dialog: HTMLElement, option: string, label = 'Gender *') {
   // `pointerType` is not decoration. Radix reads it to decide whether this is a mouse-like
@@ -575,7 +583,9 @@ describe('ProfileReview: creating an account from its own group', () => {
     expect(within(dialog).getByLabelText('Email *')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Year *')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Department/Division *')).toBeInTheDocument();
-    expect(within(dialog).getByText('Allow matchmaking')).toBeInTheDocument();
+    // Matching is the participant's own setting, so it is not asked for here even on a
+    // participant create.
+    expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText('Full name *'), {
       target: { value: 'New Student' },
@@ -583,7 +593,7 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Register number *'), {
       target: { value: '21CS999' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Gender *'), { target: { value: 'other' } });
+    await chooseOption(dialog, 'Other');
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
@@ -596,11 +606,148 @@ describe('ProfileReview: creating an account from its own group', () => {
 
     // Year and department are required of a participant and there is no column for either on a
     // moderator, so the same form cannot ask for both. "Please fill in all required fields" was
-    // true and useless: it could not say which of the six fields was the one missing.
+    // true and useless: it could not say which of the six fields was the one missing. The message
+    // now sits under the field instead of in a toast, so it travels with the control it is about.
     expect(api.createAdminUser).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(
-      'Year is required for this account type.',
+    const yearMessage = await within(dialog).findByText('Choose a year of study.');
+    expect(yearMessage).toBeInTheDocument();
+    // It is the year that is flagged, not the department filled in three lines above, and the
+    // message is announced rather than only coloured red.
+    expect(within(dialog).getByLabelText('Year *')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(dialog).getByLabelText('Department/Division *')).not.toHaveAttribute(
+      'aria-invalid',
+      'true',
     );
+    expect(yearMessage).toHaveAttribute('role', 'alert');
+  });
+
+  it('leaves gender unselected on a new account instead of guessing one', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // Nothing about the person is known yet, so the honest control is an empty one. "Other" was
+    // both a real stored value and what a pre-filled select showed, so the two were
+    // indistinguishable on screen and an operator could not tell a guess from a fact.
+    expect(within(dialog).getByLabelText('Gender *')).toHaveTextContent('Select a gender');
+  });
+
+  it('reports every empty field of a new account at once, each under its own control', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
+
+    // One round-trip, all the missing fields named. Previously this surfaced as a single toast
+    // that dismissed itself while the operator was still reading the list.
+    const alerts = within(dialog).getAllByRole('alert').map((node) => node.textContent);
+    expect(alerts).toEqual(
+      expect.arrayContaining([
+        'Enter the full name.',
+        'Enter the register number.',
+        'Choose a gender.',
+        'Enter an email address, for example name@example.com.',
+        'Choose a year of study.',
+        'Enter the department or division.',
+      ]),
+    );
+  });
+
+  it('clears a field error as soon as the operator fixes that field', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+    await within(dialog).findByText('Enter an email address, for example name@example.com.');
+
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+
+    // The stale error must go when it stops being true, or it reads as a fresh verdict on a value
+    // that is now fine.
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByText('Enter an email address, for example name@example.com.'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(within(dialog).getByLabelText('Email *')).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('re-judges an address that was valid and has been backspaced into', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+    // One submit to establish that the rest of the form is now out of the way.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+    expect(
+      within(dialog).queryByText('Enter an email address, for example name@example.com.'),
+    ).not.toBeInTheDocument();
+
+    // Backspacing out of a valid address. Editing clears the stale verdict, and the next submit
+    // replaces it with the specific one -- rather than the field going unflagged indefinitely.
+    fireEvent.change(within(dialog).getByLabelText('Email *'), { target: { value: 'new@' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    await within(dialog).findByText('Add the domain after the @, for example example.com.');
+    expect(api.createAdminUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses to send an address the browser accepts but the mail server would reject', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Mod' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: 'staff-9' },
+    });
+    await chooseOption(dialog, 'Other');
+    // No @ at all, so <input type="email"> would have raised a native tooltip and the form would
+    // have submitted nothing at all -- with no message in the dialog and none in the app either.
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'not-an-address' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    expect(api.createAdminUser).not.toHaveBeenCalled();
+    expect(
+      await within(dialog).findByText('An email address needs an @, for example name@example.com.'),
+    ).toBeInTheDocument();
+  });
+
+  it('tells the difference between a blank email and a malformed one', async () => {
+    await renderRows([moderator()], 'Mo Moderator');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    // The dialog is opened without touching any field, so every message on screen is the empty
+    // case rather than the typo case.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    const blank = within(dialog).getAllByRole('alert').map((node) => node.textContent);
+    expect(blank).toContain('Enter an email address, for example name@example.com.');
+
+    // "Enter an email address" for "name@" would be true but useless: the operator did enter one.
+    // They need to hear which part is wrong.
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'name@' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+
+    expect(
+      await within(dialog).findByText('Add the domain after the @, for example example.com.'),
+    ).toBeInTheDocument();
+    expect(api.createAdminUser).not.toHaveBeenCalled();
   });
 
   it('creates a participant once its own fields are filled in', async () => {
@@ -620,13 +767,13 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Register number *'), {
       target: { value: '21CS999' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Gender *'), { target: { value: 'other' } });
+    await chooseOption(dialog, 'Other');
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
     // The two halves sent as two keys. A single joined "2nd Year / CSE" string would have needed
     // splitting again on the server to fill the two NOT NULL columns it has.
-      await chooseOption(dialog, '3', 'Year *');
+    await chooseOption(dialog, '3', 'Year *');
     fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
       target: { value: 'CSE' },
     });
@@ -657,20 +804,19 @@ describe('ProfileReview: editing a staff account', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has these columns and no others, so the seven below live on `users`
-    // and nowhere else. Offering them asked the operator to type something that had no
-    // destination.
+    // The `moderator` table has these four columns and no others. The seven below live on `users`
+    // and nowhere else, so offering them asked the operator to type something with no destination.
     expect(within(dialog).getByLabelText('Full name')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Register number')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Email')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Gender')).toBeInTheDocument();
-    // A file, not a text box holding a Cloudinary identifier. The URL is produced by the server
-    // from an upload now, so an editable box here could only ever hold something it would refuse.
-    expect(within(dialog).getByLabelText('Profile picture')).toHaveAttribute('type', 'file');
-    expect(within(dialog).getByText('Email notifications')).toBeInTheDocument();
 
     expect(within(dialog).queryByLabelText('Year')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Department/Division')).not.toBeInTheDocument();
+    // A picture is the row's own business. An admin could once open this dialog, choose a file,
+    // and overwrite someone's face without them being in the room or able to refuse.
+    expect(within(dialog).queryByLabelText('Profile picture')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Email notifications')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
@@ -685,8 +831,9 @@ describe('ProfileReview: editing a staff account', () => {
     // A shorter form reads as the screen having less to say, not as the account having less on it.
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/A moderator account has no year, department, bio, interests/i))
-      .toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/A moderator account has no year or department/i),
+    ).toBeInTheDocument();
   });
 
   it('sends no participant-only key when a moderator is saved', async () => {
@@ -713,88 +860,69 @@ describe('ProfileReview: editing a staff account', () => {
     expect(payload).toEqual({ name: 'Mo Renamed' });
   });
 
-  it('still saves the shared toggles for a moderator', async () => {
-    api.updateAdminUser.mockResolvedValue({
-      id: MODERATOR,
-      name: 'A Moderator',
-      account_type: 'moderator',
-      notifications_enabled: false,
-    });
+  it('offers no toggle of any kind for a moderator', async () => {
     await renderRows([moderator({ notifications_enabled: true })], 'Mo Moderator');
 
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
-    // `notifications_enabled` is on all three account tables, so it is not a participant field.
-    // It is also the only switch on the form: the others have no column to be written to.
-    expect(within(dialog).getAllByRole('switch')).toHaveLength(1);
-    fireEvent.click(within(dialog).getByRole('switch'));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-
-    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
-    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ notifications_enabled: false });
+    // `notifications_enabled` has a column on all three account tables, so it is the one switch
+    // that would never have been ignored. It is gone anyway: this dialog writes identity, and a
+    // preference is a decision the account owner makes. Switching off someone's mail from an
+    // admin screen is not an identity correction.
+    expect(within(dialog).queryAllByRole('switch')).toHaveLength(0);
+    expect(within(dialog).queryAllByRole('checkbox')).toHaveLength(0);
   });
 
-  it('offers every participant field when a participant is edited', async () => {
+  it('offers a participant the cohort fields too, and shows what is stored', async () => {
     await renderRows(
       [participant(ORDINARY, 'Ordinary', {}, { bio: 'hello', interests: ['Music', 'Bogus'] })],
       'Ordinary',
     );
 
-    // The fix must not narrow the participant form by accident: these are the fields the whole
-    // reason a participant row carries a year and a department.
+    // The identity-only change must not narrow the participant form by accident: year and
+    // department are the whole reason a participant row carries a cohort at all.
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     // Both halves present, and the stored year is shown rather than dropped: `2nd Year` came from
     // the fixture, so a select sitting empty here would mean the editor refused a valid stored
     // value.
-    expect(within(dialog).getByLabelText('Year')).toBeInTheDocument();
-      expect(within(dialog).getByLabelText('Year')).toHaveTextContent('2');
+    expect(within(dialog).getByLabelText('Year')).toHaveTextContent('2');
     expect(within(dialog).getByLabelText('Department/Division')).toHaveValue('Class_9');
-    expect(within(dialog).getByLabelText('Emoji tag')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Bio')).toHaveValue('hello');
-    // Interests are twelve tickable boxes, not a comma-separated string the operator has to know
-    // the spelling of. `Bogus` is what a row from before the vocabulary was closed holds: there is
-    // no box for it, rather than an unticked one that looks like a choice the operator could make.
-    expect(within(dialog).getByRole('checkbox', { name: 'Music' })).toBeChecked();
-    expect(within(dialog).queryByRole('checkbox', { name: 'Bogus' })).not.toBeInTheDocument();
-    expect(within(dialog).getAllByRole('checkbox')).toHaveLength(12);
-    expect(within(dialog).getByText('Allow matchmaking')).toBeInTheDocument();
-    expect(within(dialog).getByText('Receive love notes')).toBeInTheDocument();
-    expect(within(dialog).getByText('Send love notes')).toBeInTheDocument();
+    // Everything below is the owner's, so it is not on an admin's form at all -- not even read-only.
+    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
+    expect(within(dialog).queryAllByRole('checkbox')).toHaveLength(0);
+    expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
   });
 
-  it('still saves a participant edit', async () => {
+  it('saves a participant cohort change and nothing else', async () => {
     api.updateAdminUser.mockResolvedValue({
       id: ORDINARY,
-      name: 'Renamed',
+      name: 'Ordinary',
+      department: 'ECE',
       account_type: 'users',
     });
     await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
 
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Bio'), {
-      target: { value: 'a short bio' },
+    fireEvent.change(within(dialog).getByLabelText('Department/Division'), {
+      target: { value: 'ECE' },
     });
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Music' }));
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Traveling' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
-    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({
-      bio: 'a short bio',
-      interests: ['Music', 'Traveling'],
-    });
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ department: 'ECE' });
   });
 
-  it('drops a legacy interest from the payload the first time the row is edited', async () => {
+  it('leaves a stored interest out of the payload when the name alone changes', async () => {
     api.updateAdminUser.mockResolvedValue({
       id: ORDINARY,
-      name: 'Ordinary',
+      name: 'Renamed',
       account_type: 'users',
     });
-    // Untouched interests. The stored list holds a value the server no longer accepts, and the
-    // operator has changed nothing about interests -- only their name.
+    // Untouched interests, including a value the server no longer accepts. The operator changed
+    // nothing but a name.
     await renderRows(
       [participant(ORDINARY, 'Ordinary', {}, { interests: ['Bogus', 'Music'] })],
       'Ordinary',
@@ -808,9 +936,8 @@ describe('ProfileReview: editing a staff account', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
-    // `interests` is absent, not `['Music']`. Sending it would be a silent edit of a field nobody
-    // looked at -- but the next save that does touch interests will send `['Music']` on its own,
-    // which is why this is a no-op here rather than a correction.
+    // `interests` is not in the payload at all -- the form does not carry it, so it cannot report
+    // a stale value as a deliberate choice.
     expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ name: 'Renamed' });
   });
 
@@ -846,129 +973,44 @@ describe('ProfileReview: editing a staff account', () => {
     expect(api.updateAdminUser).toHaveBeenCalledTimes(1);
   });
 
-  it('never offers an interest outside the twelve the server accepts', async () => {
-    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+  it('offers no way to write a picture, for either account type', async () => {
+    await renderRows(
+      [participant(ORDINARY, 'Ordinary'), moderator()],
+      'Ordinary',
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
-    const dialog = await screen.findByRole('dialog');
-    const labels = within(dialog)
-      .getAllByRole('checkbox')
-      .map((box) => box.getAttribute('aria-label') ?? document.querySelector(`label[for="${box.id}"]`)?.textContent?.trim());
-    expect(labels).toEqual([
-      'Music',
-      'Movies',
-      'Reading',
-      'Gaming',
-      'Traveling',
-      'Cooking',
-      'Sports',
-      'Art',
-      'Photography',
-      'Dancing',
-      'Writing',
-      'Coding',
-    ]);
+    // The admin client has no picture call at all any more, so there is nothing behind a control
+    // to remove later: a profile photo belongs to the account, who uploads it themselves through
+    // `/profile/upload-picture`. A missing control here would be a real regression -- it would be
+    // the admin overwriting someone's face without them being able to refuse -- so this is pinned
+    // for the participant form too, not only the staff one.
+    for (const label of ['Ordinary', 'Mo Moderator']) {
+      fireEvent.click(screen.getByRole('button', { name: `View profile for ${label}` }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).queryByLabelText('Profile picture')).not.toBeInTheDocument();
+      expect(within(dialog).queryByRole('textbox', { name: /picture|photo|image|url/i })).toBeNull();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    }
   });
 });
 
-describe('ProfileReview: profile pictures', () => {
+describe('ProfileReview: the fields an admin does not get', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('uploads a chosen file, and skips the JSON call when nothing else changed', async () => {
-    // An explicit log rather than `invocationCallOrder`, which this vitest build does not expose.
-    // The order is the point of the test, so it is recorded where it can be asserted.
-    const calls: string[] = [];
-    api.updateAdminUser.mockImplementation(() => {
-      calls.push('update');
-      return Promise.resolve({ id: ORDINARY, name: 'Ordinary', account_type: 'users' });
-    });
-    api.uploadAdminUserPicture.mockImplementation(() => {
-      calls.push('upload');
-      return Promise.resolve({ profile_picture_url: '/media/profile/ordinary.png' });
-    });
-    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
-
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
-    const dialog = await screen.findByRole('dialog');
-    const file = new File(['bytes'], 'me.png', { type: 'image/png' });
-    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
-      target: { files: [file] },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-
-    await waitFor(() => expect(api.uploadAdminUserPicture).toHaveBeenCalledTimes(1));
-    expect(api.uploadAdminUserPicture).toHaveBeenCalledWith(ORDINARY, file);
-    // No field changed, so there is no JSON request to make. The picture is a multipart upload and
-    // cannot ride along in an update body, so it is the only call here.
-    expect(calls).toEqual(['upload']);
-  });
-
-  it('keeps both halves of the result when a rename and a picture are saved together', async () => {
-    api.updateAdminUser.mockResolvedValue({
-      id: ORDINARY,
-      name: 'Renamed',
-      account_type: 'users',
-    });
-    api.uploadAdminUserPicture.mockResolvedValue({
-      profile_picture_url: '/media/profile/ordinary.png',
-    });
-    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
-
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Full name'), {
-      target: { value: 'Renamed' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
-      target: { files: [new File(['bytes'], 'me.png', { type: 'image/png' })] },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalled());
-    // The upload response carries only the new URL. Merging it over the stored profile would have
-    // reverted the name this save had just changed, while still reporting success.
-    expect(await screen.findByText('Renamed')).toBeInTheDocument();
-  });
-
-  it('keeps the saved edit when the picture upload is rejected', async () => {
-    api.updateAdminUser.mockResolvedValue({
-      id: ORDINARY,
-      name: 'Ordinary',
-      account_type: 'users',
-    });
-    api.uploadAdminUserPicture.mockRejectedValue(new Error('not an image'));
-    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
-
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Bio'), {
-      target: { value: 'a short bio' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
-      target: { files: [new File(['x'], 'me.txt', { type: 'text/plain' })] },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-
-    // The dialog closes and the edit stands. A wrong file is a mistake about one field, not a
-    // reason to discard the bio the operator wrote in the same sitting.
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ bio: 'a short bio' });
-  });
-
-  it('creates the account first and only then uploads, so a rejected picture leaves a usable row', async () => {
+  it('sends only the identity and cohort fields when a participant is created', async () => {
     api.createAdminUser.mockResolvedValue({
-      id: '77777777-7777-7777-7777-777777777777',
-      regno: '21CS777',
+      id: '44444444-4444-4444-4444-444444444488',
       name: 'New Student',
+      regno: '21CS999',
       email: 'new@school.test',
       gender: 'other',
-      year: 2,
+      year: 3,
       department: 'CSE',
       account_type: 'users',
     });
-    api.uploadAdminUserPicture.mockRejectedValue(new Error('too large'));
     await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
@@ -977,72 +1019,164 @@ describe('ProfileReview: profile pictures', () => {
       target: { value: 'New Student' },
     });
     fireEvent.change(within(dialog).getByLabelText('Register number *'), {
-      target: { value: '21CS777' },
+      target: { value: '21CS999' },
     });
+    await chooseOption(dialog, 'Other');
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'new@school.test' },
     });
-      await chooseOption(dialog, '2', 'Year *');
+    await chooseOption(dialog, '3', 'Year *');
     fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
       target: { value: 'CSE' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
-      target: { files: [new File(['x'], 'huge.png', { type: 'image/png' })] },
-    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
 
-    // `warning`, not `error`: the account was created. The operator needs to know the picture is
-    // missing without being told the whole thing failed.
-    await waitFor(() => expect(toast.warning).toHaveBeenCalled());
-    expect(api.createAdminUser).toHaveBeenCalledTimes(1);
-    expect(api.uploadAdminUserPicture).toHaveBeenCalledWith(
-      '77777777-7777-7777-7777-777777777777',
-      expect.any(File),
-    );
-    // The new participant is still listed. There is no id to upload against until the row exists,
-    // so the other order is not available.
-    expect(await screen.findByText('New Student')).toBeInTheDocument();
-    // Only the warning. A success toast alongside it would tell the operator the picture is done.
-    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.createAdminUser).toHaveBeenCalledTimes(1));
+    // `toEqual` on the whole object, not a per-key check. A per-key check would pass over an
+    // extra key, which is the failure mode: the create used to carry a bio and interests the
+    // server then had to decide what to do with.
+    expect(api.createAdminUser.mock.calls[0][0]).toEqual({
+      account_type: 'users',
+      name: 'New Student',
+      regno: '21CS999',
+      gender: 'other',
+      email: 'new@school.test',
+      year: 3,
+      department: 'CSE',
+    });
   });
 
-  it('confirms the create when the chosen picture uploads cleanly', async () => {
-    api.createAdminUser.mockResolvedValue({
-      id: '88888888-8888-8888-8888-888888888888',
-      regno: 'staff-8',
-      name: 'New Mod',
-      email: 'newmod@school.test',
-      gender: 'other',
+  it('sends only the identity fields when a staff account is edited', async () => {
+    api.updateAdminUser.mockResolvedValue({
+      id: MODERATOR,
+      name: 'Mo Renamed',
       account_type: 'moderator',
-    });
-    api.uploadAdminUserPicture.mockResolvedValue({
-      id: '88888888-8888-8888-8888-888888888888',
-      profile_picture_url: '/media/profile/newmod.png',
     });
     await renderRows([moderator()], 'Mo Moderator');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name'), {
+      target: { value: 'Mo Renamed' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number'), {
+      target: { value: 'staff-77' },
+    });
+    await chooseOption(dialog, 'Female', 'Gender');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
+    // No `year` and no `department`: the `moderator` table has neither column, so a key there would
+    // be a value with nowhere to land. `extra="forbid"` on the server turns a stray key into a 422,
+    // which is why an over-broad payload would fail the request rather than be silently dropped.
+    expect(api.updateAdminUser.mock.calls[0][1]).toEqual({
+      name: 'Mo Renamed',
+      regno: 'staff-77',
+      gender: 'female',
+    });
+  });
+
+  it('shows a 422 as readable text instead of crashing on the error body', async () => {
+    // FastAPI sends `detail` as an array of objects, so this used to reach Sonner as an array and
+    // blew up on render -- which took the whole page down rather than showing a failed save.
+    api.createAdminUser.mockRejectedValue({
+      response: {
+        data: {
+          detail: [
+            {
+              type: 'value_error',
+              loc: ['body', 'regno'],
+              msg: 'Register number already exists.',
+              input: '21CS999',
+              ctx: { error: {} },
+            },
+          ],
+        },
+        status: 422,
+      },
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Full name *'), {
-      target: { value: 'New Mod' },
+      target: { value: 'New Student' },
     });
     fireEvent.change(within(dialog).getByLabelText('Register number *'), {
-      target: { value: 'staff-8' },
+      target: { value: '21CS999' },
     });
+    await chooseOption(dialog, 'Other');
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
-      target: { value: 'newmod@school.test' },
+      target: { value: 'new@school.test' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Profile picture'), {
-      target: { files: [new File(['bytes'], 'me.png', { type: 'image/png' })] },
+    await chooseOption(dialog, '3', 'Year *');
+    fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
+      target: { value: 'CSE' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
 
-    // The upload succeeded, so this is a plain success. Skipping it because a file had been chosen
-    // left a create that did everything right reporting nothing at all.
-    await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith('Moderator account created successfully.'),
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    // The server's own words, under the field path it refused, rather than a rendering of its
+    // internal shape. The `regno: ` prefix is what tells the operator which of six fields to fix.
+    expect(toast.error).toHaveBeenCalledWith('regno: Register number already exists.');
+    // And the dialog is still open with the operator's input intact, so nothing has to be retyped.
+    expect(within(dialog).getByLabelText('Register number *')).toHaveValue('21CS999');
+  });
+
+  it('falls back to a message the server did not send', async () => {
+    // An empty 422 says nothing useful, and an empty toast is worse than no toast: it looks like
+    // the operator pressed the wrong button.
+    api.createAdminUser.mockRejectedValue({
+      response: { data: { detail: [] }, status: 422 },
+    });
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Full name *'), {
+      target: { value: 'New Student' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Register number *'), {
+      target: { value: '21CS999' },
+    });
+    await chooseOption(dialog, 'Other');
+    fireEvent.change(within(dialog).getByLabelText('Email *'), {
+      target: { value: 'new@school.test' },
+    });
+    await chooseOption(dialog, '3', 'Year *');
+    fireEvent.change(within(dialog).getByLabelText('Department/Division *'), {
+      target: { value: 'CSE' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create participant account' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toast.error).toHaveBeenCalledWith('Unable to create this account.');
+  });
+
+  it('caps each identity field at the length the server accepts', async () => {
+    await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create participant' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // The server's `max_length` is the rule; these attributes are the form telling the operator
+    // before the round-trip. A mismatch in either direction is the bug: too high and the save
+    // fails on submit, too low and a legitimate register number cannot be typed.
+    expect(within(dialog).getByLabelText('Full name *')).toHaveAttribute(
+      'maxlength',
+      String(ADMIN_NAME_MAX),
     );
-    expect(toast.warning).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText('Register number *')).toHaveAttribute(
+      'maxlength',
+      String(ADMIN_REGNO_MAX),
+    );
+    expect(within(dialog).getByLabelText('Department/Division *')).toHaveAttribute(
+      'maxlength',
+      String(ADMIN_DEPARTMENT_MAX),
+    );
+    // No cap on an address: the server's limit on `email` is 320 and the widest realistic address
+    // is nowhere near it, so a cap here would only be a guess.
+    expect(within(dialog).getByLabelText('Email *')).not.toHaveAttribute('maxlength');
   });
 
   it('refuses a staff account with no email, and names the field', async () => {
@@ -1059,8 +1193,16 @@ describe('ProfileReview: profile pictures', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
 
     // Email is required of every account type. A moderator could once be created with a regno and
-    // a name, and nobody noticed because nothing on the way to the database complained.
+    // a name and nobody noticed, because nothing on the way to the database complained. The
+    // message now lives with the field, and both blank fields are named in one pass.
     expect(api.createAdminUser).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith('Email is required for this account type.');
+    const alerts = within(dialog).getAllByRole('alert').map((node) => node.textContent);
+    expect(alerts).toEqual(
+      expect.arrayContaining([
+        'Choose a gender.',
+        'Enter an email address, for example name@example.com.',
+      ]),
+    );
+    expect(within(dialog).getByLabelText('Email *')).toHaveAttribute('aria-invalid', 'true');
   });
 });

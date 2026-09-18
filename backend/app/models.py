@@ -1,6 +1,6 @@
 # app/models.py
 
-from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator, model_validator, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator, validator
 from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, timezone
 from .postgres import new_id
@@ -295,37 +295,49 @@ class AdminUserCreate(BaseModel):
     of being a particular kind of one; a moderator nobody can be contacted about is an account
     that cannot be recovered when its holder leaves.
 
-    There is no ``profile_picture_url``. A picture is an upload, not a string: the bytes go to
-    object storage through ``PUT /admin/users/{id}/picture`` and the server writes the URL it
-    gets back. Accepting a URL here would let a caller point an account's picture at an
-    arbitrary address -- somebody else's asset, or a page that logs the reader out.
+    **Everything an account owns about itself is absent, and the model refuses it by name.**
+    There is no ``profile_picture_url``, no ``emoji``, no ``bio``, no ``interests``, and none of
+    the four preference flags (``notifications_enabled``, ``matchmaking_enabled``,
+    ``love_notes_receive_enabled``, ``love_notes_send_enabled``). An admin mints the identity
+    of an account -- who it is, which cohort it belongs to, how to reach it -- and the account
+    then fills in the rest itself through ``PUT /profile/update``. Anything an admin does not
+    belong in, therefore, is not merely ignored here: ``extra="forbid"`` turns it into a 422.
+
+    That is the part worth being explicit about. Pydantic's default is ``extra="ignore"``, so a
+    payload carrying ``bio`` would be accepted, the key dropped, and the caller told ``201``.
+    The write would not happen -- so the column would be unreachable either way -- but the
+    response would be a lie about what the request asked for, and an admin watching the list
+    refresh would conclude the bio saved. Forbidding the key is what makes a refused request
+    look refused.
+
+    ``is_blocked`` is gone for the same reason, and blocking keeps its own route
+    (``PUT /admin/users/{id}/block``) with its own confirmation. Block state is not a property
+    you fill in when the account is born; it is a later act, on an existing account, and
+    "create this participant already blocked" is not a thing that needs to exist.
+
+    Every removed column still has a value on the new row, because the database declares the
+    default rather than the payload: ``notifications_enabled``, ``matchmaking_enabled`` and
+    ``love_notes_receive_enabled`` default to true, ``love_notes_send_enabled`` to false, and
+    ``interests`` to the empty set -- see ``db_models.UserRecord``. ``emoji``, ``bio`` and
+    ``profile_picture_url`` are nullable and start NULL. The defaults live in one place and are
+    stated identically in Pydantic's ``UserDetails``, so a participant and an admin-created
+    account begin life in the same state.
 
     The participant-only fields are optional here and required by the validator below only
     when ``account_type`` is ``users``. Declaring them conditionally in the type system is
     not something Pydantic can express without a discriminated union, and a union would
     make the OpenAPI schema unreadable for a payload that is, in practice, one form.
     """
+    model_config = ConfigDict(extra="forbid")
+
     account_type: AccountType = AccountType.USERS
     regno: str = Field(max_length=USER_REGNO_MAX)
     name: str = Field(max_length=USER_NAME_MAX)
     email: EmailStr
     gender: Gender
-    notifications_enabled: bool = True
-    is_blocked: bool = False
     # participants only
-    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
-    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     year: Optional[Year] = None
     department: Optional[str] = Field(default=None, max_length=USER_DEPARTMENT_MAX)
-    interests: Optional[List[Interest]] = None
-    matchmaking_enabled: bool = True
-    love_notes_receive_enabled: bool = True
-    love_notes_send_enabled: bool = False
-
-    @field_validator("interests")
-    @classmethod
-    def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
-        return clean_interests(value)
 
     @model_validator(mode="after")
     def _require_participant_fields(self) -> "AdminUserCreate":
@@ -365,7 +377,9 @@ class AdminUserUpdate(BaseModel):
     """Payload for editing an account that already exists.
 
     Every field is optional, and the account is found by id across all three tables, so one
-    payload shape edits a participant or a staff account.
+    payload shape edits a participant or a staff account. The editable set is exactly the
+    identity of the account: ``regno``, ``name``, ``gender``, ``email``, and ``year`` and
+    ``department`` for a participant.
 
     There is deliberately no ``account_type`` here. Moving a row between tables is not a
     field edit: eleven other tables hold foreign keys into ``users`` by both id and regno, so
@@ -373,28 +387,26 @@ class AdminUserUpdate(BaseModel):
     hood. Which table an account lives in is therefore fixed when it is created; minting a
     staff account is a create, and demoting one is a matter of not using it.
 
-    There is deliberately no ``profile_picture_url`` either, for the reason given on
-    :class:`AdminUserCreate`: a picture arrives as an upload and the server writes the URL it
-    gets back, so no payload can name an address to point an account's face at.
+    For the same reasons as :class:`AdminUserCreate`, there is no ``profile_picture_url``, no
+    ``emoji``, no ``bio``, no ``interests``, no ``is_blocked``, and none of the four preference
+    flags. A picture is bytes through a participant-only upload route rather than a string
+    named in a JSON body; the profile fields belong to the participant; and blocking is its own
+    route. ``extra="forbid"`` refuses any of them by name rather than accepting the request and
+    dropping the key, so a caller that still sends one is told 422 instead of being answered
+    ``200`` for an edit that never happened.
 
-    ``gender`` and ``interests`` are narrowed to the closed vocabularies, so an edit cannot
-    write a value the create payload would have refused.
+    ``gender`` is narrowed to the closed vocabulary, so an edit cannot write a value the create
+    payload would have refused.
     """
+    model_config = ConfigDict(extra="forbid")
+
     regno: Optional[str] = Field(default=None, max_length=USER_REGNO_MAX)
     name: Optional[str] = Field(default=None, max_length=USER_NAME_MAX)
     gender: Optional[Gender] = None
-    notifications_enabled: Optional[bool] = None
-    is_blocked: Optional[bool] = None
     email: Optional[EmailStr] = None
     # participants only
-    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
-    bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     year: Optional[Year] = None
     department: Optional[str] = Field(default=None, max_length=USER_DEPARTMENT_MAX)
-    interests: Optional[List[Interest]] = None
-    matchmaking_enabled: Optional[bool] = None
-    love_notes_receive_enabled: Optional[bool] = None
-    love_notes_send_enabled: Optional[bool] = None
 
     @field_validator("name", "regno", "gender", "year", "department", "email")
     @classmethod
@@ -420,11 +432,6 @@ class AdminUserUpdate(BaseModel):
         if isinstance(value, str) and not value.strip():
             return None
         return value
-
-    @field_validator("interests")
-    @classmethod
-    def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
-        return clean_interests(value)
 
 
 class AccountDetails(BaseModel):

@@ -1,3 +1,9 @@
+import { describeApiError } from './apiError';
+
+/** Shown when the server refuses a post without saying why in a form that can be rendered. */
+const DEFAULT_COOLDOWN_MESSAGE =
+  'You can post one confession every 2 hours. Please try again shortly.';
+
 /**
  * The confession cooldown, as the compose screen needs it.
  *
@@ -95,7 +101,7 @@ export const formatCooldownRemaining = (seconds: number): string => {
  * refusal is still explained in the server's words rather than a generic "try again".
  */
 export const readCooldownRejection = (error: unknown): ConfessionCooldown | null => {
-  const response = (error as { response?: { status?: number; data?: { detail?: string }; headers?: Record<string, string> } })
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown }; headers?: Record<string, string> } })
     ?.response;
 
   // Only a 429 is a cooldown. A 400 from the same endpoint is the body-length or unstorable
@@ -105,11 +111,16 @@ export const readCooldownRejection = (error: unknown): ConfessionCooldown | null
 
   const retryAfter = Number(response.headers?.['retry-after'] ?? response.headers?.['Retry-After']);
   const seconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 0;
-  const detail = response.data?.detail;
+  // Read through `describeApiError` rather than as `detail` directly. This branch only fires on
+  // a 429, which the server currently raises with a plain string, but `detail` is typed as
+  // string-or-array by FastAPI in general -- and an array assigned to this `message: string`
+  // would render as React children downstream and take the page with it.
+  const message =
+    describeApiError({ response }, DEFAULT_COOLDOWN_MESSAGE) || DEFAULT_COOLDOWN_MESSAGE;
 
   if (seconds > 0) {
     return {
-      message: detail ?? 'You can post one confession every 2 hours. Please try again shortly.',
+      message,
       hours: Math.floor(seconds / 3600),
       minutes: Math.floor((seconds % 3600) / 60),
       seconds,
@@ -117,7 +128,7 @@ export const readCooldownRejection = (error: unknown): ConfessionCooldown | null
   }
 
   return {
-    message: detail ?? 'You can post one confession every 2 hours. Please try again shortly.',
+    message,
     hours: 0,
     minutes: 0,
     seconds: 0,

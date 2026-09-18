@@ -1,4 +1,4 @@
-﻿import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -25,9 +25,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -36,7 +33,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser, uploadAdminUserPicture } from '@/services/api';
+import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
 import type { AdminUserCreatePayload } from '@/services/api';
 import {
   Crown,
@@ -52,17 +49,24 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { describeApiError } from '@/lib/apiError';
+import {
+  firstInvalidField,
+  hasFieldIssues,
+  validateIdentityFields,
+  type FieldIssues,
+  type IdentityField,
+} from '@/lib/fieldValidation';
 import { AccountType } from '@/lib/capabilities';
 import {
   cohortLabel,
-  INTEREST_VALUES,
   isUserGender,
   isUserYear,
-  toInterests,
   USER_GENDER_OPTIONS,
   USER_YEAR_OPTIONS,
 } from '@/lib/accountFields';
-import type { Interest, UserGender, UserYear } from '@/lib/accountFields';
+import type { UserGender, UserYear } from '@/lib/accountFields';
+import { ADMIN_DEPARTMENT_MAX, ADMIN_NAME_MAX, ADMIN_REGNO_MAX } from '@/lib/limits';
 
 /**
  * The three kinds of content a participant can be reported for. A confession and a comment on
@@ -191,68 +195,26 @@ type CreateUserForm = {
   year: UserYear | '';
   /** Free text. The departments that exist belong to the institution, so there is no list. */
   department: string;
-  /** One of `USER_GENDER_OPTIONS`' values. The server accepts nothing else. */
-  gender: UserGender;
-  emoji: string;
-  bio: string;
-  matchmaking_enabled: boolean;
-  notifications_enabled: boolean;
-  love_notes_receive_enabled: boolean;
-  love_notes_send_enabled: boolean;
+  /** One of `USER_GENDER_OPTIONS`' values, or `''` for "not chosen yet".
+
+   A union with the vocabulary rather than a bare `UserGender`, because the dialog opens with
+   nothing chosen and `''` is what says so. The earlier version defaulted this to `'other'`,
+   which was not a neutral placeholder: the vocabulary is male/female/other, so every account
+   created without a deliberate choice was recorded as *other* -- a claim about the person that
+   nobody made, on a column that is NOT NULL on all three tables. The select now starts on its
+   placeholder and the required check names Gender by name, so the account is written only once
+   somebody has actually said which it is.
+
+   The same reasoning does not apply to the *edit* dialog's seed, which is a fallback for a
+   stored value outside the vocabulary rather than a default: there, showing something is the
+   honest option, because the row already holds an answer. */
+  gender: UserGender | '';
   /**
    * Which table to create the account in. Sent as ``account_type`` and used by the server to
    * choose the table, which is why it is a table name and not a label: a staff account is
    * created by writing to ``admin`` or ``moderator``, not by setting a flag on a participant.
    */
   account_type: AccountType;
-};
-
-/**
- * The twelve interests a participant may hold, as a checkbox set.
- *
- * A checkbox grid rather than a comma-separated box because these are a closed list: the old
- * text field let somebody type "music", "Music" or "musics" and store all three as different
- * interests that no screen could tell apart. Choosing from a list makes that impossible rather
- * than merely discouraged.
- */
-const InterestCheckboxes = ({
-  value,
-  onChange,
-  idPrefix,
-}: {
-  value: Interest[];
-  onChange: (next: Interest[]) => void;
-  idPrefix: string;
-}) => {
-  const toggle = (interest: Interest) => {
-    onChange(
-      value.includes(interest) ? value.filter((item) => item !== interest) : [...value, interest]
-    );
-  };
-
-  return (
-    <div
-      className="grid grid-cols-2 gap-2 rounded-md border p-3 sm:grid-cols-3"
-      role="group"
-      aria-label="Interests"
-    >
-      {INTEREST_VALUES.map((interest) => {
-        const id = `${idPrefix}-${interest.toLowerCase()}`;
-        return (
-          <div key={interest} className="flex items-center gap-2">
-            <Checkbox
-              id={id}
-              checked={value.includes(interest)}
-              onCheckedChange={() => toggle(interest)}
-            />
-            <Label htmlFor={id} className="cursor-pointer font-normal">
-              {interest}
-            </Label>
-          </div>
-        );
-      })}
-    </div>
-  );
 };
 
 const formatDate = (value?: string | null) => {
@@ -278,13 +240,59 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
  * department said the same thing whether the department or the name was the one missing, and there
  * is no department to fill in. Naming the field points at the input that needs attention.
  */
-const CREATE_FIELD_LABELS: Partial<Record<keyof CreateUserForm, string>> = {
-  name: 'Full name',
-  regno: 'Register number',
-  email: 'Email',
-  year: 'Year',
-  department: 'Department',
-  gender: 'Gender',
+/**
+ * The id of a field's message, so a screen reader hears the message with the field.
+ *
+ * Derived from the field name rather than passed separately, because the two drifting apart is
+ * exactly what breaks the association: an `aria-describedby` pointing at nothing is silently
+ * worse than no `aria-describedby` at all.
+ */
+const errorIdFor = (dialog: 'create' | 'edit', field: IdentityField): string =>
+  `${dialog}-${field}-error`;
+
+/**
+ * Move focus to the first field that needs attention.
+ *
+ * Not a scroll: `focus()` scrolls too, and it puts the caret where the next keystroke goes. A
+ * dialog that reports three problems without moving focus leaves the operator at whichever field
+ * they happened to be on, reading a message about a different one.
+ */
+const focusField = (field: IdentityField | null): void => {
+  if (!field) return;
+  const candidates = [
+    document.getElementById(`create-${field}`),
+    document.getElementById(`edit-${field}`),
+  ];
+  candidates.find((element) => element !== null)?.focus();
+};
+
+/** Drop one field's message as soon as the operator starts correcting it. */
+const clearIssue = (
+  setter: (issues: FieldIssues) => void,
+  field: IdentityField,
+) => {
+  setter((prev) => {
+    if (prev[field] === undefined) return prev;
+    const next = { ...prev };
+    delete next[field];
+    return next;
+  });
+};
+
+/**
+ * The message under a field, in place rather than in a toast.
+ *
+ * `role="alert"` so it is announced when it appears. The alternative -- rendering it silently
+ * and relying on the operator to notice red text -- leaves the change invisible to anyone using
+ * a screen reader, and the submit that revealed it has already been refused.
+ */
+const FieldError = ({ id, message }: { id: string; message?: string }) => {
+  if (!message) return null;
+  return (
+    <p id={id} role="alert" className="text-xs font-medium text-destructive">
+      {message}
+    </p>
+  );
 };
 
 const makeInitials = (name?: string | null) => {
@@ -702,17 +710,11 @@ export const ProfileReview = () => {
     // reason and needed no cast either.
     year: '',
     department: '',
-    // `other` rather than an empty string. Gender is a non-null column on all three account
-    // tables and the select has no blank option, so an empty value here could only ever be a
-    // form the operator had not finished -- which the required-field check then reports by name
-    // instead of the select silently showing nothing.
-    gender: 'other',
-    emoji: '',
-    bio: '',
-    matchmaking_enabled: true,
-    notifications_enabled: true,
-    love_notes_receive_enabled: true,
-    love_notes_send_enabled: false,
+    // Nothing rather than `'other'`. Gender is a non-null column on all three account tables, so a
+    // value has to be chosen -- but choosing it here would mean writing a gender onto every
+    // account created without a deliberate answer. `'other'` was doing that silently; now the
+    // select shows its placeholder and the required check names the field.
+    gender: '',
     account_type: accountType,
   });
 
@@ -750,25 +752,19 @@ export const ProfileReview = () => {
   const [selectedProfile, setSelectedProfile] = useState<AdminUserProfile | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Partial<AdminUserProfile> | null>(null);
-  /**
-   * The ticked interests, held separately from `editForm`.
-   *
-   * Separate because it is a set rather than a string: `editForm` is the shape the server
-   * returned, and threading `interests` through it as a comma-joined string would mean
-   * re-parsing a value the operator did not type. It is also what the save compares against the
-   * stored list to decide whether interests actually changed.
-   */
-  const [editInterests, setEditInterests] = useState<Interest[]>([]);
-  /**
-   * The file chosen in the editor, or null. Never a URL: the picture is uploaded to the
-   * server, which puts it in object storage and writes back the address it generated.
-   */
-  const [editPictureFile, setEditPictureFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * What is wrong with each dialog's fields, rendered under the field itself.
+   *
+   * Held per dialog rather than derived on every render so that a field stops showing its
+   * message the moment the operator starts fixing it, instead of the message reappearing on
+   * each keystroke of a value that is still incomplete. Both records are cleared when their
+   * dialog opens or closes.
+   */
+  const [editIssues, setEditIssues] = useState<FieldIssues>({});
+  const [createIssues, setCreateIssues] = useState<FieldIssues>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateUserForm>(() => buildDefaultCreateForm('users'));
-  const [createInterests, setCreateInterests] = useState<Interest[]>([]);
-  const [createPictureFile, setCreatePictureFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -1058,11 +1054,10 @@ export const ProfileReview = () => {
       // Falling back keeps the dialog honest about what is stored instead of showing a blank
       // control the operator would have to guess about.
       gender: isUserGender(profile.gender ?? '') ? (profile.gender as UserGender) : 'other',
-      notifications_enabled: Boolean(profile.notifications_enabled),
-      // Seeded only for a participant. A staff row carries none of these, so putting defaults for
-      // them into the form would put values there that no visible field could ever be compared
-      // against -- and a toggle seeded to `false` on a moderator is a control that looks like it
-      // says something about matchmaking when it says nothing at all.
+      // Seeded only for a participant. A staff row has no cohort, so putting defaults for these
+      // into the form would put values there that no visible field could ever be compared
+      // against -- and a year seeded to something on a moderator is a control that looks like it
+      // says something about their year when it says nothing at all.
       ...(isParticipant
         ? {
             // Same normalisation as gender below: a stored year from before the range was
@@ -1071,25 +1066,10 @@ export const ProfileReview = () => {
             // number here, and null is a value it can actually hold.
             year: isUserYear(profile.year) ? profile.year : null,
             department: profile.department ?? '',
-            bio: profile.bio ?? '',
-            emoji: profile.emoji ?? '',
-            // Read every toggle the way the change detector below reads it. Seeding one any other
-            // way makes an untouched field register as a change on save: a participant whose
-            // payload omits `love_notes_receive_enabled` would be shown the toggle on, then have
-            // it quietly written off the moment the operator changed something else.
-            matchmaking_enabled: Boolean(profile.matchmaking_enabled),
-            love_notes_receive_enabled: Boolean(profile.love_notes_receive_enabled),
-            love_notes_send_enabled: Boolean(profile.love_notes_send_enabled),
           }
         : {}),
     });
-    // Seeded from the stored list, filtered to the twelve the server accepts. A legacy value
-    // that is no longer in the vocabulary is dropped rather than shown as an unticked box the
-    // operator would have to recognise, and it stops appearing the next time they save.
-    setEditInterests(isParticipant ? toInterests(profile.interests) : []);
-    // Deliberately null on open. Re-opening the editor must not silently re-upload the file
-    // chosen last time; a picture is only sent when the operator picks one in this session.
-    setEditPictureFile(null);
+    setEditIssues({});
     setEditOpen(true);
   };
 
@@ -1097,8 +1077,7 @@ export const ProfileReview = () => {
     setEditOpen(false);
     setSelectedProfile(null);
     setEditForm(null);
-    setEditInterests([]);
-    setEditPictureFile(null);
+    setEditIssues({});
     setSaving(false);
   };
 
@@ -1108,6 +1087,27 @@ export const ProfileReview = () => {
     }
 
     const isParticipant = !isStaffAccount(selectedProfile);
+
+    // Checked here rather than only by the server, because the server's answer arrives as a 422
+    // after a round-trip and reads the same either way. These four fields are NOT NULL on every
+    // account table and the email is `EmailStr`, so an emptied name or a mistyped address used
+    // to be a submit-and-wait rather than something the dialog could say while it was still open.
+    const issues = validateIdentityFields(
+      {
+        name: editForm.name,
+        regno: editForm.regno,
+        email: editForm.email,
+        gender: editForm.gender,
+        year: editForm.year ?? null,
+        department: editForm.department,
+      },
+      { isParticipant },
+    );
+    setEditIssues(issues);
+    if (hasFieldIssues(issues)) {
+      focusField(firstInvalidField(issues));
+      return;
+    }
     const payload: Record<string, unknown> = {};
 
     // Only the fields the target table actually has. The server drops the participant-only keys
@@ -1117,17 +1117,7 @@ export const ProfileReview = () => {
       'name',
       'regno',
       'email',
-      ...(isParticipant ? (['department', 'bio', 'emoji'] as const) : []),
-    ];
-    const booleanFields: Array<keyof AdminUserProfile> = [
-      'notifications_enabled',
-      ...(isParticipant
-        ? ([
-            'matchmaking_enabled',
-            'love_notes_receive_enabled',
-            'love_notes_send_enabled',
-          ] as const)
-        : []),
+      ...(isParticipant ? (['department'] as const) : []),
     ];
 
     textFields.forEach((field) => {
@@ -1136,15 +1126,6 @@ export const ProfileReview = () => {
       const currentValue = selectedProfile[field];
       if ((newValue ?? '') !== (currentValue ?? '')) {
         payload[field] = typeof newValue === 'string' ? newValue : '';
-      }
-    });
-
-    booleanFields.forEach((field) => {
-      const newValue = (editForm as Record<string, unknown>)[field];
-      if (typeof newValue !== 'boolean') return;
-      const currentValue = Boolean(selectedProfile[field]);
-      if (newValue !== currentValue) {
-        payload[field] = newValue;
       }
     });
 
@@ -1174,63 +1155,28 @@ export const ProfileReview = () => {
       }
     }
 
-    // Interests are compared as a whole set rather than field by field, and compared against
-    // the vocabulary-filtered stored list -- the same list the boxes were seeded from. Comparing
-    // against the raw stored array would report a difference whenever a legacy value had been
-    // filtered out on open, and the save would then "change" interests the operator never touched.
-    if (isParticipant) {
-      const currentInterests = toInterests(selectedProfile.interests);
-      const changed =
-        editInterests.length !== currentInterests.length ||
-        editInterests.some((item) => !currentInterests.includes(item));
-      // An emptied list is sent as `[]` rather than being skipped: unticking the last box is a
-      // deliberate request to clear them, and omitting the key would mean "leave alone".
-      if (changed) {
-        payload.interests = editInterests;
-      }
-    }
-
-    // A chosen picture is not part of the JSON payload at all. It is a second request, sent
-    // after the field updates, because the endpoint takes multipart bytes and the other takes
-    // JSON. Both are needed before the dialog can report success.
-    const hasPicture = editPictureFile !== null;
-
-    if (Object.keys(payload).length === 0 && !hasPicture) {
+    if (Object.keys(payload).length === 0) {
       toast.info('No changes to save.');
       return;
     }
 
     try {
       setSaving(true);
-      // The update runs first and the upload second. The reverse order would mean a rejected
-      // name change left a new picture on an account whose other edits were refused, which is
-      // harder to notice and harder to undo than the other way round.
-      const updatedProfile =
-        Object.keys(payload).length > 0
-          ? await updateAdminUser(selectedProfile.id, payload)
-          : selectedProfile;
+      const updatedProfile = await updateAdminUser(selectedProfile.id, payload);
 
-const pictured = hasPicture
-        ? await uploadAdminUserPicture(selectedProfile.id, editPictureFile as File)
-        : updatedProfile;
-
-      // Both responses are merged, in order. Spreading `pictured` straight over the stored profile
-      // looked right and was wrong: the upload response carries only `profile_picture_url`, so it
-      // overrode nothing and the fields the update had just changed reverted to their old values
-      // on screen. An operator who renamed someone and added a picture at once saw the old name
-      // until the next refresh, from a save that had reported success.
       setProfiles((prev) =>
         prev.map((profile) =>
-          profile.id === selectedProfile.id
-            ? { ...profile, ...updatedProfile, ...pictured }
-            : profile,
+          profile.id === selectedProfile.id ? { ...profile, ...updatedProfile } : profile,
         )
       );
       toast.success('Profile updated successfully.');
       resetEditor();
     } catch (error) {
       console.error('Failed to update profile', error);
-      toast.error('Unable to save changes for this user.');
+      // The same reasoning as the create handler: this payload is capped and forbidden from
+      // extras, so a 422 here is routine and has to be readable. The editor writes the same
+      // four identity fields the create dialog does, so it has the same ways to be wrong.
+      toast.error(describeApiError(error, 'Unable to save changes for this user.'));
     } finally {
       setSaving(false);
     }
@@ -1238,51 +1184,34 @@ const pictured = hasPicture
 
   const openCreateDialog = (accountType: AccountType) => {
     setCreateForm(buildDefaultCreateForm(accountType));
-    setCreateInterests([]);
-    setCreatePictureFile(null);
+    // Cleared here as well as on close, so reopening the dialog after a refused attempt starts
+    // from a blank form rather than from the messages of the previous one.
+    setCreateIssues({});
     setCreateOpen(true);
   };
 
   const resetCreateDialog = () => {
     setCreateOpen(false);
     setCreateForm(buildDefaultCreateForm('users'));
-    setCreateInterests([]);
-    setCreatePictureFile(null);
+    setCreateIssues({});
     setCreating(false);
   };
 
   const handleCreateUser = async () => {
     const isParticipant = createForm.account_type === 'users';
 
-    // Required fields are a function of the table being written to, not one list for all three.
-    // Name, regno, email and gender are non-null columns on all three account tables, so all four
-    // are required of every account type. Email used to be a participant-only requirement --
-    // a staff account could be created with a regno and a name alone -- which left a moderator
-    // nobody could contact, and no error at the time to notice.
-    const requiredFields: Array<[keyof CreateUserForm, string | number]> = [
-      ['name', createForm.name],
-      ['regno', createForm.regno],
-      ['email', createForm.email],
-      ['gender', createForm.gender],
-    ];
-    if (isParticipant) {
-      // Both halves of the old `class_name`, and both required: the database holds them as NOT
-      // NULL, so a create that omitted either would be a 500 from the insert rather than
-      // something the operator could be told about.
-      requiredFields.push(['year', createForm.year], ['department', createForm.department]);
-    }
-
-    // Not one `.trim()` call across the whole list, because the list is no longer all strings.
-    // A whitespace-only name is missing and so is a year the server would refuse, and they are
-    // different tests on different types. Year is checked against the vocabulary rather than for
-    // emptiness: `''` is the unselected state, but 0 and 13 are not "not chosen", they are wrong,
-    // and a truthiness test would wave 0 through to a 422.
-    const isMissing = (value: string | number): boolean =>
-      typeof value === 'number' ? !isUserYear(value) : !value.trim();
-
-    const missingField = requiredFields.find(([, value]) => isMissing(value));
-    if (missingField) {
-      toast.error(`${CREATE_FIELD_LABELS[missingField[0]]} is required for this account type.`);
+    // Checked here rather than only by the server. Which fields are required is a function of
+    // the table being written to, not one list for all three: name, regno, email and gender are
+    // non-null columns on every account table, and the cohort pair exists only on `users`.
+    //
+    // The messages render under the field they belong to. They used to be a single toast naming
+    // one field, which meant a form with two things wrong had to be submitted twice, and an
+    // invalid email could not be told apart from a missing one at all -- `type="email"` reports
+    // in the browser's own words, or not at all.
+    const issues = validateIdentityFields(createForm, { isParticipant });
+    setCreateIssues(issues);
+    if (hasFieldIssues(issues)) {
+      focusField(firstInvalidField(issues));
       return;
     }
 
@@ -1290,75 +1219,36 @@ const pictured = hasPicture
       regno: createForm.regno.trim(),
       name: createForm.name.trim(),
       email: createForm.email.trim(),
-      gender: createForm.gender,
+      // Narrowed rather than cast: the checks above have already returned unless this is one of
+      // the three, but the compiler cannot see that through the `''` union member, so the
+      // vocabulary is re-checked instead of asserted. Same check, so the two cannot disagree.
+      gender: isUserGender(createForm.gender) ? createForm.gender : 'other',
       account_type: createForm.account_type,
-      notifications_enabled: createForm.notifications_enabled,
     };
 
-    // Participant columns. Sent only for a participant: the staff tables have no such columns and
-    // the server drops these keys for a staff row, so a form that never offered them must not
-    // send empty ones behind the operator's back either.
+    // The cohort, and only for a participant: the staff tables have no year or department column
+    // and the server refuses those keys for a staff row, so a form that never offered them must
+    // not send empty ones behind the operator's back either.
     if (isParticipant) {
-      // Narrowed rather than cast. The required-field check above has already returned unless
-      // this is a real year, but the compiler cannot see that through `find`, so the vocabulary is
-      // re-checked here instead of asserted. It is the same check, so the two cannot disagree.
+      // Same narrowing, same reason, as the gender above.
       payload.year = isUserYear(createForm.year) ? createForm.year : undefined;
       payload.department = createForm.department.trim();
-      payload.matchmaking_enabled = createForm.matchmaking_enabled;
-      payload.love_notes_receive_enabled = createForm.love_notes_receive_enabled;
-      payload.love_notes_send_enabled = createForm.love_notes_send_enabled;
-      if (createForm.emoji.trim()) {
-        payload.emoji = createForm.emoji.trim();
-      }
-      if (createForm.bio.trim()) {
-        payload.bio = createForm.bio.trim();
-      }
-      // Sent even when empty. An admin who ticked nothing has said "no interests", which is a
-      // different statement from staying silent, and the column is NOT NULL -- omitting the key
-      // would leave the server to guess.
-      payload.interests = createInterests;
     }
 
     try {
       setCreating(true);
-      let createdProfile = await createAdminUser(payload);
-      let pictureFailed = false;
-
-      // The picture is a second request, after the account exists. It cannot be part of the
-      // create body: that is JSON, and this is bytes, and the row has to have an id before
-      // there is anything to attach an image to.
-      //
-      // A failure here does not undo the account, and that is deliberate. Rolling back would
-      // mean deleting a row an operator can see was created, to recover from a failed image
-      // upload -- so the account is kept, the toast says exactly what happened, and the
-      // operator can retry the picture from the editor.
-      if (createPictureFile) {
-        try {
-          createdProfile = await uploadAdminUserPicture(createdProfile.id, createPictureFile);
-        } catch (uploadError) {
-          console.error('Failed to upload picture for the new account', uploadError);
-          pictureFailed = true;
-          toast.warning(
-            'Account created, but the picture could not be uploaded. Open the profile to retry.',
-          );
-        }
-      }
+      const createdProfile = await createAdminUser(payload);
 
       setProfiles((prev) => [createdProfile, ...prev]);
-      // Confirmed by a flag set inside the upload block, not by `!createPictureFile`: when a file
-      // was chosen and the upload succeeded, that condition is false and the create reported
-      // nothing at all. The account was there, with the right picture, and the dialog closed in
-      // silence.
-      if (!pictureFailed) {
-        toast.success(
-          `${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`,
-        );
-      }
+      toast.success(`${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`);
       resetCreateDialog();
     } catch (error: unknown) {
       console.error('Failed to create user', error);
-      const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error(detail ?? 'Unable to create this account.');
+      // Not `error.response.data.detail` directly: a 422 carries an array of Pydantic error
+      // objects there, and handing that to a toast renders objects as React children and takes
+      // the page down. Every field is capped on the server and extras are forbidden, so this is
+      // the ordinary failure for a mistyped register number, not an edge case.
+      toast.error(describeApiError(error, 'Unable to create this account.'));
     } finally {
       setCreating(false);
     }
@@ -1545,11 +1435,15 @@ const pictured = hasPicture
       </div>
 
       {/* Said rather than left for the operator to infer. Three sections are above these
-          controls and one is below, and only two of the three are narrowed by them, so without
-          this the placement reads as an arbitrary split rather than as a deliberate one. */}
+          controls and one is below, and the controls do not treat the four the same way, so
+          without this the placement reads as an arbitrary split rather than as a deliberate
+          one. It also draws the line exactly where the line is: the search box reaches every
+          section, the two cohort selects reach only the participants, and the sort picker is
+          offered only for the ordinary participants. */}
       <p className="-mt-4 text-xs text-muted-foreground">
-        These controls apply to both participant sections. Admins and moderators have no year or
-        department to filter on, so the sections above always list every account of their kind.
+        The search box applies to all four sections. The year and department filters apply to both
+        participant sections only: admins and moderators have neither to match on, so those two
+        sections stay complete whatever you pick here.
       </p>
     </>
   );
@@ -1648,8 +1542,8 @@ const pictured = hasPicture
                 <DialogTitle>Edit profile</DialogTitle>
                 <DialogDescription>
                   {editingIsParticipant
-                    ? "Update the selected user's information. Leave a field untouched to keep the current value."
-                    : `A ${staffNoun(selectedProfile)} account has no year, department, bio, interests, matchmaking or love-note settings, so those are not offered here.`}
+                    ? "Update the selected user's identity and cohort. Leave a field untouched to keep the current value."
+                    : `A ${staffNoun(selectedProfile)} account has no year or department, so those are not offered here.`}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1662,11 +1556,18 @@ const pictured = hasPicture
                     <Input
                       id="edit-name"
                       value={editForm.name ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, name: event.target.value } : prev))
-                      }
+                      aria-invalid={Boolean(editIssues.name)}
+                      aria-describedby={editIssues.name ? errorIdFor('edit', 'name') : undefined}
+                      onChange={(event) => {
+                        setEditForm((prev) =>
+                          prev ? { ...prev, name: event.target.value } : prev,
+                        );
+                        clearIssue(setEditIssues, 'name');
+                      }}
                       placeholder="Enter full name"
+                      maxLength={ADMIN_NAME_MAX}
                     />
+                    <FieldError id={errorIdFor('edit', 'name')} message={editIssues.name} />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="edit-email">Email</Label>
@@ -1674,34 +1575,54 @@ const pictured = hasPicture
                       id="edit-email"
                       type="email"
                       value={editForm.email ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, email: event.target.value } : prev))
-                      }
+                      aria-invalid={Boolean(editIssues.email)}
+                      aria-describedby={editIssues.email ? errorIdFor('edit', 'email') : undefined}
+                      onChange={(event) => {
+                        setEditForm((prev) =>
+                          prev ? { ...prev, email: event.target.value } : prev,
+                        );
+                        clearIssue(setEditIssues, 'email');
+                      }}
                       placeholder="user@example.com"
                     />
+                    <FieldError id={errorIdFor('edit', 'email')} message={editIssues.email} />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="edit-regno">Register number</Label>
                     <Input
                       id="edit-regno"
                       value={editForm.regno ?? ''}
-                      onChange={(event) =>
-                        setEditForm((prev) => (prev ? { ...prev, regno: event.target.value } : prev))
-                      }
+                      aria-invalid={Boolean(editIssues.regno)}
+                      aria-describedby={editIssues.regno ? errorIdFor('edit', 'regno') : undefined}
+                      onChange={(event) => {
+                        setEditForm((prev) =>
+                          prev ? { ...prev, regno: event.target.value } : prev,
+                        );
+                        clearIssue(setEditIssues, 'regno');
+                      }}
                       placeholder="Enter register number"
+                      maxLength={ADMIN_REGNO_MAX}
                     />
+                    <FieldError id={errorIdFor('edit', 'regno')} message={editIssues.regno} />
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="edit-gender">Gender</Label>
                     <Select
                       value={(editForm.gender as UserGender) ?? 'other'}
-                      onValueChange={(value) =>
+                      onValueChange={(value) => {
                         setEditForm((prev) =>
-                          prev ? { ...prev, gender: value as UserGender } : prev
-                        )
-                      }
+                          prev ? { ...prev, gender: value as UserGender } : prev,
+                        );
+                        clearIssue(setEditIssues, 'gender');
+                      }}
                     >
-                      <SelectTrigger id="edit-gender">
+                      <SelectTrigger
+                        id="edit-gender"
+                        aria-invalid={Boolean(editIssues.gender)}
+                        aria-describedby={
+                          editIssues.gender ? errorIdFor('edit', 'gender') : undefined
+                        }
+                      >
                         <SelectValue placeholder="Select a gender" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1712,178 +1633,82 @@ const pictured = hasPicture
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="edit-avatar">Profile picture</Label>
-                    <Input
-                      id="edit-avatar"
-                      type="file"
-                      accept="image/*"
-                      onChange={(event) => setEditPictureFile(event.target.files?.[0] ?? null)}
-                    />
-                    <p className="text-[11px] text-muted-foreground">
-                      The file is uploaded to the server and stored there; the address is written
-                      by the server. {selectedProfile.profile_picture_url
-                        ? 'Saving with a file chosen replaces the current picture.'
-                        : 'No picture is set yet.'}
-                    </p>
+                    <FieldError id={errorIdFor('edit', 'gender')} message={editIssues.gender} />
                   </div>
                 </div>
 
                 {/* Participant columns. */}
                 {editingIsParticipant && (
-                  <>
-                    {/* Year is a select and department is a text box, not two text boxes and not
-                        one joined field. Year is held to a closed vocabulary on the server, so a
-                        free-text box could only ever produce a value it refuses; department has no
-                        such list, because the departments that exist belong to the institution
-                        rather than to this codebase. */}
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="grid gap-2">
-                        <Label htmlFor="edit-year">Year</Label>
-                        <Select
-                          value={
-                            editForm.year == null
-                              ? ''
-                              : String(editForm.year)
-                          }
-                          onValueChange={(value) =>
-                            setEditForm((prev) =>
-                              prev ? { ...prev, year: Number(value) } : prev
-                            )
-                          }
+                  /* Year is a select and department is a text box, not two text boxes and not
+                     one joined field. Year is held to a closed vocabulary on the server, so a
+                     free-text box could only ever produce a value it refuses; department has no
+                     such list, because the departments that exist belong to the institution
+                     rather than to this codebase. */
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-year">Year</Label>
+                      <Select
+                        value={
+                          editForm.year == null
+                            ? ''
+                            : String(editForm.year)
+                        }
+                        onValueChange={(value) => {
+                          setEditForm((prev) =>
+                            prev ? { ...prev, year: Number(value) } : prev,
+                          );
+                          clearIssue(setEditIssues, 'year');
+                        }}
+                      >
+                        <SelectTrigger
+                          id="edit-year"
+                          aria-invalid={Boolean(editIssues.year)}
+                          aria-describedby={editIssues.year ? errorIdFor('edit', 'year') : undefined}
                         >
-                          <SelectTrigger id="edit-year">
-                            <SelectValue placeholder="Select a year" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {USER_YEAR_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={String(option.value)}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="edit-department">Department/Division</Label>
-                        <Input
-                          id="edit-department"
-                          value={editForm.department ?? ''}
-                          onChange={(event) =>
-                            setEditForm((prev) =>
-                              prev ? { ...prev, department: event.target.value } : prev
-                            )
-                          }
-                          placeholder="CSE, ECE, MECH, etc."
-                        />
-                      </div>
+                          <SelectValue placeholder="Select a year" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {USER_YEAR_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={String(option.value)}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldError id={errorIdFor('edit', 'year')} message={editIssues.year} />
                     </div>
-
                     <div className="grid gap-2">
-                      <Label htmlFor="edit-emoji">Emoji tag</Label>
+                      <Label htmlFor="edit-department">Department/Division</Label>
                       <Input
-                        id="edit-emoji"
-                        value={editForm.emoji ?? ''}
-                        onChange={(event) =>
-                          setEditForm((prev) => (prev ? { ...prev, emoji: event.target.value } : prev))
+                        id="edit-department"
+                        value={editForm.department ?? ''}
+                        aria-invalid={Boolean(editIssues.department)}
+                        aria-describedby={
+                          editIssues.department ? errorIdFor('edit', 'department') : undefined
                         }
-                        placeholder="e.g. ??"
+                        onChange={(event) => {
+                          setEditForm((prev) =>
+                            prev ? { ...prev, department: event.target.value } : prev,
+                          );
+                          clearIssue(setEditIssues, 'department');
+                        }}
+                        placeholder="CSE, ECE, MECH, etc."
+                        maxLength={ADMIN_DEPARTMENT_MAX}
+                      />
+                      <FieldError
+                        id={errorIdFor('edit', 'department')}
+                        message={editIssues.department}
                       />
                     </div>
-
-                    <div className="grid gap-2">
-                      <Label htmlFor="edit-bio">Bio</Label>
-                      <Textarea
-                        id="edit-bio"
-                        rows={4}
-                        value={editForm.bio ?? ''}
-                        onChange={(event) =>
-                          setEditForm((prev) => (prev ? { ...prev, bio: event.target.value } : prev))
-                        }
-                        placeholder="Short description that appears on their profile"
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>Interests</Label>
-                      <InterestCheckboxes
-                        value={editInterests}
-                        onChange={setEditInterests}
-                        idPrefix="edit-interest"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Interests help matchmaking results. These are the only values the server
-                        accepts, and the participant can change them afterwards.
-                      </p>
-                    </div>
-                  </>
+                  </div>
                 )}
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Email notifications</p>
-                      <p className="text-xs text-muted-foreground">
-                        Toggle to control announcement emails for this user.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={Boolean(editForm.notifications_enabled)}
-                      onCheckedChange={(checked) =>
-                        setEditForm((prev) => (prev ? { ...prev, notifications_enabled: checked } : prev))
-                      }
-                    />
-                  </div>
-                  {/* A switch that cannot be written is worse than no switch: it reads as a
-                      setting the operator has just set. */}
-                  {editingIsParticipant && (
-                    <>
-                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium">Allow matchmaking</p>
-                          <p className="text-xs text-muted-foreground">
-                            Enable to include this user in matchmaking suggestions.
-                          </p>
-                        </div>
-                        <Switch
-                          checked={Boolean(editForm.matchmaking_enabled)}
-                          onCheckedChange={(checked) =>
-                            setEditForm((prev) => (prev ? { ...prev, matchmaking_enabled: checked } : prev))
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium">Receive love notes</p>
-                          <p className="text-xs text-muted-foreground">
-                            When off, other students cannot send new love notes.
-                          </p>
-                        </div>
-                        <Switch
-                          checked={Boolean(editForm.love_notes_receive_enabled)}
-                          onCheckedChange={(checked) =>
-                            setEditForm((prev) => (prev ? { ...prev, love_notes_receive_enabled: checked } : prev))
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium">Send love notes</p>
-                          <p className="text-xs text-muted-foreground">
-                            Disable if the user is restricted from sending notes.
-                          </p>
-                        </div>
-                        <Switch
-                          checked={Boolean(editForm.love_notes_send_enabled)}
-                          onCheckedChange={(checked) =>
-                            setEditForm((prev) => (prev ? { ...prev, love_notes_send_enabled: checked } : prev))
-                          }
-                        />
-                      </div>
-                    </>
-                  )}
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Profile picture, emoji tag, bio, interests and the matchmaking, notification and
+                  love-note settings belong to the account, not to this form. The participant sets
+                  them from their own profile; the server refuses them here even if a request is
+                  made by hand.
+                </p>
                 </div>
               </ScrollArea>
 
@@ -1930,32 +1755,58 @@ const pictured = hasPicture
                   <Input
                     id="create-name"
                     value={createForm.name}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, name: event.target.value }))
+                    aria-invalid={Boolean(createIssues.name)}
+                    aria-describedby={
+                      createIssues.name ? errorIdFor('create', 'name') : undefined
                     }
+                    onChange={(event) => {
+                      setCreateForm((prev) => ({ ...prev, name: event.target.value }));
+                      clearIssue(setCreateIssues, 'name');
+                    }}
                     placeholder="Enter full name"
+                    maxLength={ADMIN_NAME_MAX}
                   />
+                  <FieldError id={errorIdFor('create', 'name')} message={createIssues.name} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="create-regno">Register number *</Label>
                   <Input
                     id="create-regno"
                     value={createForm.regno}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, regno: event.target.value }))
+                    aria-invalid={Boolean(createIssues.regno)}
+                    aria-describedby={
+                      createIssues.regno ? errorIdFor('create', 'regno') : undefined
                     }
+                    onChange={(event) => {
+                      setCreateForm((prev) => ({ ...prev, regno: event.target.value }));
+                      clearIssue(setCreateIssues, 'regno');
+                    }}
                     placeholder="eg. 21CS100"
+                    maxLength={ADMIN_REGNO_MAX}
                   />
+                  <FieldError id={errorIdFor('create', 'regno')} message={createIssues.regno} />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="create-gender">Gender *</Label>
+                  {/* Nothing preselected. The earlier default of `other` was a claim about the
+                      person rather than a placeholder: the vocabulary is male/female/other, so
+                      every account created without a deliberate answer was written down as
+                      *other*. Radix renders the placeholder for `''`, and the required check
+                      below names this field rather than letting it be inferred. */}
                   <Select
                     value={createForm.gender}
-                    onValueChange={(value) =>
-                      setCreateForm((prev) => ({ ...prev, gender: value as UserGender }))
-                    }
+                    onValueChange={(value) => {
+                      setCreateForm((prev) => ({ ...prev, gender: value as UserGender }));
+                      clearIssue(setCreateIssues, 'gender');
+                    }}
                   >
-                    <SelectTrigger id="create-gender">
+                    <SelectTrigger
+                      id="create-gender"
+                      aria-invalid={Boolean(createIssues.gender)}
+                      aria-describedby={
+                        createIssues.gender ? errorIdFor('create', 'gender') : undefined
+                      }
+                    >
                       <SelectValue placeholder="Select a gender" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1966,6 +1817,10 @@ const pictured = hasPicture
                       ))}
                     </SelectContent>
                   </Select>
+                  <FieldError
+                    id={errorIdFor('create', 'gender')}
+                    message={createIssues.gender}
+                  />
                 </div>
                 <div className="grid gap-2">
                   {/* Required for every account type. It used to be marked optional for staff,
@@ -1975,11 +1830,17 @@ const pictured = hasPicture
                     id="create-email"
                     type="email"
                     value={createForm.email}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, email: event.target.value }))
+                    aria-invalid={Boolean(createIssues.email)}
+                    aria-describedby={
+                      createIssues.email ? errorIdFor('create', 'email') : undefined
                     }
+                    onChange={(event) => {
+                      setCreateForm((prev) => ({ ...prev, email: event.target.value }));
+                      clearIssue(setCreateIssues, 'email');
+                    }}
                     placeholder="user@example.com"
                   />
+                  <FieldError id={errorIdFor('create', 'email')} message={createIssues.email} />
                 </div>
                 {createIsParticipant && (
                   <>
@@ -1995,11 +1856,18 @@ const pictured = hasPicture
                           which React then warns about the moment the first year is picked. */}
                       <Select
                         value={createForm.year === '' ? '' : String(createForm.year)}
-                        onValueChange={(value) =>
-                          setCreateForm((prev) => ({ ...prev, year: Number(value) }))
-                        }
+                        onValueChange={(value) => {
+                          setCreateForm((prev) => ({ ...prev, year: Number(value) }));
+                          clearIssue(setCreateIssues, 'year');
+                        }}
                       >
-                        <SelectTrigger id="create-year">
+                        <SelectTrigger
+                          id="create-year"
+                          aria-invalid={Boolean(createIssues.year)}
+                          aria-describedby={
+                            createIssues.year ? errorIdFor('create', 'year') : undefined
+                          }
+                        >
                           <SelectValue placeholder="Select a year" />
                         </SelectTrigger>
                         <SelectContent>
@@ -2010,143 +1878,48 @@ const pictured = hasPicture
                           ))}
                         </SelectContent>
                       </Select>
+                      <FieldError
+                        id={errorIdFor('create', 'year')}
+                        message={createIssues.year}
+                      />
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="create-department">Department/Division *</Label>
                       <Input
                         id="create-department"
                         value={createForm.department}
-                        onChange={(event) =>
-                          setCreateForm((prev) => ({ ...prev, department: event.target.value }))
+                        aria-invalid={Boolean(createIssues.department)}
+                        aria-describedby={
+                          createIssues.department
+                            ? errorIdFor('create', 'department')
+                            : undefined
                         }
+                        onChange={(event) => {
+                          setCreateForm((prev) => ({
+                            ...prev,
+                            department: event.target.value,
+                          }));
+                          clearIssue(setCreateIssues, 'department');
+                        }}
                         placeholder="CSE, ECE, MECH, etc."
+                        maxLength={ADMIN_DEPARTMENT_MAX}
                       />
-                    </div>
-                  </>
-                )}
-                {createIsParticipant && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="create-emoji">Emoji tag</Label>
-                    <Input
-                      id="create-emoji"
-                      value={createForm.emoji}
-                      onChange={(event) =>
-                        setCreateForm((prev) => ({ ...prev, emoji: event.target.value }))
-                      }
-                      placeholder="eg. ??"
-                    />
-                  </div>
-                )}
-                <div className="grid gap-2">
-                  <Label htmlFor="create-avatar">Profile picture</Label>
-                  <Input
-                    id="create-avatar"
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => setCreatePictureFile(event.target.files?.[0] ?? null)}
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    Optional. The file is uploaded to the server after the account is created, so
-                    the address stored is one the server generated.
-                  </p>
-                </div>
-              </div>
-
-              {createIsParticipant && (
-                <>
-                  <div className="grid gap-2">
-                    <Label htmlFor="create-bio">Bio</Label>
-                    <Textarea
-                      id="create-bio"
-                      rows={4}
-                      value={createForm.bio}
-                      onChange={(event) =>
-                        setCreateForm((prev) => ({ ...prev, bio: event.target.value }))
-                      }
-                      placeholder="Short description that appears on their profile"
-                    />
-                  </div>
-
-                  <div className="grid gap-2">
-                    <Label>Interests</Label>
-                    <InterestCheckboxes
-                      value={createInterests}
-                      onChange={setCreateInterests}
-                      idPrefix="create-interest"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Interests enrich matchmaking recommendations. Tick any that apply; the
-                      participant can change them afterwards.
-                    </p>
-                  </div>
-                </>
-              )}
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">Email notifications</p>
-                    <p className="text-xs text-muted-foreground">
-                      Controls announcement emails for this account.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={createForm.notifications_enabled}
-                    onCheckedChange={(checked) =>
-                      setCreateForm((prev) => ({ ...prev, notifications_enabled: checked }))
-                    }
-                  />
-                </div>
-                {/* Matchmaking and love notes are participant columns. They are not shown as
-                    disabled controls for a staff account either: a switch that cannot be turned on
-                    is a switch that reads as a setting the operator has not set yet. */}
-                {createIsParticipant && (
-                  <>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium">Allow matchmaking</p>
-                        <p className="text-xs text-muted-foreground">
-                          Enable to include the new account in matchmaking results.
-                        </p>
-                      </div>
-                      <Switch
-                        checked={createForm.matchmaking_enabled}
-                        onCheckedChange={(checked) =>
-                          setCreateForm((prev) => ({ ...prev, matchmaking_enabled: checked }))
-                        }
-                      />
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium">Receive love notes</p>
-                        <p className="text-xs text-muted-foreground">
-                          When disabled, other students cannot send love notes to this user.
-                        </p>
-                      </div>
-                      <Switch
-                        checked={createForm.love_notes_receive_enabled}
-                        onCheckedChange={(checked) =>
-                          setCreateForm((prev) => ({ ...prev, love_notes_receive_enabled: checked }))
-                        }
-                      />
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium">Send love notes</p>
-                        <p className="text-xs text-muted-foreground">
-                          Disable to prevent the account from sending love notes.
-                        </p>
-                      </div>
-                      <Switch
-                        checked={createForm.love_notes_send_enabled}
-                        onCheckedChange={(checked) =>
-                          setCreateForm((prev) => ({ ...prev, love_notes_send_enabled: checked }))
-                        }
+                      <FieldError
+                        id={errorIdFor('create', 'department')}
+                        message={createIssues.department}
                       />
                     </div>
                   </>
                 )}
               </div>
+
+              <p className="text-xs text-muted-foreground">
+                The account starts with no picture, no emoji tag, no bio, no interests, and with
+                matchmaking, email notifications and receiving love notes switched on while
+                sending love notes is switched off. Those belong to the account, which sets them
+                from its own profile; the server refuses them on this request even if one is
+                sent by hand.
+              </p>
             </div>
           </ScrollArea>
 

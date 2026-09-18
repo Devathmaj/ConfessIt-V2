@@ -52,14 +52,17 @@ SAMPLE_ROUTES = [
     ("POST", "/admin/users"),
     ("PUT", "/admin/users/{user_id}/block"),
     ("PUT", "/admin/users/{user_id}"),
-    # The picture upload replaced the ``profile_picture_url`` field that used to be part of
-    # the create and update payloads. It is listed here so that a future route inventory
-    # cannot quietly lose it -- the field's removal from the JSON bodies is only meaningful
-    # while this route exists to do the job.
-    ("PUT", "/admin/users/{user_id}/picture"),
+    # ``PUT /admin/users/{user_id}/picture`` used to be here. It was the admin's way to set an
+    # account's profile picture, and it is gone: an admin mints an identity, and everything about
+    # the profile itself -- the picture included -- is the account's to set from
+    # ``POST /profile/upload-picture``. Its absence from this list is the assertion. The route
+    # inventory is an exact match, so putting it back would fail ``test_every_admin_route_is_
+    # discovered`` rather than passing quietly.
     ("GET", "/admin/stats"),
     ("GET", "/admin/stats/active-sessions"),
     ("GET", "/admin/config"),
+    ("POST", "/admin/config/matchmaking-slot"),
+    ("DELETE", "/admin/config/matchmaking-slot"),
     ("POST", "/admin/messages/archive"),
     ("GET", "/admin/messages/archives"),
     ("GET", "/admin/messages/archives/{date}"),

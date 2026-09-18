@@ -1,18 +1,24 @@
-"""The four rules this change introduced, tested against the real database.
+"""The rules the account columns themselves hold, tested against the real database.
 
-Four things moved at once, and each of them is the kind that a payload model alone would not
-have caught:
+Four things are asserted here, and each of them is the kind that a payload model alone would
+not have caught:
 
 * ``email`` is required of every account, in the payload *and* in the column.
 * ``gender`` is a closed vocabulary, in the payload *and* in the column.
-* ``interests`` is a closed vocabulary, in the payload *and* in the column.
-* A profile picture is uploaded as bytes, not written as a URL in a JSON body.
+* ``interests`` is a closed vocabulary, on the participant's own profile payload *and* in
+  the column.
+* A profile picture is the account's to upload, not an admin's to write.
 
-The column-level half of each is the half worth testing here, because the payload models are
+The column-level half of each is the half worth testing, because the payload models are
 already exercised by the suite and a constraint that exists only in Pydantic is not a
-constraint -- it is advice. Every test below writes through a path that bypasses the API on
-purpose, because that is the only way to find out whether PostgreSQL is actually holding the
-line.
+constraint -- it is advice. Every column test below writes through a path that bypasses the
+API on purpose, because that is the only way to find out whether PostgreSQL is actually
+holding the line.
+
+The admin half of the last two is the reverse: an admin payload that carried a profile field
+used to have it silently dropped by Pydantic's ``extra="ignore"`` default and answered ``201``.
+Both admin payloads now set ``extra="forbid"``, and the tests below assert the 422 and the
+unchanged row rather than trusting the status code alone.
 """
 
 import io
@@ -28,6 +34,7 @@ from app.main import app
 from app.models import AdminUserCreate, AdminUserUpdate
 from app.postgres import PLACEHOLDER_EMAIL_SQL
 from app.services.auth_service import get_current_user
+from app.services.profile_service import UserProfileUpdate
 
 from conftest import override_get_current_user
 
@@ -167,17 +174,14 @@ def test_anything_outside_the_gender_vocabulary_is_refused(gender):
     ],
 )
 def test_interests_outside_the_vocabulary_are_refused(interests):
-    payload = {
-        "account_type": AccountType.USERS.value,
-        "regno": "r",
-        "name": "Someone",
-        "email": "e@example.com",
-        "year": 2, "department": "Class",
-        "gender": "other",
-        "interests": interests,
-    }
+    """The rule now lives on the participant's own profile payload.
+
+    ``AdminUserCreate`` no longer has an ``interests`` field to validate: interests are the
+    account's, and an admin cannot write them, so the closed vocabulary is enforced where the
+    write actually happens -- ``UserProfileUpdate``, on ``PUT /profile/update``.
+    """
     with pytest.raises(ValueError):
-        AdminUserCreate(**payload)
+        UserProfileUpdate(**{"interests": interests})
 
 
 def test_duplicate_interests_collapse_rather_than_failing():
@@ -188,62 +192,135 @@ def test_duplicate_interests_collapse_rather_than_failing():
     is rendered as a set of ticked boxes -- a duplicate would render as a list with the same
     label twice.
     """
-    payload = {
-        "account_type": AccountType.USERS.value,
-        "regno": "r",
-        "name": "Someone",
-        "email": "e@example.com",
-        "year": 2, "department": "Class",
-        "gender": "other",
-        "interests": ["Music", "Music", "Coding", "Music"],
-    }
-    assert AdminUserCreate(**payload).interests == ["Music", "Coding"]
+    assert UserProfileUpdate(
+        interests=["Music", "Music", "Coding", "Music"]
+    ).interests == ["Music", "Coding"]
 
 
-def test_interests_on_a_staff_payload_never_reach_the_row(admin_client, db):
-    """A staff payload carries participant fields; they must not be written anywhere.
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("interests", ["Music"]),
+        ("emoji", "x"),
+        ("bio", "x"),
+        ("matchmaking_enabled", False),
+        ("notifications_enabled", False),
+        ("love_notes_receive_enabled", False),
+    ],
+)
+def test_an_admin_cannot_write_a_field_the_account_owns(admin_client, field, value):
+    """The 422, which is the whole point of the change.
 
-    The model does not *refuse* them -- it cannot express "this field exists only for one
-    account type" without a discriminated union, and a union would make the OpenAPI schema
-    unreadable for what is in practice one form. The rule is enforced at the point of
-    construction instead: only ``users`` gets these keys, so a moderator row cannot acquire
-    them. Asserting the endpoint behaviour is what pins that down; asserting the model
-    raised would be asserting a rule this payload never claimed.
+    Pydantic's default is ``extra="ignore"``, so a payload carrying ``bio`` used to be accepted,
+    the key dropped, and the caller answered ``201`` -- a success for an insert that never
+    happened. Both admin payloads set ``extra="forbid"`` instead, so a caller that still sends
+    one is told, by name, that it is not theirs to send. Removing the form control alone would
+    have left the write reachable with curl.
     """
     response = admin_client.post(
         "/admin/users",
         json={
-            "account_type": AccountType.MODERATOR.value,
-            "regno": "mod-with-interests",
-            "name": "Mod",
-            "email": "mod-with-interests@example.com",
+            "account_type": AccountType.USERS.value,
+            "regno": f"forbidden-{field}",
+            "name": "Someone",
+            "email": f"forbidden-{field}@example.com",
+            "year": 2, "department": "Class",
             "gender": "other",
-            "interests": ["Music", "Coding"],
-            "bio": "a moderator has no bio either",
+            field: value,
         },
     )
-    assert response.status_code == 201, response.text
-    assert "interests" not in response.json()
+    assert response.status_code == 422, response.text
+    assert field in response.text
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("profile_picture_url", "https://example.test/whatever.png"),
+        ("emoji", "x"),
+        ("bio", "x"),
+        ("interests", ["Music"]),
+        ("matchmaking_enabled", False),
+        ("love_notes_receive_enabled", False),
+        ("love_notes_send_enabled", True),
+        ("notifications_enabled", False),
+        ("is_blocked", True),
+        ("last_matchmaking_at", "2026-01-01T00:00:00Z"),
+    ],
+)
+def test_an_admin_update_refuses_a_field_the_account_owns(admin_client, db, field, value):
+    """Same rule on the way in through the edit route.
+
+    ``last_matchmaking_at`` is here because it was never a form field at all -- it only ever
+    arrived by hand, and the old payload would have written it straight onto the row.
+    """
+    created = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": AccountType.USERS.value,
+            "regno": f"forbidden-update-{field}",
+            "name": "Someone",
+            "email": f"forbidden-update-{field}@example.com",
+            "year": 2, "department": "Class",
+            "gender": "other",
+        },
+    )
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+
+    response = admin_client.put(f"/admin/users/{user_id}", json={"name": "Renamed", field: value})
+    assert response.status_code == 422, response.text
+    assert field in response.text
+
+    # Refused means nothing moved, not merely that the response said so.
+    with db.sessions() as session:
+        row = session.scalar(select(UserRecord).where(UserRecord.id == user_id))
+        assert row.name == "Someone"
+        assert row.bio is None
+        assert row.emoji is None
+        assert list(row.interests) == []
+
+
+def test_an_admin_cannot_write_a_participant_field_onto_staff(admin_client, db):
+    """A staff row has no such columns, so it cannot gain them through the back door."""
+    created = admin_client.post(
+        "/admin/users",
+        json={
+            "account_type": AccountType.MODERATOR.value,
+            "regno": "mod-forbidden",
+            "name": "Mod",
+            "email": "mod-forbidden@example.com",
+            "gender": "other",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    # Year and department are real fields on the admin payload -- they are simply dropped for a
+    # staff row, which is a different rule from refusing them by name.
+    updated = admin_client.put(
+        f"/admin/users/{created.json()['id']}",
+        json={"name": "Mod Renamed", "year": 2, "department": "Class"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert "year" not in updated.json()
+
+    refused = admin_client.put(
+        f"/admin/users/{created.json()['id']}",
+        json={"name": "Mod Renamed", "interests": ["Music"], "bio": "x"},
+    )
+    assert refused.status_code == 422, refused.text
 
     with db.sessions() as session:
         row = session.scalar(
-            select(ModeratorRecord).where(ModeratorRecord.regno == "mod-with-interests")
+            select(ModeratorRecord).where(ModeratorRecord.regno == "mod-forbidden")
         )
         assert row is not None
+        assert row.name == "Mod Renamed"
 
 
 def test_no_interests_is_allowed_and_means_none():
-    """An admin who ticks nothing has selected no interests, which is a valid answer."""
-    payload = {
-        "account_type": AccountType.USERS.value,
-        "regno": "r",
-        "name": "Someone",
-        "email": "e@example.com",
-        "year": 2, "department": "Class",
-        "gender": "other",
-        "interests": [],
-    }
-    assert AdminUserCreate(**payload).interests == []
+    """A participant who unticks everything has selected no interests, which is a valid answer."""
+    assert UserProfileUpdate(interests=[]).interests == []
 
 
 # ------------------------------------------------------------------- the columns themselves
@@ -487,126 +564,71 @@ def test_an_empty_interest_list_is_accepted(db):
         )
 
 
-# ------------------------------------------------------------------ interests round-tripping
+# ------------------------------------------ what a new account starts life holding
 
 
-def test_interests_an_admin_sets_are_visible_and_still_uncheckable(admin_client, db):
-    """The requirement, end to end.
+def test_a_created_account_starts_from_the_declared_defaults(admin_client, db):
+    """Every column the payload no longer carries still has to have a value.
 
-    An admin ticks boxes at creation, the participant sees exactly those ticked, and ticking
-    one off removes it. The last part is what makes the admin's choice an *initial* state
-    rather than a permanent property: a participant who does not like photography can say so.
+    The admin no longer chooses these, so the default moves from the request to the column
+    declaration in ``db_models`` -- which is the only place left that can be sure. Asserting
+    the row rather than the response matters: the response is assembled by a serializer with
+    its own fallbacks, and it is the row that matchmaking, love notes and notifications read.
     """
     created = admin_client.post(
         "/admin/users",
         json={
             "account_type": AccountType.USERS.value,
-            "regno": "interest-user",
-            "name": "Interested",
-            "email": "interested@example.com",
+            "regno": "defaults",
+            "name": "Defaulted",
+            "email": "defaults@example.com",
             "year": 2, "department": "Class",
             "gender": "other",
-            "interests": ["Music", "Coding"],
         },
     )
     assert created.status_code == 201, created.text
-    assert created.json()["interests"] == ["Music", "Coding"]
 
-    user_id = created.json()["id"]
     with db.sessions() as session:
-        row = session.scalar(select(UserRecord).where(UserRecord.id == user_id))
-        assert list(row.interests) == ["Music", "Coding"]
-
-    # The participant unchecks one and leaves the other.
-    updated = admin_client.put(
-        f"/admin/users/{user_id}",
-        json={"name": "Interested", "interests": ["Coding"]},
-    )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["interests"] == ["Coding"]
-
-
-def test_clearing_every_interest_is_allowed(db, admin_client):
-    """An empty list is a deliberate answer and must not be read as "leave it alone"."""
-    created = admin_client.post(
-        "/admin/users",
-        json={
-            "account_type": AccountType.USERS.value,
-            "regno": "clear-interests",
-            "name": "Clearer",
-            "email": "clearer@example.com",
-            "year": 2, "department": "Class",
-            "gender": "other",
-            "interests": ["Music"],
-        },
-    )
-    user_id = created.json()["id"]
-
-    updated = admin_client.put(
-        f"/admin/users/{user_id}", json={"name": "Clearer", "interests": []}
-    )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["interests"] == []
+        row = session.scalar(select(UserRecord).where(UserRecord.id == created.json()["id"]))
+        assert row.profile_picture_url is None
+        assert row.emoji is None
+        assert row.bio is None
+        assert list(row.interests) == []
+        assert row.notifications_enabled is True
+        assert row.matchmaking_enabled is True
+        assert row.love_notes_receive_enabled is True
+        # Off until the participant sends their first love note, which is the only other thing
+        # that sets it.
+        assert row.love_notes_send_enabled is False
+        assert row.is_blocked is False
 
 
-def test_an_update_that_omits_interests_leaves_them_alone(db, admin_client):
-    """Omitted is not the same as empty.
+def test_a_created_participant_agrees_with_a_self_registered_one(db):
+    """The defaults cannot drift from the participant path, because both read the column.
 
-    The editor submits a participant-shaped form, so a save of only the name must not quietly
-    clear a list the admin spent time setting.
+    ``UserDetails`` states the same four booleans in Pydantic for the sign-up path. Two
+    declarations of the same default is a risk, so this compares the two against the same
+    database default rather than trusting either to stay put.
     """
-    created = admin_client.post(
-        "/admin/users",
-        json={
-            "account_type": AccountType.USERS.value,
-            "regno": "omit-interests",
-            "name": "Omitter",
-            "email": "omitter@example.com",
-            "year": 2, "department": "Class",
-            "gender": "other",
-            "interests": ["Music", "Art"],
-        },
-    )
-    user_id = created.json()["id"]
+    from app.models import UserDetails
 
-    updated = admin_client.put(f"/admin/users/{user_id}", json={"name": "Renamed"})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["interests"] == ["Music", "Art"]
+    declared = UserDetails.model_fields
+    assert declared["notifications_enabled"].default is True
+    assert declared["matchmaking_enabled"].default is True
+    assert declared["love_notes_receive_enabled"].default is True
+    assert declared["love_notes_send_enabled"].default is False
 
 
-def test_an_update_cannot_write_interests_onto_staff(admin_client, db):
-    """A staff row has no ``interests`` column, and must not gain one."""
-    created = admin_client.post(
-        "/admin/users",
-        json={
-            "account_type": AccountType.MODERATOR.value,
-            "regno": "mod-interests",
-            "name": "Mod",
-            "email": "mod-interests@example.com",
-            "gender": "other",
-        },
-    )
-    assert created.status_code == 201, created.text
-
-    updated = admin_client.put(
-        f"/admin/users/{created.json()['id']}",
-        json={"name": "Mod", "interests": ["Music"]},
-    )
-    assert updated.status_code == 200, updated.text
-    assert "interests" not in updated.json()
+# --------------------------------------------------------------------- the picture is not an admin's
 
 
-# --------------------------------------------------------------------- picture, not a URL
-
-
-def test_the_create_payload_no_longer_accepts_a_picture_url():
+def test_the_admin_payloads_no_longer_accept_a_picture_url():
     """A URL in a JSON body is an arbitrary string pointing anywhere.
 
-    Dropping the field is what makes the upload route the only way to set a picture. Note
-    that Pydantic ignores unknown keys by default, so this asserts the field is *absent from
-    the model* rather than that a payload carrying it is refused -- what happens to an
-    unrecognised key is a separate question from whether the API still advertises the field,
-    and the OpenAPI schema is what a client reads.
+    Both the field and the upload route are gone, so there is no admin-side path to a picture
+    at all. The model assertion is about what the API advertises; the 422 is asserted by
+    ``test_an_admin_cannot_write_a_field_the_account_owns`` above, and the 404 by
+    ``test_the_admin_picture_route_is_gone`` below.
     """
     assert "profile_picture_url" not in AdminUserCreate.model_fields
     assert "profile_picture_url" not in AdminUserUpdate.model_fields
@@ -628,62 +650,29 @@ def test_a_created_account_starts_with_no_picture(admin_client):
     assert created.json()["profile_picture_url"] is None
 
 
-def test_the_picture_route_is_not_reachable_by_a_participant(client):
-    """Setting a picture edits an account, so it needs ``USERS_UPDATE``.
+@pytest.mark.parametrize("caller", ["client", "admin_client"])
+def test_the_admin_picture_route_is_gone(request, caller):
+    """404, for everyone, with or without the capability.
 
-    The override is popped rather than swapped for the admin fixture: asking for
-    ``admin_client`` in the signature would install *its* override after the participant one,
-    and the request would go out as an admin and be answered with a 404 for the nonexistent
-    id -- a pass that proves nothing.
+    The route used to be the admin's way to set any account's picture. Removing it is what
+    makes the restriction real: there is no endpoint left to call, so the picture can only
+    arrive as bytes from the participant it belongs to.
     """
-    app.dependency_overrides.pop(get_current_user, None)
-    try:
-        response = client.put(
+    if caller == "client":
+        # The override is popped rather than swapped for the admin fixture: asking for
+        # ``admin_client`` here would install *its* override after the participant one, and the
+        # request would go out as an admin.
+        app.dependency_overrides.pop(get_current_user, None)
+        try:
+            response = request.getfixturevalue(caller).put(
+                f"/admin/users/{'0' * 8}-0000-0000-0000-000000000000/picture",
+                files={"file": ("me.png", io.BytesIO(b"x"), "image/png")},
+            )
+        finally:
+            app.dependency_overrides[get_current_user] = override_get_current_user
+    else:
+        response = request.getfixturevalue(caller).put(
             f"/admin/users/{'0' * 8}-0000-0000-0000-000000000000/picture",
             files={"file": ("me.png", io.BytesIO(b"x"), "image/png")},
         )
-    finally:
-        app.dependency_overrides[get_current_user] = override_get_current_user
-    assert response.status_code in (401, 403)
-
-
-def test_the_picture_route_refuses_an_upload_for_an_account_that_does_not_exist(admin_client):
-    """A bad id fails before the bytes are sent anywhere.
-
-    Checking the lookup first is what keeps a mistyped id from leaving an orphaned object in
-    Cloudinary for an account nobody has.
-    """
-    response = admin_client.put(
-        f"/admin/users/{'0' * 8}-0000-0000-0000-000000000000/picture",
-        files={"file": ("me.png", io.BytesIO(b"x"), "image/png")},
-    )
     assert response.status_code == 404
-
-
-def test_the_picture_route_refuses_a_non_image(admin_client):
-    """The bytes are checked before anything is stored.
-
-    The cap and the image validation are the whole reason this is a multipart upload rather
-    than a URL, so the negative case is the one worth asserting. The id is a well-formed UUID
-    that matches nothing, so either the file check or the lookup can refuse it -- what is
-    being asserted is that neither path accepts the bytes.
-    """
-    response = admin_client.put(
-        f"/admin/users/{'0' * 8}-0000-0000-0000-000000000000/picture",
-        files={"file": ("notes.txt", io.BytesIO(b"this is not an image"), "text/plain")},
-    )
-    assert response.status_code in (400, 404)
-
-
-def test_the_picture_route_refuses_an_admin_setting_their_own(admin_client):
-    """The same self-target guard the block route carries.
-
-    An admin cannot unblock themselves, and they cannot quietly replace their own avatar from
-    Profile Review either -- both would be a staff account editing its own row through a
-    screen meant for editing other people.
-    """
-    response = admin_client.put(
-        "/admin/users/adminuser/picture",
-        files={"file": ("me.png", io.BytesIO(b"x"), "image/png")},
-    )
-    assert response.status_code in (400, 404)

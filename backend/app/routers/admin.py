@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select, text
 
 from ..postgres import new_id, is_valid_id
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
 from ..postgres import Database
 
 from ..dependencies import get_db
@@ -11,14 +11,10 @@ from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
     MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
 from ..accounts import (
-    AccountRef, AccountType, Capability, account_cap, account_cap_lock_key,
+    AccountType, Capability, account_cap, account_cap_lock_key,
     normalize_account_type,
 )
 from ..services.authorization import require_capability
-from ..services.account_picture_service import (
-    retire_previous_picture,
-    upload_account_picture,
-)
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
@@ -256,14 +252,21 @@ async def create_user(
 
     The table is chosen by the payload, and the same payload shape creates a participant or
     a staff account: there is no separate admin-creation form or endpoint to fall out of
-    step with this one. Participant-only fields are rejected by the payload validator for a
-    staff account, so a caller cannot smuggle an email onto an admin row.
+    step with this one. ``year`` and ``department`` are required by the payload validator only
+    for a participant, so a caller cannot write them onto a staff row.
 
-    The picture is not accepted here either: ``profile_picture_url`` is gone from the payload,
-    and bytes go through ``PUT /users/{id}/picture`` instead. A URL in a JSON body is a string
-    anybody can point at any host, and an admin screen that accepts one is an SSRF-shaped hole
-    with a form wrapped round it.
+    What an admin supplies is an identity and a cohort -- regno, name, email, gender, and for
+    a participant the year and department. Everything else belongs to the account rather than
+    to whoever typed the form: the picture, emoji, bio, interests and the four preference
+    flags are not on this payload at all, and ``AdminUserCreate`` forbids them by name so a
+    curl that sends one is answered 422 rather than a 201 for an insert that dropped it.
+
+    Each of those columns is still populated on the new row, from the default declared in
+    ``db_models`` rather than from the request: notifications on, matchmaking on, love notes
+    receivable, love notes not yet sendable, no interests, and a NULL picture. A participant
+    edits them through ``PUT /profile/update`` from the moment the account exists.
     """
+
     account_type = payload.account_type
     model = ACCOUNT_MODELS[account_type.value]
     normalized_regno = payload.regno.strip()
@@ -294,53 +297,32 @@ async def create_user(
                 detail="An account with this email already exists for this account type.",
             )
 
-    # ``clean_interests`` has already de-duplicated and bounded the list, and the
-    # ``Interest`` type has already refused anything outside the vocabulary, so there is
-    # nothing left to normalise here beyond the round trip through the model's own ordering.
-    interests_value: List[str] = list(payload.interests or [])
-
-    # An admin row is never blocked -- ``ck_admin_not_blockable`` in ``db_models`` is what
-    # actually enforces that, at the database, for every writer including raw SQL. This check
-    # exists only so that asking for one produces a 400 that says why, instead of letting the
-    # constraint fire as an IntegrityError the client sees as a 500. The database remains the
-    # enforcement point; removing this line would not make an admin blockable.
-    if account_type is AccountType.ADMIN and payload.is_blocked:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An admin account cannot be blocked.",
-        )
-
+    # ``notifications_enabled`` and ``is_blocked`` are intentionally not written here. Both have
+    # server defaults in ``db_models.AccountColumns`` (true and false), so the new row takes the
+    # declared values whether or not this dict mentions them, and there is no longer any way to
+    # ask for a different one at creation time. Blocking an existing account is
+    # ``PUT /admin/users/{id}/block``, which is a decision about a row that already exists.
+    #
     # Only the fields the target table actually has are passed to the constructor. Building
     # the kwargs from the payload with the participant keys removed -- rather than branching
     # into two constructors -- means a field added to AccountColumns lands in all three
     # tables at once, and a participant-only field can never reach a staff row.
-    #
-    # ``profile_picture_url`` is absent from this dict on purpose: it is set only by the
-    # upload route, so it starts NULL and is filled in by bytes that passed through
-    # Cloudinary rather than by whatever URL a caller typed into a form.
     account_fields: Dict[str, Any] = {
         "regno": normalized_regno,
         "name": payload.name.strip(),
         "email": normalized_email,
         "profile_picture_url": None,
         "gender": payload.gender.strip(),
-        "notifications_enabled": payload.notifications_enabled,
-        "is_blocked": payload.is_blocked,
     }
     if account_type is AccountType.USERS:
         account_fields.update({
-            "emoji": payload.emoji.strip() if payload.emoji else None,
-            "bio": payload.bio.strip() if payload.bio else None,
             # Written from the two fields separately rather than by joining them back into one
             # string. The columns are what matchmaking groups by, and a stored "CSE 2" would
             # be groupable by neither half.
             "year": payload.year,
             "department": payload.department.strip(),
-            "interests": interests_value or [],
-            "matchmaking_enabled": payload.matchmaking_enabled,
-            "love_notes_receive_enabled": payload.love_notes_receive_enabled,
-            "love_notes_send_enabled": payload.love_notes_send_enabled,
         })
+
 
     with db.sessions.begin() as session:
         # The cap is checked here, inside the same transaction as the insert, and behind an
@@ -438,6 +420,15 @@ async def update_user_details(
     editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
     moderator into a participant and strand the content that references it.
 
+    The editable set is the account's identity: regno, name, gender, email, and year and
+    department for a participant. The picture, emoji, bio, interests and the four preference
+    flags are not fields on this payload, and ``extra="forbid"`` refuses them by name -- so a
+    caller still sending one gets a 422 rather than a 200 for an edit that silently did not
+    happen. ``is_blocked`` is likewise absent, and blocking an account is the separate
+    ``PUT /admin/users/{id}/block`` route. That is what removes this route's old job of
+    refusing to block an admin: an admin row's block state cannot be written here at all, so
+    there is no second door to guard.
+
     A field the operator cleared is dropped rather than written. ``AdminUserUpdate``'s validator
     turns a blank string into ``None`` so the *model* is valid, but ``exclude_unset`` keeps the key
     -- the field was sent, it just held nothing -- and writing that ``None`` to a NOT NULL column
@@ -465,37 +456,21 @@ async def update_user_details(
     if not update_payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided")
 
-    # ``AdminUserUpdate`` carries ``is_blocked``, so this route is a second way to reach the
-    # block column and has to refuse an admin for the same reason the block route does. The
-    # CHECK constraint is still what enforces it -- this is the courtesy 400, not the rule.
-    if update_payload.get("is_blocked") is True:
-        with db.sessions() as session:
-            target = resolve_account_by_id(session, user_id)
-        if target and normalize_account_type(target[0]) == AccountType.ADMIN.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="An admin account cannot be blocked.",
-            )
-
     with db.sessions.begin() as session:
         found = resolve_account_by_id(session, user_id)
         if found:
             account_type, account = found
-            # Participant-only keys are dropped for a staff account. The participant-shaped
-            # form submits every field it knows about, and without this an edit to a
-            # moderator's name would also try to write a bio onto a table that has no bio
-            # column -- and, more insidiously, would write one if the column were ever added
-            # for an unrelated reason.
+            # ``year`` and ``department`` are dropped for a staff account. The participant-shaped
+            # form submits every field it knows about, and without this an edit to a moderator's
+            # name would also try to write a cohort onto a table that has no such columns -- and,
+            # more insidiously, would write one if the columns were ever added for an unrelated
+            # reason.
             #
             # ``email`` is *not* on this list. It is a shared column now, required on every
             # account, so a moderator's address is edited exactly as a participant's is; the
             # note that once stood here to explain its absence is what would have led to
             # staff rows being left without one.
-            participant_only = (
-                "emoji", "bio", "year", "department", "interests", "matchmaking_enabled",
-                "love_notes_receive_enabled", "love_notes_send_enabled", "last_matchmaking_at",
-                "last_confession_at",
-            )
+            participant_only = ("year", "department")
             if account_type != AccountType.USERS.value:
                 update_payload = {
                     key: value for key, value in update_payload.items()
@@ -510,98 +485,6 @@ async def update_user_details(
     return serialize_user_doc(updated_doc)
 
 
-@router.put("/users/{user_id}/picture", response_model=Dict[str, Any])
-async def set_user_profile_picture(
-    user_id: str,
-    db: Database = Depends(get_db),
-    current_admin: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE)),
-    file: UploadFile = File(...)
-) -> Dict[str, Any]:
-    """Upload and store a profile picture for an account in any of the three tables.
-
-    This is the replacement for the ``profile_picture_url`` field that used to be part of the
-    create and update payloads, and the reason it is a separate endpoint rather than a field is
-    the whole point of the change: a URL in a JSON body is an arbitrary string. Nothing checks
-    where it points, nothing verifies the bytes behind it are an image, and an admin form that
-    accepts one is a way to make the server hold a link to anywhere. Receiving the image as
-    multipart means the bytes pass through the size cap and the image validation in
-    ``storage_service`` before they are stored anywhere, and the URL that ends up in the
-    database is one the server generated.
-
-    The target is resolved by id across all three tables, for the same reason
-    ``PUT /users/{id}/block`` does: a moderator's picture is exactly as editable as a
-    participant's, and a route that only looked in ``users`` would quietly not work on half the
-    accounts this screen lists.
-
-    ``USERS_UPDATE`` is the capability required, not ``USERS_CREATE``: setting a picture edits
-    an existing account, and it is the same permission as any other edit to it.
-
-    Uploading is not undone if a later step fails. The upload succeeds or raises before the
-    database is touched, and the write that follows is a single column on one row, so there is no
-    window where the account is left pointing at an object that does not exist. Note that this is
-    a two-transaction route rather than one locked transaction on purpose: holding a database
-    transaction open across a Cloudinary round trip would pin a connection for the length of a
-    network call. The cost is that the row can be deleted between the two, which the second read
-    turns into a 404 -- the object uploaded in between is then orphaned, which is the lesser
-    failure next to the alternative.
-    """
-    if not is_valid_id(user_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
-
-    if str(current_admin.id) == user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot change your own profile picture from Profile Review",
-        )
-
-    # Resolved before the upload rather than after it: a bad id should fail immediately, and
-    # uploading first would leave an orphaned object in Cloudinary for an account that does not
-    # exist. The row is read here only to learn the owner regno and the previous URL, both of
-    # which the upload needs; the write is a separate transaction so the network round trip is
-    # not held open across it.
-    with db.sessions() as session:
-        found = resolve_account_by_id(session, user_id)
-        if not found:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-        account_type, account = found
-        owner_ref = AccountRef.from_row(account, account_type)
-        previous_picture_url = account.profile_picture_url
-
-    upload = await upload_account_picture(
-        file=file,
-        owner_regno=owner_ref.regno,
-        account=owner_ref,
-        previous_picture_url=previous_picture_url,
-        actor_regno=current_admin.regno,
-    )
-
-    # Serialised inside the transaction, not after it. `db.sessions.begin()` commits and closes on
-    # the way out, and a commit expires every attribute on the instance, so reading `account`
-    # afterwards raises DetachedInstanceError -- a 500 on the successful path of a route whose
-    # upload had already worked. The other write routes here build their document inside the
-    # block for the same reason.
-    with db.sessions.begin() as session:
-        found = resolve_account_by_id(session, user_id)
-        if not found:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-        account_type, account = found
-        account.profile_picture_url = upload["stored_identifier"]
-        updated_doc = serialize_user_doc(_account_row_payload(account_type, account))
-
-    # The old object is retired only now that the row names the new one and the write has
-    # committed. Doing it inside the transaction would mean a rollback there leaves the account
-    # pointing at bytes that have already been deleted, with no way to get them back.
-    retire_previous_picture(
-        previous_picture_url=previous_picture_url,
-        owner_regno=owner_ref.regno,
-        new_stored_identifier=upload["stored_identifier"],
-        actor_regno=current_admin.regno,
-    )
-
-    return {
-        **updated_doc,
-        "message": "Profile picture uploaded successfully",
-    }
 
 
 @router.get("/stats", response_model=Dict[str, Any])
@@ -951,4 +834,3 @@ async def update_message_report_status(
     the third field so the screen can say plainly whether anything came down.
     """
     return resolve_message_report(db, report_id, new_status, reviewer.regno)
-

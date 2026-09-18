@@ -28,6 +28,8 @@ from app.limits import (
     MESSAGE_BODY_MAX,
     RECIPIENT_NAME_MAX,
     REPORT_REASON_MAX,
+    USER_BIO_MAX,
+    USER_EMOJI_MAX,
 )
 from app.models import CommentCreate, ConfessionCreate, ReportCreate
 from app.routers.messages import MessageCreate, MessageReport
@@ -237,16 +239,59 @@ def test_whitespace_is_not_a_character_requirement():
         ("name", 160),
         ("regno", 100),
         ("department", 80),
-        ("bio", 500),
-        ("emoji", 16),
     ],
 )
 def test_admin_user_fields_are_capped(field, limit):
+    """What an admin may write, against the width of the column it lands in.
+
+    ``bio`` and ``emoji`` used to appear here. They do not any more, because an admin can no
+    longer write them at all, and their cap is asserted on the participant's payload below.
+    Leaving them in this list would have kept asserting a constraint against a payload that
+    refuses the key outright -- the test would pass for the wrong reason, and would go on
+    passing if the cap were later dropped from the route that does write the field.
+    """
     from app.models import AdminUserCreate
 
     AdminUserCreate(**_admin_user(**{field: "x" * limit}))
     with pytest.raises(ValidationError):
         AdminUserCreate(**_admin_user(**{field: "x" * (limit + 1)}))
+
+
+@pytest.mark.parametrize(
+    "field, limit",
+    [
+        ("emoji", USER_EMOJI_MAX),
+        ("bio", USER_BIO_MAX),
+    ],
+)
+def test_profile_fields_are_capped_on_the_participant_payload(field, limit):
+    """The cap follows the write, not the field.
+
+    These two fields are the account's own, so the admin payload no longer carries them and
+    ``PUT /profile/update`` is the only route that can set them. The cap therefore has to be
+    declared there too: without it the column width is the only limit, and an over-long bio
+    comes back as a 500 from the database rather than a 422 that names the field.
+    """
+    from app.services.profile_service import UserProfileUpdate
+
+    UserProfileUpdate(**{field: "x" * limit})
+    with pytest.raises(ValidationError):
+        UserProfileUpdate(**{field: "x" * (limit + 1)})
+
+
+def test_the_profile_caps_match_the_columns():
+    """The payload cap and the column width are the same number, deliberately.
+
+    Two independent declarations of one limit is how a field ends up writable past its column
+    and then failing on insert. This reads both so the pairing is checked rather than assumed.
+    """
+    from app.db_models import UserRecord
+    from app.services.profile_service import UserProfileUpdate
+
+    assert UserRecord.__table__.c.emoji.type.length == USER_EMOJI_MAX
+    assert UserRecord.__table__.c.bio.type.length == USER_BIO_MAX
+    assert UserProfileUpdate.model_fields["emoji"].metadata[0].max_length == USER_EMOJI_MAX
+    assert UserProfileUpdate.model_fields["bio"].metadata[0].max_length == USER_BIO_MAX
 
 
 def test_gender_is_bounded_by_value_rather_than_by_length():
