@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Heart, User, Menu, X, MessageSquareText, Shuffle, Mail, Gamepad2, Bell, MessageCircle } from 'lucide-react';
+import { Heart, User, Menu, X, MessageSquareText, Shuffle, Mail, Gamepad2, Bell, MessageCircle, LogOut } from 'lucide-react';
+import { toast } from 'sonner';
 // This component is referenced in your ProfilePage.tsx, so we assume it exists here.
 import { ModeToggle } from '@/components/ui/ModeToggle';
+import { useAuth } from '@/contexts/AuthContext';
 
 /**
  * A responsive, floating navigation bar for the application.
@@ -12,15 +14,25 @@ import { ModeToggle } from '@/components/ui/ModeToggle';
 export const Navigation = () => {
   // State to manage the visibility of the mobile menu
   const [isOpen, setIsOpen] = useState(false);
+  const { logout, isAuthenticated } = useAuth();
+
+  /**
+   * Used to log the user out of the application and display a farewell message.
+   */
+  const handleLogout = () => {
+    logout();
+    setIsOpen(false);
+    toast.success('Goodbye! Come back soon ❤️');
+  };
 
   // Configuration for navigation links to keep the code clean and maintainable.
   const navLinks = [
-    { to: "/confessions", text: "Confessions", icon: MessageSquareText },
-    { to: "/matchmaking", text: "Matchmaking", icon: Shuffle },
-    { to: "/notifications", text: "Notifications", icon: Bell },
-    { to: "/inbox", text: "Message Box", icon: MessageCircle },
-    { to: "/love-notes", text: "Love Notes", icon: Mail },
-    { to: "/mini-games", text: "Mini Games", icon: Gamepad2 },
+    { to: "/confessions", text: "Confess", icon: MessageSquareText },
+    { to: "/matchmaking", text: "Match", icon: Shuffle },
+    { to: "/notifications", text: "Alerts", icon: Bell },
+    { to: "/inbox", text: "Inbox", icon: MessageCircle },
+    { to: "/love-notes", text: "Notes", icon: Mail },
+    { to: "/mini-games", text: "Games", icon: Gamepad2 },
   ];
 
   // Common Tailwind classes for NavLink components to ensure consistency.
@@ -63,7 +75,7 @@ export const Navigation = () => {
             ))}
           </div>
 
-          {/* Right side: Theme Toggle and Profile Link */}
+          {/* Right side: Theme Toggle, Profile Link and Logout */}
           <div className="hidden xl:flex items-center gap-2">
             <ModeToggle />
             <NavLink
@@ -73,6 +85,17 @@ export const Navigation = () => {
             >
               <User className="h-5 w-5" />
             </NavLink>
+            {isAuthenticated && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="Logout"
+                title="Logout"
+                className="p-2 rounded-full text-foreground/70 hover:text-destructive hover:bg-secondary/50 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <LogOut className="h-5 w-5" />
+              </button>
+            )}
           </div>
 
           {/* Mobile/Tablet Menu Button - Show on screens smaller than xl (including iPad Pro) */}
@@ -118,6 +141,16 @@ export const Navigation = () => {
                   <ModeToggle />
                 </div>
               </div>
+              {isAuthenticated && (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className={`w-full ${baseLinkClass} text-destructive hover:bg-destructive/10`}
+                >
+                  <LogOut className="h-5 w-5 flex-shrink-0" />
+                  <span className="text-sm">Logout</span>
+                </button>
+              )}
             </div>
           </div>
         )}

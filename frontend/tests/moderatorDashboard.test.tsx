@@ -269,8 +269,8 @@ describe('AdminNavigation: what it calls the area', () => {
     renderWith(<AdminNavigation />, ADMIN_CAPABILITIES);
     expect(screen.queryByRole('link', { name: /^moderation$/i })).not.toBeInTheDocument();
     // The queues the hub would have listed are still all offered, so nothing is lost with it.
-    expect(screen.getByRole('link', { name: /reports review/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /confession review/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /reports/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /confessions/i })).toBeInTheDocument();
   });
 
   it('says Moderation on a review screen too, not only on the hub', () => {
@@ -281,7 +281,7 @@ describe('AdminNavigation: what it calls the area', () => {
     // and has to be answered from the account's capabilities.
     renderWith(<AdminNavigation />, MODERATION_CAPABILITIES);
 
-    expect(screen.getByRole('link', { name: /reports review/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /reports/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /confessit moderation/i })).toBeInTheDocument();
   });
 
