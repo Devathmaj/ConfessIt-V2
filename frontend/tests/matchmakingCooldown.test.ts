@@ -56,11 +56,23 @@ describe('readCooldown', () => {
 
 describe('cooldownPermitsMatch', () => {
   it('permits a draw on an eligible answer', () => {
-    expect(cooldownPermitsMatch({ known: true, remaining: null })).toBe(true);
+    expect(cooldownPermitsMatch({ known: true, remaining: null, cohortBlock: null })).toBe(true);
   });
 
   it('refuses a draw while the wait is running', () => {
-    expect(cooldownPermitsMatch({ known: true, remaining: cooldown })).toBe(false);
+    expect(cooldownPermitsMatch({ known: true, remaining: cooldown, cohortBlock: null })).toBe(false);
+  });
+
+  it('refuses a draw for a cohort with no slot', () => {
+    // Not a wait, so nothing would ever lift it, and the point of asking before the animation is
+    // that this user is never sent through it to be refused at the end.
+    expect(
+      cooldownPermitsMatch({
+        known: true,
+        remaining: null,
+        cohortBlock: { message: 'Your cohort is not in any matchmaking slot.' },
+      })
+    ).toBe(false);
   });
 
   it('refuses a draw when the check never came back', () => {

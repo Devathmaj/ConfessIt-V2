@@ -362,7 +362,7 @@ def test_postgresql_still_refuses_a_duplicate_regno_within_one_table(db):
 
 
 # ----------------------------------------------------------------------
-# The active-session list reads accounts across all three tables
+# The active-today count includes staff, not only participants
 # ----------------------------------------------------------------------
 
 
@@ -393,13 +393,14 @@ def _consumed_token(db, account_id, account_type, *, regno_suffix=""):
         return str(token.id)
 
 
-def test_the_session_list_reads_an_account_out_of_each_table(admin_client, db):
-    """Regression: this list is per-token and cross-table, and it must not blow up.
+def test_the_active_count_reads_a_session_from_each_table(admin_client, db):
+    """Regression: a staff session counts as active, and so does a participant's.
 
-    It resolves each token's account with the table recorded on that token, so it exercises
-    all three tables in one call. A participant-only version of this query would pass a test
-    that only seeded participants, and a wrong arity on the resolver -- which is what
-    actually happened -- is invisible to every test that never reaches this code.
+    The dashboard's "Active Today" figure counts distinct accounts holding a live session,
+    taken from the login token, which names the table its account lives in. It therefore sees
+    staff and participants alike, without resolving an account row at all -- a count taken
+    only from ``users`` would quietly report the moderation team as absent, which is the bug
+    this pins shut.
     """
     ids = _seed_shared(db)
     with db.sessions.begin() as session:
@@ -411,17 +412,9 @@ def test_the_session_list_reads_an_account_out_of_each_table(admin_client, db):
     for account_type in (AccountType.USERS.value, AccountType.MODERATOR.value, AccountType.ADMIN.value):
         _consumed_token(db, ids[account_type], account_type, regno_suffix=account_type)
 
-    response = admin_client.get("/admin/stats/active-sessions")
+    response = admin_client.get("/admin/stats")
 
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["count"] >= 3
-    # A staff session showing up here is the point: a ``users``-only query would return the
-    # participant and quietly drop the other two.
-    users = [entry["user"] for entry in body["sessions"]]
-    assert {u["regno"] for u in users} >= {SHARED, "staff-reg"}
-    assert {u["account_type"] for u in users} >= {
-        AccountType.USERS.value,
-        AccountType.MODERATOR.value,
-        AccountType.ADMIN.value,
-    }
+    # Three accounts, three tables, three live sessions. At least, because any other token
+    # the fixture database already holds counts too.
+    assert response.json()["active_sessions"] >= 3

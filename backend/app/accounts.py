@@ -90,15 +90,14 @@ class Capability(str, Enum):
     USERS_CREATE = "users:create"
     USERS_UPDATE = "users:update"
     USERS_BLOCK = "users:block"
-    SESSIONS_READ = "sessions:read"
     MESSAGES_ARCHIVE = "messages:archive"
     APP_CONFIG_READ = "app_config:read"
 
 
 # What a moderator can do: read every content queue and act on what is in it. Nothing here can
-# count the platform, create, edit, block, or mint an account, see a session, or touch the
-# message archive -- the moderator dashboard this backs measures its own backlog, from the
-# queue endpoints below, rather than counting the platform behind them.
+# count the platform, create, edit, block, or mint an account, or touch the message archive --
+# the moderator dashboard this backs measures its own backlog, from the queue endpoints below,
+# rather than counting the platform behind them.
 MODERATION_CAPABILITIES: frozenset[str] = frozenset(
     capability.value
     for capability in (
@@ -130,7 +129,6 @@ ADMIN_ONLY_CAPABILITIES: frozenset[str] = frozenset(
         Capability.USERS_CREATE,
         Capability.USERS_UPDATE,
         Capability.USERS_BLOCK,
-        Capability.SESSIONS_READ,
         Capability.MESSAGES_ARCHIVE,
         Capability.APP_CONFIG_READ,
     )

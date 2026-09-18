@@ -24,7 +24,6 @@ import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 
 const api = vi.hoisted(() => ({
   getAdminStats: vi.fn(),
-  getAdminActiveSessions: vi.fn(),
   getAdminConfessionReports: vi.fn(),
   getAdminLoveNoteReports: vi.fn(),
   getAdminMessageReports: vi.fn(),
@@ -178,7 +177,6 @@ describe('ModeratorDashboard: the backlog it counts', () => {
       expect(screen.getByRole('button', { name: /open reports/i })).toHaveTextContent('1');
     });
     expect(api.getAdminStats).not.toHaveBeenCalled();
-    expect(api.getAdminActiveSessions).not.toHaveBeenCalled();
     // Nor the whole confession feed: a confession is public the moment it is written, so there
     // is no pending figure for it and pulling the entire review screen to invent one would be
     // the most expensive request on the page.
@@ -193,7 +191,9 @@ describe('ModeratorDashboard: the backlog it counts', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /open reports/i })).toHaveTextContent('1');
     });
-    ['Total Users', 'Active Sessions', 'Total Confessions', 'Blocked Users'].forEach((label) => {
+    // The console's own tile labels. Named exactly as that page renders them, so a rename
+    // there cannot quietly turn this into an assertion about a label nobody shows.
+    ['Total Users', 'Active Today', 'Total Confessions', 'Blocked Users'].forEach((label) => {
       expect(screen.queryByText(label)).not.toBeInTheDocument();
     });
   });

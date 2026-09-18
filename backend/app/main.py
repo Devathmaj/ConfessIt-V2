@@ -20,6 +20,7 @@ from .services.auth_service import oauth2_scheme, verify_token_service, load_act
 from .dependencies import get_db 
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
+from .services.matchmaking_service import MatchmakingRefusal
 from .services import asset_delivery_service
 from .models import AccountDetails
 import uvicorn
@@ -351,6 +352,25 @@ async def _request_validation_response(request: Request, exc: RequestValidationE
     )
 
 
+# ----------------------
+# A draw that was refused
+# ----------------------
+# A matchmaking refusal is a 404 whose ``detail`` is a sentence written for a person, and the
+# page has to decide what to *show* as well as what to say in a toast. Those are different
+# sentences: a draw refused because nobody was available and a draw refused because the cohort has
+# no slot are both "no match", but only the second one is permanent, and telling that user to try
+# again would be as wrong as telling them they are on a cooldown.
+#
+# So the code travels beside the sentence rather than inside it. ``detail`` stays a plain string,
+# which keeps ``describeApiError`` and the toast exactly as they were; the client branches on
+# ``code`` and falls back to the sentence alone if it meets a server that does not send one.
+async def _matchmaking_refusal_response(request: Request, exc: MatchmakingRefusal) -> Response:
+    return JSONResponse(
+        {"detail": exc.detail, "code": exc.code},
+        status_code=exc.status_code,
+    )
+
+
 class RequestBodyLimitMiddleware:
     """Reject a request whose body exceeds the configured ceiling, declared or not."""
 
@@ -425,6 +445,9 @@ def request_body_limit() -> int:
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=request_body_limit())
 app.add_exception_handler(RequestBodyTooLarge, _body_too_large_response)
 app.add_exception_handler(RequestValidationError, _request_validation_response)
+# Registered for the subclass, so it does not shadow the ordinary HTTPException handler: FastAPI
+# walks the exception's bases, so a plain HTTPException still gets the default body.
+app.add_exception_handler(MatchmakingRefusal, _matchmaking_refusal_response)
 
 # ----------------------
 # CORS Middleware

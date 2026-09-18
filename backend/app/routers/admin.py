@@ -19,7 +19,6 @@ from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
     _account_row_payload,
-    collect_active_sessions,
     get_all_confessions_data,
     get_confession_reports_data,
     get_admin_statistics_data,
@@ -496,25 +495,6 @@ async def get_admin_statistics(
     return get_admin_statistics_data(db)
 
 
-@router.get("/stats/active-sessions", response_model=Dict[str, Any])
-async def list_active_sessions(
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.SESSIONS_READ))
-) -> Dict[str, Any]:
-    """Return details about users with recent activity for the active sessions dialog."""
-    sessions = collect_active_sessions(db)
-
-    unique_user_ids = {session.get("user", {}).get("id") for session in sessions if session.get("user")}
-    unique_user_ids.discard(None)
-
-    return {
-        "count": len(sessions),
-        "unique_user_count": len(unique_user_ids),
-        "sessions": sessions,
-        "window_hours": 24,
-    }
-
-
 @router.get("/config", response_model=Dict[str, Any])
 async def read_app_configuration(
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ)),
@@ -548,6 +528,13 @@ async def create_matchmaking_slot(
     department_a: str = Body(..., description="Department or division of the first cohort. Required."),
     year_b: Year = Body(..., description="Year of the second cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
     department_b: str = Body(..., description="Department or division of the second cohort. Required."),
+    group_key: Optional[str] = Body(
+        None,
+        description=(
+            "UUID naming the editor slot box this pair belongs to. Optional: a pair is valid on its "
+            "own, and rows written before this existed have none. It does not affect what may match."
+        ),
+    ),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
 ) -> Dict[str, Any]:
@@ -562,10 +549,17 @@ async def create_matchmaking_slot(
     so a year outside the range is a 422 naming the field. Without it the value would reach
     the table and be refused by a CHECK constraint as a 500, or -- on a write that somehow skipped
     that -- become a cohort that matches nobody.
+
+    ``group_key`` is a plain ``str`` rather than a ``UUID`` so that a malformed one is answered with
+    a 400 naming the field, the way ``slot_id`` is on the delete route. Letting the type system
+    reject it would produce a 422 whose ``loc`` points at the body rather than at the field, which
+    is the mistake ``test_the_delete_endpoint_takes_the_id_in_an_object`` records.
     """
     from ..services.matchmaking_slot_service import create_matchmaking_slot_service
 
-    slot = await create_matchmaking_slot_service(db, year_a, department_a, year_b, department_b)
+    slot = await create_matchmaking_slot_service(
+        db, year_a, department_a, year_b, department_b, group_key
+    )
     return slot
 
 

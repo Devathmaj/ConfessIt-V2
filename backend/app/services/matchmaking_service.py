@@ -12,6 +12,12 @@ from datetime import datetime, timedelta, timezone
 from ..models import UserDetails
 from ..services.storage_service import storage_service
 from ..services import asset_delivery_service
+from ..services.matchmaking_slot_service import (
+    candidate_shares_a_slot_predicate,
+    cohort_is_configured,
+    cohort_label,
+    slots_are_configured,
+)
 from ..accounts import AccountRef
 
 # Logger
@@ -58,6 +64,30 @@ def _consume_matchmaking_attempt(session, regno: str, now: datetime) -> bool:
     return result.rowcount == 1
 
 
+COHORT_NOT_CONFIGURED = "matchmaking_cohort_not_configured"
+NO_CANDIDATES = "matchmaking_no_candidates"
+
+
+class MatchmakingRefusal(HTTPException):
+    """A draw that was refused, carrying a code the client can branch on.
+
+    ``detail`` is the human sentence the toast shows and stays a plain string, because that is
+    what ``describeApiError`` reads and it should not have to change. ``code`` is what the client
+    branches on to decide what the *page* should say.
+
+    The two need to be separate because the two refusals ask different things of the reader. "No
+    potential matches found" is bad luck, and the honest response is that another attempt may
+    succeed. "Your cohort is not configured" is not bad luck at all -- no future attempt can succeed
+    until an operator adds a slot -- and telling that user to try again would be the same mistake as
+    telling them they are on a cooldown. The server is the only place that knows which happened, and
+    a client that inferred it from the wording would break the day a sentence is reworded.
+    """
+
+    def __init__(self, detail: str, code: str):
+        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+        self.code = code
+
+
 def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
     hours, remainder = divmod(seconds_remaining, 3600)
     minutes = remainder // 60
@@ -69,39 +99,65 @@ def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
 
 def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     """
-    Used to check if the user is eligible for matchmaking based on the cooldown period.
+    Used to check if a user is eligible for matchmaking based on the cooldown period.
     The matchmaking page should only show matchmaking UI or cooldown, not conversation status.
     Conversation status is handled by the inbox.
 
     The caller is a ``UserDetails``, which the router only produces for an account in
-    ``users``, so there is no staff check here: a staff account cannot reach this function.
+    ``users``, so no staff check is needed here.
+
+    **Three answers, not two.** A cooldown and a cohort with no slot both stop a draw, but they are
+    different problems for different people and the page has to be able to tell them apart: one is
+    the user's own timer, the other is an operator's configuration. Answering ``cohort_not_configured``
+    here rather than letting the draw discover it is what lets the page stop *before* the animation
+    instead of after it, so the user is not made to watch five seconds of matching to be told what
+    they could have been told by a click.
+
+    Ordered so the cheaper and more common answer wins: a user who is on a cooldown is told so
+    without the slot table being read, and a user with no slot is told that even if they would also
+    have been on a cooldown -- because the slot is the one that will still be true in four hours.
     """
     current_time = datetime.now(timezone.utc)
 
     # Check if user has matchmaking time within cooldown period
     if current_user.last_matchmaking_at:
         cooldown_period = timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
-        
+
         # Ensure last_matchmaking_at is timezone-aware
         last_matchmaking_at = current_user.last_matchmaking_at
         if last_matchmaking_at.tzinfo is None:
             last_matchmaking_at = last_matchmaking_at.replace(tzinfo=timezone.utc)
-        
+
         time_since_last_matchmaking = current_time - last_matchmaking_at
-        
+
         if time_since_last_matchmaking < cooldown_period:
             # Within cooldown period - show cooldown
             remaining_time = cooldown_period - time_since_last_matchmaking
             hours, remainder = divmod(remaining_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
-            
+
             return {
                 "status": "cooldown",
                 "message": f"You are on a cooldown. Please try again in {int(hours)} hours and {int(minutes)} minutes.",
                 "remaining_hours": int(hours),
                 "remaining_minutes": int(minutes)
             }
-    
+
+    # A cohort no slot names cannot be matched, and no amount of waiting changes that. Only a
+    # configured deployment can refuse a cohort this way; with no slots at all every cohort may
+    # match with every other, so there is nobody to refuse.
+    if slots_are_configured(db) and not cohort_is_configured(
+        db, current_user.year, current_user.department
+    ):
+        return {
+            "status": "cohort_not_configured",
+            "message": (
+                f"Your cohort ({cohort_label(current_user.year, current_user.department)}) is not "
+                "in any matchmaking slot. An administrator needs to add it."
+            ),
+            "cohort": cohort_label(current_user.year, current_user.department),
+        }
+
     # No last_matchmaking_at or past cooldown period - eligible for matchmaking
     return {"status": "eligible", "message": "You are eligible for matchmaking. Proceed?"}
 
@@ -117,6 +173,29 @@ class _PairTaken(Exception):
 
 def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime) -> dict:
     """One pass: claim the attempt, pick a partner, and write the match atomically."""
+    # Whether this cohort can be matched at all, decided before anything is written.
+    #
+    # This is the one refusal that costs the user nothing. Spending an attempt on it would be the
+    # worst of the three outcomes: the user watches five seconds of animation, is told their cohort
+    # is not configured, and is then locked out for four hours from a draw that could never have
+    # succeeded anyway. Nothing about waiting changes the answer -- only an operator adding a slot
+    # does -- so the attempt is left unspent and the user may click again the moment they are
+    # configured, without losing anything.
+    #
+    # Read per draw, because an operator can add the missing slot between two attempts, and the
+    # user should not have to wait out a cooldown to benefit from it.
+    slots_exist = slots_are_configured(db)
+    if slots_exist and not cohort_is_configured(
+        db, current_user.year, current_user.department
+    ):
+        raise MatchmakingRefusal(
+            detail=(
+                f"Your cohort ({cohort_label(current_user.year, current_user.department)}) is not "
+                "configured for matchmaking. Your attempt has not been used."
+            ),
+            code=COHORT_NOT_CONFIGURED,
+        )
+
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
 
     # Staff are excluded as candidates by the schema rather than by a filter: they have no
@@ -141,17 +220,34 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     )
     filters.append(UserRecord.regno.not_in(live_partners))
 
+    # Which cohorts may match is a rule about the deployment rather than about this user, and it is
+    # read per draw because an operator changes it from the admin screen between two draws. Empty
+    # means all-to-all and skips the predicate; non-empty means the rows are the whole rule, so a
+    # cohort missing from every one of them cannot match anybody. Both branches are the same query
+    # with a different WHERE clause rather than two queries, because "no candidates" has to mean the
+    # same thing on both paths for the message below to be honest.
+    #
+    # ``slots_exist`` was resolved above, where the cohort was checked against it, rather than
+    # queried again here.
     with db.sessions() as session:
-        candidate_users = session.scalars(select(UserRecord).where(*filters)).all()
+        candidate_query = select(UserRecord).where(*filters)
+        if slots_exist:
+            candidate_query = candidate_query.where(
+                candidate_shares_a_slot_predicate(current_user.year, current_user.department)
+            )
+        candidate_users = session.scalars(candidate_query).all()
 
     if not candidate_users:
-        # The attempt is still spent even though nothing was created, so the user cannot
-        # poll the endpoint for candidates.
+        # The cohort is configured -- it was checked at the top of this function -- so this is
+        # nobody being available rather than a rule that excludes everyone, and that is bad luck
+        # rather than a permanent condition. The attempt is spent even though nothing was created,
+        # so the user cannot poll the endpoint for candidates.
         with db.sessions.begin() as session:
             _consume_matchmaking_attempt(session, current_user.regno, now)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No potential matches found. Your attempt has been used. Try again later!"
+
+        raise MatchmakingRefusal(
+            detail="No potential matches found. Your attempt has been used. Try again later!",
+            code=NO_CANDIDATES,
         )
 
     # Find random match
@@ -274,14 +370,22 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     # Re-check cooldown status for a friendly message before touching the database. This
     # is only a fast-fail: _consume_matchmaking_attempt is the authoritative check,
     # because this one runs in a different transaction than the write.
+    #
+    # Only a cooldown is answered here. The check now also reports a cohort that no slot names, and
+    # that must not be answered with a 429: it is not a rate limit, nothing is waiting, and a
+    # cooldown status would tell the client to come back in four hours for a draw that cannot
+    # succeed. It is left to _create_match_attempt, which refuses it with the right code and --
+    # unlike a cooldown -- without spending the attempt. That costs a second read of the slot table
+    # on a draw that is going to be refused anyway, which is cheaper than teaching two places how to
+    # describe the same refusal and having one of them drift.
     cooldown_check = check_matchmaking_cooldown_service(current_user, db)
-    if cooldown_check["status"] not in ["eligible"]:
-        if cooldown_check["status"] == "matched":
-            return cooldown_check  # Return existing match data
+    if cooldown_check["status"] == "cooldown":
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=cooldown_check.get("message", "Cooldown is still active.")
         )
+    if cooldown_check["status"] == "matched":
+        return cooldown_check  # Return existing match data
 
     for _ in range(PAIR_COLLISION_RETRIES):
         try:

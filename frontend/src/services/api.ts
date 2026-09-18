@@ -317,13 +317,16 @@ export const getNotifications = async () => {
 
 // --- Admin Endpoints ---
 
+/**
+ * The dashboard's figures, read once per load.
+ *
+ * `active_sessions` is a count of accounts and nothing more: the route that used to list each
+ * one's last login, browser and IP is gone, because the "Active Today" card has no use for
+ * that. `pending_report_queues` is the report backlog split by queue, next to its
+ * `pending_reports` total, so the dashboard can say where the work is rather than only how much.
+ */
 export const getAdminStats = async () => {
     const response = await axios.get(`${API_URL}/admin/stats`, { headers: getAuthHeaders() });
-    return response.data;
-};
-
-export const getAdminActiveSessions = async () => {
-    const response = await axios.get(`${API_URL}/admin/stats/active-sessions`, { headers: getAuthHeaders() });
     return response.data;
 };
 

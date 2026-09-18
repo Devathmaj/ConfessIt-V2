@@ -5,14 +5,13 @@ import { useEffect, useState, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import type { Cohort } from '@/lib/accountFields';
 import { cohortDragPayload, cohortFromDragPayload, cohortKey, cohortLabel, isSameCohort } from '@/lib/accountFields';
+import { expandSlotBoxes, newSlotGroupKey, reconstructSlotBoxes } from '@/lib/matchmakingSlots';
+import type { SlotBox } from '@/lib/matchmakingSlots';
 
 // Base URL for backend API
 const API_BASE_URL = 'http://localhost:8001';
 
-interface Slot {
-  id: string;
-  cohorts: Cohort[];  // The (year, department) pairs in this slot
-}
+type Slot = SlotBox;
 
 /**
  * Operator-facing matchmaking slot configuration with drag-and-drop UI.
@@ -54,55 +53,22 @@ const [saveError, setSaveError] = useState<string | null>(null);
         const cohorts: Cohort[] = data.cohorts || [];
         setAllCohorts(cohorts);
 
-        // Convert backend slots (pairs) to frontend slots (arrays of cohorts)
+        // Pairs are stored; boxes are what this screen shows. `reconstructSlotBoxes` puts them back
+        // together using the `group_key` each pair was written with, so a box of three comes back as
+        // a box of three rather than being re-guessed from the pairs. Both are pure functions in
+        // `@/lib/matchmakingSlots` because this round trip is the thing most worth testing and the
+        // two implementations of it are what made it wrong once already.
         const backendSlots = data.slots || [];
 
         if (backendSlots.length === 0 && cohorts.length > 0) {
-          // No slots yet, create initial slot with all cohorts
-          const initialSlot: Slot = {
-            id: 'initial-' + Date.now(),
-            cohorts: [...cohorts],
-          };
-          setSlots([initialSlot]);
+          // No rows yet. One box holding every cohort, which is what "unconfigured" means: with no
+          // row in the table at all, every cohort may match with every other. The key is minted now
+          // rather than on save so the box is a normal box for the whole of its life.
+          setSlots([{ groupKey: newSlotGroupKey(), cohorts: [...cohorts] }]);
         } else {
-          // Reconstruct slots from pairs.
-          //
-          // Pairs are saved as (first cohort, other cohort), so grouping by the first cohort
-          // recovers the slot each pair came from. The grouping key has to be the whole pair
-          // rather than the department alone: "CSE 2nd Year" and "CSE 3rd Year" are different
-          // cohorts and must not be merged into one slot by sharing a department.
-          const slotMap = new Map<string, Cohort[]>();
-
-          for (const pair of backendSlots) {
-            const { year_a, department_a, year_b, department_b } = pair;
-            const cohortA: Cohort = { year: year_a, department: department_a };
-            const cohortB: Cohort = { year: year_b, department: department_b };
-            const groupKey = cohortKey(cohortA);
-            const group = slotMap.get(groupKey);
-            if (!group) {
-              slotMap.set(groupKey, [cohortA, cohortB]);
-              continue;
-            }
-            // A cohort appears once per slot, so the self-pair A-A must not list it twice.
-            for (const cohort of [cohortA, cohortB]) {
-              if (!group.some(existing => isSameCohort(existing, cohort))) group.push(cohort);
-            }
-          }
-
-          // The id is client-side only: the server assigns its own when the slot is saved, and
-          // the delete loop matches on the ids it handed back. So an index is enough to keep the
-          // React keys unique.
-          const reconstructedSlots: Slot[] = Array.from(slotMap.values()).map((group, index) => ({
-            id: `reconstructed-${index}`,
-            cohorts: group,
-          }));
-
-          // If no slots reconstructed but cohorts exist, create initial slot
+          const reconstructedSlots = reconstructSlotBoxes(backendSlots);
           if (reconstructedSlots.length === 0 && cohorts.length > 0) {
-            setSlots([{
-              id: 'initial-' + Date.now(),
-              cohorts: [...cohorts],
-            }]);
+            setSlots([{ groupKey: newSlotGroupKey(), cohorts: [...cohorts] }]);
           } else {
             setSlots(reconstructedSlots);
           }
@@ -119,7 +85,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
   // Create a new empty slot
   const createNewSlot = () => {
     const newSlot: Slot = {
-      id: 'slot-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+      groupKey: newSlotGroupKey(),
       cohorts: [],
     };
     setSlots(prev => [...prev, newSlot]);
@@ -171,7 +137,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
     // missed or out-of-order enter/leave discards a drop that plainly landed on the slot.
     if (dropped) {
       setSlots(prev => prev.map(slot => {
-        if (slot.id === slotId) {
+        if (slot.groupKey === slotId) {
           // Check if cohort already exists in this slot
           if (slot.cohorts.some(existing => isSameCohort(existing, dropped))) {
             return slot; // Already in this slot, do nothing
@@ -195,7 +161,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
   // Remove cohort from a slot
   const handleRemoveFromSlot = (slotId: string, cohort: Cohort) => {
     setSlots(prev => prev.map(slot => {
-      if (slot.id === slotId) {
+      if (slot.groupKey === slotId) {
         return {
           ...slot,
           cohorts: slot.cohorts.filter(existing => !isSameCohort(existing, cohort)),
@@ -236,7 +202,10 @@ const [saveError, setSaveError] = useState<string | null>(null);
       const existingData = await existingResponse.json();
       const existingSlots = existingData.slots || [];
       
-      // Delete all existing slots
+      // Delete all existing slots. The row's own `id`, not its `group_key`: a group key names a box
+      // that several rows share, so deleting by it would either take out one pair and leave the box
+      // half standing, or -- if the server ever grew a "delete the group" route -- quietly become a
+      // second way to remove a configuration with different semantics from this one.
       for (const existingSlot of existingSlots) {
         await expectOk(
           await fetch(`${API_BASE_URL}/admin/config/matchmaking-slot`, {
@@ -251,10 +220,17 @@ const [saveError, setSaveError] = useState<string | null>(null);
         );
       }
       
-      // Create new slots from current state
-      // For each slot, create all pairs (clique - all-to-all matching)
-      // Single-cohort slots create self-pairs (A-A) for self-matching
-      const createPair = async (cohortA: Cohort, cohortB: Cohort) => {
+      // Write the boxes out. `expandSlotBoxes` is the same function the tests pin the round trip
+      // against, and it tags every pair with the box it came from so the screen can be rebuilt
+      // identically on the next load.
+      //
+      // Overlapping boxes are emitted as-is rather than deduplicated: a cohort is allowed in several
+      // boxes, so [A, B, C] and [D, E, A] both write A-B and A-D, and the server accepts a pair that
+      // repeats across *different* boxes. Deduplicating here would silently drop one of the boxes'
+      // pairs, and the box that lost one would come back smaller than the operator left it.
+      const pairs = expandSlotBoxes(slots);
+
+      for (const pair of pairs) {
         await expectOk(
           await fetch(`${API_BASE_URL}/admin/config/matchmaking-slot`, {
             method: 'POST',
@@ -262,31 +238,12 @@ const [saveError, setSaveError] = useState<string | null>(null);
               Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              year_a: cohortA.year,
-              department_a: cohortA.department,
-              year_b: cohortB.year,
-              department_b: cohortB.department,
-            }),
+            body: JSON.stringify(pair),
           }),
-          `Saving the ${cohortLabel(cohortA.year, cohortA.department)} / ${cohortLabel(cohortB.year, cohortB.department)} pairing`
+          `Saving the ${cohortLabel(pair.year_a, pair.department_a)} / ${cohortLabel(pair.year_b, pair.department_b)} pairing`
         );
-      };
-
-      for (const slot of slots) {
-        if (slot.cohorts.length >= 2) {
-          // Create all combinations (clique): for [A,B,C,D] create A-B, A-C, A-D, B-C, B-D, C-D
-          for (let i = 0; i < slot.cohorts.length; i++) {
-            for (let j = i + 1; j < slot.cohorts.length; j++) {
-              await createPair(slot.cohorts[i], slot.cohorts[j]);
-            }
-          }
-        } else if (slot.cohorts.length === 1) {
-          // Single cohort slot: create self-pair for self-matching (A-A)
-          await createPair(slot.cohorts[0], slot.cohorts[0]);
-        }
       }
-      
+
       setSaveStatus('success');
       setSaveError(null);
       setTimeout(() => setSaveStatus('idle'), 3000);
@@ -364,25 +321,25 @@ const [saveError, setSaveError] = useState<string | null>(null);
   // Render a single slot box
   const renderSlot = (slot: Slot, index: number) => (
     <div
-      key={slot.id}
-      ref={(el) => { if (el) slotRefs.current.set(slot.id, el); }}
+      key={slot.groupKey}
+      ref={(el) => { if (el) slotRefs.current.set(slot.groupKey, el); }}
       className={cn(
         'border rounded-lg p-4 min-h-[100px] flex flex-col gap-3',
         'bg-card/50 border-border/50 transition-all',
-        dragOverSlotId === slot.id && 'border-blue-500 bg-blue-50/20 shadow-lg'
+        dragOverSlotId === slot.groupKey && 'border-blue-500 bg-blue-50/20 shadow-lg'
       )}
       onDragOver={handleDragOver}
-      onDragEnter={(e) => handleDragEnter(e, slot.id)}
-      onDragLeave={(e) => handleDragLeave(e, slot.id)}
-      onDrop={(e) => handleDrop(e, slot.id)}
+      onDragEnter={(e) => handleDragEnter(e, slot.groupKey)}
+      onDragLeave={(e) => handleDragLeave(e, slot.groupKey)}
+      onDrop={(e) => handleDrop(e, slot.groupKey)}
     >
       <div className="flex items-center justify-between">
         <span className="font-medium text-sm">
-          Slot {index + 1} {slot.id === slots[0].id && slots.length === 1 ? '(Initial)' : ''}
+          Slot {index + 1} {slot.groupKey === slots[0].groupKey && slots.length === 1 ? '(Initial)' : ''}
         </span>
         {slots.length > 1 && (
           <button
-            onClick={() => setSlots(prev => prev.filter(s => s.id !== slot.id))}
+            onClick={() => setSlots(prev => prev.filter(s => s.groupKey !== slot.groupKey))}
             className="text-red-500 hover:text-red-700 text-sm px-2 py-1 rounded"
             title="Remove slot"
             disabled={slots.length <= 1}
@@ -407,8 +364,8 @@ const [saveError, setSaveError] = useState<string | null>(null);
                   'text-sm font-medium text-blue-800'
                 )}
                 draggable={true}
-                onDragStart={(e) => handleDragStart(e, cohort, 'slot', slot.id)}
-                onClick={() => handleRemoveFromSlot(slot.id, cohort)}
+                onDragStart={(e) => handleDragStart(e, cohort, 'slot', slot.groupKey)}
+                onClick={() => handleRemoveFromSlot(slot.groupKey, cohort)}
                 style={{ userSelect: 'none', cursor: 'pointer' }}
               >
                 <span>{cohortLabel(cohort.year, cohort.department)}</span>

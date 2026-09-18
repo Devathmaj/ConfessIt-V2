@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode, type KeyboardEvent } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -6,34 +6,40 @@ import {
   Users,
   Activity,
   MessageCircle,
-  Heart,
   Mail,
   ShieldAlert,
   LogOut,
   UsersRound,
   ClipboardList,
-  Loader2
+  Flag,
+  MessageCircleHeart,
+  ArrowRight
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { resolveProfilePictureUrl } from '@/lib/utils';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { CAPABILITIES, Capability } from '@/lib/capabilities';
-import { getAdminStats, getAdminActiveSessions } from '@/services/api';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
+import { getAdminStats } from '@/services/api';
 
 import DashboardWebm from '@/assets/Dashboard.webm';
 import DashboardMp4 from '@/assets/Dashboard.mp4';
 import DashboardWebp from '@/assets/Dashboard.webp';
 
+/** The report backlog, split the way the three report queues are. */
+interface PendingReportQueues {
+  confessions: number;
+  love_notes: number;
+  messages: number;
+}
+
 interface AdminStats {
   total_users: number;
   active_sessions: number;
   total_confessions: number;
-  total_love_notes: number;
   pending_love_notes: number;
+  pending_reports: number;
+  pending_report_queues: PendingReportQueues;
   blocked_users: number;
 }
 
@@ -44,7 +50,6 @@ interface StatCardData {
   icon: LucideIcon;
   value: string | number;
   isLoading: boolean;
-  onClick?: () => void;
 }
 
 interface QuickAction {
@@ -57,30 +62,22 @@ interface QuickAction {
   capability: Capability;
 }
 
-const recentActivity = [
-  'Daily review window started.',
-  'Awaiting new confession approvals.',
-  'Monitoring love-note submissions.',
-  'Watching matchmaking requests.',
-  'Keeping an eye on reported content.'
-];
-
 interface GlassCardProps {
   children: ReactNode;
   className?: string;
-  onClick?: () => void;
-  role?: string;
-  tabIndex?: number;
-  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
 }
 
-const GlassCard = ({ children, className = '', onClick, role, tabIndex, onKeyDown }: GlassCardProps) => (
+/**
+ * The tile shell.
+ *
+ * Not clickable, and no longer pretending to be: the dashboard's tiles are figures to read,
+ * and the one that used to open a panel of sessions behind it is a plain number now. Anything
+ * on this page you act on is a real `<button>` that navigates, so there is no card here that
+ * looks live and is not.
+ */
+const GlassCard = ({ children, className = '' }: GlassCardProps) => (
   <div
-    onClick={onClick}
-    role={role}
-    tabIndex={tabIndex}
-    onKeyDown={onKeyDown}
-    className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-lg transition-all duration-300 hover:bg-white/10 hover:border-white/20 ${onClick ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent' : ''} ${className}`}
+    className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-lg transition-all duration-300 hover:bg-white/10 hover:border-white/20 ${className}`}
   >
     <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
     <div className="relative z-10 h-full">{children}</div>
@@ -89,24 +86,9 @@ const GlassCard = ({ children, className = '', onClick, role, tabIndex, onKeyDow
 
 const StatCard = ({ item }: { item: StatCardData }) => {
   const Icon = item.icon;
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!item.onClick) {
-      return;
-    }
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      item.onClick();
-    }
-  };
 
   return (
-    <GlassCard
-      className="p-6 flex flex-col justify-between"
-      onClick={item.onClick}
-      role={item.onClick ? 'button' : undefined}
-      tabIndex={item.onClick ? 0 : undefined}
-      onKeyDown={item.onClick ? handleKeyDown : undefined}
-    >
+    <GlassCard className="p-6 flex flex-col justify-between">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm text-white/70">{item.title}</p>
@@ -125,40 +107,15 @@ const StatCard = ({ item }: { item: StatCardData }) => {
   );
 };
 
-interface ActiveSessionRecord {
-  session_id: string;
-  status: string;
-  last_seen?: string | null;
-  ip?: string | null;
-  device?: string | null;
-  user?: {
-    id?: string | null;
-    name?: string | null;
-    regno?: string | null;
-    email?: string | null;
-    /** Which account table the session's account lives in. Not a privilege. */
-    account_type?: string | null;
-    is_blocked?: boolean;
-  };
-}
-
 export const AdminDashboard = () => {
   const { user, logout, can } = useAuth();
   const navigate = useNavigate();
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [showActiveSessions, setShowActiveSessions] = useState(false);
-  const [activeSessions, setActiveSessions] = useState<ActiveSessionRecord[]>([]);
-  const [activeSessionsLoading, setActiveSessionsLoading] = useState(false);
 
   // Every card below reads `/admin/stats`, which is `stats:read` -- so this page is only ever
-  // mounted for an admin, and a moderator's landing page is the moderation hub instead. The
-  // Active Sessions card re-checks separately because it is a different capability
-  // (`sessions:read`), and the check is here rather than only on the route so the affordance
-  // matches what the server would allow.
-  const canReadSessions = can(CAPABILITIES.SESSIONS_READ);
-
+  // mounted for an admin, and a moderator's landing page is the moderation hub instead.
   useEffect(() => {
     setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
 
@@ -178,35 +135,6 @@ export const AdminDashboard = () => {
     fetchStats();
   }, [user]);
 
-  const fetchActiveSessions = async () => {
-    try {
-      setActiveSessionsLoading(true);
-  const data = await getAdminActiveSessions();
-  setActiveSessions(Array.isArray(data?.sessions) ? data.sessions : []);
-      if (typeof data?.count === 'number') {
-        setStats((previous) =>
-          previous
-            ? {
-                ...previous,
-                active_sessions: data.count,
-              }
-            : previous
-        );
-      }
-    } catch (error) {
-      console.error('Failed to load active sessions', error);
-      setActiveSessions([]);
-      toast.error('Unable to load active sessions right now.');
-    } finally {
-      setActiveSessionsLoading(false);
-    }
-  };
-
-  const handleActiveSessionsClick = () => {
-    setShowActiveSessions(true);
-    void fetchActiveSessions();
-  };
-
   const statCards: StatCardData[] = [
     {
       id: 'total-users',
@@ -217,13 +145,12 @@ export const AdminDashboard = () => {
       isLoading: loading,
     },
     {
-      id: 'active-sessions',
-      title: 'Active Sessions',
-      description: 'Logged in within 24 hours',
+      id: 'active-today',
+      title: 'Active Today',
+      description: 'Accounts that signed in within 24 hours',
       icon: Activity,
       value: stats?.active_sessions ?? '—',
       isLoading: loading,
-      onClick: canReadSessions ? handleActiveSessionsClick : undefined,
     },
     {
       id: 'confessions',
@@ -234,11 +161,13 @@ export const AdminDashboard = () => {
       isLoading: loading,
     },
     {
-      id: 'love-notes',
-      title: 'Love Notes',
-      description: 'Submitted love notes',
-      icon: Heart,
-      value: stats?.total_love_notes ?? '—',
+      // Work someone is waiting on, rather than a total of everything ever sent: the queues
+      // below this row are what an admin opens, and a report already ruled on is not a task.
+      id: 'pending-reports',
+      title: 'Pending Reports',
+      description: 'Filed and still waiting on a ruling',
+      icon: Flag,
+      value: stats?.pending_reports ?? '—',
       isLoading: loading,
     },
     {
@@ -259,11 +188,39 @@ export const AdminDashboard = () => {
     }
   ];
 
-  const activeSessionAccountCount = new Set(
-    activeSessions
-      .map((session) => session.user?.id)
-      .filter((value): value is string => Boolean(value))
-  ).size;
+  // The pending-report figure is only a number; this is where it comes from. Every row is a
+  // button into the review screen, so the breakdown is something to act on rather than a
+  // second figure to read, and the three counts come from the same fields as the tile above
+  // them -- one request, one set of numbers, no chance of the two disagreeing.
+  const reportQueues: Array<{
+    id: keyof PendingReportQueues;
+    title: string;
+    caption: string;
+    icon: LucideIcon;
+    value: number;
+  }> = [
+    {
+      id: 'confessions',
+      title: 'Posts & comments',
+      caption: 'Reported by a participant',
+      icon: ShieldAlert,
+      value: stats?.pending_report_queues?.confessions ?? 0,
+    },
+    {
+      id: 'love_notes',
+      title: 'Love notes',
+      caption: 'Reported by the recipient',
+      icon: MessageCircleHeart,
+      value: stats?.pending_report_queues?.love_notes ?? 0,
+    },
+    {
+      id: 'messages',
+      title: 'Chat messages',
+      caption: 'Reported in a private conversation',
+      icon: MessageCircle,
+      value: stats?.pending_report_queues?.messages ?? 0,
+    },
+  ];
 
   const quickActions: QuickAction[] = [
     {
@@ -412,20 +369,44 @@ export const AdminDashboard = () => {
           </div>
 
           <GlassCard className="lg:col-span-2 p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <Activity className="h-5 w-5 text-pink-300" />
-              <h2 className="text-lg font-semibold">Recent Admin Focus</h2>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Flag className="h-5 w-5 text-pink-300" />
+                <h2 className="text-lg font-semibold">Report Backlog</h2>
+              </div>
+              <p className="text-xs text-white/60">Where the backlog is</p>
             </div>
+
             <div className="space-y-3">
-              {recentActivity.map((entry, index) => (
-                <div
-                  key={index}
-                  className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/80"
-                >
-                  {entry}
-                </div>
-              ))}
+              {reportQueues.map((queue) => {
+                const Icon = queue.icon;
+                return (
+                  <button
+                    key={queue.id}
+                    type="button"
+                    onClick={() => handleNavigate('/admin/reports')}
+                    className="group flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-left transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400"
+                  >
+                    <span className="rounded-lg bg-gradient-to-br from-pink-500/20 to-purple-500/20 p-2 text-white">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium">{queue.title}</span>
+                      <span className="block text-xs text-white/60">{queue.caption}</span>
+                    </span>
+                    <span className="text-xl font-semibold tabular-nums">
+                      {loading ? '—' : queue.value}
+                    </span>
+                    <ArrowRight className="h-4 w-4 text-white/40 transition group-hover:translate-x-0.5" />
+                  </button>
+                );
+              })}
             </div>
+
+            <p className="mt-4 text-xs text-white/50">
+              Reports waiting on a decision. Each queue is opened in Reports Review, where the
+              report can be dismissed or the content behind it taken down.
+            </p>
           </GlassCard>
         </section>
 
@@ -433,80 +414,6 @@ export const AdminDashboard = () => {
           ConfessIt Administration · Maintaining a safe and supportive community
         </footer>
       </div>
-
-      {/* Not merely hidden by CSS: the panel is never mounted without SESSIONS_READ, so
-          there is no path to it from this page for an account that could not read the data
-          anyway. The route and the endpoint behind it refuse independently. */}
-      {canReadSessions && (
-      <Dialog open={showActiveSessions} onOpenChange={setShowActiveSessions}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Active sessions</DialogTitle>
-            <DialogDescription>
-              Accounts seen in the last 24 hours. Refresh to capture the latest activity.
-            </DialogDescription>
-          </DialogHeader>
-
-          {activeSessionsLoading ? (
-            <div className="flex h-40 items-center justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : activeSessions.length === 0 ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">
-              No active accounts detected in this window.
-            </div>
-          ) : (
-            <ScrollArea className="max-h-[400px] pr-4">
-              <ul className="space-y-3">
-                {activeSessions.map((session) => {
-                  const user = session.user || {};
-                  const displayName = user.name || user.regno || 'Unknown user';
-                  const lastSeen = session.last_seen ? formatDateTimeDDMMYYYY(session.last_seen) : 'Unknown';
-                  return (
-                    <li key={session.session_id} className="rounded-2xl border border-border bg-muted/30 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium text-foreground">{displayName}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {user.email || 'No email on file'}
-                            {user.regno ? ` · ${user.regno}` : ''}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">{session.status}</Badge>
-                          {user.is_blocked && <Badge variant="destructive">Blocked</Badge>}
-                          {/* The table the account lives in, which is the only thing that
-                              says what kind of account it is. A participant reads as
-                              "users" because that is the account's own name, not a grade. */}
-                          <Badge variant={user.account_type === 'admin' ? 'default' : 'secondary'}>
-                            {user.account_type || 'users'}
-                          </Badge>                        </div>
-                      </div>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Last seen {lastSeen}
-                        {session.ip ? ` · IP ${session.ip}` : ''}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Device: {session.device || 'Unknown device'}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ul>
-            </ScrollArea>
-          )}
-
-          <div className="flex items-center justify-between pt-2">
-            <p className="text-xs text-muted-foreground">
-              Showing {activeSessions.length} session{activeSessions.length === 1 ? '' : 's'} across {activeSessionAccountCount} account{activeSessionAccountCount === 1 ? '' : 's'} in the past 24 hours.
-            </p>
-            <Button variant="ghost" size="sm" onClick={() => void fetchActiveSessions()} disabled={activeSessionsLoading}>
-              Refresh
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-      )}
     </div>
   );
 };

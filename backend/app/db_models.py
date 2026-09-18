@@ -737,11 +737,25 @@ class NotificationRecord(Base):
 
 
 class MatchmakingSlotRecord(Base):
-    """A pair of participant cohorts that are allowed to match with each other.
+    """A pair of participant cohorts, naming the slot they belong to.
 
-    A slot means *this cohort may match with that cohort*. Multiple slots can overlap -- A-B and
-    B-C means A can match B and C, but A cannot match C unless there is a separate A-C slot -- and
-    a slot whose two sides are identical is what permits self-matching.
+    The row carries no pairing rule of its own. What it means is fixed once, in
+    ``matchmaking_slot_service``, and it is this: a cohort is *in a slot* when some row names it on
+    either side, and two cohorts may match when some row names both of them. A row therefore
+    describes a clique that includes self-pairs -- the editor's slot box holding A, B and C permits
+    A->A, A->B, A->C, B->B, B->C and C->C -- and a pair of rows is the smallest thing that can
+    hold that fact about two or three cohorts at once.
+
+    Overlapping rows compose by union and **not** by transitivity. A-B together with B-C permits
+    A->A, A->B, B->B, B->C and C->C, and still not A->C, which needs its own row. That is a
+    property of the storage, not an oversight in the rule: a row names two cohorts, so nothing in
+    it can name a third, and a rule that inferred A->C from A->B->C would let two operators
+    combining two boxes they each meant to keep separate produce a pairing neither asked for.
+
+    A row whose two sides are identical (A-A) is consequently **not** what permits self-matching --
+    any row naming A already does that. It is written for one narrow reason: the editor stores a
+    box holding a single cohort, and a box that produces no row cannot be read back, so saving one
+    would silently delete it from the screen the operator is looking at.
 
     **Each side is a ``(year, department)`` pair, not a name.** This used to be two string columns
     holding a ``class_name`` the operator had typed, which made the grouping exactly as precise as
@@ -770,14 +784,38 @@ class MatchmakingSlotRecord(Base):
     department_a: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
     year_b: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     department_b: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
+    # Which editor slot box this pair was written from. Every pair in one box carries the same value,
+    # so the box can be put back together on load.
+    #
+    # This column exists because the box is an entity the operator reasons about and the row is not.
+    # A box holding A, B and C is stored as three pairs, and from those three pairs alone there is no
+    # way to tell that box apart from three separate two-cohort boxes -- different intentions,
+    # identical stored state. The grouping was being *guessed* on load by keying on each pair's first
+    # cohort, which is wrong in both directions at once: it split one box apart (B-C's first cohort
+    # is B, so it started a box of its own) and merged unrelated boxes that shared a first cohort.
+    # Re-saving the result wrote pairs that already existed, the server answered 409, and because
+    # the editor deletes the old configuration before writing the new one, the operator was left with
+    # a truncated configuration and an error.
+    #
+    # Matchmaking does not read this column and must not: the pairing rule is defined on pairs, so
+    # two boxes that happen to name the same pair permit exactly what one of them would. It is
+    # bookkeeping about how to *display* a configuration, and it is deliberately the one column here
+    # that no filter depends on.
+    #
+    # Nullable, because a deployed table has rows written before this existed and
+    # ``apply_missing_columns`` will not invent a value for them. A NULL means "this pair was not
+    # saved as part of a named box", and the editor falls back to its old grouping for those rather
+    # than scattering every legacy row into a box of its own.
+    group_key: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 
-    # A self-pair (year_a, department_a) == (year_b, department_b) is allowed: it is how a cohort
-    # is permitted to match within itself. So the constraints here bound each field to its range
-    # and say nothing about the two sides differing.
+    # A self-pair (year_a, department_a) == (year_b, department_b) is allowed, and deliberately so:
+    # it is how a box holding one cohort is written at all. Nothing here forbids the two sides
+    # differing, and nothing forbids them agreeing -- the pairing rule needs neither, and the only
+    # constraint worth stating is that each half is a whole year inside the known range.
     # Same numeric-suffix reasoning as ``ck_users_year_known_{USER_YEAR_MAX}``: these two replaced
     # text-equality checks that carried these exact unsuffixed names, so the bound has to be in the
     # name for them to be recognised as superseded rather than silently kept.

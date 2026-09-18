@@ -59,7 +59,13 @@ SAMPLE_ROUTES = [
     # inventory is an exact match, so putting it back would fail ``test_every_admin_route_is_
     # discovered`` rather than passing quietly.
     ("GET", "/admin/stats"),
-    ("GET", "/admin/stats/active-sessions"),
+    # ``GET /admin/stats/active-sessions`` used to be here. It listed every account live in
+    # the last 24 hours with their last login, browser and IP, and the dashboard's "Active
+    # Sessions" card was the only thing that opened it. Both are gone: the card now reads
+    # "Active Today" and shows the count alone, so there is nothing left to list a session
+    # for, and ``sessions:read`` left the enum with it. The route inventory is an exact
+    # match, so putting it back would fail ``test_every_admin_route_is_discovered`` rather
+    # than pass quietly.
     ("GET", "/admin/config"),
     ("POST", "/admin/config/matchmaking-slot"),
     ("DELETE", "/admin/config/matchmaking-slot"),

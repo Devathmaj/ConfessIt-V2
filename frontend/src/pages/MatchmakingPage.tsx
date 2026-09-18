@@ -73,11 +73,21 @@ export type CooldownRemaining = {
 /**
  * What a check for a cooldown came back with.
  *
- * `known: false` is deliberately not the same as `remaining: null`. One means "go ahead", the
- * other means "nobody answered", and the page must not offer to match on the strength of a
- * request that never came back -- that is how a real cooldown turns into an invitation.
+ * `known: false` is for a check that never came back -- a request that never arrived. That is not
+ * the same as "no cooldown": a request that never came back is how a real cooldown turns into an
+ * invitation.
+ *
+ * `cohortBlock` is carried alongside rather than folded into `remaining` because it is not a wait.
+ * It is a standing condition that no amount of waiting clears, and everywhere the page would treat
+ * a wait it has to treat this differently -- most visibly by refusing the click outright instead of
+ * letting it become a draw that cannot succeed.
  */
-export type CooldownCheck = { known: true; remaining: CooldownRemaining | null } | { known: false };
+export type CooldownCheck = {
+  known: true;
+  remaining: CooldownRemaining | null;
+  /** The cohort is in no matchmaking slot, so it cannot be matched at all. */
+  cohortBlock: CohortBlock | null;
+} | { known: false };
 
 /** A check that could not be made. Carries no verdict about the user. */
 export const UNANSWERED_COOLDOWN: CooldownCheck = { known: false };
@@ -108,13 +118,39 @@ export const readCooldown = (response: unknown): CooldownRemaining | null => {
 };
 
 /**
+ * A cohort that is in no matchmaking slot, as GET /matchmaking/check reports it.
+ *
+ * Not a wait and not a rate limit. The cohort cannot be matched by anybody, and the reason is an
+ * operator's configuration rather than the user's own timer, so nothing the user does changes it.
+ */
+export type CohortBlock = { message: string };
+
+/**
+ * Reads the "your cohort has no slot" answer out of GET /matchmaking/check.
+ *
+ * `null` for every other status, including a cooldown -- that one is read by {@link readCooldown},
+ * and folding it in here would make a four-hour wait look like a configuration fault.
+ */
+export const readCohortBlock = (response: unknown): CohortBlock | null => {
+  const body = response as { status?: string; message?: string } | null;
+  if (!body || body.status !== 'cohort_not_configured') return null;
+
+  return {
+    message:
+      body.message ??
+      'Your cohort is not in any matchmaking slot. An administrator needs to add it.',
+  };
+};
+
+/**
  * Whether a check permits a draw.
  *
  * The single place that decides it, so that no caller can quietly treat an unanswered check
- * as a yes.
+ * as a yes. A cohort with no slot does not permit one either, and that is the point of asking
+ * before the animation rather than after it.
  */
 export const cooldownPermitsMatch = (check: CooldownCheck) =>
-  check.known && check.remaining === null;
+  check.known && check.remaining === null && check.cohortBlock === null;
 
 /**
  * What to say about a match that has lapsed.
@@ -129,6 +165,78 @@ export const describeExpiredMatch = (cooldown: CooldownRemaining | null) =>
 /** The remaining wait, for the page's own copy. */
 export const formatRemaining = ({ hours, minutes }: CooldownRemaining) =>
   hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+
+/** The server's stable code for a draw refused because nobody was available. */
+export const NO_CANDIDATES = 'matchmaking_no_candidates';
+
+/** The server's stable code for a draw refused because no slot names the user's cohort. */
+export const COHORT_NOT_CONFIGURED = 'matchmaking_cohort_not_configured';
+
+/** A draw that was refused, as the page needs to talk about it. */
+export type DrawRefusal = {
+  /** The server's own sentence, shown verbatim. */
+  message: string;
+  /**
+   * Which refusal this was, or `null` when the server did not say.
+   *
+   * `null` rather than defaulting to "bad luck", because the two are not interchangeable and
+   * guessing wrong is what this whole type exists to prevent.
+   */
+  code: string | null;
+};
+
+/**
+ * Read a refused draw out of a failed request.
+ *
+ * `null` for anything that is not a refusal, so a network drop cannot be shown as "no match this
+ * time" -- a request that never arrived has not established that there was nobody to match.
+ */
+export const readDrawRefusal = (error: unknown): DrawRefusal | null => {
+  const body = (error as { response?: { data?: { detail?: unknown; code?: unknown } } })
+    ?.response?.data;
+  if (!body || typeof body !== 'object') return null;
+
+  const detail = body.detail;
+  if (typeof detail !== 'string' || !detail.trim()) return null;
+
+  return {
+    message: detail.trim(),
+    code: typeof body.code === 'string' ? body.code : null,
+  };
+};
+
+/**
+ * What the card says about a draw that was refused.
+ *
+ * Two sentences, because the server has two reasons and they are not the same news. Somebody being
+ * available and nobody being available is luck, and another attempt can turn it around. A cohort
+ * that no slot names will not become matchable by waiting, retrying or refreshing -- an operator
+ * has to add it -- so the page must not tell that user to come back later, which is the same
+ * mistake as answering the refusal with a cooldown notice.
+ *
+ * `guidance` is the second line rather than being folded into `message`, because the server's
+ * sentence is written for a toast and does not know it is being rendered as the state of the page.
+ */
+export const describeDrawRefusal = (refusal: DrawRefusal) => {
+  if (refusal.code === COHORT_NOT_CONFIGURED) {
+    return {
+      headline: 'Your cohort is not set up for matchmaking yet',
+      guidance: 'An administrator needs to add your cohort to a matchmaking slot. Trying again will not help until they do.',
+    };
+  }
+  if (refusal.code === NO_CANDIDATES) {
+    return {
+      headline: 'No match this time',
+      guidance: 'Nobody was available to match with just now. Your next attempt is in four hours.',
+    };
+  }
+  // No code, or one this build does not know: the server's sentence is still the answer, and
+  // "this time" is the safe reading because it claims nothing about whether a retry can work.
+  return {
+    headline: 'No match this time',
+    guidance: 'Nobody was available to match with just now.',
+  };
+};
 
 /**
  * Time left on a live match.
@@ -349,6 +457,33 @@ export const MatchmakingPage = () => {
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState<CooldownRemaining | null>(null);
   /**
+   * The last draw that was refused, and the only reason the card below the slot machine has
+   * anything to say other than "waiting". Cleared whenever a new draw starts, so an outcome is
+   * never carried over to an attempt it does not describe.
+   */
+  const [drawRefusal, setDrawRefusal] = useState<DrawRefusal | null>(null);
+  /**
+   * The cohort is in no matchmaking slot, so no draw of theirs can succeed.
+   *
+   * A standing condition rather than an outcome, which is why it is read before the animation and
+   * why the card treats it the same way it treats a refused draw: from the user's side these are
+   * the same fact -- no match is coming -- discovered at different moments.
+   */
+  const [cohortBlock, setCohortBlock] = useState<CohortBlock | null>(null);
+  /**
+   * The one reason to show on the card, whichever way it was found.
+   *
+   * A cohort with no slot and a refused draw are the same fact to the person looking at this -- no
+   * match is coming -- so they share one branch and one set of words. Discovered differently: the
+   * block is known from the eligibility check before anything was attempted, the refusal only after
+   * a draw was.
+   */
+  const noMatchReason: DrawRefusal | null =
+    cohortBlock
+      ? { message: cohortBlock.message, code: COHORT_NOT_CONFIGURED }
+      : drawRefusal;
+  const cardCopy = noMatchReason ? describeDrawRefusal(noMatchReason) : null;
+  /**
    * Whether `cooldown` is the server's answer rather than the absence of one.
    *
    * Tracked apart from the value because the two are easy to conflate and only one of them is
@@ -390,9 +525,14 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
   try {
     const response = await checkMatchmakingStatus();
     const remaining = readCooldown(response);
+    const cohortBlock = readCohortBlock(response);
     setCooldown(remaining);
+    // Held in state, not just returned, because the block outlives the click that discovered it:
+    // the invite to draw has to stay withdrawn for as long as the cohort is unconfigured, which is
+    // until an operator changes something rather than until the page is next asked.
+    setCohortBlock(cohortBlock);
     setCooldownKnown(true);
-    return { known: true, remaining };
+    return { known: true, remaining, cohortBlock };
   } catch (error: any) {
     // The previous state stands and the draw endpoint still refuses a real cooldown with the
     // real remaining time, so nothing is lost by reporting the failure instead of guessing.
@@ -564,6 +704,19 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         notifyCooldown(check.remaining, { force: true });
         return;
       }
+      if (check.known && check.cohortBlock) {
+        // Refused here rather than at the end of five seconds of animation.
+        //
+        // This is not the cooldown case above, and the difference matters to the user in two ways.
+        // Nothing is waiting, so there is no "try again in four hours" to say; and no attempt is
+        // spent -- the draw endpoint refuses this before it writes anything -- so the moment an
+        // administrator adds the slot, the next click works. Telling them to wait would be wrong
+        // twice over: waiting does not help, and there is nothing to wait out.
+        //
+        // The message is the server's, so the cohort named in it is the one the operator needs.
+        toast.error(check.cohortBlock.message);
+        return;
+      }
       if (!check.known) {
         // Opening the dialog here is what sends the user through the whole animation to be
         // refused at the end, so an unanswered check closes this click with nothing.
@@ -595,6 +748,9 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     setChatMessages([]);
     setExpiresAt(null);
     setCooldown(null);
+    // The previous attempt's outcome says nothing about this one, and leaving it up would have
+    // the card explaining a refusal that is no longer the reason the page is in this state.
+    setDrawRefusal(null);
 
     const slotInterval = setInterval(() => {
       const randomIndex = Math.floor(Math.random() * mockMatches.length);
@@ -639,12 +795,31 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               console.log('Setting matched profile:', newMatchedProfile);
             })
             .catch(async error => {
-              toast.error(describeApiError(error, 'Could not find a match.'));
-              // A failed draw still spends the attempt, so the server is now on a cooldown
-              // even though nothing was matched. Ask it what the wait is rather than leaving
-              // the page offering a heart that cannot do anything.
-              const check = await fetchCooldown();
-              if (check.known && check.remaining) notifyCooldown(check.remaining, { force: true });
+              // The server's own reason, which distinguishes the two cases that matter here:
+              // "no potential matches" and "your cohort has no slot". Neither is a cooldown, so
+              // neither is answered with one.
+              //
+              // Kept as state as well as shown: the card in the right-hand column is where the
+              // user is looking when they decide what to do next, and it used to go on promising
+              // "Waiting for your match..." long after the draw was over -- which is a different
+              // lie from the cooldown toast, and the same species of one.
+              const refusal = readDrawRefusal(error);
+              setDrawRefusal(refusal);
+              toast.error(
+                refusal?.message ?? describeApiError(error, 'Could not find a match.')
+              );
+              // The attempt was spent, so a wait really did start, and the page has to know that:
+              // the cooldown panel and the disabled heart are both driven by this state, and
+              // leaving it unset would leave the user staring at a heart that does nothing.
+              //
+              // Settled without announcing it. `notifyCooldown` is forced on a heart click because
+              // a click that silently does nothing reads as a broken button, and there is no such
+              // ambiguity here -- the user just watched five seconds of animation and was told the
+              // reason in the toast above. A second toast saying they are on a cooldown would
+              // outrank the answer they actually needed, and for an unconfigured cohort it is worse
+              // than redundant: it tells them to wait for a draw that cannot succeed until an
+              // operator configures a slot, which is the one thing the message must not suggest.
+              await fetchCooldown();
             })
             .finally(() => {
               setSlotMachineUser(null);
@@ -732,16 +907,31 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                 </div>
               )}
 
-              {!isMatching && !matchedProfile && (
+{!isMatching && !matchedProfile && (
+                // The invite to click the heart is withdrawn while the server is still
+                // counting a cooldown down. It used to show regardless, which is what left a
+                // terminated user reading "Click the heart to find your match!" next to a
+                // toast promising them a match they could not have.
+                //
+                // Withdrawn for a cohort with no slot too, which is the same kind of promise for a
+                // different reason: this user's draws cannot succeed at all, so an invitation to try
+                // is an invitation to be refused.
                 cooldown ? (
-                  // The invite to click the heart is withdrawn while the server is still
-                  // counting a cooldown down. It used to show regardless, which is what left a
-                  // terminated user reading "Click the heart to find your match!" next to a
-                  // toast promising them a match they could not have.
                   <div className="text-center space-y-4">
                     <div className="text-4xl">⏳</div>
                     <h2 className="text-2xl font-dancing text-romantic">Matchmaking on Cooldown</h2>
                     <p className="text-muted-foreground">{cooldown.message}</p>
+                  </div>
+                ) : cohortBlock ? (
+                  <div className="text-center space-y-4">
+                    <div className="text-4xl">🔒</div>
+                    <h2 className="text-2xl font-dancing text-romantic">
+                      No matchmaking slot for your cohort
+                    </h2>
+                    <p className="text-muted-foreground">{cohortBlock.message}</p>
+                    <p className="text-sm text-muted-foreground">
+                      You have not used an attempt, and you will not need to wait once a slot is set.
+                    </p>
                   </div>
                 ) : (
                   <div className="text-center space-y-4">
@@ -865,6 +1055,24 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                 ) : matchedProfile ? (
                     <div className="w-full max-w-sm animate-fade-in">
                         <UserCard profile={matchedProfile} />
+                    </div>
+                ) : noMatchReason ? (
+                    // The draw is over and it produced nobody, so the card reports that rather than
+                    // going on waiting. It used to say "Waiting for your match..." here, which
+                    // stayed on screen indefinitely: nothing was in progress, the attempt had been
+                    // spent, and the heart was withdrawn -- so it promised a match the page would
+                    // not even let the user try for.
+                    <div className="w-full max-w-sm text-center animate-fade-in">
+                        <div className="text-4xl mb-4" aria-hidden="true">💔</div>
+                        <p className="font-dancing text-xl text-romantic">
+                            {cardCopy.headline}
+                        </p>
+                        <p className="text-sm text-muted-foreground mt-2">
+                            {noMatchReason.message}
+                        </p>
+                        <p className="text-sm text-muted-foreground mt-2">
+                            {cardCopy.guidance}
+                        </p>
                     </div>
                 ) : (
                     <div className="text-center text-muted-foreground">

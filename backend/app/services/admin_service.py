@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select, update
 
-from ..postgres import new_id, is_valid_id
+from ..postgres import new_id
 from ..postgres import Database
 from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionRecord,
-    LoginTokenRecord, LoveNoteRecord, ReportRecord, UserRecord, resolve_account,
+    LoginTokenRecord, LoveNoteRecord, ReportRecord, UserRecord,
     resolve_account_by_id)
 from ..accounts import AccountType, normalize_account_type
-from ..services.report_resolution_service import resolve_status_filter
+from ..services.report_resolution_service import pending_report_totals, resolve_status_filter
 from .report_counters import tally_for_row
 
 
@@ -130,119 +130,37 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def collect_active_sessions(db: Database, window_hours: int = 24) -> List[Dict[str, Any]]:
-    """Collect and return active user sessions within the specified time window."""
+def count_active_sessions(db: Database, window_hours: int = 24) -> int:
+    """How many accounts held a live session at some point inside the window.
+
+    Counts distinct accounts rather than tokens, because one account signing in twice is one
+    person, not two. The dashboard reads this as a single figure and no longer needs the
+    session rows behind it -- who was online, from where, on what -- so nothing is resolved
+    per token here: no account lookup, no per-row write, and nothing session-shaped leaves
+    this function.
+    """
     now = datetime.now(timezone.utc)
     active_threshold = now - timedelta(hours=window_hours)
     with db.sessions.begin() as session:
+        # A session that was last seen before the window is over, whatever it says about
+        # itself, so it stops being counted as live. This is the one write the count needs,
+        # and it is why an account's presence expires even when nobody is reading the list.
         session.execute(update(LoginTokenRecord).where(
             LoginTokenRecord.session_status == "active",
             LoginTokenRecord.consumed_at < active_threshold,
         ).values(session_status="expired"))
-        token_rows = session.scalars(select(LoginTokenRecord).where(
-            LoginTokenRecord.used.is_(True), LoginTokenRecord.revoked.is_(False),
-            LoginTokenRecord.consumed_at >= active_threshold,
-        )).all()
-        active_tokens = [{
-            "id": str(row.id), "account_id": str(row.account_id),
-            "account_type": normalize_account_type(row.account_type),
-            "session_status": row.session_status,
-            "last_seen_at": row.last_seen_at, "consumed_at": row.consumed_at,
-            "consume_ip": str(row.consume_ip) if row.consume_ip else None,
-            "request_ip": str(row.request_ip) if row.request_ip else None,
-            "device": row.device, "consume_user_agent": row.consume_user_agent,
-            "request_user_agent": row.request_user_agent,
-        } for row in token_rows]
+        account_ids = session.scalars(
+            select(LoginTokenRecord.account_id)
+            .where(
+                LoginTokenRecord.session_status == "active",
+                LoginTokenRecord.used.is_(True),
+                LoginTokenRecord.revoked.is_(False),
+                LoginTokenRecord.consumed_at >= active_threshold,
+            )
+            .distinct()
+        ).all()
 
-    if not active_tokens:
-        return []
-
-    # Fetch account documents. The token names the table the account was in when the link
-    # was minted, and a session can belong to a participant or to staff, so the lookup is
-    # per-token and cross-table rather than a single query against ``users`` -- which is
-    # exactly what would silently drop every staff session from this list.
-    account_map: Dict[str, Dict[str, Any]] = {}
-    with db.sessions() as session:
-        for token in active_tokens:
-            account_id = token.get("account_id")
-            if not isinstance(account_id, str) or not is_valid_id(account_id):
-                continue
-            # ``resolve_account`` takes the table it should read and returns just the row, so
-            # the account kind here is the one recorded on the token -- not something derived
-            # from the row. That keeps the reported ``account_type`` honest even if a row were
-            # ever reachable through a different table.
-            token_account_type = token["account_type"]
-            row = resolve_account(session, token_account_type, account_id)
-            if row is not None:
-                account_map[account_id] = _account_row_payload(token_account_type, row)
-
-    # Build session entries
-    session_entries: Dict[str, Dict[str, Any]] = {}
-    for token in active_tokens:
-        status = token.get("session_status") or "active"
-        
-        if status != "active":
-            continue
-
-        raw_account_id = token.get("account_id")
-        user_doc = account_map.get(raw_account_id) if raw_account_id else None
-
-        last_seen_value = token.get("last_seen_at") or token.get("consumed_at") or datetime.now(timezone.utc)
-        
-        # Parse last_seen
-        if isinstance(last_seen_value, str):
-            try:
-                parsed_last_seen = datetime.fromisoformat(last_seen_value.replace("Z", "+00:00"))
-                if parsed_last_seen.tzinfo is not None:
-                    parsed_last_seen = parsed_last_seen.astimezone(timezone.utc)
-            except ValueError:
-                parsed_last_seen = datetime.now(timezone.utc)
-        elif isinstance(last_seen_value, datetime):
-            parsed_last_seen = last_seen_value
-        else:
-            parsed_last_seen = datetime.now(timezone.utc)
-
-        with db.sessions.begin() as session:
-            token_row = session.get(LoginTokenRecord, token["id"])
-            if token_row:
-                token_row.last_seen_at = parsed_last_seen
-
-        # Serialize account
-        serialized_user = serialize_user_doc(user_doc) if user_doc else {
-            "id": raw_account_id,
-            "name": None,
-            "regno": None,
-            "account_type": token.get("account_type"),
-            "is_blocked": False,
-        }
-        if not serialized_user.get("id"):
-            serialized_user["id"] = raw_account_id or str(token.get("id"))
-
-        iso_last_seen = serialize_datetime(parsed_last_seen.replace(tzinfo=timezone.utc))
-
-        entry = {
-            "session_id": str(token.get("id")),
-            "status": status,
-            "last_seen": iso_last_seen,
-            "ip": token.get("consume_ip") or token.get("request_ip"),
-            "device": token.get("device") or token.get("consume_user_agent") or token.get("request_user_agent"),
-            "user": serialized_user,
-            "_last_seen_dt": parsed_last_seen,
-        }
-
-        account_key = serialized_user.get("id") or str(token.get("id"))
-        existing_entry = session_entries.get(account_key)
-        if not existing_entry or entry["_last_seen_dt"] > existing_entry["_last_seen_dt"]:
-            session_entries[account_key] = entry
-
-    # Build results
-    results: List[Dict[str, Any]] = []
-    for value in session_entries.values():
-        value.pop("_last_seen_dt", None)
-        results.append(value)
-
-    results.sort(key=lambda item: item.get("last_seen") or "", reverse=True)
-    return results
+    return len(account_ids)
 
 
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
@@ -673,8 +591,13 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
             if account_type != AccountType.USERS.value
         )
 
-    active_session_entries = collect_active_sessions(db)
-    active_sessions = len(active_session_entries)
+    active_sessions = count_active_sessions(db)
+
+    # Read through the same helper the report queues are counted by, so the dashboard's
+    # backlog figure cannot drift from the queues behind it. Only `pending` rows are counted:
+    # a report that has already been ruled on is not work anyone is waiting on.
+    report_queues = pending_report_totals(db)
+    pending_reports = sum(report_queues.values())
 
     return {
         "total_users": total_users,
@@ -683,5 +606,7 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
         "total_confessions": total_confessions,
         "total_love_notes": total_love_notes,
         "pending_love_notes": pending_love_notes,
+        "pending_reports": pending_reports,
+        "pending_report_queues": report_queues,
         "blocked_users": blocked_accounts,
     }

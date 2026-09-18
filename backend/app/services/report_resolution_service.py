@@ -684,8 +684,10 @@ def hide_comment(
 def pending_report_totals(db: Database) -> Dict[str, int]:
     """How many reports are still awaiting a decision, per queue.
 
-    Only used by tests and by anyone who needs the three numbers without reading three
-    payloads; the queue endpoints remain the one place a report is listed.
+    The one place the three queue totals are counted, so the dashboard's backlog figure and the
+    queues behind it cannot disagree; the queue endpoints remain the one place a report is
+    listed. A status that has already been ruled on is not counted, so a closed report cannot
+    inflate what looks like outstanding work.
     """
     with db.sessions() as session:
         return {
