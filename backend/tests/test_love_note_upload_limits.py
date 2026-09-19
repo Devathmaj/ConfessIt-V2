@@ -19,6 +19,8 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 
+from app.db_models import LoveNoteRecord
+from app.limits import LOVE_NOTE_BODY_MAX
 from app.services import storage_service as storage_service_module
 from app.services.love_note_service import LoveNoteCreate
 from app.services.storage_service import storage_service
@@ -355,11 +357,78 @@ def test_model_accepts_a_payload_at_the_cap():
 
 
 def test_model_caps_the_note_body_to_the_column_width():
-    """love_notes.body is String(2000); without this the message is the unbounded field."""
+    """love_notes.body is String(LOVE_NOTE_BODY_MAX); without this the message is unbounded.
+
+    The cap is read from the model rather than restated as 1000, so that a limit moved in
+    backend/app/limits.py cannot leave this test asserting a number the code no longer uses --
+    a test that keeps passing at the wrong limit is worse than no test at all.
+    """
+    assert LoveNoteRecord.__table__.c.body.type.length == LOVE_NOTE_BODY_MAX
+
     with pytest.raises(ValueError):
         LoveNoteCreate(
             recipient_id="22222222-2222-2222-2222-222222333333",
             image_base64="AAAA",
-            body="x" * 2001,
+            body="x" * (LOVE_NOTE_BODY_MAX + 1),
+            anonymous=False,
+        )
+
+
+def test_model_accepts_a_body_at_the_cap():
+    """A note of exactly the cap is legal. The boundary is inclusive on both sides."""
+    note = LoveNoteCreate(
+        recipient_id="22222222-2222-2222-2222-222222333333",
+        image_base64="AAAA",
+        body="x" * LOVE_NOTE_BODY_MAX,
+        anonymous=False,
+    )
+    assert len(note.body) == LOVE_NOTE_BODY_MAX
+
+
+def test_model_counts_a_character_as_a_code_point_not_a_utf16_unit():
+    """The cap is in characters, so an emoji spends one unit of it, not two.
+
+    Pydantic counts `str` length, which is code points. This is asserted rather than assumed
+    because it is what makes the limit safe to state as "1000 characters" to someone typing in
+    an emoji-heavy field: if the count were UTF-16 units, a note of 1000 emoji would measure
+    2000 and be refused for being half as long as the sender's allowance.
+    """
+    emoji = "\N{HEAVY BLACK HEART}"
+    # One character, but two UTF-16 code units -- which is the unit the browser's textarea and
+    # `.length` count, and the reason the frontend counts code points explicitly instead.
+    assert len(emoji) == 1
+    assert len(emoji.encode("utf-16-le")) == 2
+
+    note = LoveNoteCreate(
+        recipient_id="22222222-2222-2222-2222-222222333333",
+        image_base64="AAAA",
+        body=emoji * LOVE_NOTE_BODY_MAX,
+        anonymous=False,
+    )
+    assert len(note.body) == LOVE_NOTE_BODY_MAX
+
+    over = emoji * (LOVE_NOTE_BODY_MAX + 1)
+    assert len(over) == LOVE_NOTE_BODY_MAX + 1
+    with pytest.raises(ValueError):
+        LoveNoteCreate(
+            recipient_id="22222222-2222-2222-2222-222222333333",
+            image_base64="AAAA",
+            body=over,
+            anonymous=False,
+        )
+
+
+def test_model_rejects_an_over_the_cap_body_of_east_asian_characters():
+    """A CJK ideograph is one UTF-16 unit and one character, so it must not be counted twice.
+
+    The mirror of the emoji case, and the one a `len()`-based limit would get right by accident.
+    Asserted so that a future switch to a byte or code-unit count fails here rather than on a
+    sender's device.
+    """
+    with pytest.raises(ValueError):
+        LoveNoteCreate(
+            recipient_id="22222222-2222-2222-2222-222222333333",
+            image_base64="AAAA",
+            body="\u3053" * (LOVE_NOTE_BODY_MAX + 1),
             anonymous=False,
         )

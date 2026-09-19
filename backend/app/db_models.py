@@ -19,6 +19,7 @@ from .limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     INTEREST_VALUES,
+    LOVE_NOTE_BODY_MAX,
     MESSAGE_BODY_MAX,
     REPORT_REASON_MAX,
     USER_DEPARTMENT_MAX,
@@ -585,11 +586,24 @@ class LoveNoteRecord(RemovedContentColumns, Base):
     sender_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     recipient_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     image_url: Mapped[str] = mapped_column(Text)
-    body: Mapped[str] = mapped_column(String(2000))
+    body: Mapped[str] = mapped_column(String(LOVE_NOTE_BODY_MAX))
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            f"length(body) <= {LOVE_NOTE_BODY_MAX}",
+            # Value in the name, for the reason ``ck_confessions_body_length_500`` does it:
+            # apply_check_constraints only adds what is missing, so a stable name here would
+            # leave every deployed database enforcing the 2000 this column used to hold, with
+            # nothing anywhere reporting that the constraint and the model now disagree. The
+            # suffix is the new ceiling and this name supersedes
+            # ``ck_love_notes_body_length_2000`` on the next boot.
+            name=f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}",
+        ),
+    )
 
 
 class LoveNoteReportRecord(Base):

@@ -1,6 +1,6 @@
 // src/pages/LoveNotesPage.tsx
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,17 @@ import {
   isSameCohort,
 } from '@/lib/accountFields';
 import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
+import {
+    fitTextToBox,
+    fontString,
+    fontForPreset,
+    maxFittingCharacters,
+    maxSizeForBox,
+    wrapText,
+    STYLE_PRESETS,
+    type FontStyle,
+    type StylePreset,
+} from '@/lib/loveNoteText';
 
 // Used to define the structure for a template's field
 interface TemplateField {
@@ -91,11 +102,51 @@ interface Recipient extends User {
 
 const emojiStickers = ['💕', '💖', '💗', '💘', '💝', '💌', '🌹', '🌸', '🌺', '🦋', '✨', '💫', '⭐', '🌟', '💎', '👑'];
 const availableFonts = ['sans-serif', 'serif', 'monospace', 'cursive'];
-const availableFontStyles = ['normal', 'bold', 'italic'];
+
+/**
+ * Basic colours for the message, rather than a free colour picker.
+ *
+ * A picker would let the sender put white on template 1 and dark navy on template 5, both of which
+ * are unreadable, and neither card can be told apart from the other while choosing. A fixed palette
+ * makes every combination at least legible on every card, which is the constraint that actually
+ * matters here.
+ */
+const noteTextColors = [
+    { value: '#000000', label: 'Black' },
+    { value: '#FFFFFF', label: 'White' },
+    { value: '#C1121F', label: 'Crimson' },
+    { value: '#E75480', label: 'Rose' },
+    { value: '#6A0572', label: 'Purple' },
+    { value: '#1B3A6B', label: 'Navy' },
+    { value: '#2D6A4F', label: 'Green' },
+    { value: '#8B5E3C', label: 'Brown' },
+    { value: '#6C757D', label: 'Grey' },
+];
 
 // Keep in step with the backend's MAX_IMAGE_SIZE_MB (2MB) cap on the decoded love note
 // image, so an oversized note is refused before it is built into a request body.
 const MAX_NOTE_IMAGE_BYTES = 2 * 1024 * 1024;
+
+// The ceiling on a love note's message. Mirrors LOVE_NOTE_BODY_MAX in backend/app/limits.py,
+// which is where it is actually enforced -- this copy exists so the sender never gets further
+// than the server allows.
+//
+// It is a *ceiling*, not the number the sender sees. The template's `body` box is the
+// authority: a card with a short box holds fewer characters than one with a tall box, and the
+// sender's chosen card is what their note will be drawn on. The effective limit is whichever is
+// smaller, computed from the real box in `effectiveBodyLimit` below. At 2000 -- what this was
+// before -- the binding limit was always the 1000 here and never the card, which is why the
+// renderer had to cut text off: the sender was allowed to write more than their card could show.
+//
+// A character here is a Unicode code point, not a UTF-16 unit, so it is counted rather than
+// taken from `.length`. An emoji outside the BMP is one character the sender means to write
+// and two units, and counting units would spend a third of the allowance on half as much prose.
+// `maxLength` on the textarea cannot express this, so it is left off and the count is enforced
+// on the way in instead.
+const LOVE_NOTE_BODY_MAX = 1000;
+
+/** Code points in `value`, which is what the server's cap counts. */
+const characterCount = (value: string): number => [...value].length;
 
 export const LoveNotesPage = () => {
 const { user, fetchAndSetUser, token } = useAuth();
@@ -107,12 +158,29 @@ const { user, fetchAndSetUser, token } = useAuth();
     const [isAnonymous, setIsAnonymous] = useState(false);
     const [selectedEmoji, setSelectedEmoji] = useState<string | null>(null);
     const [selectedFont, setSelectedFont] = useState<string>('sans-serif');
-    const [selectedFontStyle, setSelectedFontStyle] = useState<string>('normal');
+    const [selectedStylePreset, setSelectedStylePreset] = useState<StylePreset>('normal');
+    // `null` means "whatever the card itself wants", which is not the same as black: template 5's
+    // body is declared `#F0F4FF` because the card is dark, so defaulting to black would make a
+    // perfectly good template unreadable. Holding the override as null rather than seeding it with
+    // the first template's colour is what lets it follow the card when the sender switches.
+    const [colorOverride, setColorOverride] = useState<string | null>(null);
 const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
     const [receivedNotes, setReceivedNotes] = useState<LoveNote[]>([]);
     const [loadingNotes, setLoadingNotes] = useState(false);
     const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    // A second context used only for measuring, so the character limit can be derived from the
+    // template's box without waiting for the preview PNG to load.
+    //
+    // It cannot be the visible canvas: measuring has to happen during render, to decide what
+    // the sender is allowed to type, while the visible canvas is only usable inside `img.onload`
+    // -- a callback that has not run yet on first paint. A detached 1x1 canvas gives a real
+    // `measureText` immediately and costs nothing; the context holds no pixels.
+    const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    if (measureCanvasRef.current === null && typeof document !== 'undefined') {
+        measureCanvasRef.current = document.createElement('canvas');
+    }
 
     // Which notes this account has already reported. The server refuses a second report, so
     // the button is hidden rather than left to fail: a control that can only ever answer
@@ -231,6 +299,87 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         if (searchParams.get('tab') === 'inbox') setActiveTab('inbox');
     }, [searchParams]);
 
+    // The template's `body` field, which is the rectangle the message is drawn into. This is the
+    // authoritative limit for the message: see `effectiveBodyLimit`.
+    //
+    // `fields` is optional-chained as well as `selectedTemplate`, because the template list is
+    // whatever the JSON files contain: a failed fetch resolves to something that is not a
+    // template at all, and the canvas effect shrugs that off because it has already returned on a
+    // null context. Reading `.fields` unguarded here took down the whole page instead.
+    const bodyField = useMemo<TemplateField | null>(
+        () => selectedTemplate?.fields?.find((field) => field.name === 'body') ?? null,
+        [selectedTemplate]
+    );
+
+    // The font the message is drawn in, in the shape `loveNoteText` wants. Kept next to the
+    // body field rather than built inside the canvas effect because the limit below needs it
+    // during render too, and building it twice invites the two copies to disagree.
+    const bodyFont = useMemo<FontStyle>(
+        () => ({
+            ...fontForPreset(selectedStylePreset),
+            family: selectedFont,
+        }),
+        [selectedFont, selectedStylePreset]
+    );
+
+    // The colour the message is drawn in. The card's own declared colour until the sender picks
+    // one, and an explicit pick is never silently discarded -- dropping it because they changed
+    // card would throw away a deliberate choice over something they did not ask about.
+    const cardDefaultColor = bodyField?.font?.color ?? '#000000';
+    const bodyColor = colorOverride ?? cardDefaultColor;
+
+    // Measures against the detached canvas, so it is available before the preview has loaded.
+    const measureFor = useCallback(
+        (font: FontStyle, size: number, text: string): number => {
+            const context = measureCanvasRef.current?.getContext('2d');
+            if (!context) return 0;
+            context.font = fontString(font, size);
+            return context.measureText(text).width;
+        },
+        []
+    );
+
+    // How many characters this particular card can actually show, at the smallest size the
+    // renderer will use. This is what the sender is held to, and it is why two templates can
+    // have different limits: the boxes differ, so the cards do.
+    //
+    // Computed from the message the sender has typed rather than from a fixed sample, because
+    // capacity is a property of the glyphs -- a card holds materially fewer emoji than Latin
+    // letters. `fontKey` is in the dependency list so that changing the font or its weight
+    // recomputes it.
+    const fontKey = `${bodyFont.style}|${bodyFont.weight}|${bodyFont.family}`;
+    const capacity = useMemo(() => {
+        if (!bodyField) return LOVE_NOTE_BODY_MAX;
+        return Math.min(
+            LOVE_NOTE_BODY_MAX,
+            maxFittingCharacters(
+                measureFor,
+                bodyFont,
+                noteMessage,
+                bodyField,
+                LOVE_NOTE_BODY_MAX
+            )
+        );
+        // `fontKey` stands in for the three fields of `bodyFont`, which is a fresh object every
+        // render and would defeat the memo.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bodyField, fontKey, measureFor, noteMessage]);
+
+    // The limit actually applied: the smaller of what the server will store and what this card
+    // can draw. Neither alone is right -- the ceiling without the card would let the sender
+    // type text that gets cut off, and the card alone would let them type something the server
+    // refuses at send time with a 422.
+    const effectiveBodyLimit = Math.min(LOVE_NOTE_BODY_MAX, capacity);
+
+    // Kept in step when the card or the font changes, because switching to a template with a
+    // smaller box can make the existing message over-long. Trimming here rather than only in the
+    // handler means the textarea and the preview never disagree about what the note contains.
+    useEffect(() => {
+        const characters = [...noteMessage];
+        if (characters.length <= effectiveBodyLimit) return;
+        setNoteMessage(characters.slice(0, effectiveBodyLimit).join(''));
+    }, [noteMessage, effectiveBodyLimit]);
+
     // Used to draw the content on the canvas
     useEffect(() => {
         if (!selectedTemplate || !canvasRef.current) return;
@@ -246,14 +395,28 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
             canvas.height = img.height;
             ctx.drawImage(img, 0, 0);
 
+            // A canvas only measures text in the font currently set on it, so every candidate
+            // size has to be applied before it can be measured. Centralised here because the fit
+            // probes a dozen sizes per field and the alternative -- remembering to set the font
+            // at each one -- is exactly the kind of omission that silently measures at the wrong
+            // size and returns a layout that overflows.
+            const measureAt = (font: FontStyle, size: number, text: string): number => {
+                ctx.font = fontString(font, size);
+                return ctx.measureText(text).width;
+            };
+
             // Used to render dynamic fields on the template
             selectedTemplate.fields.forEach(field => {
-                ctx.fillStyle = field.font?.color || '#000000';
+                const isBody = field.name === 'body';
+
+                // Only the message takes the sender's colour. The signature fields are card
+                // chrome drawn in the weight and colour the card was designed around, and the
+                // emoji is a colour glyph that ignores `fillStyle` anyway.
+                ctx.fillStyle = isBody ? bodyColor : field.font?.color || '#000000';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
 
                 let textToRender = '';
-                let fontStyle = 'normal';
                 let fontWeight = 'normal';
                 const fontFamily = selectedFont;
                 const fontSize = field.font?.size || 16;
@@ -261,8 +424,9 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 switch (field.name) {
                     case 'body':
                         textToRender = noteMessage || 'Your message here...';
-                        if (selectedFontStyle === 'italic') fontStyle = 'italic';
-                        if (selectedFontStyle === 'bold') fontWeight = 'bold';
+                        // Its slant and weight come from `bodyFont` below. Deriving them here as
+                        // well used to be the only way to express bold *and* italic, and having
+                        // two mappings of the same setting is how they drift apart.
                         break;
                     case 'from_label':
                         textToRender = field.value || 'From,';
@@ -281,78 +445,94 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                         }
                         return; 
                 }
-                
-                ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
-                
-                if (field.type !== 'emoji') {
-                    wrapText(ctx, textToRender, field.x, field.y, field.width, field.height, fontSize);
-                }
+
+                // The body field reuses the font and the box computed during render, so the
+                // limit the sender was held to and the layout being drawn cannot come from two
+                // different readings of the template. The others are always upright: the sender's
+                // chosen slant is meant for their message, and tilting a printed "From," or their
+                // own name is a different decision from the one they made.
+                const font: FontStyle =
+                    field.name === 'body'
+                        ? bodyFont
+                        : { style: 'normal', weight: fontWeight, family: fontFamily };
+
+                // Only `body` is fitted. The signature fields are a fixed word and the sender's
+                // own name, and they are drawn at exactly the size the card was drawn around --
+                // shrinking them would make a note look wrong for a reason that has nothing to
+                // do with its message. They are still wrapped, though, because a long name used
+                // to wrap here and drawing it as one overflowing line would be a regression
+                // disguised as a simplification.
+                // `truncated` is deliberately not read here. It can only be true for a message
+                // over the server's cap -- which this field will not let anyone type, see
+                // `handleMessageChange` -- or for one unbroken run of glyphs wider than the box,
+                // and the counter above is the honest report in both cases. Surfacing it would
+                // mean threading canvas-load state back into render for a branch the sender
+                // cannot reach.
+                // The ceiling comes from the box, not from `field.font.size`. Every template
+                // shipped the same declared 32 against boxes spanning 830x800 to 1570x570 on a
+                // 1920x1080 card, so 32 was a placeholder rather than a tuned value -- it made a
+                // short note look tiny and left no room to shrink within, which is the opposite
+                // of what the fit is for. See `maxSizeForBox`.
+                const fitted = isBody                    ? fitTextToBox(
+                          measureAt,
+                          font,
+                          textToRender,
+                          field,
+                          maxSizeForBox(field)
+                      )
+                    : {
+                          lines: wrapText(
+                              (candidate) => measureAt(font, fontSize, candidate),
+                              textToRender,
+                              field.width
+                          ),
+                          fontSize,
+                          truncated: false,
+                      };
+
+                // The draw has to happen at the size the text was *fitted* at. Drawing at
+                // `field.font.size` while using lines that were wrapped for a smaller size is
+                // what puts text outside the box: the wrap was computed against one font and
+                // the glyphs are painted in another.
+                ctx.font = fontString(font, fitted.fontSize);
+
+                const lineHeight = fitted.fontSize;
+                const totalTextHeight = fitted.lines.length * lineHeight;
+                const startY = (field.y + field.height / 2) - (totalTextHeight / 2) + (lineHeight / 2);
+
+                fitted.lines.forEach((line, index) => {
+                    ctx.fillText(line, field.x + field.width / 2, startY + (index * lineHeight));
+                });
             });
         };
 
-    }, [selectedTemplate, noteMessage, isAnonymous, selectedEmoji, selectedFont, selectedFontStyle, user]);
+    }, [
+        selectedTemplate,
+        noteMessage,
+        isAnonymous,
+        selectedEmoji,
+        selectedFont,
+        selectedStylePreset,
+        user,
+        bodyFont,
+        bodyColor,
+    ]);
 
-    // Used to wrap and center text within a specified area.
-    const wrapText = (context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, maxHeight: number, lineHeight: number) => {
-        const lines: string[] = [];
-        const paragraphs = text.split('\n');
-
-        for (const paragraph of paragraphs) {
-            const words = paragraph.split(' ');
-            let currentLine = '';
-            for (const word of words) {
-                const testLine = currentLine ? `${currentLine} ${word}` : word;
-                const metrics = context.measureText(testLine);
-                if (metrics.width > maxWidth && currentLine) {
-                    lines.push(currentLine);
-                    currentLine = word;
-                } else {
-                    currentLine = testLine;
-                }
-            }
-            lines.push(currentLine);
-        }
-        
-        const wrappedLines: string[] = [];
-        lines.forEach(line => {
-            let tempLine = '';
-            if (context.measureText(line).width > maxWidth) {
-                for(let i = 0; i < line.length; i++) {
-                    const char = line[i];
-                    const testLine = tempLine + char;
-                    if (context.measureText(testLine).width > maxWidth) {
-                        wrappedLines.push(tempLine);
-                        tempLine = char;
-                    } else {
-                        tempLine = testLine;
-                    }
-                }
-                wrappedLines.push(tempLine);
-            } else {
-                wrappedLines.push(line);
-            }
-        });
-
-        const maxLines = Math.floor(maxHeight / lineHeight);
-        const visibleLines = wrappedLines.slice(0, maxLines);
-
-        if (wrappedLines.length > maxLines && visibleLines.length > 0) {
-            const lastLineIndex = visibleLines.length - 1;
-            let lastLine = visibleLines[lastLineIndex];
-            let truncatedLine = lastLine;
-            while (context.measureText(truncatedLine + '...').width > maxWidth && truncatedLine.length > 0) {
-                truncatedLine = truncatedLine.slice(0, -1);
-            }
-            visibleLines[lastLineIndex] = truncatedLine + '...';
-        }
-
-        const totalTextHeight = visibleLines.length * lineHeight;
-        const startY = (y + maxHeight / 2) - (totalTextHeight / 2) + (lineHeight / 2);
-
-        visibleLines.forEach((line, index) => {
-            const lineY = startY + (index * lineHeight);
-            context.fillText(line, x + maxWidth / 2, lineY);
-        });
+    // Used to keep the message inside what this card can actually show. Truncating at a
+    // code-point boundary rather than refusing the keystroke is deliberate: the limit is
+    // something the sender cannot see coming, and silently dropping input they just typed reads
+    // as the field being broken. The alternative -- letting them type past it and surfacing a
+    // 422 on send -- spends the whole message to deliver the same result.
+    //
+    // `effectiveBodyLimit` rather than `LOVE_NOTE_BODY_MAX`: the ceiling is the server's, but
+    // the number that matters to the sender is the one their chosen card imposes.
+    const handleMessageChange = (value: string) => {
+        const characters = [...value];
+        setNoteMessage(
+            characters.length > effectiveBodyLimit
+                ? characters.slice(0, effectiveBodyLimit).join('')
+                : value
+        );
     };
 
     // Used to handle the selection of a single emoji sticker.
@@ -566,36 +746,81 @@ setSearchTerm('');
                                     <div>
                                         <Label className="text-romantic font-semibold mb-3 block">Choose a Style</Label>
                                         <div className="flex flex-wrap gap-2">
-                                            {availableFontStyles.map((style) => (
+                                            {STYLE_PRESETS.map((preset) => (
                                                 <button
-                                                    key={style}
-                                                    onClick={() => setSelectedFontStyle(style)}
-                                                    className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 capitalize ${selectedFontStyle === style
+                                                    key={preset.value}
+                                                    onClick={() => setSelectedStylePreset(preset.value)}
+                                                    className={`px-4 py-2 text-sm rounded-lg border-2 transition-all duration-300 hover:scale-105 ${selectedStylePreset === preset.value
                                                             ? 'border-romantic bg-gradient-love text-white'
                                                             : 'border-muted hover:border-romantic'
                                                         }`}
-                                                    style={{ 
-                                                        fontWeight: style === 'bold' ? 'bold' : 'normal',
-                                                        fontStyle: style === 'italic' ? 'italic' : 'normal'
+                                                    // The button is drawn in the style it selects,
+                                                    // so "Bold Italic" reads as bold italic rather
+                                                    // than as a label for it.
+                                                    style={{
+                                                        fontWeight: preset.preview.weight,
+                                                        fontStyle: preset.preview.style
                                                     }}
                                                 >
-                                                    {style}
+                                                    {preset.label}
                                                 </button>
                                             ))}
                                         </div>
                                     </div>
 
-                                    {/* Message Input */}
+                                    {/* Message Colour Selection */}
                                     <div>
-                                        <Label htmlFor="message" className="text-romantic font-semibold">Your Message</Label>
-                                        <Textarea
+                                        <Label className="text-romantic font-semibold mb-3 block">Choose a Colour</Label>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {noteTextColors.map((color) => (
+                                                <button
+                                                    key={color.value}
+                                                    onClick={() => setColorOverride(color.value)}
+                                                    title={color.label}
+                                                    aria-label={color.label}
+                                                    aria-pressed={bodyColor === color.value}
+                                                    className={`w-9 h-9 rounded-full border-2 transition-all duration-300 hover:scale-110 ${bodyColor === color.value
+                                                            ? 'border-romantic ring-2 ring-offset-2 ring-romantic'
+                                                            : 'border-muted hover:border-romantic'
+                                                        }`}
+                                                    style={{ backgroundColor: color.value }}
+                                                />
+                                            ))}
+                                            {/* Back to whatever the card was designed with. Only worth
+                                                showing when the sender has actually overridden it,
+                                                and when the card's colour is not one of the swatches
+                                                above -- template 5's `#F0F4FF` is not. */}
+                                            {bodyColor !== cardDefaultColor && (
+                                                <button
+                                                    onClick={() => setColorOverride(null)}
+                                                    className="px-3 py-2 text-xs rounded-lg border-2 border-dashed border-muted hover:border-romantic transition-all duration-300"
+                                                    style={{ color: cardDefaultColor }}
+                                                >
+                                                    Card default
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+
+{/* Message Input */}
+                                    <div>
+                                         <Label htmlFor="message" className="text-romantic font-semibold">Your Message</Label>
+                                         <Textarea
                                             id="message"
                                             placeholder="Write your heartfelt message here..."
                                             value={noteMessage}
-                                            onChange={(e) => setNoteMessage(e.target.value)}
+                                            onChange={(e) => handleMessageChange(e.target.value)}
                                             rows={4}
                                             className="resize-none"
                                         />
+                                         <p className="text-xs text-muted-foreground mt-1">
+                                            {characterCount(noteMessage)} / {effectiveBodyLimit} characters
+                                         </p>
+                                         <p className="text-xs text-muted-foreground mt-1">
+                                            {capacity < LOVE_NOTE_BODY_MAX
+                                                ? `This card fits about ${capacity} characters. Longer notes are written smaller so the whole message fits.`
+                                                : 'Longer notes are written smaller so the whole message fits the card.'}
+                                         </p>
                                     </div>
 
                                     {/* Emoji Stickers */}

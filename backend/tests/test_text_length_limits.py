@@ -25,6 +25,7 @@ from app.accounts import AccountType
 from app.limits import (
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
+    LOVE_NOTE_BODY_MAX,
     MESSAGE_BODY_MAX,
     RECIPIENT_NAME_MAX,
     REPORT_REASON_MAX,
@@ -33,15 +34,31 @@ from app.limits import (
 )
 from app.models import CommentCreate, ConfessionCreate, ReportCreate
 from app.routers.messages import MessageCreate, MessageReport
+from app.services.love_note_service import LoveNoteCreate
 
 warnings.simplefilter("ignore")
 
 AT_LIMIT = "x" * 10
 
+# A minimal decodable PNG. `image_base64` is capped separately and checked first, so a love note
+# at the body limit still needs a payload that gets past that check to reach the body field.
+TINY_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
 
 def _confession(body, recipient_name="Sam"):
     return ConfessionCreate(
         body=body, anonymous=False, comments_enabled=False, recipient_name=recipient_name
+    )
+
+
+def _love_note(body):
+    return LoveNoteCreate(
+        recipient_id="22222222-2222-2222-2222-222222333333",
+        image_base64=TINY_PNG_BASE64,
+        body=body,
+        anonymous=False,
     )
 
 
@@ -103,6 +120,7 @@ def _insert_author(db, regno):
         (lambda n: ReportCreate(reason="x" * n), REPORT_REASON_MAX),
         (lambda n: MessageCreate(conversation_id="c", body="x" * n), MESSAGE_BODY_MAX),
         (lambda n: MessageReport(message_id="m", reason="x" * n), REPORT_REASON_MAX),
+        (lambda n: _love_note("x" * n), LOVE_NOTE_BODY_MAX),
     ],
 )
 def test_text_field_accepts_exactly_the_limit(factory, limit):
@@ -118,6 +136,7 @@ def test_text_field_accepts_exactly_the_limit(factory, limit):
         (lambda n: ReportCreate(reason="x" * n), REPORT_REASON_MAX),
         (lambda n: MessageCreate(conversation_id="c", body="x" * n), MESSAGE_BODY_MAX),
         (lambda n: MessageReport(message_id="m", reason="x" * n), REPORT_REASON_MAX),
+        (lambda n: _love_note("x" * n), LOVE_NOTE_BODY_MAX),
     ],
 )
 def test_text_field_rejects_one_past_the_limit(factory, limit):
@@ -279,6 +298,23 @@ def test_profile_fields_are_capped_on_the_participant_payload(field, limit):
         UserProfileUpdate(**{field: "x" * (limit + 1)})
 
 
+def test_the_love_note_caps_match_the_columns():
+    """The payload cap and the column width are the same number, deliberately.
+
+    Same reason as the profile fields above, and load-bearing in a specific way for a love note:
+    the message is not stored as text that anyone reads back -- it is drawn onto a PNG and
+    uploaded -- so the body column is the only durable copy. A payload cap and a column width
+    that disagree means either an over-long note fails on insert with a 500, or a column wider
+    than the payload is a wider rasterised card than the renderer was built to lay out.
+    """
+    from app.db_models import LoveNoteRecord
+
+    assert LoveNoteRecord.__table__.c.body.type.length == LOVE_NOTE_BODY_MAX
+    assert (
+        LoveNoteCreate.model_fields["body"].metadata[0].max_length == LOVE_NOTE_BODY_MAX
+    )
+
+
 def test_the_profile_caps_match_the_columns():
     """The payload cap and the column width are the same number, deliberately.
 
@@ -365,6 +401,7 @@ def test_openapi_publishes_the_limits(client: TestClient):
     assert components["ReportCreate"]["properties"]["reason"]["maxLength"] == REPORT_REASON_MAX
     assert components["MessageCreate"]["properties"]["body"]["maxLength"] == MESSAGE_BODY_MAX
     assert components["MessageReport"]["properties"]["reason"]["maxLength"] == REPORT_REASON_MAX
+    assert components["LoveNoteCreate"]["properties"]["body"]["maxLength"] == LOVE_NOTE_BODY_MAX
 
 
 # ----------------------------------------------------------------------------- api
@@ -385,6 +422,17 @@ def test_openapi_publishes_the_limits(client: TestClient):
         ("/confessions/1/comment", {"body": "x" * (COMMENT_BODY_MAX + 1)}),
         ("/confessions/1/report", {"reason": "x" * (REPORT_REASON_MAX + 1)}),
         ("/messages/send", {"conversation_id": "c", "body": "x" * (MESSAGE_BODY_MAX + 1)}),
+        (
+            # `POST`, not `GET`: an over-long body on the wrong verb would 405 before validation
+            # ran, so the route and the method both have to be right for this to assert anything.
+            "/love-notes/send",
+            {
+                "recipient_id": "22222222-2222-2222-2222-222222333333",
+                "image_base64": TINY_PNG_BASE64,
+                "body": "x" * (LOVE_NOTE_BODY_MAX + 1),
+                "anonymous": False,
+            },
+        ),
     ],
 )
 def test_api_rejects_over_long_text_with_422(client: TestClient, path, payload):
@@ -495,7 +543,8 @@ def test_length_constraints_are_installed(db):
                     "WHERE conname IN ("
                     f"  'ck_confessions_body_length_{CONFESSION_BODY_MAX}',"
                     f"  'ck_confession_comments_body_length_{COMMENT_BODY_MAX}',"
-                    f"  'ck_messages_body_length_{MESSAGE_BODY_MAX}')"
+                    f"  'ck_messages_body_length_{MESSAGE_BODY_MAX}',"
+                    f"  'ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}')"
                 )
             )
         }
@@ -506,6 +555,7 @@ def test_length_constraints_are_installed(db):
             f"ck_confession_comments_body_length_{COMMENT_BODY_MAX}",
         ),
         ("messages", f"ck_messages_body_length_{MESSAGE_BODY_MAX}"),
+        ("love_notes", f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}"),
     }
 
 
@@ -599,6 +649,7 @@ def test_no_superseded_confession_length_constraint_is_left_behind(db):
     [
         ("confessions", CONFESSION_BODY_MAX, "body"),
         ("messages", MESSAGE_BODY_MAX, "body"),
+        ("love_notes", LOVE_NOTE_BODY_MAX, "body"),
     ],
 )
 def test_database_rejects_over_long_text_written_outside_the_api(db, table, limit, column):
@@ -618,6 +669,12 @@ def test_database_rejects_over_long_text_written_outside_the_api(db, table, limi
         # test passes for the wrong reason -- it would be asserting that a `ck_` constraint
         # rejects the row while the database was actually complaining about a missing user.
         _insert_user(connection, "limits-peer")
+        # `love_notes` carries a foreign key on both `sender_id` and `recipient_id`, so it needs a
+        # third participant beyond the two above. Without it the insert fails on the key and the
+        # test passes for the wrong reason -- asserting that a `ck_` constraint rejects the row
+        # while the database was actually complaining about a missing user. Same false negative
+        # the `messages` case documents, one participant over.
+        _insert_user(connection, "limits-recipient")
         statement = {
             "confessions": (
                 "INSERT INTO confessions (id, body, recipient_name, anonymous, "
@@ -648,6 +705,15 @@ def test_database_rejects_over_long_text_written_outside_the_api(db, table, limi
                 ") "
                 "INSERT INTO messages (id, conversation_id, sender_regno, receiver_regno, body, created_at) "
                 "SELECT gen_random_uuid(), cid, 'limits-owner', 'limits-peer', :body, now() FROM c2"
+            ),
+            "love_notes": (
+                "INSERT INTO love_notes (id, sender_id, recipient_id, image_url, body, "
+                "anonymous, created_at) VALUES "
+                "(gen_random_uuid(), "
+                "(SELECT id FROM users WHERE regno = 'limits-owner'), "
+                "(SELECT id FROM users WHERE regno = 'limits-recipient'), "
+                "'testuser/AbCdEfGhIjKlMnOpQrStUv/20240101_120000_000000_love_note.png', "
+                ":body, false, now())"
             ),
         }[table]
         with pytest.raises(IntegrityError) as excinfo:

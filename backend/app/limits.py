@@ -29,9 +29,31 @@ one, and a chat message is a conversational turn.
 # below it off the screen.
 #
 # Longer feelings have a home already: a love note is a message to one person and is bounded
-# separately at 2000. A public anonymous feed is the wrong place for a paragraph nobody chose
-# to read.
+# separately at LOVE_NOTE_BODY_MAX. A public anonymous feed is the wrong place for a paragraph
+# nobody chose to read.
 CONFESSION_BODY_MAX = 500
+
+# The message on a love note, and the only limit here that is a layout constraint rather than a
+# readability one.
+#
+# A love note is *drawn*: the browser rasterises the message onto the template's PNG at the
+# sender's chosen font and font size, and that image is the whole note. There is no markup and no
+# scroll, so a message has to fit inside a fixed rectangle on the card or part of it is simply
+# not there. This number is therefore the point past which the picture stops being able to show
+# the note at a size anybody can read -- which is why it is far below the storage it could have.
+#
+# 1000 is set against the tightest template rather than the average one. The body box on
+# template 3 is 895x328; at the 32px its JSON declares, that is about 10 lines of roughly 45
+# characters, so ~450 characters at the intended size and a good deal more once the renderer is
+# allowed to scale the type down. A note near this limit renders noticeably smaller than one
+# near the start of it, which is the intended behaviour -- the sender sees the same scaling in
+# the live preview before sending -- but it does mean the limit is a legibility ceiling rather
+# than a comfortable one.
+#
+# Lowered from 2000, which was inherited from the confession and never checked against what a
+# card could hold. At that length the only way to render a note was to shrink the type to
+# roughly 12px, so the extra characters bought a love note nobody could read.
+LOVE_NOTE_BODY_MAX = 1000
 
 # A comment replies to a confession, so it is deliberately much shorter.
 COMMENT_BODY_MAX = 500

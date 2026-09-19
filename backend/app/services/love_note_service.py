@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
-from ..limits import REPORT_REASON_MAX
+from ..limits import LOVE_NOTE_BODY_MAX, REPORT_REASON_MAX
 from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote
@@ -32,9 +32,11 @@ class LoveNoteCreate(BaseModel):
     # still within what the decoder will accept once the data URI prefix and any
     # embedded whitespace are folded out.
     image_base64: str = Field(max_length=storage_service.max_base64_chars)
-    # Matches the String(2000) column in db_models.LoveNoteRecord; without a cap here
-    # this field is just as unbounded as the image was.
-    body: str = Field(max_length=2000)
+    # Matches the String(LOVE_NOTE_BODY_MAX) column in db_models.LoveNoteRecord, and is the
+    # legibility limit described there rather than a storage one: the note is rasterised onto
+    # a fixed card, so a body longer than this could only be rendered at a size nobody reads.
+    # Without the cap here this field is just as unbounded as the image was.
+    body: str = Field(max_length=LOVE_NOTE_BODY_MAX)
     anonymous: bool
 
 class LoveNoteReportCreate(BaseModel):
