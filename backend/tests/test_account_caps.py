@@ -68,11 +68,13 @@ def _payload(regno: str, account_type: str, **overrides):
         "regno": regno,
         "name": f"Person {regno}",
         "email": f"{regno.lower()}@example.com",
-        "gender": "other",
     }
     if account_type == AccountType.USERS.value:
         payload["year"] = 2
         payload["department"] = "Cap Class"
+        # Gender is a ``users`` column like year and department, so a staff create that
+        # carried one would be a field the router drops rather than a field it writes.
+        payload["gender"] = "other"
     payload.update(overrides)
     return payload
 
@@ -94,14 +96,18 @@ def _seed_rows(db, account_type: str, how_many: int, blocked: bool = False) -> N
     with db.sessions.begin() as session:
         for index in range(how_many):
             regno = f"FILL-{account_type}-{index}"
+            participant_fields = (
+                {"year": 2, "department": "Fill Class", "gender": "other"}
+                if account_type == AccountType.USERS.value
+                else {}
+            )
             session.add(
                 model(
                     regno=regno,
                     name=f"Filler {index}",
                     email=f"fill-{account_type}-{index}@example.com",
-                    gender="other",
                     is_blocked=blocked,
-                    **({"year": 2, "department": "Fill Class"} if account_type == AccountType.USERS.value else {}),
+                    **participant_fields,
                 )
             )
 
@@ -304,9 +310,9 @@ def test_the_database_refuses_to_create_an_already_blocked_admin(restore_caps, d
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO admin (id, regno, name, email, gender, is_blocked) "
+                    "INSERT INTO admin (id, regno, name, email, is_blocked) "
                     "VALUES (gen_random_uuid(), 'born-blocked', 'Born', "
-                    "'born-blocked@example.com', 'other', true)"
+                    "'born-blocked@example.com', true)"
                 )
             )
     assert "ck_admin_not_blockable" in str(caught.value)
@@ -396,9 +402,9 @@ def test_a_null_is_blocked_admin_is_refused_by_the_not_null_column(restore_caps,
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO admin (id, regno, name, email, gender, is_blocked) "
+                    "INSERT INTO admin (id, regno, name, email, is_blocked) "
                     "VALUES (gen_random_uuid(), 'null-blocked', 'Null', "
-                    "'null-blocked@example.com', 'other', NULL)"
+                    "'null-blocked@example.com', NULL)"
                 )
             )
     assert "is_blocked" in str(caught.value)

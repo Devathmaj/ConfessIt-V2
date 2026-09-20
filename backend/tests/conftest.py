@@ -81,7 +81,6 @@ def override_get_admin_user():
         regno="adminuser",
         name="Admin User",
         email="admin@user.com",
-        gender="other",
         notifications_enabled=True,
         account_type=AccountType.ADMIN.value,
     )
@@ -98,7 +97,6 @@ def override_get_moderator_user():
         regno="moduser",
         name="Moderator User",
         email="moderator@user.com",
-        gender="other",
         notifications_enabled=True,
         account_type=AccountType.MODERATOR.value,
     )

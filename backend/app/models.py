@@ -293,11 +293,17 @@ class AdminUserCreate(BaseModel):
     becomes staff: there is no ``role`` to set, so a payload cannot half-create a staff
     account by naming a privilege instead of a table.
 
-    ``email`` and ``gender`` are required of *every* account type, so they are declared
-    unconditionally rather than through the validator below. Both are non-null columns on all
-    three tables, which is what makes them a property of being an account at all rather than
-    of being a particular kind of one; a moderator nobody can be contacted about is an account
-    that cannot be recovered when its holder leaves.
+    ``email`` is required of *every* account type and is declared unconditionally rather than
+    through the validator below: it is a non-null column on all three tables, which is what makes
+    it a property of being an account at all rather than of being a particular kind of one; a
+    moderator nobody can be contacted about is an account that cannot be recovered when its
+    holder leaves.
+
+    ``gender`` is participant-only, and follows the same rule ``year`` and ``department`` do
+    below: optional in the type, required by the validator only when ``account_type`` is
+    ``users``. It is a matchmaking filter on ``users`` and nothing else, so a staff table has no
+    such column -- and a payload required to answer a question about a row that cannot hold the
+    answer is a required field that can only ever be dropped on arrival.
 
     **Everything an account owns about itself is absent, and the model refuses it by name.**
     There is no ``profile_picture_url``, no ``emoji``, no ``bio``, no ``interests``, and none of
@@ -338,8 +344,8 @@ class AdminUserCreate(BaseModel):
     regno: str = Field(max_length=USER_REGNO_MAX)
     name: str = Field(max_length=USER_NAME_MAX)
     email: EmailStr
-    gender: Gender
     # participants only
+    gender: Optional[Gender] = None
     year: Optional[Year] = None
     department: Optional[str] = Field(default=None, max_length=USER_DEPARTMENT_MAX)
 
@@ -347,6 +353,11 @@ class AdminUserCreate(BaseModel):
     def _require_participant_fields(self) -> "AdminUserCreate":
         if self.account_type is not AccountType.USERS:
             return self
+        # Gender joins the cohort pair below: it is NOT NULL on ``users`` and closed to three
+        # values, so letting it through unset would be a 500 from the insert rather than a
+        # validation message.
+        if not self.gender:
+            raise ValueError("gender is required for a participant account.")
         # Both halves of what used to be one ``class_name``. Storing "CSE 2nd Year" in a single
         # column meant the value could only be grouped by whatever a person typed, so two
         # spellings of the same cohort were two cohorts; requiring them separately is what makes
@@ -382,8 +393,10 @@ class AdminUserUpdate(BaseModel):
 
     Every field is optional, and the account is found by id across all three tables, so one
     payload shape edits a participant or a staff account. The editable set is exactly the
-    identity of the account: ``regno``, ``name``, ``gender``, ``email``, and ``year`` and
-    ``department`` for a participant.
+    identity of the account: ``regno``, ``name``, ``email``, and ``gender``, ``year`` and
+    ``department`` for a participant -- the router drops those three for a staff row, for the
+    same reason it drops them from any request that names a moderator: the staff tables have no
+    such columns, and an edit that tried to write one would be a 500 rather than a save.
 
     There is deliberately no ``account_type`` here. Moving a row between tables is not a
     field edit: eleven other tables hold foreign keys into ``users`` by both id and regno, so
@@ -454,16 +467,15 @@ class AccountDetails(BaseModel):
     address at the moment an operator is already typing one. It is NOT NULL on all three tables
     for the same reason.
 
-    ``gender`` is shared and required for the same reason, and additionally because it is a
-    filter: matchmaking reads it, so a staff account that cannot hold one is a row every
-    query has to special-case.
+    ``gender`` and ``profile_picture_url`` are deliberately absent rather than null, for the
+    same reason ``year`` and ``department`` are: the staff tables have no gender column and no
+    picture columns, so ``null`` here would describe a value the row does not have rather than a
+    value it holds as empty. Both belong to ``UserDetails`` below.
     """
     id: str = Field(default_factory=new_id)
     regno: str
     name: str
     email: EmailStr
-    profile_picture_url: Optional[str] = None
-    gender: Gender
     notifications_enabled: bool = True
     is_blocked: bool = False
     last_login_at: Optional[datetime] = None
@@ -527,8 +539,11 @@ class UserDetails(AccountDetails):
     account cannot reach a participant feature not because a role string said so, but
     because there is no row for it in the table the feature reads.
 
-    Nothing is narrowed from ``AccountDetails`` any more: email and gender are required of
-    every account, so this model adds fields rather than tightening shared ones.
+    ``gender`` and ``profile_picture_url`` are declared here rather than on ``AccountDetails``
+    because only ``users`` has the columns underneath them: gender is a matchmaking filter and a
+    picture is uploaded through a participant-only route, so on a staff row both would be
+    answers about columns that do not exist. ``gender`` is required, like the column -- NOT NULL
+    and closed to ``Gender`` by ``ck_accounts_gender``.
 
     ``interests`` stays a plain list of strings rather than a list of the closed vocabulary,
     deliberately. A CHECK constraint added by ``apply_check_constraints`` lands ``NOT VALID``,
@@ -537,6 +552,11 @@ class UserDetails(AccountDetails):
     worst possible place to discover a legacy value. The write paths -- every payload that
     accepts interests -- enforce the vocabulary, which is where enforcing it does any good.
     """
+    gender: Gender
+    # Derived on read from the stored Cloudinary identity (``profile_picture_public_id`` plus
+    # ``profile_picture_format``), never stored as a URL. Nullable because a participant who has
+    # never uploaded has no picture, which is a real state and not a missing answer.
+    profile_picture_url: Optional[str] = None
     emoji: Optional[str] = None
     bio: Optional[str] = None
     # Both NOT NULL on ``users``, so both are required here. ``year`` is a plain ``int`` rather

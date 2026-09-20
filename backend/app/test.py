@@ -93,11 +93,11 @@ def _staff() -> list[tuple[str, dict]]:
     return [
         (AccountType.ADMIN.value, {
             "regno": "admin", "name": "Test Admin", "email": "admin@test.com",
-            "gender": "male", "profile_picture_public_id": None, "profile_picture_format": None, "notifications_enabled": True,
+            "notifications_enabled": True,
         }),
         (AccountType.MODERATOR.value, {
             "regno": "moderator", "name": "Test Moderator", "email": "moderator@test.com",
-            "gender": "female", "profile_picture_public_id": None, "profile_picture_format": None, "notifications_enabled": True,
+            "notifications_enabled": True,
         }),
     ]
 

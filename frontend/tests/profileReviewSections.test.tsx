@@ -496,14 +496,14 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has no year, department, bio, interests, emoji, matchmaking or
+    // The `moderator` table has no year, department, gender, bio, interests, emoji, matchmaking or
     // love-note columns. Offering those inputs asked for values the server silently dropped.
     expect(
       within(dialog).getByRole('heading', { name: 'Create moderator account' }),
     ).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Full name *')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Register number *')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Gender *')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Gender *')).not.toBeInTheDocument();
     // Both halves of the split, not just the one that used to be asked for: a moderator needs
     // neither, and offering the department alone would invite an answer with nowhere to go.
     expect(within(dialog).queryByLabelText('Year *')).not.toBeInTheDocument();
@@ -545,7 +545,6 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
       target: { value: 'newmod@school.test' },
     });
-    await chooseOption(dialog, 'Female');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create moderator account' }));
 
     await waitFor(() => expect(api.createAdminUser).toHaveBeenCalledTimes(1));
@@ -556,12 +555,14 @@ describe('ProfileReview: creating an account from its own group', () => {
       // Email is required of a staff account too. It used to be omitted here, which is how a
       // moderator ended up with no address anybody could reach.
       email: 'newmod@school.test',
-      gender: 'female',
       account_type: 'moderator',
     });
     // Nothing participant-only was sent, because nothing participant-only was collected. Sending
     // empty values would rely on the server dropping them, which is how they got sent at all.
+    // `gender` is in this list: the create form no longer offers it for a staff account, because
+    // neither staff table has the column to write it into.
     for (const key of [
+      'gender',
       'year',
       'department',
       'bio',
@@ -711,7 +712,8 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.change(within(dialog).getByLabelText('Register number *'), {
       target: { value: 'staff-9' },
     });
-    await chooseOption(dialog, 'Other');
+    // No gender step here: a moderator create has no gender control to fill in on the way to a
+    // malformed address.
     // No @ at all, so <input type="email"> would have raised a native tooltip and the form would
     // have submitted nothing at all -- with no message in the dialog and none in the app either.
     fireEvent.change(within(dialog).getByLabelText('Email *'), {
@@ -804,12 +806,13 @@ describe('ProfileReview: editing a staff account', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has these four columns and no others. The seven below live on `users`
-    // and nowhere else, so offering them asked the operator to type something with no destination.
+    // The `moderator` table has these three columns and no others. Everything asserted absent
+    // below lives on `users` and nowhere else, so offering it asked the operator to type
+    // something with no destination.
     expect(within(dialog).getByLabelText('Full name')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Register number')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Email')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Gender')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Gender')).not.toBeInTheDocument();
 
     expect(within(dialog).queryByLabelText('Year')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Department/Division')).not.toBeInTheDocument();
@@ -832,7 +835,7 @@ describe('ProfileReview: editing a staff account', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
     expect(
-      within(dialog).getByText(/A moderator account has no year or department/i),
+      within(dialog).getByText(/A moderator account has no gender, year or department/i),
     ).toBeInTheDocument();
   });
 
@@ -942,18 +945,23 @@ describe('ProfileReview: editing a staff account', () => {
   });
 
   it('sends a changed gender once, and not on every later save', async () => {
+    // A participant, because gender is a `users` column now: the same comparison on a moderator
+    // would have nothing to compare, since the editor never seeds a gender it cannot store.
     api.updateAdminUser.mockImplementation((_id: string, payload: Record<string, unknown>) =>
       Promise.resolve({
-        id: MODERATOR,
-        name: 'Mo Moderator',
-        account_type: 'moderator',
+        id: ORDINARY,
+        name: 'Ordinary',
+        account_type: 'users',
         gender: 'male',
         ...payload,
       }),
     );
-    await renderRows([moderator({ gender: 'male' })], 'Mo Moderator');
+    await renderRows(
+      [participant(ORDINARY, 'Ordinary', {}, { gender: 'male' })],
+      'Ordinary',
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     await chooseOption(dialog, 'Female', 'Gender');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
@@ -962,9 +970,9 @@ describe('ProfileReview: editing a staff account', () => {
     expect(api.updateAdminUser.mock.calls[0][1]).toEqual({ gender: 'female' });
 
     // Reopening on the value just written must report no change. If the form kept comparing the
-    // displayed value against the row it was fetched with, a moderator edited for any other reason
-    // would have their gender rewritten on that save instead.
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    // displayed value against the row it was fetched with, a participant edited for any other
+    // reason would have their gender rewritten on that save instead.
+    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
     const reopened = await screen.findByRole('dialog');
     await chooseOption(reopened, 'Female', 'Gender');
     fireEvent.click(within(reopened).getByRole('button', { name: 'Save changes' }));
@@ -1062,17 +1070,16 @@ describe('ProfileReview: the fields an admin does not get', () => {
     fireEvent.change(within(dialog).getByLabelText('Register number'), {
       target: { value: 'staff-77' },
     });
-    await chooseOption(dialog, 'Female', 'Gender');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(api.updateAdminUser).toHaveBeenCalledTimes(1));
-    // No `year` and no `department`: the `moderator` table has neither column, so a key there would
-    // be a value with nowhere to land. `extra="forbid"` on the server turns a stray key into a 422,
-    // which is why an over-broad payload would fail the request rather than be silently dropped.
+    // No `gender`, no `year` and no `department`: the `moderator` table has none of those columns,
+    // so a key there would be a value with nowhere to land. `extra="forbid"` on the server turns a
+    // stray key into a 422, which is why an over-broad payload would fail the request rather than
+    // be silently dropped.
     expect(api.updateAdminUser.mock.calls[0][1]).toEqual({
       name: 'Mo Renamed',
       regno: 'staff-77',
-      gender: 'female',
     });
   });
 
@@ -1194,15 +1201,14 @@ describe('ProfileReview: the fields an admin does not get', () => {
 
     // Email is required of every account type. A moderator could once be created with a regno and
     // a name and nobody noticed, because nothing on the way to the database complained. The
-    // message now lives with the field, and both blank fields are named in one pass.
+    // message now lives with the field and is named on its own; gender is not among the messages,
+    // because a staff create never offers the control that would need one.
     expect(api.createAdminUser).not.toHaveBeenCalled();
     const alerts = within(dialog).getAllByRole('alert').map((node) => node.textContent);
     expect(alerts).toEqual(
-      expect.arrayContaining([
-        'Choose a gender.',
-        'Enter an email address, for example name@example.com.',
-      ]),
+      expect.arrayContaining(['Enter an email address, for example name@example.com.']),
     );
+    expect(alerts).not.toContain('Choose a gender.');
     expect(within(dialog).getByLabelText('Email *')).toHaveAttribute('aria-invalid', 'true');
   });
 });

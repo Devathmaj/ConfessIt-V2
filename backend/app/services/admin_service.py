@@ -47,14 +47,6 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
         "name": row.name,
         "email": row.email,
         "account_type": account_type,
-        "gender": row.gender,
-        # Derived here rather than read from a column: the row holds the picture's identity, and
-        # the address the admin client renders is built from it on the way out. Nothing is
-        # authorised by this -- a profile picture is a public Cloudinary object -- so the same URL
-        # goes to every admin, moderator and participant who can see the profile.
-        "profile_picture_url": storage_service.profile_delivery_url(
-            row.profile_picture_public_id, row.profile_picture_format
-        ),
         "notifications_enabled": row.notifications_enabled,
         "is_blocked": row.is_blocked,
         "last_login_at": serialize_datetime(row.last_login_at),
@@ -66,6 +58,15 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
     if account_type == AccountType.USERS.value:
         payload.update({
             "email": row.email,
+            "gender": row.gender,
+            # Derived here rather than read from a column: the row holds the picture's identity,
+            # and the address the admin client renders is built from it on the way out. Nothing
+            # is authorised by this -- a profile picture is a public Cloudinary object -- so the
+            # same URL goes to every account that can see the profile. Participant-only, because
+            # the upload route is: a staff row has neither column to derive from.
+            "profile_picture_url": storage_service.profile_delivery_url(
+                row.profile_picture_public_id, row.profile_picture_format
+            ),
             "emoji": row.emoji,
             "bio": row.bio,
             "year": row.year,
@@ -104,8 +105,6 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         # Shared, so it sits with the common fields and every account can report one.
         "email": doc.get("email"),
         "account_type": normalize_account_type(doc.get("account_type")),
-        "gender": doc.get("gender"),
-        "profile_picture_url": doc.get("profile_picture_url"),
         "notifications_enabled": doc.get("notifications_enabled", True),
         "is_blocked": doc.get("is_blocked", False),
         "last_login_at": serialize_datetime(doc.get("last_login_at")),
@@ -117,6 +116,8 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
 
     if is_participant:
         payload.update({
+            "gender": doc.get("gender"),
+            "profile_picture_url": doc.get("profile_picture_url"),
             "emoji": doc.get("emoji"),
             "bio": doc.get("bio"),
             "year": doc.get("year"),

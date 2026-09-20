@@ -258,8 +258,8 @@ async def create_user(
     step with this one. ``year`` and ``department`` are required by the payload validator only
     for a participant, so a caller cannot write them onto a staff row.
 
-    What an admin supplies is an identity and a cohort -- regno, name, email, gender, and for
-    a participant the year and department. Everything else belongs to the account rather than
+    What an admin supplies is an identity and a cohort -- regno, name, email, and, for a
+    participant, gender, year and department. Everything else belongs to the account rather than
     to whoever typed the form: the picture, emoji, bio, interests and the four preference
     flags are not on this payload at all, and ``AdminUserCreate`` forbids them by name so a
     curl that sends one is answered 422 rather than a 201 for an insert that dropped it.
@@ -314,15 +314,16 @@ async def create_user(
         "regno": normalized_regno,
         "name": payload.name.strip(),
         "email": normalized_email,
-        # A new account has no picture. Both halves of the picture's identity are named rather
-        # than left to a default, because "no picture" is a real state and it has to be one value
-        # in two columns -- a row with a public_id and no format would render a broken image.
-        "profile_picture_public_id": None,
-        "profile_picture_format": None,
-        "gender": payload.gender.strip(),
     }
     if account_type is AccountType.USERS:
         account_fields.update({
+            # A new account has no picture. Both halves of the picture's identity are named
+            # rather than left to a default, because "no picture" is a real state and it has to
+            # be one value in two columns -- a row with a public_id and no format would render a
+            # broken image.
+            "profile_picture_public_id": None,
+            "profile_picture_format": None,
+            "gender": payload.gender.strip(),
             # Written from the two fields separately rather than by joining them back into one
             # string. The columns are what matchmaking groups by, and a stored "CSE 2" would
             # be groupable by neither half.
@@ -427,11 +428,11 @@ async def update_user_details(
     editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
     moderator into a participant and strand the content that references it.
 
-    The editable set is the account's identity: regno, name, gender, email, and year and
-    department for a participant. The picture, emoji, bio, interests and the four preference
-    flags are not fields on this payload, and ``extra="forbid"`` refuses them by name -- so a
-    caller still sending one gets a 422 rather than a 200 for an edit that silently did not
-    happen. ``is_blocked`` is likewise absent, and blocking an account is the separate
+    The editable set is the account's identity: regno, name, email, and -- for a participant
+    only -- gender, year and department. The picture, emoji, bio, interests and the four
+    preference flags are not fields on this payload, and ``extra="forbid"`` refuses them by
+    name -- so a caller still sending one gets a 422 rather than a 200 for an edit that silently
+    did not happen. ``is_blocked`` is likewise absent, and blocking an account is the separate
     ``PUT /admin/users/{id}/block`` route. That is what removes this route's old job of
     refusing to block an admin: an admin row's block state cannot be written here at all, so
     there is no second door to guard.
@@ -467,17 +468,17 @@ async def update_user_details(
         found = resolve_account_by_id(session, user_id)
         if found:
             account_type, account = found
-            # ``year`` and ``department`` are dropped for a staff account. The participant-shaped
-            # form submits every field it knows about, and without this an edit to a moderator's
-            # name would also try to write a cohort onto a table that has no such columns -- and,
-            # more insidiously, would write one if the columns were ever added for an unrelated
-            # reason.
+            # ``gender``, ``year`` and ``department`` are dropped for a staff account. The
+            # participant-shaped form submits every field it knows about, and without this an
+            # edit to a moderator's name would also try to write a cohort -- or a gender -- onto
+            # tables that have no such columns, and, more insidiously, would write one if the
+            # columns were ever added for an unrelated reason.
             #
             # ``email`` is *not* on this list. It is a shared column now, required on every
             # account, so a moderator's address is edited exactly as a participant's is; the
             # note that once stood here to explain its absence is what would have led to
             # staff rows being left without one.
-            participant_only = ("year", "department")
+            participant_only = ("gender", "year", "department")
             if account_type != AccountType.USERS.value:
                 update_payload = {
                     key: value for key, value in update_payload.items()

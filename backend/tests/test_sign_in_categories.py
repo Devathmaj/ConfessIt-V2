@@ -86,8 +86,8 @@ def _seed_shared(db):
             regno=SHARED, name="Participant", email="shared@example.com",
             year=2, department="Test_Class", gender="other",
         )
-        moderator = ModeratorRecord(regno=SHARED, name="Moderator", email="shared-mod@example.com", gender="other")
-        admin = AdminRecord(regno=SHARED, name="Admin", email="shared-admin@example.com", gender="other")
+        moderator = ModeratorRecord(regno=SHARED, name="Moderator", email="shared-mod@example.com")
+        admin = AdminRecord(regno=SHARED, name="Admin", email="shared-admin@example.com")
         session.add_all([participant, moderator, admin])
         session.flush()
         ids[AccountType.USERS.value] = str(participant.id)
@@ -150,7 +150,7 @@ def test_each_sign_in_page_mints_a_link_for_its_own_account(client_with_no_auth_
 def test_a_page_refuses_a_regno_that_only_exists_in_another_table(client_with_no_auth_override, db):
     """A moderator's regno typed on the participant page is not a participant."""
     with db.sessions.begin() as session:
-        session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com", gender="other"))
+        session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com"))
 
     response = client_with_no_auth_override.post(
         f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": STAFF_ONLY}
@@ -167,7 +167,7 @@ def test_a_page_refuses_a_regno_that_only_exists_in_another_table(client_with_no
 
 def test_a_refused_page_mints_nothing(client_with_no_auth_override, db):
     with db.sessions.begin() as session:
-        session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com", gender="other"))
+        session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com"))
 
     client_with_no_auth_override.post(
         f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": STAFF_ONLY}
@@ -324,7 +324,6 @@ def test_the_create_endpoint_allows_a_regno_reused_from_another_table(admin_clie
             # different tables, so nothing here collides, and email is required of every
             # account so the payload would otherwise be refused before the regno rule ran.
             "email": "shared-mod@example.com",
-            "gender": "other",
         },
     )
 
@@ -344,7 +343,6 @@ def test_the_create_endpoint_still_refuses_a_duplicate_in_the_same_table(admin_c
             "regno": SHARED,
             "name": "Second Moderator",
             "email": "second-moderator@example.com",
-            "gender": "other",
         },
     )
 
@@ -357,7 +355,7 @@ def test_postgresql_still_refuses_a_duplicate_regno_within_one_table(db):
 
     with db.sessions.begin() as session:
         with pytest.raises(IntegrityError):
-            session.add(ModeratorRecord(regno=SHARED, name="Clash", email="clash@example.com", gender="other"))
+            session.add(ModeratorRecord(regno=SHARED, name="Clash", email="clash@example.com"))
             session.flush()
 
 
@@ -404,7 +402,7 @@ def test_the_active_count_reads_a_session_from_each_table(admin_client, db):
     """
     ids = _seed_shared(db)
     with db.sessions.begin() as session:
-        admin = AdminRecord(regno="staff-reg", name="Admin", email="staff-admin@example.com", gender="other")
+        admin = AdminRecord(regno="staff-reg", name="Admin", email="staff-admin@example.com")
         session.add(admin)
         session.flush()
         ids[AccountType.ADMIN.value] = str(admin.id)

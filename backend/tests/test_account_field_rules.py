@@ -4,7 +4,8 @@ Four things are asserted here, and each of them is the kind that a payload model
 not have caught:
 
 * ``email`` is required of every account, in the payload *and* in the column.
-* ``gender`` is a closed vocabulary, in the payload *and* in the column.
+* ``gender`` is a closed vocabulary, in the payload *and* in the column -- on ``users``, which
+  is the only table that has one.
 * ``interests`` is a closed vocabulary, on the participant's own profile payload *and* in
   the column.
 * A profile picture is the account's to upload, not an admin's to write.
@@ -294,15 +295,19 @@ def test_an_admin_cannot_write_a_participant_field_onto_staff(admin_client, db):
         },
     )
     assert created.status_code == 201, created.text
+    # Gender is accepted by the payload and dropped by the router, because ``users`` is the
+    # only table with a column to write it to.
+    assert "gender" not in created.json()
 
-    # Year and department are real fields on the admin payload -- they are simply dropped for a
-    # staff row, which is a different rule from refusing them by name.
+    # Year, department and gender are real fields on the admin payload -- they are simply
+    # dropped for a staff row, which is a different rule from refusing them by name.
     updated = admin_client.put(
         f"/admin/users/{created.json()['id']}",
-        json={"name": "Mod Renamed", "year": 2, "department": "Class"},
+        json={"name": "Mod Renamed", "gender": "male", "year": 2, "department": "Class"},
     )
     assert updated.status_code == 200, updated.text
     assert "year" not in updated.json()
+    assert "gender" not in updated.json()
 
     refused = admin_client.put(
         f"/admin/users/{created.json()['id']}",
@@ -346,28 +351,53 @@ def test_postgresql_refuses_a_null_email_on_every_account_table(db, model, table
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    f'INSERT INTO "{table}" (id, regno, name, email, gender) '
-                    f"VALUES (gen_random_uuid(), 'null-email-{table}', 'X', NULL, 'other')"
+                    # ``gender`` is written only for ``users``: it is a participants-only
+                    # column now, and naming it on a staff table would fail with
+                    # ``column ... does not exist`` before the NULL email was ever looked at.
+                    f'INSERT INTO "{table}" (id, regno, name, email'
+                    f'{", gender" if table == "users" else ""}) '
+                    f"VALUES (gen_random_uuid(), 'null-email-{table}', 'X', NULL"
+                    f"{", 'other'" if table == "users" else ""})"
                 )
             )
     assert "email" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("table", ["users", "admin", "moderator"])
-def test_postgresql_refuses_a_gender_outside_the_vocabulary(db, table):
-    # ``year`` and ``department`` are supplied for ``users`` even though only ``users`` has them.
-    # They are NOT NULL there, and a NOT NULL violation is raised before the table's CHECK
-    # constraints are evaluated -- so omitting them would prove nothing about gender at all,
-    # and this test would keep passing if the gender constraint were deleted.
-    extra = ", year, department" if table == "users" else ""
-    values = "2, 'Class'" if table == "users" else ""
+def test_only_participants_still_have_a_gender_column(db, table):
+    """The scoping itself, asserted against the database rather than the model.
+
+    The boot path drops retired columns only when it finds them, so this is the check that a
+    deployed schema actually reached the same shape as a fresh one -- and it is what makes the
+    tests below meaningful: an insert that names ``gender`` on a staff table has to fail for
+    the column's absence, not for something else.
+    """
+    with db.engine.begin() as connection:
+        present = connection.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :table AND column_name = 'gender')"
+            ),
+            {"table": table},
+        ).scalar_one()
+    assert present is (table == "users")
+
+
+def test_postgresql_refuses_a_gender_outside_the_vocabulary(db):
+    """On ``users``, the only table that still has a gender column.
+
+    The staff tables used to be in the parametrised list too. Their copy of the column was
+    retired along with the constraint, so an insert naming ``gender`` there now fails for the
+    column's absence -- which is a different rule, and one ``test_only_participants_still_
+    have_a_gender_column`` above pins.
+    """
     with pytest.raises(DBAPIError) as excinfo:
         with db.engine.begin() as connection:
             connection.execute(
                 text(
-                    f'INSERT INTO "{table}" (id, regno, name, email, gender{extra}) '
-                    f"VALUES (gen_random_uuid(), 'bad-gender-{table}', 'X', "
-                    f"'bad-gender-{table}@example.com', 'Male'{', ' + values if values else ''})"
+                    "INSERT INTO users (id, regno, name, email, gender, year, department) "
+                    "VALUES (gen_random_uuid(), 'bad-gender', 'X', "
+                    "'bad-gender@example.com', 'Male', 2, 'Class')"
                 )
             )
     assert "ck_accounts_gender" in str(excinfo.value)

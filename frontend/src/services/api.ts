@@ -494,27 +494,31 @@ export const getAdminUsers = async () => {
 /**
  * The fields `POST /admin/users` accepts.
  *
- * An admin mints an identity and nothing else: regno, name, email, gender, and for a
- * participant the year and department that place them in a cohort. Every field the account
- * owns about itself -- picture, emoji, bio, interests, and the four preference flags -- is
- * absent, and the server forbids those names outright rather than ignoring them, so a payload
- * carrying one is a 422 and not a silent no-op. There is nothing to upload here either: a
- * participant sets their own picture through their profile once the account exists.
+ * An admin mints an identity and nothing else: regno, name, email, and for a participant the
+ * gender, year and department that place them in a cohort. Every field the account owns about
+ * itself -- picture, emoji, bio, interests, and the four preference flags -- is absent, and the
+ * server forbids those names outright rather than ignoring them, so a payload carrying one is a
+ * 422 and not a silent no-op. There is nothing to upload here either: a participant sets their
+ * own picture through their profile once the account exists.
  *
- * `email` and `gender` are not optional because the server refuses a payload without them on
- * any account type, and a type that said otherwise would let a dialog submit one.
+ * `email` is not optional because the server refuses a payload without it on any account type,
+ * and a type that said otherwise would let a dialog submit one.
  *
- * `year` and `department` are required of a participant and refused for staff, like the rest of
- * the participant-only block. They are two fields rather than one because the server stores two
- * fields: a payload joining them into a single `class_name`-shaped string would have nowhere to
- * go, and would re-create the ambiguity the split exists to remove.
+ * `gender`, `year` and `department` are required of a participant and omitted for staff. Gender
+ * used to be listed with `email` as required of every account; the staff tables no longer carry
+ * the column, so a staff create that sent one was writing a value the router drops.
+ *
+ * `year` and `department` are two fields rather than one because the server stores two fields:
+ * a payload joining them into a single `class_name`-shaped string would have nowhere to go,
+ * and would re-create the ambiguity the split exists to remove.
  */
 export interface AdminUserCreatePayload {
     account_type: AccountType;
     regno: string;
     name: string;
     email: string;
-    gender: UserGender;
+    /** Participants only. No `gender` column exists on `admin` or `moderator`. */
+    gender?: UserGender;
     /** Participants only. Accepted but not written for staff, which has no such columns. */
     year?: UserYear;
     department?: string;
@@ -526,6 +530,10 @@ export interface AdminUserCreatePayload {
  * The same identity set as the create payload, minus `account_type` (which table an account
  * lives in is fixed at creation) and minus every field the account owns itself. Omitting a
  * field leaves it alone; there is no longer any list that `[]` could clear.
+ *
+ * `gender`, `year` and `department` are participant-only: the server drops those three keys
+ * from an update aimed at a staff row, so a client should not send them for one either --
+ * the value would vanish on the next fetch and look like an edit that did not stick.
  */
 export interface AdminUserUpdatePayload {
     regno?: string;

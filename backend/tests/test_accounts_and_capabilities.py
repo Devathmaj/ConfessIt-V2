@@ -203,14 +203,35 @@ def test_staff_tables_do_not_hold_participant_columns():
     true of a moderator as much as a student, so it is a shared column on all three tables --
     see :func:`test_every_account_table_can_hold_an_email` for what that does and does not
     imply.
+
+    ``gender`` and the two profile-picture columns are in the set because they were moved
+    out of the shared mixin: gender is a matchmaking filter and a picture only ever arrives
+    through a participant's own upload route, so neither has anything to say about a staff
+    row. The CHECK that closes gender's vocabulary went with it -- ``ck_accounts_gender`` is
+    declared on ``users`` alone, asserted below.
     """
     participant_only = {
         "emoji", "bio", "year", "department", "interests",
         "matchmaking_enabled", "love_notes_receive_enabled",
         "love_notes_send_enabled", "last_matchmaking_at",
+        "gender", "profile_picture_public_id", "profile_picture_format",
     }
     for model in (AdminRecord, ModeratorRecord):
         assert participant_only.isdisjoint(model.__table__.columns.keys())
+
+
+def test_the_gender_constraint_is_declared_on_users_alone():
+    """The vocabulary check follows the column, and the column is participant-only.
+
+    Asserted separately because a constraint is easy to leave behind: ``apply_check_constraints``
+    only ever adds what is missing, so a database created before the move would keep the old
+    staff-level constraint even if the models stopped declaring it.
+    """
+    assert "ck_accounts_gender" in {c.name for c in UserRecord.__table__.constraints}
+    for model in (AdminRecord, ModeratorRecord):
+        assert "ck_accounts_gender" not in {
+            c.name for c in model.__table__.constraints
+        }, model.__tablename__
 
 
 def test_every_account_table_can_hold_an_email():
@@ -289,15 +310,22 @@ def test_report_counts_live_on_participants_only():
 
 
 def _create_payload(**overrides):
-    """A minimally valid create payload, so each test varies only the account type."""
+    """A minimally valid create payload, so each test varies only the account type.
+
+    The participant fields are added only when the payload is for a participant. ``gender``,
+    ``year`` and ``department`` are ``users`` columns; a staff payload that carried one would
+    be exercising the router's drop rule rather than this model's.
+    """
     payload = {
         "regno": "r1",
         "name": "Someone",
         "email": "someone@user.com",
-        "year": 2, "department": "Class",
-        "gender": "other",
     }
     payload.update(overrides)
+    if payload.get("account_type", AccountType.USERS.value) == AccountType.USERS.value:
+        payload.setdefault("year", 2)
+        payload.setdefault("department", "Class")
+        payload.setdefault("gender", "other")
     return payload
 
 
@@ -322,14 +350,24 @@ def test_user_create_rejects_non_canonical_account_types(account_type):
 
 
 def test_staff_account_create_does_not_require_participant_fields():
+    """A moderator row has no gender, year or department, so the payload must not demand any."""
     payload = AdminUserCreate(**_create_payload(account_type="moderator"))
     assert payload.account_type == AccountType.MODERATOR
+    assert payload.gender is None
+    assert payload.year is None
+    assert payload.department is None
 
 
 def test_participant_create_requires_participant_fields():
-    """A ``users`` row without an email, year or department would be unusable and unreadable."""
+    """A ``users`` row without an email, gender, year or department would be unusable and unreadable."""
     with pytest.raises(ValueError):
-        AdminUserCreate(**_create_payload(email=None, year=None, department=None))
+        AdminUserCreate(**_create_payload(email=None, year=None, department=None, gender=None))
+
+
+def test_participant_create_requires_a_gender_of_its_own():
+    """The column is NOT NULL and matchmaking filters on it, so an absent one is not optional."""
+    with pytest.raises(ValueError):
+        AdminUserCreate(**_create_payload(gender=None))
 
 
 def test_user_update_has_no_account_type_field():
@@ -365,8 +403,9 @@ def _details_payload(**overrides):
 
 
 def test_user_details_exposes_capabilities_for_a_moderator():
+    # No ``gender``: a staff row has no such column, so ``AccountDetails`` does not carry one.
     details = AccountDetails(
-        regno="m", name="M", email="m@example.com", gender="other", account_type=AccountType.MODERATOR.value
+        regno="m", name="M", email="m@example.com", account_type=AccountType.MODERATOR.value
     )
     assert details.account_type == "moderator"
     assert set(details.capabilities) == MODERATION_CAPABILITIES
@@ -388,7 +427,7 @@ def test_account_details_normalises_a_corrupted_stored_type():
     cannot retain authority.
     """
     details = AccountDetails(
-        regno="u", name="U", email="u@example.com", gender="other", account_type="Admin"
+        regno="u", name="U", email="u@example.com", account_type="Admin"
     )
     assert details.account_type == "users"
     assert details.capabilities == []
@@ -429,8 +468,8 @@ def test_cross_table_regno_uniqueness_is_not_a_database_constraint(db):
     ``test_sign_in_categories.py``.
     """
     with db.sessions.begin() as session:
-        session.add(ModeratorRecord(regno="cross-table", name="M", email="cross-mod@example.com", gender="other"))
-        session.add(AdminRecord(regno="cross-table", name="A", email="cross-admin@example.com", gender="other"))
+        session.add(ModeratorRecord(regno="cross-table", name="M", email="cross-mod@example.com"))
+        session.add(AdminRecord(regno="cross-table", name="A", email="cross-admin@example.com"))
         session.flush()
 
 
@@ -458,7 +497,6 @@ def test_cross_table_email_uniqueness_is_not_a_database_constraint(db):
                 regno="shared-email-mod",
                 name="Moderator",
                 email="shared-address@example.com",
-                gender="other",
             )
         )
         session.add(
@@ -466,7 +504,6 @@ def test_cross_table_email_uniqueness_is_not_a_database_constraint(db):
                 regno="shared-email-admin",
                 name="Admin",
                 email="shared-address@example.com",
-                gender="other",
             )
         )
         session.flush()
@@ -477,7 +514,7 @@ def test_postgresql_still_refuses_a_duplicate_email_within_one_table(db):
     with db.sessions.begin() as session:
         session.add(
             ModeratorRecord(
-                regno="dup-email-a", name="A", email="only-once@example.com", gender="other"
+                regno="dup-email-a", name="A", email="only-once@example.com"
             )
         )
         session.flush()
@@ -486,7 +523,7 @@ def test_postgresql_still_refuses_a_duplicate_email_within_one_table(db):
         with pytest.raises(IntegrityError):
             session.add(
                 ModeratorRecord(
-                    regno="dup-email-b", name="B", email="only-once@example.com", gender="other"
+                    regno="dup-email-b", name="B", email="only-once@example.com"
                 )
             )
             session.flush()
@@ -501,12 +538,14 @@ def test_a_staff_account_can_be_created_with_an_email(admin_client, db):
             "regno": "mod-with-email",
             "name": "Moderator With Email",
             "email": "mod.contact@example.com",
-            "gender": "other",
         },
     )
 
     assert response.status_code == 201, response.text
     assert response.json()["email"] == "mod.contact@example.com"
+    # The moderator row has no gender column, so the response cannot carry one either.
+    assert "gender" not in response.json()
+    assert "profile_picture_url" not in response.json()
 
 
 def test_a_staff_account_cannot_be_created_without_an_email(admin_client, db):
@@ -517,7 +556,6 @@ def test_a_staff_account_cannot_be_created_without_an_email(admin_client, db):
             "account_type": "admin",
             "regno": "admin-without-email",
             "name": "Admin Without Email",
-            "gender": "other",
         },
     )
 
@@ -535,7 +573,6 @@ def test_the_same_email_is_refused_within_one_table_but_allowed_across_tables(ad
             "regno": "email-admin-1",
             "name": "Admin One",
             "email": "reused@example.com",
-            "gender": "other",
         },
     )
     assert created.status_code == 201, created.text
@@ -548,7 +585,6 @@ def test_the_same_email_is_refused_within_one_table_but_allowed_across_tables(ad
             "regno": "email-admin-2",
             "name": "Admin Two",
             "email": "reused@example.com",
-            "gender": "other",
         },
     )
     assert same_table.status_code == 409, same_table.text
@@ -561,7 +597,6 @@ def test_the_same_email_is_refused_within_one_table_but_allowed_across_tables(ad
             "regno": "email-mod-1",
             "name": "Moderator One",
             "email": "reused@example.com",
-            "gender": "other",
         },
     )
     assert other_table.status_code == 201, other_table.text
@@ -577,7 +612,6 @@ def test_a_staff_email_is_editable(admin_client, db):
             "regno": "mod-email-edit",
             "name": "Editable",
             "email": "before@example.com",
-            "gender": "other",
         },
     )
     assert created.status_code == 201, created.text
@@ -599,7 +633,7 @@ def test_a_staff_email_is_editable(admin_client, db):
 def test_a_staff_regno_is_absent_from_users(db):
     """The invariant the participant gates rely on: staff have no ``users`` row."""
     with db.sessions.begin() as session:
-        session.add(AdminRecord(regno="only-admin", name="A", email="only-admin@example.com", gender="other"))
+        session.add(AdminRecord(regno="only-admin", name="A", email="only-admin@example.com"))
         session.flush()
     with db.sessions.begin() as session:
         assert session.scalar(select(UserRecord.id).where(UserRecord.regno == "only-admin")) is None

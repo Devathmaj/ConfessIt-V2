@@ -33,7 +33,7 @@ from typing import Iterable
 from sqlalchemy import text
 
 from app.config import settings
-from app.postgres import PostgresClient
+from app.postgres import RETIRED_COLUMNS, PostgresClient
 
 
 # Which old role value became which new table. Anything not listed here stayed a participant,
@@ -42,6 +42,13 @@ ROLE_TO_ACCOUNT_TABLE: dict[str, str] = {"admin": "admin", "moderator": "moderat
 
 # The columns every account table has. Copied verbatim from the users row so a staff account
 # keeps its id, its timestamps and its last-login record through the move.
+#
+# ``gender`` and the two profile-picture columns are deliberately absent. They are participant
+# fields now -- only a participant is a matchmaking candidate and only a participant can upload
+# a picture -- so a staff table created from ``Base.metadata`` has no such column, and copying
+# one across would fail the INSERT on a fresh run. On a database split by an earlier run of
+# this script the columns are still there; ``PostgresClient.apply_retired_columns`` drops them
+# on the next boot, which is where that cleanup lives rather than here.
 SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     "id",
     "regno",
@@ -49,12 +56,6 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     # Every account table carries an address, so a staff row keeps the one it had as a
     # ``users`` row rather than having it silently dropped on the way across.
     "email",
-    # A picture is stored as its Cloudinary identity, so both halves move together: a row with a
-    # public_id and no format would render a broken image, and a row with a format and no
-    # public_id names nothing at all.
-    "profile_picture_public_id",
-    "profile_picture_format",
-    "gender",
     "notifications_enabled",
     "is_blocked",
     "last_login_at",
@@ -266,6 +267,32 @@ def _add_shared_email_column(connection, steps: list[str]) -> None:
             _report(steps, "users.email is now nullable, as it is on the other two tables")
 
 
+def _drop_participant_fields_from_staff(connection, steps: list[str]) -> None:
+    """Remove ``RETIRED_COLUMNS`` from a staff table an earlier run gave them to.
+
+    The column split that made these participant-only is applied at boot by
+    ``PostgresClient.apply_retired_columns``, but this script can reach a state the boot path
+    cannot: a database where ``users.role`` is still present (so the move below is about to
+    run) and the staff tables were created by a version that put ``gender`` on all three. The
+    copy would then omit a NOT NULL column and fail. Dropping them here, before the move, is
+    what keeps the script's own promise that it is safe to run on any database in any order.
+    """
+    for table in ROLE_TO_ACCOUNT_TABLE.values():
+        if not _table_exists(connection, table):
+            continue
+        present = _columns(connection, table)
+        retired = [column for column in RETIRED_COLUMNS.get(table, ()) if column in present]
+        for column in retired:
+            connection.execute(
+                text(f'ALTER TABLE "{table}" DROP COLUMN IF EXISTS "{column}"')
+            )
+        if retired:
+            _report(
+                steps,
+                f"dropped participant-only column(s) from {table}: {', '.join(retired)}",
+            )
+
+
 def _move_staff_rows(connection, steps: list[str]) -> None:
     """Copy staff rows out of ``users`` into their own tables, keeping the primary key.
 
@@ -423,6 +450,7 @@ def migrate(connection, dry_run: bool) -> int:
         return 1
 
     _create_staff_tables(connection, steps)
+    _drop_participant_fields_from_staff(connection, steps)
     _move_staff_rows(connection, steps)
     _migrate_login_tokens(connection, steps)
     _drop_staff_from_users(connection, steps)

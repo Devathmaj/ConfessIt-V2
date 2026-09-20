@@ -97,7 +97,6 @@ def make_moderator(db, regno="mod"):
             regno=regno,
             name=f"Mod {regno}",
             email=f"{regno}@test.com",
-            gender="other",
         )
         session.add(row)
         session.flush()

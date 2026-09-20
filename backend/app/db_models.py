@@ -126,9 +126,19 @@ class AccountColumns:
     absent for staff would be a bug no type checker would catch, and the whole point of
     splitting the tables is that the shared shape stays honest.
 
-    Deliberately *not* here: emoji, bio, year, department, interests, matchmaking_enabled and the
-    love-note toggles. Those describe a participant, and a staff account is not a participant,
-    so storing them would only create columns nothing writes and nothing reads.
+    Deliberately *not* here: emoji, bio, year, department, interests, matchmaking_enabled, the
+    love-note toggles, ``gender`` and the two profile-picture columns. Those describe a
+    participant, and a staff account is not a participant, so storing them would only create
+    columns nothing writes and nothing reads.
+
+    ``gender`` used to be here, and the argument for it -- that matchmaking reads it, so a row
+    without it is a row every query must special-case -- was the argument for *users* stated as
+    though it were an argument for accounts. A staff row is never a matchmaking candidate, so
+    the column on ``admin`` and ``moderator`` held a value no query ever read while forcing
+    every staff create and edit payload to supply one. The same is true of the picture columns:
+    only a participant can upload a picture (``POST /profile/upload-picture`` is participant-only),
+    so the staff copy of those two columns could only ever be NULL. Both groups now live on
+    ``UserRecord`` alone.
 
     ``email`` *is* here, on all three tables, and it is NOT NULL. It is how a person is
     reached, and that is true of a moderator as much as a student: a staff account with no
@@ -142,18 +152,6 @@ class AccountColumns:
     touched, so an already-deployed database reaches the same state rather than refusing to
     boot.
 
-    ``gender`` is here for the same reason and is also NOT NULL, with ``ck_accounts_gender``
-    holding it to the three values in ``limits.USER_GENDER_VALUES``. It is a *filter* --
-    matchmaking pairs candidates by it -- so "Male" and "male" being different people to that
-    query is not untidiness, it is a participant who never appears in a single pool.
-
-    The constraint on ``gender`` lives in ``_ACCOUNT_TABLE_ARGS`` below and is attached to
-    each of the three tables explicitly. It cannot simply sit here: SQLAlchemy treats
-    ``__table_args__`` as a single replaceable attribute, so a concrete class that declares
-    its own -- as ``UserRecord`` does, for its interests check -- silently drops the mixin's
-    rather than merging the two. The first version of this did exactly that and left ``users``,
-    the table with the most accounts on it, as the only one without the constraint.
-
     Uniqueness is per table, and that is the same rule ``regno`` follows: the constraint is
     declared on the column, so PostgreSQL enforces it within one table and never across the
     three. An address may therefore exist as a participant and as a moderator simultaneously.
@@ -166,17 +164,6 @@ class AccountColumns:
     regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    # The *identity* of the picture, never a URL. A profile picture is a public Cloudinary
-    # object served straight from the CDN, so nothing about it needs to be authorised at
-    # fetch time and nothing about it can be revoked by re-signing anything here; the only
-    # question a stored URL answered -- "which object is this?" -- is what these two columns
-    # answer directly. ``profile_picture_format`` is stored separately rather than appended to
-    # the public_id because Cloudinary's own ``public_id`` never carries the extension, and
-    # folding it in here would put a dot in the middle of the identifier for no gain.
-    # The delivery URL is derived on the way out by ``storage_service.profile_delivery_url``.
-    profile_picture_public_id: Mapped[Optional[str]] = mapped_column(Text)
-    profile_picture_format: Mapped[Optional[str]] = mapped_column(String(16))
-    gender: Mapped[str] = mapped_column(String(24))
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -193,13 +180,10 @@ class AccountColumns:
     )
 
 
-# Attached to all three account tables by hand rather than declared on ``AccountColumns``.
-# See that class's docstring for why a mixin declaration is not enough: SQLAlchemy replaces
-# ``__table_args__`` rather than merging, so the moment any concrete table needs a constraint
-# of its own the mixin's disappears from that table without a word.
-_ACCOUNT_TABLE_ARGS: tuple = (
-    CheckConstraint(_GENDER_CHECK_SQL, name="ck_accounts_gender"),
-)
+# ``ck_accounts_gender`` is declared on ``UserRecord`` alone rather than on a shared tuple
+# attached to every account table: gender is a participant field now, and a CHECK on ``gender``
+# attached to ``admin`` or ``moderator`` would fail to install the moment the column is gone
+# from those tables.
 
 
 class UserRecord(AccountColumns, Base):
@@ -209,7 +193,10 @@ class UserRecord(AccountColumns, Base):
     ``*_removal_count`` columns below describe *what a person has been reported for*, and
     only a participant is ever reported -- a moderator's posts are not in anybody's report
     queue, so a staff row would have six columns nothing ever writes and nothing reads. Same
-    reasoning as ``emoji``, ``bio`` and the matchmaking toggles being absent from the mixin.
+    reasoning as ``emoji``, ``bio`` and the matchmaking toggles being absent from the mixin,
+    and the same reasoning that moved ``gender`` and the two profile-picture columns here:
+    matchmaking reads gender, and only a participant can upload a picture, so on a staff table
+    both would be columns nothing reads and a payload field nothing can honestly answer for.
 
     **What the two columns per kind mean, and why there are two.** For each of the three kinds
     of content a participant can be reported for, this table holds:
@@ -266,7 +253,12 @@ class UserRecord(AccountColumns, Base):
     # would go on enforcing ``year IN ('1st Year', ...)`` against a column the models call an
     # integer, with nothing to report it. Raising USER_YEAR_MAX to 13 renames this to ``_13`` and
     # supersedes it by the same rule.
-    __table_args__ = _ACCOUNT_TABLE_ARGS + (
+    __table_args__ = (
+        # Gender is a *filter* -- matchmaking pairs candidates by it -- so "Male" and "male"
+        # being different people to that query is not untidiness, it is a participant who never
+        # appears in a single pool. Held to the three values in ``limits.USER_GENDER_VALUES``,
+        # and to a value at all, by the same NULL-excluding form the other two checks use.
+        CheckConstraint(_GENDER_CHECK_SQL, name="ck_accounts_gender"),
         CheckConstraint(
             f"interests IS NOT NULL AND interests <@ {_INTEREST_SQL_ARRAY}",
             name="ck_users_interests_known",
@@ -278,6 +270,26 @@ class UserRecord(AccountColumns, Base):
 
     emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
+
+    # The *identity* of the picture, never a URL. A profile picture is a public Cloudinary
+    # object served straight from the CDN, so nothing about it needs to be authorised at
+    # fetch time and nothing about it can be revoked by re-signing anything here; the only
+    # question a stored URL answered -- "which object is this?" -- is what these two columns
+    # answer directly. ``profile_picture_format`` is stored separately rather than appended to
+    # the public_id because Cloudinary's own ``public_id`` never carries the extension, and
+    # folding it in here would put a dot in the middle of the identifier for no gain.
+    # The delivery URL is derived on the way out by ``storage_service.profile_delivery_url``.
+    #
+    # On ``users`` alone: the upload route (``POST /profile/upload-picture``) is participant-only,
+    # so a staff table's copy of these two columns could only ever hold NULL. Both columns move
+    # together -- a row with a public_id and no format would render a broken image.
+    profile_picture_public_id: Mapped[Optional[str]] = mapped_column(Text)
+    profile_picture_format: Mapped[Optional[str]] = mapped_column(String(16))
+    # NOT NULL and closed to ``USER_GENDER_VALUES`` by ``ck_accounts_gender`` above. Staff rows
+    # deliberately have none: a moderator is never a matchmaking candidate, so a gender on
+    # ``admin`` or ``moderator`` was a value nothing read and a field every staff payload had
+    # to invent an answer for.
+    gender: Mapped[str] = mapped_column(String(24))
 
     # Which year of study this participant is in, and which department or division they belong to.
     #
@@ -351,7 +363,7 @@ class AdminRecord(AccountColumns, Base):
     # which enforces it on every insert and update from that point on while leaving already-stored
     # rows alone. A blocked admin left over from before this rule therefore survives boot and is
     # reported rather than being silently repaired, and the first write to that row fails loudly.
-    __table_args__ = _ACCOUNT_TABLE_ARGS + (
+    __table_args__ = (
         CheckConstraint("is_blocked IS NOT TRUE", name="ck_admin_not_blockable"),
     )
 
@@ -360,7 +372,6 @@ class ModeratorRecord(AccountColumns, Base):
     """A staff account with the content-moderation capabilities. No participant fields."""
 
     __tablename__ = "moderator"
-    __table_args__ = _ACCOUNT_TABLE_ARGS
 
 
 # The one place a table name becomes a model. ``AccountType`` is a plain string enum with no

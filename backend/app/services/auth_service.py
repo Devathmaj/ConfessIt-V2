@@ -49,11 +49,16 @@ ACCOUNT_CATEGORY_LABELS: Dict[str, str] = {
 # The columns every account table shares. Read generically so one serialiser serves all
 # three, and so a field added to the mixin cannot be added to only one of the tables.
 #
-# ``profile_picture_public_id``/``profile_picture_format`` are deliberately absent from this
-# list. They are read separately, below, because what an API response carries is an address the
-# browser can fetch -- not the internal identity of the object behind it.
+# ``gender`` and the two profile-picture columns are deliberately absent from this list, for
+# the same reason the participant fields below are: they exist on ``users`` only, so a staff row
+# has nothing to read and ``AccountDetails`` does not declare them. They are added by
+# ``_user_payload``, alongside the rest of the participant shape.
+#
+# What an API response carries for a picture is an address the browser can fetch -- not the
+# internal identity of the object behind it -- so that derivation lives with the participant
+# payload too.
 _ACCOUNT_SERIALIZED_FIELDS: Tuple[str, ...] = (
-    "id", "regno", "name", "email", "gender",
+    "id", "regno", "name", "email",
     "notifications_enabled", "is_blocked", "last_login_at",
     "last_login_ip", "last_login_user_agent", "created_at", "updated_at",
 )
@@ -64,13 +69,6 @@ def _account_payload(row: Any, account_type: str) -> Dict[str, Any]:
     payload: Dict[str, Any] = {name: getattr(row, name) for name in _ACCOUNT_SERIALIZED_FIELDS}
     payload["id"] = str(row.id)
     payload["last_login_ip"] = str(row.last_login_ip) if row.last_login_ip else None
-    # A profile picture is a public object on Cloudinary's CDN, so the address is derived from the
-    # stored identity rather than stored itself. Nothing here authorises anything: the same URL
-    # goes to every account that can see the profile, which is why it is cheap to build and why
-    # building it must not be confused with a permission check.
-    payload["profile_picture_url"] = storage_service.profile_delivery_url(
-        row.profile_picture_public_id, row.profile_picture_format
-    )
     payload["account_type"] = account_type
     return payload
 
@@ -83,6 +81,14 @@ def _user_payload(row: Any) -> Dict[str, Any]:
         "bio": row.bio,
         "year": row.year,
         "department": row.department,
+        "gender": row.gender,
+        # A profile picture is a public object on Cloudinary's CDN, so the address is derived
+        # from the stored identity rather than stored itself. Nothing here authorises anything:
+        # the same URL goes to every account that can see the profile, which is why it is cheap
+        # to build and why building it must not be confused with a permission check.
+        "profile_picture_url": storage_service.profile_delivery_url(
+            row.profile_picture_public_id, row.profile_picture_format
+        ),
         "interests": row.interests or [],
         "matchmaking_enabled": row.matchmaking_enabled,
         "love_notes_receive_enabled": row.love_notes_receive_enabled,

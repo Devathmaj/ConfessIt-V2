@@ -145,6 +145,10 @@ interface AdminUserProfile {
    */
   year?: number | null;
   department?: string | null;
+  /**
+   * Participants only, like the cohort pair above: `admin` and `moderator` have no gender
+   * column, and the server omits the key rather than sending a value the row cannot hold.
+   */
   gender?: string | null;
   /**
    * Which account table the row came from. There is no role: a staff account has no row in
@@ -698,10 +702,11 @@ export const ProfileReview = () => {
     // reason and needed no cast either.
     year: '',
     department: '',
-    // Nothing rather than `'other'`. Gender is a non-null column on all three account tables, so a
-    // value has to be chosen -- but choosing it here would mean writing a gender onto every
-    // account created without a deliberate answer. `'other'` was doing that silently; now the
-    // select shows its placeholder and the required check names the field.
+    // Nothing rather than `'other'`. Gender is a non-null column on `users`, the only table that
+    // has one, so a value has to be chosen -- but choosing it here would mean writing a gender
+    // onto every participant created without a deliberate answer. `'other'` was doing that
+    // silently; now the select shows its placeholder and the required check names the field.
+    // The field is not offered at all for a staff account, which has no column to put it in.
     gender: '',
     account_type: accountType,
   });
@@ -1037,18 +1042,20 @@ export const ProfileReview = () => {
       name: profile.name ?? '',
       regno: profile.regno ?? '',
       email: profile.email ?? '',
-      // A stored value from before the gender vocabulary was closed will not match any option,
-      // and a select with no matching option displays the wrong thing as though it were chosen.
-      // Falling back keeps the dialog honest about what is stored instead of showing a blank
-      // control the operator would have to guess about.
-      gender: isUserGender(profile.gender ?? '') ? (profile.gender as UserGender) : 'other',
-      // Seeded only for a participant. A staff row has no cohort, so putting defaults for these
-      // into the form would put values there that no visible field could ever be compared
-      // against -- and a year seeded to something on a moderator is a control that looks like it
-      // says something about their year when it says nothing at all.
+      // Seeded only for a participant. A staff row has neither a cohort nor a gender, so
+      // putting defaults for these into the form would put values there that no visible field
+      // could ever be compared against -- and a gender seeded to something on a moderator is a
+      // control that looks like it says something about them when it says nothing at all.
       ...(isParticipant
         ? {
-            // Same normalisation as gender below: a stored year from before the range was
+            // A stored value from before the gender vocabulary was closed will not match any
+            // option, and a select with no matching option displays the wrong thing as though it
+            // were chosen. Falling back keeps the dialog honest about what is stored instead of
+            // showing a blank control the operator would have to guess about.
+            gender: isUserGender(profile.gender ?? '')
+              ? (profile.gender as UserGender)
+              : 'other',
+            // Same normalisation as gender above: a stored year from before the range was
             // closed matches no option, and a select with no matching option displays the wrong
             // thing as though it were chosen. `null` rather than `''` because the field is a
             // number here, and null is a value it can actually hold.
@@ -1077,9 +1084,10 @@ export const ProfileReview = () => {
     const isParticipant = !isStaffAccount(selectedProfile);
 
     // Checked here rather than only by the server, because the server's answer arrives as a 422
-    // after a round-trip and reads the same either way. These four fields are NOT NULL on every
+    // after a round-trip and reads the same either way. Name and regno are NOT NULL on every
     // account table and the email is `EmailStr`, so an emptied name or a mistyped address used
     // to be a submit-and-wait rather than something the dialog could say while it was still open.
+    // Gender and the cohort pair are checked on the same call, for a participant only.
     const issues = validateIdentityFields(
       {
         name: editForm.name,
@@ -1124,12 +1132,16 @@ export const ProfileReview = () => {
     // which is how a legacy `female` quietly became `other` on the first unrelated edit.
     //
     // Comparing against the same normalisation that seeded it means a gender is sent only when
-    // the operator actually picked a different one.
-    const genderBefore = isUserGender(selectedProfile.gender ?? '')
-      ? selectedProfile.gender
-      : 'other';
-    if (editForm.gender !== genderBefore) {
-      payload.gender = editForm.gender;
+    // the operator actually picked a different one. Guarded by `isParticipant` because a staff
+    // row has no gender column: nothing was seeded for it, so every save would otherwise send
+    // a form value against a column that does not exist.
+    if (isParticipant) {
+      const genderBefore = isUserGender(selectedProfile.gender ?? '')
+        ? selectedProfile.gender
+        : 'other';
+      if (editForm.gender !== genderBefore) {
+        payload.gender = editForm.gender;
+      }
     }
 
     // Year joins gender in needing its own comparison, for the same reason: `openProfileEditor`
@@ -1189,8 +1201,9 @@ export const ProfileReview = () => {
     const isParticipant = createForm.account_type === 'users';
 
     // Checked here rather than only by the server. Which fields are required is a function of
-    // the table being written to, not one list for all three: name, regno, email and gender are
-    // non-null columns on every account table, and the cohort pair exists only on `users`.
+    // the table being written to, not one list for all three: name, regno and email are
+    // non-null columns on every account table, while gender and the cohort pair exist only on
+    // `users` -- a staff row has no gender column to require one against.
     //
     // The messages render under the field they belong to. They used to be a single toast naming
     // one field, which meant a form with two things wrong had to be submitted twice, and an
@@ -1207,18 +1220,17 @@ export const ProfileReview = () => {
       regno: createForm.regno.trim(),
       name: createForm.name.trim(),
       email: createForm.email.trim(),
-      // Narrowed rather than cast: the checks above have already returned unless this is one of
-      // the three, but the compiler cannot see that through the `''` union member, so the
-      // vocabulary is re-checked instead of asserted. Same check, so the two cannot disagree.
-      gender: isUserGender(createForm.gender) ? createForm.gender : 'other',
       account_type: createForm.account_type,
     };
 
-    // The cohort, and only for a participant: the staff tables have no year or department column
-    // and the server refuses those keys for a staff row, so a form that never offered them must
-    // not send empty ones behind the operator's back either.
+    // The participant block, and only for a participant: the staff tables have no gender, year
+    // or department column, and the server drops those keys for a staff row, so a form that
+    // never offered them must not send empty ones behind the operator's back either.
     if (isParticipant) {
-      // Same narrowing, same reason, as the gender above.
+      // Narrowed rather than cast: the checks above have already returned unless this is one of
+      // the three, but the compiler cannot see that through the `''` union member, so the
+      // vocabulary is re-checked instead of asserted. Same check, so the two cannot disagree.
+      if (isUserGender(createForm.gender)) payload.gender = createForm.gender;
       payload.year = isUserYear(createForm.year) ? createForm.year : undefined;
       payload.department = createForm.department.trim();
     }
@@ -1531,13 +1543,13 @@ export const ProfileReview = () => {
                 <DialogDescription>
                   {editingIsParticipant
                     ? "Update the selected user's identity and cohort. Leave a field untouched to keep the current value."
-                    : `A ${staffNoun(selectedProfile)} account has no year or department, so those are not offered here.`}
+                    : `A ${staffNoun(selectedProfile)} account has no gender, year or department, so none of those are offered here.`}
                 </DialogDescription>
               </DialogHeader>
 
               <ScrollArea className="max-h-[65vh] pr-2">
                 <div className="grid gap-6 py-4">
-                {/* Shared columns: every account table has these five. */}
+                {/* Shared columns: every account table has these three. */}
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
                     <Label htmlFor="edit-name">Full name</Label>
@@ -1593,46 +1605,48 @@ export const ProfileReview = () => {
                     />
                     <FieldError id={errorIdFor('edit', 'regno')} message={editIssues.regno} />
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="edit-gender">Gender</Label>
-                    <Select
-                      value={(editForm.gender as UserGender) ?? 'other'}
-                      onValueChange={(value) => {
-                        setEditForm((prev) =>
-                          prev ? { ...prev, gender: value as UserGender } : prev,
-                        );
-                        clearIssue(setEditIssues, 'gender');
-                      }}
-                    >
-                      <SelectTrigger
-                        id="edit-gender"
-                        aria-invalid={Boolean(editIssues.gender)}
-                        aria-describedby={
-                          editIssues.gender ? errorIdFor('edit', 'gender') : undefined
-                        }
-                      >
-                        <SelectValue placeholder="Select a gender" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {USER_GENDER_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FieldError id={errorIdFor('edit', 'gender')} message={editIssues.gender} />
-                  </div>
                 </div>
 
                 {/* Participant columns. */}
                 {editingIsParticipant && (
-                  /* Year is a select and department is a text box, not two text boxes and not
-                     one joined field. Year is held to a closed vocabulary on the server, so a
-                     free-text box could only ever produce a value it refuses; department has no
-                     such list, because the departments that exist belong to the institution
-                     rather than to this codebase. */
+                  /* Gender sits with the cohort rather than with the shared fields: only
+                     ``users`` has the column, so offering it for a moderator would be a control
+                     that writes nothing. Year is a select and department is a text box, not two
+                     text boxes and not one joined field. Year is held to a closed vocabulary on
+                     the server, so a free-text box could only ever produce a value it refuses;
+                     department has no such list, because the departments that exist belong to
+                     the institution rather than to this codebase. */
                   <div className="grid gap-4 md:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-gender">Gender</Label>
+                      <Select
+                        value={(editForm.gender as UserGender) ?? 'other'}
+                        onValueChange={(value) => {
+                          setEditForm((prev) =>
+                            prev ? { ...prev, gender: value as UserGender } : prev,
+                          );
+                          clearIssue(setEditIssues, 'gender');
+                        }}
+                      >
+                        <SelectTrigger
+                          id="edit-gender"
+                          aria-invalid={Boolean(editIssues.gender)}
+                          aria-describedby={
+                            editIssues.gender ? errorIdFor('edit', 'gender') : undefined
+                          }
+                        >
+                          <SelectValue placeholder="Select a gender" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {USER_GENDER_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldError id={errorIdFor('edit', 'gender')} message={editIssues.gender} />
+                    </div>
                     <div className="grid gap-2">
                       <Label htmlFor="edit-year">Year</Label>
                       <Select
@@ -1775,42 +1789,6 @@ export const ProfileReview = () => {
                   <FieldError id={errorIdFor('create', 'regno')} message={createIssues.regno} />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="create-gender">Gender *</Label>
-                  {/* Nothing preselected. The earlier default of `other` was a claim about the
-                      person rather than a placeholder: the vocabulary is male/female/other, so
-                      every account created without a deliberate answer was written down as
-                      *other*. Radix renders the placeholder for `''`, and the required check
-                      below names this field rather than letting it be inferred. */}
-                  <Select
-                    value={createForm.gender}
-                    onValueChange={(value) => {
-                      setCreateForm((prev) => ({ ...prev, gender: value as UserGender }));
-                      clearIssue(setCreateIssues, 'gender');
-                    }}
-                  >
-                    <SelectTrigger
-                      id="create-gender"
-                      aria-invalid={Boolean(createIssues.gender)}
-                      aria-describedby={
-                        createIssues.gender ? errorIdFor('create', 'gender') : undefined
-                      }
-                    >
-                      <SelectValue placeholder="Select a gender" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {USER_GENDER_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldError
-                    id={errorIdFor('create', 'gender')}
-                    message={createIssues.gender}
-                  />
-                </div>
-                <div className="grid gap-2">
                   {/* Required for every account type. It used to be marked optional for staff,
                       which left a moderator with no address anybody could reach. */}
                   <Label htmlFor="create-email">Email *</Label>
@@ -1832,6 +1810,45 @@ export const ProfileReview = () => {
                 </div>
                 {createIsParticipant && (
                   <>
+                    {/* Gender belongs to this block and not to the shared fields above: only
+                        `users` has the column, so a staff create that offered it would be
+                        asking for an answer the row cannot hold. */}
+                    <div className="grid gap-2">
+                      <Label htmlFor="create-gender">Gender *</Label>
+                      {/* Nothing preselected. The earlier default of `other` was a claim about the
+                          person rather than a placeholder: the vocabulary is male/female/other, so
+                          every account created without a deliberate answer was written down as
+                          *other*. Radix renders the placeholder for `''`, and the required check
+                          below names this field rather than letting it be inferred. */}
+                      <Select
+                        value={createForm.gender}
+                        onValueChange={(value) => {
+                          setCreateForm((prev) => ({ ...prev, gender: value as UserGender }));
+                          clearIssue(setCreateIssues, 'gender');
+                        }}
+                      >
+                        <SelectTrigger
+                          id="create-gender"
+                          aria-invalid={Boolean(createIssues.gender)}
+                          aria-describedby={
+                            createIssues.gender ? errorIdFor('create', 'gender') : undefined
+                          }
+                        >
+                          <SelectValue placeholder="Select a gender" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {USER_GENDER_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldError
+                        id={errorIdFor('create', 'gender')}
+                        message={createIssues.gender}
+                      />
+                    </div>
                     <div className="grid gap-2">
                       <Label htmlFor="create-year">Year *</Label>
                       {/* No default. The server refuses any year outside its range, so the select

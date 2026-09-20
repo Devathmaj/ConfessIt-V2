@@ -67,8 +67,8 @@ async def read_users_me(current_user: Annotated[AccountDetails, Depends(get_curr
     server re-checks all of it per request regardless.
     """
     payload = current_user.model_dump(by_alias=True)
-    # ``profile_picture_url`` is already correct here: ``auth_service._account_payload`` derives it
-    # from the stored Cloudinary identity when the account is resolved, so there is no URL in the
+    # ``profile_picture_url`` is already correct here: ``auth_service._user_payload`` derives it
+    # from the stored Cloudinary identity when a participant is resolved, so there is no URL in the
     # database to rewrite and nothing that could still hold a stale address from a previous build.
     if current_user.account_type == AccountType.USERS.value:
         return UserDetails(**payload)

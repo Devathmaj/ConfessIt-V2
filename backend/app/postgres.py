@@ -70,6 +70,26 @@ PLACEHOLDER_EMAIL_SQL = (
 )
 
 
+# Columns the models no longer declare, on the tables that used to carry them.
+#
+# The counterpart to :meth:`PostgresClient.apply_missing_columns`, and far more restricted on
+# purpose. Adding a column is always safe -- the model declares it, so every write that reaches
+# the table knows about it -- while removing one is a decision about data, which is why this is
+# a named list rather than "anything the models do not mention": a column created by a script or
+# an operator is not the application's to delete.
+#
+# The three entries below are participant fields that were once on the shared account mixin.
+# ``gender`` is the load-bearing one: it is NOT NULL with no server default, so a deployed
+# ``admin`` table that kept it would reject every ORM insert the application makes into it,
+# because the model no longer writes the column. Dropping ``gender`` also drops
+# ``ck_accounts_gender`` with it -- PostgreSQL removes any CHECK constraint involving a dropped
+# column -- which is the whole reason the staff side of that constraint needs no entry here.
+RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "admin": ("gender", "profile_picture_public_id", "profile_picture_format"),
+    "moderator": ("gender", "profile_picture_public_id", "profile_picture_format"),
+}
+
+
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
 
@@ -114,6 +134,7 @@ class PostgresClient:
         # column is not there yet. Adding the columns first is what lets a partially-migrated
         # database reach a consistent state in one boot.
         self.apply_missing_columns()
+        self.apply_retired_columns()
         self.apply_unique_indexes()
         self.apply_check_constraints()
         # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
@@ -133,9 +154,13 @@ class PostgresClient:
         Each column is added on its own with ``IF NOT EXISTS``, so a partially-migrated
         database converges rather than aborting the boot. What this deliberately does *not*
         do is drop anything: a column the models no longer declare is left in place, because
-        removing one is a decision about data rather than about schema shape. The
-        one-off removal of the retired ``users.role`` and ``users.reported_count`` columns
-        is in ``scripts/migrate_account_tables.py``.
+        removing one is a decision about data rather than about schema shape. Those live in
+        ``RETIRED_COLUMNS`` and are removed by :meth:`apply_retired_columns` -- deliberately a
+        named list rather than "everything the models stopped mentioning", so a column written
+        by a script or an operator is never the application's to delete. The one-off removal of
+        the retired ``users.role`` and ``users.reported_count`` columns is in
+        ``scripts/migrate_account_tables.py``, which has to run before the boot path can even
+        see those tables in their new shape.
         """
         with self.engine.begin() as connection:
             for table in Base.metadata.sorted_tables:
@@ -178,6 +203,51 @@ class PostgresClient:
                     )
                     logger.info(
                         "Added column %s.%s", table.name, column.name
+                    )
+
+    def apply_retired_columns(self) -> None:
+        """Drop the columns in ``RETIRED_COLUMNS`` from tables that still have them.
+
+        Run on every boot and idempotent: each column is looked up first, so an already
+        converged database costs one catalogue query per table and changes nothing.
+
+        Dropping the column is the whole migration for these three. PostgreSQL removes any
+        CHECK constraint involving a dropped column, so ``ck_accounts_gender`` leaves ``admin``
+        and ``moderator`` with the ``gender`` they were holding, while ``users`` -- which keeps
+        the column -- keeps the constraint. Nothing reads the dropped values: the picture columns
+        were always NULL on staff (the upload route is participant-only) and gender was only
+        ever read by matchmaking, which queries ``users``.
+
+        The values are logged as dropped rather than silently discarded, because this is the one
+        step in :meth:`initialize` that destroys stored data. It cannot be made conditional on
+        the data being empty -- a non-null ``gender`` on a staff row is exactly the state this
+        change declares invalid -- but an operator watching the boot log should be able to see
+        that it happened.
+        """
+        with self.engine.begin() as connection:
+            for table_name, columns in RETIRED_COLUMNS.items():
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": table_name},
+                    )
+                }
+                if not present:
+                    continue
+                for column in columns:
+                    if column not in present:
+                        continue
+                    connection.execute(
+                        text(
+                            f'ALTER TABLE "{table_name}" DROP COLUMN "{column}"'
+                        )
+                    )
+                    logger.info(
+                        "Dropped retired column %s.%s", table_name, column
                     )
 
     def apply_unique_indexes(self) -> None:

@@ -43,15 +43,17 @@ def make_user(db, regno, gender, *, is_blocked=False, love_notes_receive_enabled
         return str(row.id)
 
 
-def make_staff(db, regno, account_type, *, gender="other"):
+def make_staff(db, regno, account_type):
     """Write a staff account into the table that grants ``account_type``.
 
     Staff have no ``users`` row, so tests that need a moderator or admin acting on a
-    conversation insert here and resolve through ``as_staff``.
+    conversation insert here and resolve through ``as_staff``. No ``gender`` argument: the
+    staff tables have no such column, and passing one would be a ``TypeError`` rather than
+    a value nobody reads.
     """
     with db.sessions.begin() as session:
         row = ACCOUNT_MODELS[account_type](
-            regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com", gender=gender
+            regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com"
         )
         session.add(row)
         session.flush()
@@ -76,7 +78,7 @@ def as_staff(db, regno, account_type) -> AccountDetails:
             select(ACCOUNT_MODELS[account_type]).where(ACCOUNT_MODELS[account_type].regno == regno)
         )
     return AccountDetails(
-        id=str(row.id), regno=row.regno, name=row.name, email=f"{row.regno}@test.com", gender=row.gender,
+        id=str(row.id), regno=row.regno, name=row.name, email=f"{row.regno}@test.com",
         notifications_enabled=row.notifications_enabled, is_blocked=row.is_blocked,
         account_type=account_type,
     )

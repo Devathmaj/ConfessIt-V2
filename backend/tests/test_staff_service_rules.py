@@ -53,18 +53,20 @@ def make_user(db, regno, gender="other"):
         return str(row.id)
 
 
-def make_staff(db, regno, account_type, gender="other"):
+def make_staff(db, regno, account_type):
     """Insert a staff account into the table that grants ``account_type``.
 
     Staff are not participants, so they are written to ``admin`` or ``moderator`` and never
-    to ``users``. That absence is what the service rules below are really testing.
+    to ``users``. That absence is what the service rules below are really testing. There is
+    no ``gender`` argument either: the staff tables have no such column, so a staff row is
+    excluded from the candidate pool by construction rather than by a value it holds.
     """
     model = AdminRecord if account_type == AccountType.ADMIN.value else ModeratorRecord
     with db.sessions.begin() as session:
         # Email is required of every account, so the helper supplies one derived from the
         # regno: derived rather than constant so two staff rows in the same table stay unique
         # under the per-table unique index.
-        row = model(regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com", gender=gender)
+        row = model(regno=regno, name=f"Staff {regno}", email=f"{regno}@test.com")
         session.add(row)
         session.flush()
         return str(row.id)
@@ -84,12 +86,12 @@ def details_for(regno):
 
 
 def staff_details_for(regno, account_type, *, account_id=None):
+    # No ``gender``: the staff model carries one fewer participant field than ``UserDetails``.
     return AccountDetails(
         id=account_id or regno,
         regno=regno,
         name=f"Staff {regno}",
         email=f"{regno}@test.com",
-        gender="other",
         notifications_enabled=True,
         account_type=account_type,
     )
@@ -114,7 +116,7 @@ def test_staff_are_excluded_from_the_candidate_pool(db, monkeypatch, staff_type)
     # never by the rare same-gender chance looking for a different gender.
     monkeypatch.setattr(matchmaking_service.random, "random", lambda: 0.99)
     make_user(db, "seeker", gender="male")
-    make_staff(db, "staffmod", staff_type, gender="female")
+    make_staff(db, "staffmod", staff_type)
 
     with pytest.raises(HTTPException) as exhausted:
         matchmaking_service.find_match_service(details_for("seeker"), db)
@@ -130,7 +132,7 @@ def test_a_participant_candidate_is_still_offered(db, monkeypatch):
     # look for a male candidate and fail intermittently rather than by design.
     monkeypatch.setattr(matchmaking_service.random, "random", lambda: 0.99)
     make_user(db, "seeker", gender="male")
-    make_staff(db, "staffmod", AccountType.MODERATOR.value, gender="female")
+    make_staff(db, "staffmod", AccountType.MODERATOR.value)
     make_user(db, "rival", gender="female")
 
     result = matchmaking_service.find_match_service(details_for("seeker"), db)

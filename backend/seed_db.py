@@ -83,9 +83,6 @@ ADMIN_SEED = {
     "regno": "admin",
     "name": "Test Admin",
     "email": "admin@test.com",
-    "gender": "male",
-    "profile_picture_public_id": None, "profile_picture_format": None,
-    "notifications_enabled": True,
 }
 
 MODERATOR_SEEDS = (
@@ -93,21 +90,16 @@ MODERATOR_SEEDS = (
         "regno": "moderator1",
         "name": "Test Moderator 1",
         "email": "moderator1@test.com",
-        # All three genders appear across the staff seeds, so a screen that renders or filters a
-        # staff list is exercised against the whole vocabulary rather than one value.
-        "gender": "male",
     },
     {
         "regno": "moderator2",
         "name": "Test Moderator 2",
         "email": "moderator2@test.com",
-        "gender": "female",
     },
     {
         "regno": "moderator3",
         "name": "Test Moderator 3",
         "email": "moderator3@test.com",
-        "gender": "other",
     },
 )
 
@@ -214,11 +206,13 @@ def _staff_seeds() -> list[tuple[str, dict]]:
     """The admin and the three moderators, as ``(account_type, values)`` pairs.
 
     Each moderator dict is completed from ``ADMIN_SEED``'s shape rather than repeated, because a
-    staff row carries exactly the columns ``AccountColumns`` declares -- and a value in here that
+    staff row carries exactly the columns ``AccountRecord`` declares -- and a value in here that
     is not one of those columns is a ``TypeError`` at insert rather than a silently ignored key.
+    Gender and the two picture columns are deliberately absent from every entry: they exist on
+    ``users`` only, so a staff seed that carried them would be writing columns the staff tables
+    do not have.
     """
     shared = {
-        "profile_picture_public_id": None, "profile_picture_format": None,
         "notifications_enabled": True,
         # Left unblocked explicitly so a re-seed cannot be read as "staff start blocked".
         "is_blocked": False,

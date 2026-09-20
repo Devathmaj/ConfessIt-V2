@@ -2,8 +2,9 @@
  * Checking the identity fields an admin writes, before the request is made.
  *
  * **Why this is here rather than in the dialog.** The server is the authority on all of it --
- * `AdminUserCreate` and `AdminUserUpdate` cap every field, require the cohort of a participant,
- * and refuse extras. But a rule that only exists on the server is discovered by submitting:
+ * `AdminUserCreate` and `AdminUserUpdate` cap every field, require the gender and cohort of a
+ * participant, and refuse extras. But a rule that only exists on the server is discovered by
+ * submitting:
  * the operator fills the dialog, presses Save, waits for a round-trip, and is then told what is
  * wrong in a toast that has already moved on. These are the same rules stated earlier and in
  * place, so the answer arrives while the operator is still looking at the field.
@@ -25,8 +26,9 @@ import { ADMIN_DEPARTMENT_MAX, ADMIN_NAME_MAX, ADMIN_REGNO_MAX } from './limits'
 /**
  * The fields both dialogs write.
  *
- * One list for both because the rules are one list: the account tables share these columns, and
- * the two dialogs differ only in whether the cohort pair applies.
+ * One list for both because the rules are one list. The fields themselves are shared; what
+ * differs is which of them a given row is required to have, which is what `isParticipant`
+ * decides -- gender and the cohort pair apply to a participant and mean nothing on a staff row.
  */
 export const IDENTITY_FIELDS = [
   'name',
@@ -125,13 +127,15 @@ export const validateIdentityFields = (
   const email = validateEmail(values.email);
   if (email) issues.email = email;
 
-  if (!isUserGender(values.gender ?? '')) {
-    issues.gender = 'Choose a gender.';
-  }
-
-  // The cohort pair is the only part that is not on every table, and it is required exactly
-  // when the row being written is a participant's.
+  // Gender and the cohort pair are the parts that are not on every table, and each is required
+  // exactly when the row being written is a participant's: the staff tables have no gender
+  // column either, so a staff form that demanded one would be asking for an answer the row
+  // cannot hold.
   if (isParticipant) {
+    if (!isUserGender(values.gender ?? '')) {
+      issues.gender = 'Choose a gender.';
+    }
+
     if (!isUserYear(values.year ?? null)) {
       issues.year = 'Choose a year of study.';
     }

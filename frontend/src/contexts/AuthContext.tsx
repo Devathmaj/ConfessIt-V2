@@ -25,8 +25,14 @@ export interface User {
     year?: number;
   department?: string;
   profile_picture_url?: string;
-  /** One of `USER_GENDER_VALUES`, so the three are the only possibilities. */
-  gender: UserGender;
+  /**
+   * One of `USER_GENDER_VALUES`, so the three are the only possibilities.
+   *
+   * Optional because only a participant has one: the staff tables carry no gender column, so
+   * `/auth/me` answers without the key for an admin or a moderator rather than with a value
+   * the row does not hold.
+   */
+  gender?: UserGender;
   interests?: string[];
   matchmaking_enabled?: boolean;
   notifications_enabled?: boolean;
