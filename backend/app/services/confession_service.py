@@ -9,6 +9,7 @@ from datetime import timezone
 from typing import Optional, List
 
 from .report_counters import CONFESSION, record_report_filed
+from .storage_service import storage_service
 
 logger = get_logger(__name__)
 
@@ -106,6 +107,24 @@ def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
     )
 
 
+def _profile_picture_url(user) -> Optional[str]:
+    """The author's photo as a delivery URL, or None when they have not set one.
+
+    Derived at read time from the stored public id rather than cached on the post, so a
+    picture changed or removed later is reflected immediately everywhere it is shown.
+    Accepts either a ``UserRecord`` (which holds the Cloudinary identity) or a
+    ``UserDetails`` (which already carries the derived URL, as the comment-posting caller
+    does).
+    """
+    if user is None:
+        return None
+    if hasattr(user, "profile_picture_public_id"):
+        return storage_service.profile_delivery_url(
+            user.profile_picture_public_id, user.profile_picture_format
+        )
+    return getattr(user, "profile_picture_url", None)
+
+
 class ConfessionService:
     def __init__(self, client: Optional[PostgresClient] = None):
         # Injected so the service never creates its own engine: an engine per instance
@@ -125,7 +144,8 @@ class ConfessionService:
             user_doc = session.get(UserRecord, str(user_id))
         if user_doc:
             return UserInfo(
-                id=str(user_doc.id), name=user_doc.name or "Anonymous User", avatar=user_doc.emoji
+                id=str(user_doc.id), name=user_doc.name or "Anonymous User", avatar=user_doc.emoji,
+                profile_picture_url=_profile_picture_url(user_doc),
             )
         return None
 
@@ -141,7 +161,9 @@ class ConfessionService:
     @staticmethod
     def _comment_payload(row, user=None):
         return {"id": str(row.id), "confession_id": str(row.confession_id), "user_id": str(row.user_id),
-            "user_info": {"id": str(row.user_id), "name": user.name if user else "User", "avatar": user.emoji if user else None},
+            "user_info": {"id": str(row.user_id), "name": user.name if user else "User",
+                "avatar": user.emoji if user else None,
+                "profile_picture_url": _profile_picture_url(user)},
             "body": row.body, "created_at": row.created_at, "likes": [str(x) for x in (row.likes or [])],
             "dislikes": [str(x) for x in (row.dislikes or [])], "like_count": row.like_count,
             "dislike_count": row.dislike_count, "report_count": row.report_count}
@@ -238,6 +260,10 @@ class ConfessionService:
                 "id": str(confession.get("author_id")),
                 "name": author.name if author else "Anonymous User",
                 "avatar": author.emoji if author else None,
+                # Withheld on an anonymous post: a photo identifies its owner far more
+                # directly than a name does, so it follows the same condition the client
+                # uses to hide that name.
+                "profile_picture_url": _profile_picture_url(author) if not confession.get("anonymous") else None,
             }
 
         def timestamp_key(row):
@@ -330,6 +356,8 @@ class ConfessionService:
             # Add user_info to single confession fetch
             author_info = self._get_user_info(confession_doc['author_id'])
             if author_info:
+                if confession_doc.get('anonymous'):
+                    author_info.profile_picture_url = None
                 confession_doc['user_info'] = author_info.dict()
 
             return Confession(**confession_doc)
@@ -461,8 +489,6 @@ class ConfessionService:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
             return "COMMENT_LIMIT_REACHED"
 
-        user_info = UserInfo(id=user_id, name=user.name, avatar=user.emoji)
-
         with self.sessions.begin() as session:
             row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
                 body=comment_data.body, created_at=datetime.datetime.now(datetime.timezone.utc))
@@ -470,7 +496,7 @@ class ConfessionService:
             confession_row = session.get(ConfessionRecord, str(confession_id))
             if confession_row: confession_row.comment_count += 1
             session.flush()
-            new_comment = self._comment_payload(row)
+            new_comment = self._comment_payload(row, user)
             new_comment["user_info"].update({"name": user.name, "avatar": user.emoji})
         logger.info(f"Added comment {new_comment['id']} to confession {confession_id}")
         return ConfessionComment(**new_comment)

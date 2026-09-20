@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import { resolveProfilePictureUrl } from '@/lib/utils';
 import { AdminNavigation } from '@/components/AdminNavigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { CAPABILITIES, Capability } from '@/lib/capabilities';
 import { getAdminStats } from '@/services/api';
 
@@ -110,15 +110,12 @@ const StatCard = ({ item }: { item: StatCardData }) => {
 export const AdminDashboard = () => {
   const { user, logout, can } = useAuth();
   const navigate = useNavigate();
-  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Every card below reads `/admin/stats`, which is `stats:read` -- so this page is only ever
   // mounted for an admin, and a moderator's landing page is the moderation hub instead.
   useEffect(() => {
-    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
-
     const fetchStats = async () => {
       try {
         setLoading(true);
@@ -298,20 +295,11 @@ export const AdminDashboard = () => {
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-white/10">
-                {profilePictureUrl ? (
-                  <img
-                    src={profilePictureUrl}
-                    alt="Admin profile"
-                    className="h-full w-full object-cover"
-                    onError={(event) => {
-                      (event.currentTarget as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                ) : (
-                  <span className="text-2xl font-semibold">{user?.name?.[0] ?? 'A'}</span>
-                )}
-              </div>
+              <ProfileAvatar
+                src={user?.profile_picture_url}
+                name={user?.name}
+                className="h-16 w-16 border border-white/20"
+              />
               <div>
                 <p className="text-sm text-white/60">Signed in as</p>
                 <p className="text-base font-medium">{user?.email}</p>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { parseTimestamp, resolveProfilePictureUrl, timestampMs } from '@/lib/utils';
+import { parseTimestamp, timestampMs } from '@/lib/utils';
 import { cohortLabel } from '@/lib/accountFields';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { serverNow } from '@/lib/serverClock';
 
 // Defines the structure for conversation data.
@@ -220,10 +221,6 @@ export const MessageBoxPage = () => {
   const handleOpenConversation = async (conversation: ConversationData) => {
     await openConversationByMatchId(conversation.match.id);
   };
-
-  // Constructs the full URL for a user's profile picture.
-  const getProfilePictureUrl = (profilePictureId?: string | null) =>
-    resolveProfilePictureUrl(profilePictureId ?? null);
 
   // Returns a styled status badge based on conversation status and expiration.
   const getStatusBadge = (status: string, expiresAt: string) => {
@@ -510,10 +507,10 @@ export const MessageBoxPage = () => {
                   >
                     <CardContent className="p-6">
                       <div className="flex items-start space-x-4">
-                        <img
-                          src={getProfilePictureUrl(conversation.other_user.profile_picture_url)}
-                          alt={conversation.other_user.name}
-                          className="w-16 h-16 rounded-full object-cover border-2 border-pink-500 flex-shrink-0"
+                        <ProfileAvatar
+                          src={conversation.other_user.profile_picture_url}
+                          name={conversation.other_user.name}
+                          className="w-16 h-16 border-2 border-pink-500"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between mb-2">
@@ -644,10 +641,10 @@ export const MessageBoxPage = () => {
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <img
-                        src={resolveProfilePictureUrl(conversation.other_user.profile_picture_url)}
-                        alt={conversation.other_user.name}
-                        className="w-12 h-12 rounded-full object-cover"
+                      <ProfileAvatar
+                        src={conversation.other_user.profile_picture_url}
+                        name={conversation.other_user.name}
+                        className="w-12 h-12"
                       />
                       <div>
                         <h3 className="text-lg font-semibold">{conversation.other_user.name}</h3>

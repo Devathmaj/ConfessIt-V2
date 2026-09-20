@@ -221,6 +221,10 @@ class UserInfo(BaseModel):
     id: str
     name: str
     avatar: Optional[str] = None
+    # Derived on read from the stored Cloudinary identity, never stored on the post. It is
+    # withheld for an anonymous confession so the author's photo cannot unmask them; the
+    # render layer hides the name on the same condition.
+    profile_picture_url: Optional[str] = None
 
 
 class ConfessionComment(BaseModel):

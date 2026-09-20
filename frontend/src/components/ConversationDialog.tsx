@@ -16,9 +16,10 @@ import {
 } from '@/lib/messageQuota';
 import type { MessageQuota } from '@/lib/messageQuota';
 import { toast } from 'sonner';
-import { resolveProfilePictureUrl, parseTimestamp, timestampMs } from '@/lib/utils';
+import { parseTimestamp, timestampMs } from '@/lib/utils';
 import { cohortLabel } from '@/lib/accountFields';
 import { ReportMessageDialog } from './ReportMessageDialog';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { BlockUserDialog } from './BlockUserDialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { serverNow } from '@/lib/serverClock';
@@ -736,8 +737,6 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     }
   };
 
-  const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
-
   const getStatusBadge = (status: string, isExpired: boolean) => {
     // Termination outranks expiry: a thread a moderator closed is reported as terminated
     // even when its match is also past due, so the reason it is closed stays visible.
@@ -813,10 +812,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           <div className="flex justify-between items-start gap-2">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 sm:gap-3 mb-2">
-                <img
-                  src={getProfilePictureUrl(conversationData.other_user.profile_picture_url)}
-                  alt={conversationData.other_user.name}
-                  className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover flex-shrink-0"
+                <ProfileAvatar
+                  src={conversationData.other_user.profile_picture_url}
+                  name={conversationData.other_user.name}
+                  className="w-10 h-10 sm:w-12 sm:h-12"
                 />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base sm:text-xl truncate">{conversationData.other_user.name}</CardTitle>

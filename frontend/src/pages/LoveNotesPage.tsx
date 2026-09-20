@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { ReportLoveNoteDialog } from '@/components/ReportLoveNoteDialog';
 import { getAllUsers, getCohorts, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
 import type { Cohort } from '@/lib/accountFields';
@@ -49,7 +50,7 @@ import {
   cohortLabel,
   isSameCohort,
 } from '@/lib/accountFields';
-import { resolveProfilePictureUrl, formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import {
     fitTextToBox,
     fontString,
@@ -1057,11 +1058,10 @@ setSearchTerm('');
                                         onClick={() => setSelectedRecipient(u)}
                                         className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?.id === u.id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
                                     >
-                                        <img
-                                            src={resolveProfilePictureUrl(u.profile_picture_url)}
-                                            alt={u.name}
-                                            className="w-10 h-10 rounded-full mr-4 object-cover"
-                                            onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/40' }}
+                                        <ProfileAvatar
+                                            src={u.profile_picture_url}
+                                            name={u.name}
+                                            className="w-10 h-10 mr-4"
                                         />
                                         <div>
                                             <p className="font-semibold">{u.name}</p>

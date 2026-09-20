@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   Dialog,
   DialogContent,
@@ -295,16 +295,6 @@ const FieldError = ({ id, message }: { id: string; message?: string }) => {
   );
 };
 
-const makeInitials = (name?: string | null) => {
-  if (!name) return '??';
-  return name
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase())
-    .join('');
-};
-
 /**
  * Whether this row is a staff account.
  *
@@ -568,9 +558,7 @@ const ProfileCard = ({
         className="flex cursor-pointer flex-col gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div className="flex items-start gap-3">
-          <Avatar className="h-11 w-11 shrink-0">
-            <AvatarFallback>{makeInitials(profile.name)}</AvatarFallback>
-          </Avatar>
+          <ProfileAvatar src={profile.profile_picture_url} name={profile.name} className="h-11 w-11 shrink-0" />
           <div className="grid min-w-0 flex-1 gap-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-sm font-semibold">{profile.name ?? 'Unknown user'}</span>

@@ -28,6 +28,7 @@ import { getConfessions, createConfession, getConfessionCooldown, reactToConfess
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import {
   formatCooldownRemaining,
@@ -50,6 +51,8 @@ interface UserInfo {
   name: string;
   /** Emoji chosen by the user. The API omits it when unset, so it is genuinely optional. */
   avatar?: string | null;
+  /** Author's photo; the API withholds it on an anonymous confession. */
+  profile_picture_url?: string | null;
   user_reaction: 'like' | 'dislike' | null;
   report_count: number;
   reported_by: string[];
@@ -88,6 +91,15 @@ interface Confession {
   report_count: number;
   reported_by: string[];
 }
+
+/**
+ * A commenter's or non-anonymous author's avatar: their photo, or their first initial when
+ * they have set none. Callers must not pass the user_info of an anonymous confession:
+ * hiding that identity is the whole point of the anonymous flag.
+ */
+const UserAvatar = ({ info, className = 'w-10 h-10' }: { info?: Pick<UserInfo, 'name' | 'profile_picture_url'> | null; className?: string }) => (
+  <ProfileAvatar src={info?.profile_picture_url} name={info?.name} className={className} />
+);
 
 export const ConfessionsPage = () => {
   const [confessions, setConfessions] = useState<Confession[]>([]);
@@ -709,16 +721,19 @@ export const ConfessionsPage = () => {
                   {/* min-w-0 so this column is allowed to shrink. Without it the flex item
                       keeps min-width:auto, refuses to get narrower than its longest word, and
                       a long recipient name pushes the action buttons off the card. */}
-                  <div className="min-w-0">
-                    <CardTitle className="text-lg font-dancing text-romantic break-words [overflow-wrap:anywhere]">
-                      {confession.anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
-                    </CardTitle>
-                    <CardDescription>{formatDateTimeDDMMYYYY(confession.created_at)}</CardDescription>
-                    {confession.recipient_name && (
-                      <p className="mt-1 text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">
-                        Confessing to: <span className="font-medium text-foreground">{confession.recipient_name}</span>
-                      </p>
-                    )}
+                  <div className="min-w-0 flex items-center gap-3">
+                    {!confession.anonymous && <UserAvatar info={confession.user_info} />}
+                    <div className="min-w-0">
+                      <CardTitle className="text-lg font-dancing text-romantic break-words [overflow-wrap:anywhere]">
+                        {confession.anonymous ? "🤫 Anonymous" : (confession.user_info?.name || "User")}
+                      </CardTitle>
+                      <CardDescription>{formatDateTimeDDMMYYYY(confession.created_at)}</CardDescription>
+                      {confession.recipient_name && (
+                        <p className="mt-1 text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">
+                          Confessing to: <span className="font-medium text-foreground">{confession.recipient_name}</span>
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {isAuthenticated && user?.id === confession.author_id && (
@@ -808,10 +823,15 @@ export const ConfessionsPage = () => {
           {selectedConfession && (
             <>
               <DialogHeader className="p-6 pb-4">
-                <DialogTitle className="font-dancing text-2xl text-romantic break-words [overflow-wrap:anywhere]">
-                  {selectedConfession.anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
-                </DialogTitle>
-                <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.created_at)}</DialogDescription>
+                <div className="flex items-center gap-3 w-full">
+                  {!selectedConfession.anonymous && <UserAvatar info={selectedConfession.user_info} className="w-12 h-12" />}
+                  <div className="min-w-0">
+                    <DialogTitle className="font-dancing text-2xl text-romantic break-words [overflow-wrap:anywhere]">
+                      {selectedConfession.anonymous ? "🤫 Anonymous Confession" : (selectedConfession.user_info?.name || "User") + "'s Confession"}
+                    </DialogTitle>
+                    <DialogDescription>{formatDateTimeDDMMYYYY(selectedConfession.created_at)}</DialogDescription>
+                  </div>
+                </div>
                 {selectedConfession.recipient_name && (
                   <p className="mt-2 text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
                     Confessing to: <span className="font-semibold text-foreground">{selectedConfession.recipient_name}</span>
@@ -832,7 +852,7 @@ export const ConfessionsPage = () => {
                     return (
                     <div key={comment.id} className="text-sm p-3 bg-muted/50 rounded-lg shadow-sm">
                       <div className="flex items-center gap-2">
-                         <span className="text-lg">{comment.user_info.avatar || '👤'}</span>
+                         <UserAvatar info={comment.user_info} className="w-8 h-8" />
                          <p className="font-bold text-foreground">{comment.user_info.name}</p>
                       </div>
                       <p className="my-2">{comment.body}</p>

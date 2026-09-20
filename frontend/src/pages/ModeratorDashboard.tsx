@@ -17,7 +17,7 @@ import { CAPABILITIES } from '@/lib/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { resolveProfilePictureUrl } from '@/lib/utils';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import {
   getAdminConfessionReports,
   getAdminLoveNoteReports,
@@ -308,20 +308,11 @@ export const ModeratorDashboard = () => {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border bg-muted">
-              {user?.profile_picture_url ? (
-                <img
-                  src={resolveProfilePictureUrl(user.profile_picture_url)}
-                  alt="Moderator profile"
-                  className="h-full w-full object-cover"
-                  onError={(event) => {
-                    (event.currentTarget as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              ) : (
-                <span className="text-2xl font-semibold">{user?.name?.[0] ?? 'M'}</span>
-              )}
-            </div>
+            <ProfileAvatar
+              src={user?.profile_picture_url}
+              name={user?.name}
+              className="h-16 w-16 border"
+            />
             <div>
               <p className="text-sm text-muted-foreground">Signed in as</p>
               <p className="text-base font-medium">{user?.email}</p>

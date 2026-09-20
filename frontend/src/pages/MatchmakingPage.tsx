@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
-import { parseTimestamp, resolveProfilePictureUrl } from '@/lib/utils';
+import { parseTimestamp } from '@/lib/utils';
 import { cohortLabel } from '@/lib/accountFields';
 import { ConversationDialog } from '@/components/ConversationDialog';
 import {
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -503,13 +504,6 @@ export const MatchmakingPage = () => {
     latest.current = { cooldown, cooldownKnown, expiresAt, matchId: matchedProfile?.match_id };
   });
 
-  /**
-   * Constructs the full URL for a user's profile picture.
-   * @param {string} [pictureId] - The ID or URL of the picture.
-   * @returns {string} The full URL to the profile picture.
-   */
-  const getProfilePictureUrl = (pictureId?: string | null) => resolveProfilePictureUrl(pictureId ?? null);
-
 /**
  * Asks the server whether a draw is allowed right now, and keeps the answer on the page.
  *
@@ -852,10 +846,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
   const UserCard = ({ profile }: { profile: User }) => (
     <Card className="confession-card">
       <CardHeader className="items-center text-center">
-        <img 
-            src={getProfilePictureUrl(profile.profile_picture_url)} 
-            alt={profile.name}
-            className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg"
+        <ProfileAvatar
+            src={profile.profile_picture_url}
+            name={profile.name}
+            className="w-24 h-24 border-4 border-background shadow-lg"
         />
         <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.name}</CardTitle>
         <CardDescription>{cohortLabel(profile.year, profile.department)}</CardDescription>
@@ -1042,10 +1036,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                     <div className="w-full h-full flex items-center justify-center overflow-hidden relative">
                         <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-card z-10" />
                         <div className="text-center animate-pulse" style={{ filter: 'blur(4px)' }}>
-                            <img 
-                                src={getProfilePictureUrl(slotMachineUser.profile_picture_url)} 
-                                alt={slotMachineUser.name}
-                                className="w-24 h-24 rounded-full object-cover border-4 border-background shadow-lg mx-auto mb-4"
+                            <ProfileAvatar
+                                src={slotMachineUser.profile_picture_url}
+                                name={slotMachineUser.name}
+                                className="w-24 h-24 border-4 border-background shadow-lg mx-auto mb-4"
                             />
                             <h3 className="text-xl font-dancing text-romantic">{slotMachineUser.name}</h3>
                             <p className="text-sm text-muted-foreground">{cohortLabel(slotMachineUser.year, slotMachineUser.department)}</p>

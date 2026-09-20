@@ -21,8 +21,8 @@ import { toast } from 'sonner';
 import { updateUserProfile, uploadProfilePicture } from '../services/api';
 import { ModeToggle } from '@/components/ui/ModeToggle';
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
-import { resolveProfilePictureUrl } from '@/lib/utils';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
 
 // Used for the emoji selector
@@ -50,7 +50,6 @@ export const ProfilePage = () => {
   const [love_notes_receive_enabled, setLoveNotesReceiveEnabled] = useState(user?.love_notes_receive_enabled ?? true);
   
   // State for UI elements
-  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -76,9 +75,6 @@ export const ProfilePage = () => {
       setMatchmakingEnabled(user.matchmaking_enabled || false);
       setNotificationsEnabled(user.notifications_enabled || false);
       setLoveNotesReceiveEnabled(user.love_notes_receive_enabled ?? true);
-      setProfilePictureUrl(resolveProfilePictureUrl(user.profile_picture_url));
-    } else {
-      setProfilePictureUrl(resolveProfilePictureUrl(null));
     }
   }, [user]);
 
@@ -189,13 +185,10 @@ export const ProfilePage = () => {
             <div className="flex flex-col items-center gap-4">
                 <div className="relative">
                     <div className="w-32 h-32 rounded-full p-1 bg-secondary">
-                        <img
-                            src={profilePictureUrl || `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.name?.[0] || 'U'}`}
-                            alt="Profile"
-                            className="w-full h-full rounded-full object-cover"
-                            onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://placehold.co/128x128/EED8E6/AF4D98?text=${user?.name?.[0] || 'U'}`;
-                            }}
+                        <ProfileAvatar
+                            src={user?.profile_picture_url}
+                            name={user?.name}
+                            className="w-full h-full"
                         />
                     </div>
                     <Button 

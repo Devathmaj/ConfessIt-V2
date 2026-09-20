@@ -14,10 +14,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getConfessions } from '../services/api';
-import { resolveProfilePictureUrl } from '@/lib/utils';
 
 // Import the new Navigation component
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 
 // Import video and image assets
 import DashboardWebm from '@/assets/Dashboard.webm';
@@ -79,14 +79,10 @@ const navigationItems: NavigationItem[] = [
 export const UserDashboard = () => {
   const { user, logout } = useAuth();
   const [selectedPage, setSelectedPage] = useState<string | null>(null);
-  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [trendingConfessions, setTrendingConfessions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Set profile picture URL if available
-    setProfilePictureUrl(resolveProfilePictureUrl(user?.profile_picture_url ?? null));
-
     // Fetch trending confessions
     fetchTrendingConfessions();
   }, [user]);
@@ -271,24 +267,11 @@ export const UserDashboard = () => {
             {/* User Info Card */}
             <GlassCard className="p-4 sm:p-6 flex flex-col">
               <div className="flex items-center gap-3 sm:gap-4 mb-4 sm:mb-5">
-                <div className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center overflow-hidden border-2 border-white/30 shadow-lg flex-shrink-0">
-                  {profilePictureUrl ? (
-                    <img
-                      src={profilePictureUrl}
-                      alt="Profile"
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        // Fallback to initial if image fails to load
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  ) : null}
-                  {!profilePictureUrl && (
-                    <span className="text-lg sm:text-xl font-bold text-white">
-                      {user?.name?.charAt(0)}
-                    </span>
-                  )}
-                </div>
+                <ProfileAvatar
+                  src={user?.profile_picture_url}
+                  name={user?.name}
+                  className="w-12 h-12 sm:w-14 sm:h-14 border-2 border-white/30 shadow-lg"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="font-bold text-base sm:text-lg truncate">{user?.name}</p>
                   <p className="text-xs sm:text-sm text-white/70 mt-1 truncate">Reg: {user?.regno}</p>

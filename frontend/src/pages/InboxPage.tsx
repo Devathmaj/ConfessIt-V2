@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { parseTimestamp, resolveProfilePictureUrl, formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
+import { parseTimestamp, formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import { notificationIsClickable, notificationTargetPath } from '@/lib/notificationTargets';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -23,6 +23,7 @@ import {
 
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { serverNow } from '@/lib/serverClock';
 
 // Defines the structure for conversation data.
@@ -291,9 +292,6 @@ notifications.push({
     }
   };
 
-  // Constructs the full URL for a user's profile picture.
-  const getProfilePictureUrl = (profilePictureId?: string | null) => resolveProfilePictureUrl(profilePictureId ?? null);
-
   // Returns an icon component based on the notification type.
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -469,11 +467,11 @@ case 'message_rejected':
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex items-center space-x-3">
-                          {notification.user_profile_picture ? (
-                            <img
-                              src={getProfilePictureUrl(notification.user_profile_picture)}
-                              alt={notification.user_name || 'System'}
-                              className="w-12 h-12 rounded-full object-cover border-2 border-pink-500"
+                          {notification.user_profile_picture || notification.user_name ? (
+                            <ProfileAvatar
+                              src={notification.user_profile_picture}
+                              name={notification.user_name}
+                              className="w-12 h-12 border-2 border-pink-500"
                             />
                           ) : (
                             <div className="w-12 h-12 rounded-full bg-pink-500 flex items-center justify-center border-2 border-pink-300">
