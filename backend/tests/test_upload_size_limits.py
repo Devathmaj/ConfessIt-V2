@@ -188,17 +188,17 @@ async def test_profile_upload_does_not_buffer_an_unbounded_body():
     error here.
     """
     stream = EndlessStream()
-    # ``id`` and ``account_type`` are both read while building the ``AccountRef`` for the
-    # delivery URL, which happens before the body is read. The 413 still comes from the
-    # bounded read -- that is the first thing the shared uploader does -- but without these
-    # attributes the test would be measuring an AttributeError instead.
+    # Only ``regno`` is needed now: the upload reads the body first and refuses it at 413
+    # without ever naming the object. Without ``regno`` the test would be measuring an
+    # AttributeError instead of the size limit.
     user = type(
         "U",
         (),
         {
             "id": "22CS045-0000-0000-0000-000000000001",
             "regno": "22CS045",
-            "profile_picture_url": None,
+            "profile_picture_public_id": None,
+            "profile_picture_format": None,
             "account_type": "users",
         },
     )()

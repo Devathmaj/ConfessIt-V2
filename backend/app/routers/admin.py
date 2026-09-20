@@ -15,6 +15,7 @@ from ..accounts import (
     normalize_account_type,
 )
 from ..services.authorization import require_capability
+from ..services.storage_service import storage_service
 from ..services.admin_service import (
     serialize_datetime,
     serialize_user_doc,
@@ -45,7 +46,10 @@ def _user_payload(user):
         "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
         "emoji": user.emoji, "bio": user.bio, "year": user.year, "department": user.department,
         "gender": user.gender,
-        "profile_picture_url": user.profile_picture_url, "interests": user.interests or [],
+        "profile_picture_url": storage_service.profile_delivery_url(
+            user.profile_picture_public_id, user.profile_picture_format
+        ),
+        "interests": user.interests or [],
         "account_type": AccountType.USERS.value,
         "matchmaking_enabled": user.matchmaking_enabled,
         "notifications_enabled": user.notifications_enabled, "love_notes_receive_enabled": user.love_notes_receive_enabled,
@@ -310,7 +314,11 @@ async def create_user(
         "regno": normalized_regno,
         "name": payload.name.strip(),
         "email": normalized_email,
-        "profile_picture_url": None,
+        # A new account has no picture. Both halves of the picture's identity are named rather
+        # than left to a default, because "no picture" is a real state and it has to be one value
+        # in two columns -- a row with a public_id and no format would render a broken image.
+        "profile_picture_public_id": None,
+        "profile_picture_format": None,
         "gender": payload.gender.strip(),
     }
     if account_type is AccountType.USERS:

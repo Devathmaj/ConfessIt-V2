@@ -84,7 +84,7 @@ ADMIN_SEED = {
     "name": "Test Admin",
     "email": "admin@test.com",
     "gender": "male",
-    "profile_picture_url": None,
+    "profile_picture_public_id": None, "profile_picture_format": None,
     "notifications_enabled": True,
 }
 
@@ -202,7 +202,7 @@ def _participant(regno: str, gender: str, year: int, department: str, index: int
         "emoji": None,
         "bio": f"Seeded {department} {year} {gender} participant.",
         "interests": _interests_for(index),
-        "profile_picture_url": None,
+        "profile_picture_public_id": None, "profile_picture_format": None,
         "matchmaking_enabled": True,
         "notifications_enabled": True,
         "love_notes_receive_enabled": True,
@@ -218,7 +218,7 @@ def _staff_seeds() -> list[tuple[str, dict]]:
     is not one of those columns is a ``TypeError`` at insert rather than a silently ignored key.
     """
     shared = {
-        "profile_picture_url": None,
+        "profile_picture_public_id": None, "profile_picture_format": None,
         "notifications_enabled": True,
         # Left unblocked explicitly so a re-seed cannot be read as "staff start blocked".
         "is_blocked": False,

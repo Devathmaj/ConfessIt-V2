@@ -1,18 +1,21 @@
 """Tests for profile-asset ownership on the delete path.
 
-The read path already refuses to serve an asset the requesting account does not own
-(``asset_delivery_service``). These tests pin the matching rule for destruction: an
-account must not be able to wipe an object belonging to somebody else, even when the
-stored ``profile_picture_url`` names it.
+A profile picture is stored as its Cloudinary *identity* -- ``profile_picture_public_id`` plus
+``profile_picture_format`` -- and handed to the browser as an ordinary public URL derived from
+that identity at read time. Nothing proxies or authorises the read any more, because nothing
+serves the read any more; the object is public by design (see ``account_picture_service``).
 
-The stored value is treated as untrusted throughout, because it is not only ever written
-by the owner: an admin creating a user can set that column to any string
-(``routers/admin.py``), and the Cloudinary URL parser accepts any host.
+That makes these tests the only thing standing between one account and another's avatar on the
+*destroy* path: an account must not be able to wipe an object belonging to somebody else, even
+when the row it is authenticated against names that object.
+
+The stored identity is treated as untrusted throughout. It is not only ever written by the
+owner: an admin creating or editing a user can set these columns to any string
+(``routers/admin.py``), and a public id is just text.
 """
 
+import io
 import logging
-import os
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest
@@ -24,31 +27,22 @@ from app.services.storage_service import storage_service
 OWNER = "22CS045"
 OTHER = "22CS099"
 
-OWNED_PATH = f"{OWNER}/tok3n/profile_20260101_120000_000000.png"
-FOREIGN_PATH = f"{OTHER}/tok9z9/profile_20260101_130000_000000.png"
+OWNED_ID = f"profile_pics/{OWNER}/AbCdEfGhIjKlMnOpQrStUv/profile"
+FOREIGN_ID = f"profile_pics/{OTHER}/ZyXwVuTsRqPoNmLkJiHgFe/d/profile"
 
 
-def cloudinary_url_for(object_path: str) -> str:
-    return (
-        f"https://res.cloudinary.com/{storage_service.cloud_name}"
-        f"/image/upload/v1767268800/{storage_service.bucket_name}/{object_path}"
-    )
-
-
-@pytest.fixture
-def enabled(monkeypatch):
-    """Force the delete path to be live so ``enabled`` never short-circuits the test."""
-    monkeypatch.setattr(storage_service, "enabled", True, raising=False)
-    return storage_service
+# ---------------------------------------------------------------------------
+# Ownership of the destroy
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def destroyed(monkeypatch, enabled):
+def destroyed(monkeypatch):
     """Record every Cloudinary destroy call instead of performing it."""
     calls = []
 
-    def _destroy(public_id, resource_type="image", invalidate=False, **kwargs):
-        calls.append(public_id)
+    def _destroy(public_id, resource_type="image", type="upload", invalidate=False, **kwargs):
+        calls.append((public_id, type, invalidate))
         return {"result": "ok"}
 
     monkeypatch.setattr(
@@ -57,55 +51,86 @@ def destroyed(monkeypatch, enabled):
     return calls
 
 
-def expected_public_id(object_path: str) -> str:
-    """The public_id the destroy call should carry (extension is dropped by design)."""
-    return storage_service.build_public_id(storage_service.bucket_name, object_path)
+@pytest.fixture(autouse=True)
+def enabled(monkeypatch):
+    """Force the delete path live so ``enabled`` never short-circuits the test."""
+    monkeypatch.setattr(storage_service, "enabled", True, raising=False)
+    return storage_service
 
 
-def test_own_asset_is_deleted(enabled, destroyed):
-    assert storage_service.delete_profile_asset(cloudinary_url_for(OWNED_PATH), owner_regno=OWNER)
-    assert destroyed == [expected_public_id(OWNED_PATH)]
+def test_own_asset_is_deleted(destroyed):
+    assert storage_service.delete_profile_asset(OWNED_ID, owner_regno=OWNER) is True
+    assert destroyed == [(OWNED_ID, "upload", True)]
 
 
-def test_foreign_asset_is_never_destroyed(enabled, destroyed):
-    """The core rule: knowing the URL is not permission to delete it."""
-    assert storage_service.delete_profile_asset(
-        cloudinary_url_for(FOREIGN_PATH), owner_regno=OWNER
-    ) is False
+def test_foreign_asset_is_never_destroyed(destroyed):
+    """The core rule: knowing the id is not permission to delete it."""
+    assert storage_service.delete_profile_asset(FOREIGN_ID, owner_regno=OWNER) is False
     assert destroyed == []
 
 
-def test_foreign_asset_supplied_as_a_bare_path_is_refused(enabled, destroyed):
-    assert storage_service.delete_profile_asset(FOREIGN_PATH, owner_regno=OWNER) is False
+def test_missing_owner_cannot_delete_anything(destroyed):
+    """Without a known owner there is nothing to check against, so refuse."""
+    assert storage_service.delete_profile_asset(OWNED_ID, owner_regno="") is False
     assert destroyed == []
 
 
-def test_foreign_asset_supplied_through_a_foreign_host_is_refused(enabled, destroyed):
-    """The URL parser ignores the host, so a lookalike domain must not help an attacker.
+def test_owner_match_uses_a_whole_segment_not_a_prefix(destroyed):
+    """``22CS0455`` must not be treated as owning ``22CS045``'s folder."""
+    assert storage_service.delete_profile_asset(OWNED_ID, owner_regno=OWNER + "5") is False
+    assert destroyed == []
 
-    The URL keeps the real segment layout on purpose: an unparseable URL would be
-    rejected earlier by the parser, and the test would pass without ever reaching the
-    ownership check it exists to exercise.
+
+def test_owner_segments_are_compared_case_sensitively(destroyed):
+    """``22cs045`` must not be treated as owning ``22CS045``'s folder.
+
+    Folding case here would be the vulnerability, not the convenience: regnos are the account
+    identifier in this application, so if two regnos differing only in case can both exist,
+    case-folding would let either one destroy the other's avatar. The folder is sanitised on the
+    way in without changing case, so an exact comparison is both the safe rule and the one
+    that matches what was written.
     """
-    spoofed = (
-        f"https://evil.example.invalid/{storage_service.cloud_name}"
-        f"/image/upload/v1767268800/{storage_service.bucket_name}/{FOREIGN_PATH}"
-    )
-    # Confirm the spoofed URL really does parse to the foreign object, so the assertion
-    # below is about ownership and not about the URL being rejected as malformed.
-    assert storage_service.normalize_stored_path(spoofed, "profile") == FOREIGN_PATH
+    assert storage_service.delete_profile_asset(OWNED_ID, owner_regno="22cs045") is False
+    assert destroyed == []
+
+
+def test_a_url_is_not_an_identity_and_is_refused(destroyed):
+    """A stored *address* must not be torn apart and acted on.
+
+    The column holds a public_id, so a value that looks like a URL can only be stale data from
+    before the move or a hand-edited row. Accepting one would mean re-introducing the parser --
+    and with it the host-spoofing question -- for a value that should never appear. Refusing it
+    is the behaviour that keeps the rule simple: an id either sits in this account's folder or
+    it is not deleted.
+    """
+    url = storage_service.profile_delivery_url(OWNED_ID, "png")
+    assert url.startswith("https://res.cloudinary.com/")
+
+    assert storage_service.delete_profile_asset(url, owner_regno=OWNER) is False
+    assert destroyed == []
+
+
+def test_a_full_url_on_a_foreign_host_does_not_grant_deletion(destroyed):
+    """A lookalike host must not help an attacker, and must not crash anything either."""
+    spoofed = f"https://evil.example.invalid/{FOREIGN_ID}"
 
     assert storage_service.delete_profile_asset(spoofed, owner_regno=OWNER) is False
     assert destroyed == []
 
 
-def test_missing_owner_cannot_delete_anything(enabled, destroyed):
-    """Without a known owner there is nothing to check against, so refuse."""
-    assert storage_service.delete_profile_asset(cloudinary_url_for(OWNED_PATH), owner_regno="") is False
+def test_love_note_object_is_not_deletable_through_the_profile_path(destroyed):
+    """A profile delete must not reach an authenticated love note image.
+
+    The two layouts live in the same account, so a bug in the segment check would let an
+    ordinary avatar replacement delete a private note. The check is on the layout, and this
+    is the test for it.
+    """
+    note_id = "love_notes/22222222-2222-2222-2222-222222333333/image"
+    assert storage_service.delete_profile_asset(note_id, owner_regno=OWNER) is False
     assert destroyed == []
 
 
-def test_refusal_is_logged_for_audit(enabled, destroyed, caplog):
+def test_refusal_is_logged_for_audit(caplog):
     # app.logger.get_logger() sets propagate=False so a module's records are not
     # re-delivered by the root logger, which also means caplog's root handler never
     # sees them. Attach the capture handler to the module logger itself so the audit
@@ -114,7 +139,7 @@ def test_refusal_is_logged_for_audit(enabled, destroyed, caplog):
     target.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.WARNING, logger="app.services.storage_service"):
-            storage_service.delete_profile_asset(cloudinary_url_for(FOREIGN_PATH), owner_regno=OWNER)
+            storage_service.delete_profile_asset(FOREIGN_ID, owner_regno=OWNER)
     finally:
         target.removeHandler(caplog.handler)
 
@@ -126,13 +151,80 @@ def test_refusal_is_logged_for_audit(enabled, destroyed, caplog):
     assert OTHER in message
 
 
-def test_owner_match_uses_a_whole_segment_not_a_prefix(enabled, destroyed):
-    """``22CS0455`` must not be treated as owning ``22CS045``'s folder."""
-    lookalike_owner = OWNER + "5"
-    assert storage_service.delete_profile_asset(
-        cloudinary_url_for(OWNED_PATH), owner_regno=lookalike_owner
-    ) is False
-    assert destroyed == []
+def test_an_upstream_delete_failure_never_reaches_the_caller(monkeypatch, caplog):
+    """The raw Cloudinary error embeds the public_id, so it must not reach the client.
+
+    The profile path swallows the failure entirely and reports ``False``: the replacement is
+    already committed, so an orphaned object is a cleanup problem and a 500 would answer a
+    successful upload with an error. Nothing about the upstream message may escape, which is a
+    stronger guarantee than sanitising it.
+    """
+
+    def _destroy(public_id, **kwargs):
+        raise RuntimeError("cloudinary 404 not found for public_id prof-secret-token")
+
+    monkeypatch.setattr(
+        "app.services.storage_service.cloudinary_destroy", _destroy, raising=True
+    )
+    target = logging.getLogger("app.services.storage_service")
+    target.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.ERROR, logger="app.services.storage_service"):
+            assert storage_service.delete_profile_asset(OWNED_ID, owner_regno=OWNER) is False
+    finally:
+        target.removeHandler(caplog.handler)
+
+    # The detail is logged for operators, which is where it belongs, and is not returned.
+    assert any("prof-secret-token" in r.getMessage() for r in caplog.records)
+
+
+def test_love_note_delete_failure_raises_but_still_does_not_leak(monkeypatch):
+    """The love note path does raise, because the row must not be deleted behind a live object.
+
+    It raises the *fixed* message, not Cloudinary's: the SDK's error text names the object, and
+    "the caller wrapped it" is a rule a future caller forgets. The real cause is in the log.
+    """
+
+    def _destroy(public_id, **kwargs):
+        raise RuntimeError("cloudinary 500 for public_id note-secret-token")
+
+    monkeypatch.setattr(
+        "app.services.storage_service.cloudinary_destroy", _destroy, raising=True
+    )
+
+    note_id = "love_notes/22222222-2222-2222-2222-222222333333/image"
+    with pytest.raises(HTTPException) as excinfo:
+        storage_service.delete_love_note_asset(note_id)
+
+    assert excinfo.value.status_code == 500
+    assert "note-secret-token" not in str(excinfo.value.detail)
+    assert excinfo.value.detail == "Failed to delete file"
+
+
+def test_love_note_delete_refuses_a_foreign_layout(monkeypatch):
+    """A corrupt stored id must not turn a note deletion into an unrelated destroy."""
+    calls = []
+    monkeypatch.setattr(
+        "app.services.storage_service.cloudinary_destroy",
+        lambda public_id, **k: calls.append(public_id) or {"result": "ok"},
+        raising=True,
+    )
+
+    assert storage_service.delete_love_note_asset(OWNED_ID) is False
+    assert storage_service.delete_love_note_asset("love_notes/../profile_pics/x/profile") is False
+    assert calls == []
+
+
+def test_owner_segment_helper():
+    assert storage_service.profile_owner_segment(OWNED_ID) == OWNER
+    assert storage_service.profile_owner_segment("") is None
+    assert storage_service.profile_owner_segment(None) is None
+    # A bare name is not a four-segment profile identity, so it cannot be authorised. The
+    # layout check is stricter than "read the second segment", which is what keeps
+    # ``love_notes/x/image`` from being read as an owner called ``x``.
+    assert storage_service.profile_owner_segment("profile") is None
+    assert storage_service.profile_owner_segment("love_notes/x/image") is None
+    assert storage_service.profile_owner_segment(f"profile_pics/{OWNER}/x/notprofile") is None
 
 
 # ---------------------------------------------------------------------------
@@ -141,37 +233,26 @@ def test_owner_match_uses_a_whole_segment_not_a_prefix(enabled, destroyed):
 
 
 def _upload_stub(monkeypatch, *, fail: bool):
-    def _upload(*, file, content, user_folder):
+    def _upload(*, file, content, owner_regno):
         if fail:
             raise HTTPException(status_code=500, detail="Failed to upload profile image: upstream down")
-        path = f"{user_folder}/newtok/new_20260101_140000_000000.png"
         return {
-            "object_path": path,
-            "cloudinary_url": cloudinary_url_for(path),
-            "secure_url": cloudinary_url_for(path),
+            "public_id": f"profile_pics/{owner_regno}/NewOneTwoThreeFourFiveSix/profile",
+            "format": "png",
         }
 
     monkeypatch.setattr(storage_service, "upload_profile_image", _upload, raising=True)
-    monkeypatch.setattr(storage_service, "verify_uploaded_asset", lambda *a, **k: True, raising=True)
+    monkeypatch.setattr(storage_service, "profile_delivery_url", lambda *a, **k: "https://cdn/x.png", raising=True)
 
 
-def _user_details(regno, picture_url):
-    # ``account_type`` is needed because the upload builds an ``AccountRef`` for the delivery
-    # URL, and building one reads it. These rules moved out of ``profile_service`` into
-    # ``account_picture_service`` so the admin upload could share them, and the patch targets
-    # below follow them there -- ``profile_service`` still owns only the participant-specific
-    # part, which is writing the ``users`` row.
-    return Mock(
-        regno=regno,
-        profile_picture_url=picture_url,
-        account_type="users",
-    )
+def _user_details(regno):
+    return Mock(regno=regno, account_type="users")
 
 
-def _fake_db():
+def _fake_db(previous_public_id=None):
     db = Mock()
     session = Mock()
-    session.scalar.return_value = Mock(profile_picture_url=None)
+    session.scalar.return_value = Mock(profile_picture_public_id=previous_public_id)
     ctx = Mock()
     ctx.__enter__ = Mock(return_value=session)
     ctx.__exit__ = Mock(return_value=False)
@@ -179,72 +260,91 @@ def _fake_db():
     return db
 
 
-async def _run_upload(monkeypatch, *, fail: bool, current):
-    _upload_stub(monkeypatch, fail=fail)
-    # Patched on ``account_picture_service``, which is where the capped read, the validation,
-    # the Cloudinary call and the deletion ordering now live. ``profile_service`` kept only the
-    # part that is participant-specific, and patching names there would silently do nothing --
-    # monkeypatch on a module attribute nobody reads is not a failure, it is a no-op, which is
-    # the worse outcome because the test still passes.
-    monkeypatch.setattr(
-        account_picture_service.asset_delivery_service,
-        "build_delivery_url",
-        lambda **kwargs: "http://proxy/delivery",
-        raising=True,
-    )
-    upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
+def _upload_file():
+    return UploadFile(filename="me.png", file=io.BytesIO(b"not-a-real-png"))
+
+
+def _patch_validation(monkeypatch):
     monkeypatch.setattr(
         account_picture_service.storage_service,
         "validate_image_file",
         lambda *a, **k: "png",
         raising=True,
     )
-    return await profile_service.upload_profile_picture_service(current, _fake_db(), upload)
+
+
+async def _run_upload(monkeypatch, *, fail: bool, db, current):
+    _upload_stub(monkeypatch, fail=fail)
+    _patch_validation(monkeypatch)
+    return await profile_service.upload_profile_picture_service(current, db, _upload_file())
 
 
 @pytest.mark.asyncio
-async def test_failed_upload_leaves_the_previous_picture_intact(monkeypatch, enabled, destroyed):
+async def test_failed_upload_leaves_the_previous_picture_intact(monkeypatch, destroyed):
     """Regression: the old asset used to be deleted before the new one was confirmed.
 
     A failed upload therefore left the account pointing at an object that had already
     been destroyed, and no retry could recover it.
     """
-    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
-
     with pytest.raises(HTTPException):
-        await _run_upload(monkeypatch, fail=True, current=current)
+        await _run_upload(
+            monkeypatch, fail=True, db=_fake_db(OWNED_ID), current=_user_details(OWNER)
+        )
 
     assert destroyed == [], "previous asset was destroyed even though the upload failed"
 
 
 @pytest.mark.asyncio
-async def test_successful_upload_deletes_the_previous_asset(monkeypatch, enabled, destroyed):
-    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
+async def test_successful_upload_deletes_the_previous_asset(monkeypatch, destroyed):
+    db = _fake_db(OWNED_ID)
 
-    result = await _run_upload(monkeypatch, fail=False, current=current)
+    result = await _run_upload(monkeypatch, fail=False, db=db, current=_user_details(OWNER))
 
     assert result["message"] == "Profile picture uploaded successfully"
-    assert destroyed == [expected_public_id(OWNED_PATH)]
+    assert result["profile_picture_url"] == "https://cdn/x.png"
+    assert destroyed == [(OWNED_ID, "upload", True)]
 
 
 @pytest.mark.asyncio
-async def test_replaced_foreign_asset_is_left_alone(monkeypatch, enabled, destroyed):
-    """Even the normal replacement path must not touch another account's object.
+async def test_the_new_identity_is_what_gets_persisted(monkeypatch, destroyed):
+    """The row must be handed the object identity, never the URL that was shown to the browser.
 
-    This is the scenario where an admin has pointed this account's column at somebody
-    else's picture: the victim uploading a new avatar must not delete it.
+    Storing the URL would put an address in the database that has to be parsed back into an
+    identity before it can be deleted or re-derived -- and the address contains a version and a
+    format that Cloudinary may change underneath us.
     """
-    current = _user_details(OWNER, cloudinary_url_for(FOREIGN_PATH))
+    db = _fake_db(OWNED_ID)
 
-    await _run_upload(monkeypatch, fail=False, current=current)
+    await _run_upload(monkeypatch, fail=False, db=db, current=_user_details(OWNER))
 
+    written = db.sessions.begin.return_value.__enter__.return_value.scalar.return_value
+    assert written.profile_picture_public_id == f"profile_pics/{OWNER}/NewOneTwoThreeFourFiveSix/profile"
+    assert written.profile_picture_format == "png"
+
+
+@pytest.mark.asyncio
+async def test_first_upload_with_no_previous_object_destroys_nothing(monkeypatch, destroyed):
+    """An account that has never had a picture must not reach the delete path at all."""
+    await _run_upload(monkeypatch, fail=False, db=_fake_db(None), current=_user_details(OWNER))
     assert destroyed == []
 
 
 @pytest.mark.asyncio
-async def test_delete_failure_does_not_fail_the_upload(monkeypatch, enabled):
+async def test_replaced_foreign_asset_is_left_alone(monkeypatch, destroyed):
+    """Even the normal replacement path must not touch another account's object.
+
+    This is the scenario where an admin has pointed this account's columns at somebody
+    else's picture: the victim uploading a new avatar must not delete it.
+    """
+    await _run_upload(
+        monkeypatch, fail=False, db=_fake_db(FOREIGN_ID), current=_user_details(OWNER)
+    )
+    assert destroyed == []
+
+
+@pytest.mark.asyncio
+async def test_delete_failure_does_not_fail_the_upload(monkeypatch):
     """The new picture is already saved, so a cleanup error must not surface as a 500."""
-    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
 
     def _boom(*args, **kwargs):
         raise HTTPException(status_code=500, detail="Failed to delete file")
@@ -253,30 +353,31 @@ async def test_delete_failure_does_not_fail_the_upload(monkeypatch, enabled):
         account_picture_service.storage_service, "delete_profile_asset", _boom, raising=True
     )
 
-    result = await _run_upload(monkeypatch, fail=False, current=current)
+    result = await _run_upload(
+        monkeypatch, fail=False, db=_fake_db(OWNED_ID), current=_user_details(OWNER)
+    )
     assert result["message"] == "Profile picture uploaded successfully"
 
 
 @pytest.mark.asyncio
-async def test_the_old_object_survives_a_failed_database_write(monkeypatch, enabled, destroyed):
+async def test_the_old_object_survives_a_failed_database_write(monkeypatch, destroyed):
     """The ordering rule, tested at the step that can actually break it.
 
     The upload helper used to delete the previous object itself, on the strength of a comment
-    claiming the replacement had already been stored. It had not: the caller persists the new URL
-    *after* the helper returns. So a database failure between the two left the row still naming
-    the old object, which the helper had already destroyed -- a broken image with no retry able to
-    recover it, because the bytes were gone.
+    claiming the replacement had already been stored. It had not: the caller persists the new
+    identity *after* the helper returns. So a database failure between the two left the row
+    still naming the old object, which the helper had already destroyed -- a broken image with
+    no retry able to recover it, because the bytes were gone.
 
     Making the database write fail is the only way to observe the difference. Both previous tests
     pass either way, which is why this one exists.
     """
-    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
 
     class _FailingSession:
         """Stands in for a commit that fails after the upload has already succeeded."""
 
         def scalar(self, *args, **kwargs):
-            return Mock(profile_picture_url=None)
+            return Mock(profile_picture_public_id=OWNED_ID)
 
     class _FailingContext:
         def __enter__(self):
@@ -291,23 +392,10 @@ async def test_the_old_object_survives_a_failed_database_write(monkeypatch, enab
     db.sessions.begin.return_value = _FailingContext()
 
     _upload_stub(monkeypatch, fail=False)
-    monkeypatch.setattr(
-        account_picture_service.asset_delivery_service,
-        "build_delivery_url",
-        lambda **kwargs: "http://proxy/delivery",
-        raising=True,
-    )
-    monkeypatch.setattr(
-        account_picture_service.storage_service,
-        "validate_image_file",
-        lambda *a, **k: "png",
-        raising=True,
-    )
-
-    upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
+    _patch_validation(monkeypatch)
 
     with pytest.raises(RuntimeError):
-        await profile_service.upload_profile_picture_service(current, db, upload)
+        await profile_service.upload_profile_picture_service(_user_details(OWNER), db, _upload_file())
 
     assert destroyed == [], (
         "the previous asset was destroyed even though the write that should have replaced it "
@@ -316,24 +404,12 @@ async def test_the_old_object_survives_a_failed_database_write(monkeypatch, enab
 
 
 @pytest.mark.asyncio
-async def test_the_old_object_goes_only_after_the_write(enabled, monkeypatch):
+async def test_the_old_object_goes_only_after_the_write(monkeypatch):
     """Not just "deleted eventually" -- deleted after the stored value changed."""
-    current = _user_details(OWNER, cloudinary_url_for(OWNED_PATH))
     order = []
 
     _upload_stub(monkeypatch, fail=False)
-    monkeypatch.setattr(
-        account_picture_service.asset_delivery_service,
-        "build_delivery_url",
-        lambda **kwargs: "http://proxy/delivery",
-        raising=True,
-    )
-    monkeypatch.setattr(
-        account_picture_service.storage_service,
-        "validate_image_file",
-        lambda *a, **k: "png",
-        raising=True,
-    )
+    _patch_validation(monkeypatch)
     monkeypatch.setattr(
         account_picture_service.storage_service,
         "delete_profile_asset",
@@ -341,43 +417,40 @@ async def test_the_old_object_goes_only_after_the_write(enabled, monkeypatch):
         raising=True,
     )
 
-    db = _fake_db()
-    # The write is recorded where it actually happens -- the assignment of the new stored URL --
+    db = _fake_db(OWNED_ID)
+    # The write is recorded where it actually happens -- the assignment of the new identity --
     # rather than by wrapping the context manager, which is fiddly to do on a Mock and would be
     # testing the wrapper rather than the ordering.
-    original_scalar = db.sessions.begin.return_value.__enter__.return_value.scalar
+    session = db.sessions.begin.return_value.__enter__.return_value
+    original_scalar = session.scalar
 
     def _scalar(*args, **kwargs):
+        row = original_scalar(*args, **kwargs)
         order.append("write")
-        return original_scalar(*args, **kwargs)
+        return row
 
-    db.sessions.begin.return_value.__enter__.return_value.scalar = _scalar
+    session.scalar = _scalar
 
-    upload = UploadFile(filename="me.png", file=__import__("io").BytesIO(b"not-a-real-png"))
-    await profile_service.upload_profile_picture_service(current, db, upload)
+    await profile_service.upload_profile_picture_service(_user_details(OWNER), db, _upload_file())
 
     assert order == ["write", "delete"]
 
 
-def test_error_detail_no_longer_leaks_the_public_id(enabled, monkeypatch):
-    """The raw Cloudinary error embeds the bucket and public_id, so it must not be returned."""
-    def _destroy(public_id, **kwargs):
-        raise RuntimeError("cloudinary 404 not found for public_id prof-secret-token")
-
+def test_retiring_the_same_object_twice_is_a_no_op(monkeypatch):
+    """Re-uploading an identical object must not delete the picture the row still points at."""
+    calls = []
     monkeypatch.setattr(
-        "app.services.storage_service.cloudinary_destroy", _destroy, raising=True
+        account_picture_service.storage_service,
+        "delete_profile_asset",
+        lambda public_id, **k: calls.append(public_id),
+        raising=True,
     )
 
-    with pytest.raises(HTTPException) as excinfo:
-        storage_service.delete_file_from_bucket("prof-bucket", OWNED_PATH)
+    account_picture_service.retire_previous_picture(
+        previous_public_id=OWNED_ID,
+        new_public_id=OWNED_ID,
+        owner_regno=OWNER,
+        actor_regno=OWNER,
+    )
 
-    assert "prof-secret-token" not in str(excinfo.value.detail)
-    assert excinfo.value.detail == "Failed to delete file"
-
-
-def test_owner_segment_helper():
-    assert storage_service.asset_owner_segment(OWNED_PATH) == OWNER
-    assert storage_service.asset_owner_segment("") is None
-    assert storage_service.asset_owner_segment(None) is None
-    # A bare filename has no owner segment, so it cannot be authorised.
-    assert storage_service.asset_owner_segment("profile.png") == "profile.png"
+    assert calls == []

@@ -28,9 +28,6 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None
     CLOUDINARY_URL: str | None = None
-    CLOUDINARY_PROFILE_FOLDER: str | None = None
-    CLOUDINARY_EVENTS_FOLDER: str | None = None
-    CLOUDINARY_GALLERY_FOLDER: str | None = None
     MAX_IMAGE_SIZE_MB: int | None = None
     # Geometry caps for uploaded images. A byte limit alone does not bound image
     # processing: a small compressed file can describe a bitmap that costs gigabytes
@@ -45,17 +42,61 @@ class Settings(BaseSettings):
     # once, which is the second line of defence if the body cap is being probed.
     MAX_CONCURRENCY: int = 100
     PUBLIC_BASE_URL: str | None = None
-    CLOUDINARY_USE_ADVANCED_TRANSFORMS: str | None = None
-    CLOUDINARY_DEFAULT_VIEW_TTL: int | None = None
     CLOUDINARY_ALLOWED_FORMATS: str | None = None
 
-    # Lifetime of the short-lived tokens embedded in backend image delivery URLs.
-    # Defaults to the access-token lifetime when unset.
-    ASSET_TOKEN_TTL_SECONDS: int | None = None
+    # --- Organising the library ---
+    #
+    # Cloudinary offers two different things that both read like "put this in a named
+    # collection", and only one of them can be driven from code:
+    #
+    #   * *Asset folders* are addressable. They have an Admin API (`folders`) and an upload
+    #     parameter (`asset_folder`), and on a dynamic-folder-mode account they are purely a
+    #     Media Library location: public_id and delivery URL are untouched.
+    #   * *Collections* are a DAM concept: a flat conceptual grouping that an asset can belong
+    #     to more than once, and that shows up under Assets rather than under Images. There is
+    #     no REST endpoint and no SDK method for them anywhere in Cloudinary's APIs -- the Admin
+    #     API reference has folders, resources, tags and metadata_fields, and no collections.
+    #     They can only be assembled in the Media Library console.
+    #
+    # So the grouping is carried by tags, which the Upload API does accept. A *dynamic*
+    # collection with a rule on these tags then fills itself with no further calls from us, and
+    # an operator who would rather browse folders can point a folder at the same tag instead.
+    # Neither setting can affect delivery: tags are metadata, and they are not part of a URL.
+    CLOUDINARY_PROFILE_ASSET_TAG: str = "profile_picture"
+    CLOUDINARY_LOVE_NOTE_ASSET_TAG: str = "love_note"
 
-    # Absolute base URL of the backend that serves the image proxy routes. Must point at
-    # the API, not the frontend. Falls back to PUBLIC_BASE_URL when unset.
-    ASSET_BASE_URL: str | None = None
+    # --- Private (signed) love note delivery ---
+    #
+    # Love note images are delivered straight from Cloudinary's CDN, never through this
+    # application, so the thing that authorises a fetch is a Cloudinary *signed delivery URL*
+    # minted here. The signature is the SDK's SHA-1 URL signature over the object's path, keyed
+    # by `CLOUDINARY_API_SECRET`, which is the same credential the upload already uses. Nothing
+    # account-side has to be configured for it to work.
+    #
+    # **The signature is not a token and does not expire.** Cloudinary's two private-delivery
+    # mechanisms are genuinely different things, and conflating them is the mistake this file
+    # used to make. An *authentication token* is `?__cld_token__=exp=...~hmac=...`, carries an
+    # expiry, and is checked against a separate account-wide **Auth token key** configured under
+    # Console -> Settings -> Delivery. A *signed URL* is an `s--<signature>--` path segment
+    # derived from the API secret, needs no console configuration, and is valid forever once
+    # issued. Only the token mechanism expires.
+    #
+    # That matters because a token ACL is not merely decorative: applying
+    # `access_control=[{"access_type": "token"}]` to an upload makes Cloudinary reject even a
+    # correctly signed URL and demand a real token instead. So an account with no Auth token key
+    # will *accept* such an upload, report the ACL back, and then 401 every delivery -- signed or
+    # signed-with-token. Auth token keys are not available on this plan, so the token ACL is not
+    # used and delivery is signed-URL based.
+    #
+    # The cost is accepted knowingly and is not small: a signed love note URL does not expire,
+    # cannot be revoked without destroying and re-uploading the object, and is a bearer
+    # capability for as long as it exists. What still holds is that the URL cannot be forged
+    # without the API secret, is never stored, is minted only after the application has
+    # authorised the viewer, and is scoped to one immutable object's path. What is given up is
+    # the short expiry window, so there is deliberately **no TTL setting here** -- leaving one
+    # would let an operator believe love note URLs time out when they do not.
+    #
+    # See ``storage_service.love_note_delivery_url``.
 
     SECRET_KEY: str = secrets.token_hex(32)
     ALGORITHM: str = "HS256"
@@ -95,3 +136,31 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_cloudinary_settings() -> None:
+    """Refuse to start if the image store cannot actually serve images.
+
+    The three credentials are checked as a group because they are genuinely all-or-nothing:
+    without the API secret there is no signature, and a signed delivery URL is the *only* way a
+    love note image is ever served. That makes an incomplete configuration a broken deployment
+    rather than a degraded one, and there is deliberately no fallback -- serving a love note
+    from a weaker path because the strong one was unconfigured would be a privacy incident, not
+    a graceful degradation.
+
+    There used to be a second failure mode here, a missing ``CLOUDINARY_AUTH_TOKEN_KEY``, and it
+    was the more important of the two: the API secret alone would have let profile pictures work
+    while *every love note image* failed, and the failure would otherwise only have surfaced as a
+    503 in the inbox of the person who was sent a note. That check is gone because the token
+    mechanism is no longer used -- signed URLs are keyed off the API secret that is validated
+    here, so there is no longer a second credential that can be missing on its own.
+    """
+    credentials = (settings.CLOUDINARY_CLOUD_NAME, settings.CLOUDINARY_API_KEY, settings.CLOUDINARY_API_SECRET)
+    if not all(credentials):
+        raise RuntimeError(
+            "Cloudinary is not configured: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and "
+            "CLOUDINARY_API_SECRET must all be set to store and deliver images. The API secret "
+            "is what signs private love note delivery URLs, so it is required for love notes and "
+            "not just for uploads."
+        )
+

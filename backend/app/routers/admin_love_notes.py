@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from ..postgres import Database
 
 from ..dependencies import get_db
@@ -78,9 +78,13 @@ async def get_love_note_reports(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Database = Depends(get_db),
-    admin: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
+    admin: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW)),
+    response: Response = None
 ) -> Dict[str, Any]:
     """Every love note report, newest first, with the reported note and its sender."""
+    # The reported note's signed URL does not expire; keep it out of every cache that would
+    # outlive the moderation session that requested it.
+    response.headers["Cache-Control"] = "no-store"
     return await get_love_note_reports_for_admin(
         db,
         AccountRef.of(admin),
@@ -104,8 +108,8 @@ async def update_love_note_report_status(
     offers the two new words. See ``admin.update_confession_report`` for why.
 
     ``dismissed`` leaves the note exactly as it is and tells the reporter it was reviewed.
-    ``removed`` marks the note removed so it leaves the recipient's inbox and stops being
-    served by the image proxy, and tells both the sender and the reporter.
+    ``removed`` marks the note removed so it leaves the recipient's inbox and has its image
+    destroyed at the store, and tells both the sender and the reporter.
 
     The note's own ``status`` is untouched either way. Approving, rejecting or deleting a note
     stays with the love-note endpoints above, so ``status`` keeps meaning "judged as a love

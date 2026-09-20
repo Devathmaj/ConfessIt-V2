@@ -10,10 +10,8 @@ from datetime import datetime, timezone
 
 from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
-from ..services import asset_delivery_service
 from ..config import settings
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
-from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -25,7 +23,9 @@ def _user_data(row):
         "id": str(row.id), "regno": row.regno, "name": row.name,
 "email": row.email, "emoji": row.emoji, "bio": row.bio,
         "year": row.year, "department": row.department,
-        "profile_picture_url": row.profile_picture_url,
+        "profile_picture_url": storage_service.profile_delivery_url(
+            row.profile_picture_public_id, row.profile_picture_format
+        ),
         "gender": row.gender, "interests": row.interests or [],
         "matchmaking_enabled": row.matchmaking_enabled, "notifications_enabled": row.notifications_enabled,
         "love_notes_receive_enabled": row.love_notes_receive_enabled, "love_notes_send_enabled": row.love_notes_send_enabled,
@@ -504,9 +504,11 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         other_user_doc = _get_user_by_regno(db, other_user_regno)
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-        profile_picture_url = asset_delivery_service.profile_image_url(
-            other_user.profile_picture_url if other_user else None, account=AccountRef.of(current_user)
-        )
+        # ``_user_data`` already derived this from the row's stored identity. ``UserDetails``
+        # carries the delivery URL, not the Cloudinary identity -- the identity columns exist
+        # only on the database row -- so there is nothing to recompute here, and reaching for
+        # them on the model would be reading an attribute that has never existed there.
+        profile_picture_url = other_user.profile_picture_url if other_user else None
 
         return {
             "status": "success",
@@ -543,9 +545,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
     other_user_doc = _get_user_by_regno(db, other_user_regno)
     other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-    profile_picture_url = asset_delivery_service.profile_image_url(
-        other_user.profile_picture_url if other_user else None, account=AccountRef.of(current_user)
-    )
+    # Derived once in ``_user_data``; see the note on the sibling branch above.
+    profile_picture_url = other_user.profile_picture_url if other_user else None
 
     response_data = {
         "status": "success",
@@ -659,9 +660,8 @@ def get_received_conversations_service(current_user: UserDetails, db: Database):
             continue
         
         initiator_user = UserDetails(**initiator_user_doc)
-        profile_picture_url = asset_delivery_service.profile_image_url(
-            initiator_user.profile_picture_url, account=AccountRef.of(current_user)
-        )
+        # Already derived by ``_user_data``; see the note on the sibling branch above.
+        profile_picture_url = initiator_user.profile_picture_url
         
         match_expires_at = match.expires_at
         if match_expires_at.tzinfo is None:
@@ -746,9 +746,8 @@ def get_conversation_by_match_service(current_user: UserDetails, match_id_str: s
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Other user not found.")
         
         other_user = UserDetails(**other_user_doc)
-        profile_picture_url = asset_delivery_service.profile_image_url(
-            other_user.profile_picture_url, account=AccountRef.of(current_user)
-        )
+        # Already derived by ``_user_data``; see the note on the sibling branch above.
+        profile_picture_url = other_user.profile_picture_url
         
         # Check if match is expired
         current_time = datetime.now(timezone.utc)

@@ -303,7 +303,7 @@ def add_love_note(db, *, sender, recipient, status) -> str:
     with db.sessions.begin() as session:
         row = LoveNoteRecord(
             sender_id=sender_id, recipient_id=recipient_id, body="hello",
-            image_url="http://example.test/note.png", anonymous=False,
+            image_public_id="love_notes/mock-note-id/image", image_format="png", anonymous=False,
             status=status, created_at=_now(),
         )
         session.add(row)

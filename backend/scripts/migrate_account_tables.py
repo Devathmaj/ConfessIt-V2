@@ -49,7 +49,11 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     # Every account table carries an address, so a staff row keeps the one it had as a
     # ``users`` row rather than having it silently dropped on the way across.
     "email",
-    "profile_picture_url",
+    # A picture is stored as its Cloudinary identity, so both halves move together: a row with a
+    # public_id and no format would render a broken image, and a row with a format and no
+    # public_id names nothing at all.
+    "profile_picture_public_id",
+    "profile_picture_format",
     "gender",
     "notifications_enabled",
     "is_blocked",

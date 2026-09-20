@@ -6,14 +6,13 @@ from typing import Annotated
 
 # Corrected: Use direct imports from the project root
 from ..dependencies import get_db
-from ..accounts import AccountRef, AccountType
+from ..accounts import AccountType
 from ..models import AccountDetails, UserDetails
 from ..services.auth_service import (
     generate_magic_link_service,
     verify_magic_link_service,
     get_current_user
 )
-from ..services import asset_delivery_service
 from pydantic import BaseModel
 
 router = APIRouter(
@@ -68,13 +67,9 @@ async def read_users_me(current_user: Annotated[AccountDetails, Depends(get_curr
     server re-checks all of it per request regardless.
     """
     payload = current_user.model_dump(by_alias=True)
-    # Profile images are delivered through the asset proxy, which re-checks entitlement
-    # on every request. Values that are not a servable object (a placeholder, a data URL)
-    # fall through unchanged.
-    payload["profile_picture_url"] = asset_delivery_service.profile_image_url(
-        payload.get("profile_picture_url"),
-        account=AccountRef.from_row(current_user, current_user.account_type),
-    )
+    # ``profile_picture_url`` is already correct here: ``auth_service._account_payload`` derives it
+    # from the stored Cloudinary identity when the account is resolved, so there is no URL in the
+    # database to rewrite and nothing that could still hold a stale address from a previous build.
     if current_user.account_type == AccountType.USERS.value:
         return UserDetails(**payload)
     return AccountDetails(**payload)

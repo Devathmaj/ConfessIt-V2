@@ -10,11 +10,10 @@ from ..utils import isoformat_datetime
 from ..limits import LOVE_NOTE_BODY_MAX, REPORT_REASON_MAX
 from fastapi import HTTPException, status
 
-from ..models import UserDetails, LoveNote
+from ..models import UserDetails, LoveNote, LoveNoteImageIdentity
 from ..services.storage_service import storage_service
-from ..services import asset_delivery_service
 from ..services.report_resolution_service import resolve_status_filter
-from ..accounts import AccountRef
+from ..accounts import AccountRef, Capability, has_capability
 from ..services.matchmaking_slot_service import list_participant_cohorts
 from .report_counters import LOVE_NOTE, record_report_filed
 
@@ -32,10 +31,11 @@ class LoveNoteCreate(BaseModel):
     # still within what the decoder will accept once the data URI prefix and any
     # embedded whitespace are folded out.
     image_base64: str = Field(max_length=storage_service.max_base64_chars)
-    # Matches the String(LOVE_NOTE_BODY_MAX) column in db_models.LoveNoteRecord, and is the
-    # legibility limit described there rather than a storage one: the note is rasterised onto
-    # a fixed card, so a body longer than this could only be rendered at a size nobody reads.
-    # Without the cap here this field is just as unbounded as the image was.
+    # Matches the ``ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}`` constraint on
+    # db_models.LoveNoteRecord, and is the legibility limit described there rather than a storage
+    # one: the note is rasterised onto a fixed card, so a body longer than this could only be
+    # rendered at a size nobody reads. Without the cap here this field is just as unbounded as the
+    # image was.
     body: str = Field(max_length=LOVE_NOTE_BODY_MAX)
     anonymous: bool
 
@@ -87,17 +87,84 @@ def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
         "id": str(user.id), "name": user.name, "emoji": user.emoji,
         "year": user.year, "department": user.department, "gender": user.gender,
         "interests": user.interests or [],
-        "profile_picture_url": asset_delivery_service.profile_image_url(
-            user.profile_picture_url, account=account
+        # A profile picture is public on Cloudinary's CDN, so this is a plain derivation from the
+        # stored identity. The recipient list is shown to every participant who may send a note,
+        # which is exactly the set of people who are allowed to see a profile picture.
+        "profile_picture_url": storage_service.profile_delivery_url(
+            user.profile_picture_public_id, user.profile_picture_format
         ),
         "is_blocked": bool(user.is_blocked),
     }
     return payload
 
+
+def may_view_love_note_image(
+    note: LoveNoteRecord, *, viewer_id: str | None, viewer_account_type: str | None
+) -> bool:
+    """Whether this viewer may be handed a working address for ``note``'s image.
+
+    A love note's delivery URL is a capability, not a convenience: it authorises Cloudinary to
+    serve that one image to whoever holds it, until it expires. So this question is answered
+    before any token is minted, and it is answered from the row rather than from anything the
+    request carried. The rules are unchanged from when the backend proxied the bytes, and each
+    one exists for a reason:
+
+    * A staff account holding ``love_notes:review`` may open any note, in any state. Moderation
+      means ruling on notes that are pending, rejected and already removed -- a reviewer who could
+      not see the image of the note they are ruling on would be reviewing it blind.
+    * Anyone else is refused once the note has been taken down (``removed_at``). Removal is the
+      platform withdrawing a note, and it has to withdraw the picture with it: leaving the image
+      reachable for a few more minutes because the sender has the URL would make the moderation
+      action reversible by anyone who already saw it.
+    * The sender may always see their own note, in any review state. They wrote it, and the
+      "was it delivered?" screen is the whole point of the sent list.
+    * The recipient may see it only once it is ``approved``, and only while it has not been
+      removed. A pending note is exactly one the recipient must not see yet.
+    """
+    if viewer_account_type is not None and has_capability(
+        viewer_account_type, Capability.LOVE_NOTES_REVIEW
+    ):
+        return True
+    if note.removed_at is not None:
+        return False
+    if viewer_id is None:
+        return False
+    viewer_id = str(viewer_id)
+    if str(note.sender_id) == viewer_id:
+        return True
+    return str(note.recipient_id) == viewer_id and note.status == "approved"
+
+
+def love_note_image_url(
+    note: LoveNoteRecord, *, viewer_id: str | None, viewer_account_type: str | None
+) -> Optional[str]:
+    """The signed delivery URL for ``note``'s image, or ``None`` if the viewer is not entitled.
+
+    The single place a love note image address is created. Keeping authorisation and signing in
+    one function is what makes it hard to add a second call site that hands out an address without
+    asking first -- which is the only way this control could be got wrong now that the bytes are
+    served by somebody else's server and nothing on our side re-checks a URL after it is issued.
+
+    That single choke point is load-bearing here for a reason specific to signed URLs: they do not
+    expire, so there is no later moment at which a mistake can be corrected. Every check has to
+    happen here, every time.
+    """
+    if not may_view_love_note_image(
+        note, viewer_id=viewer_id, viewer_account_type=viewer_account_type
+    ):
+        return None
+    return storage_service.love_note_delivery_url(note.image_public_id, note.image_format)
+
+
 async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: Database):
     """
     Service to create and save a new love note with 'pending_review' status.
-    The base64 image is uploaded to Cloudinary and the URL is stored instead.
+
+    The note's id is minted *before* the image is uploaded, because the object's public_id is
+    derived from it (``love_notes/{note_id}/image``). That ordering is what makes the object
+    one-to-one with the row: the image cannot be named after anything the sender supplied, it
+    cannot be re-pointed at another note, and deleting the note gives the deletion code a public_id
+    it can read straight out of the database instead of parsing it back out of a stored URL.
     """
     with db.sessions() as session:
         recipient = session.get(UserRecord, str(note_data.recipient_id))
@@ -107,68 +174,77 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
             detail="Recipient not found."
         )
 
+    note_id = new_id()
+
     # Both parties are participants by construction: the recipient is read from ``users``
     # and the sender arrives through ``require_participant``. The role checks that used to
     # stand here are gone because there is no longer a value they could reject.
     try:
-        # Upload the love note image to Cloudinary
-        upload_result = storage_service.upload_love_note_image(
+        stored_image = storage_service.upload_love_note_image(
             image_base64=note_data.image_base64,
-            sender_name=sender.name or sender.regno
+            love_note_id=note_id,
         )
-        
-        # Use the Cloudinary URL instead of the base64 string
-        cloudinary_url = upload_result["cloudinary_url"]
-        
     except HTTPException:
         # Size, format and dimension rejections are the sender's problem and carry a
         # message worth showing. Re-raise as-is instead of collapsing them into a 500
         # that reports a server fault and hides which limit was hit.
         raise
-    except Exception as e:
-        logger.error(f"Failed to upload love note image to Cloudinary: {e}", exc_info=True)
+    except Exception:
+        logger.error("Failed to upload love note image to Cloudinary", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upload love note image"
         )
-    
-    # Create the love note with the Cloudinary URL
+
     love_note = LoveNote(
+        id=note_id,
         sender_id=sender.id,
         recipient_id=str(note_data.recipient_id),
-        image_url=cloudinary_url,
+        image=LoveNoteImageIdentity(
+            public_id=stored_image["public_id"], format=stored_image["format"]
+        ),
         body=note_data.body,
         anonymous=note_data.anonymous,
         status="pending_review"
     )
 
-    with db.sessions.begin() as session:
-        row = LoveNoteRecord(
-            sender_id=sender.id, recipient_id=str(note_data.recipient_id),
-            image_url=cloudinary_url, body=note_data.body,
-            anonymous=note_data.anonymous, status="pending_review",
-            created_at=love_note.created_at,
+    try:
+        with db.sessions.begin() as session:
+            row = LoveNoteRecord(
+                id=note_id,
+                sender_id=sender.id, recipient_id=str(note_data.recipient_id),
+                image_public_id=stored_image["public_id"], image_format=stored_image["format"],
+                body=note_data.body,
+                anonymous=note_data.anonymous, status="pending_review",
+                created_at=love_note.created_at,
+            )
+            session.add(row)
+            sender_row = session.get(UserRecord, sender.id)
+            if sender_row:
+                sender_row.love_notes_send_enabled = True
+            session.flush()
+    except Exception:
+        # The image is already in the bucket with nothing pointing at it. Best-effort cleanup
+        # rather than a leak: the note was never created, so the object is unreachable through
+        # any URL this application will ever produce.
+        logger.error("Failed to insert love note into the database; discarding uploaded image", exc_info=True)
+        try:
+            storage_service.delete_love_note_asset(stored_image["public_id"])
+        except Exception:
+            logger.error("Failed to discard image for unsaved love note %s", note_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not send the love note."
         )
-        session.add(row)
-        sender_row = session.get(UserRecord, sender.id)
-        if sender_row:
-            sender_row.love_notes_send_enabled = True
-        session.flush()
-        note_id = str(row.id)
-        return {
-            "message": "Love note sent successfully for review.",
-            "note_id": note_id,
-            # The sender is always entitled to their own note, in any review state.
-            "image_url": asset_delivery_service.build_delivery_url(
-                kind="love-notes", stored_identifier=cloudinary_url, account=AccountRef.of(sender)
-            ) or cloudinary_url
-        }
-    
-    logger.error("Failed to insert love note into the database.")
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Could not send the love note."
-    )
+
+    return {
+        "message": "Love note sent successfully for review.",
+        "note_id": note_id,
+        # The sender is always entitled to their own note, in any review state.
+        "image_url": storage_service.love_note_delivery_url(
+            stored_image["public_id"], stored_image["format"]
+        ),
+    }
 
 
 # ============================================================================
@@ -187,8 +263,10 @@ async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
     the response where a future field could surface them.
 
     The image is withheld for the same reason. It is content in its own right, so a reviewer
-    can only rule on the words the reviewer can read, and the asset proxy is not asked to
-    mint a delivery URL for a review this payload no longer carries.
+    can only rule on the words the reviewer can read, and this endpoint does not carry the
+    viewer's account, so it has no way to decide whether it may mint a delivery token for a
+    review at all. The report queue (``get_love_note_reports_for_admin``) does, and it is the
+    screen a moderator opens to actually look at a reported note.
 
     What stays is what moderation needs to act and to be audited: the note id (every action
     takes it), the body, the moderation status, when it arrived, and the removal flags -- so
@@ -470,10 +548,8 @@ async def get_love_note_reports_for_admin(
             "anonymous": bool(note.anonymous),
             "note_status": note.status,
             "note_created_at": isoformat_datetime(note.created_at),
-            "image_url": (
-                asset_delivery_service.build_delivery_url(
-                    kind="love-notes", stored_identifier=note.image_url, account=viewer
-                ) or note.image_url
+            "image_url": love_note_image_url(
+                note, viewer_id=None, viewer_account_type=viewer.account_type
             ),
             "reporter": {
                 "regno": report.reporter_regno,
@@ -503,28 +579,52 @@ async def get_love_note_reports_for_admin(
 
 async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:
     """
-    Delete a love note from the system.
-    
-    Args:
-        note_id: The str of the love note
-        db: PostgreSQL database instance
-        
-    Returns:
-        Dict with deleted note_id
+    Delete a love note, permanently, and destroy the image it points at.
+
+    The order is deliberate and is the same rule the profile picture path follows: the object is
+    destroyed *before* the row goes, never after. The row is what names the object, so destroying
+    it last would mean an interrupted deletion left a live row whose image no longer exists --
+    which is a broken note nobody can repair, and is indistinguishable from data loss. Destroying
+    it first means the worst case is an orphaned object that costs storage and nothing else.
+
+    The public_id is read from the authoritative row, never reconstructed from a request or a URL,
+    so the deletion is provably about the image this note had. An object Cloudinary has never heard
+    of is not an error: the note is being removed either way, and refusing because the image was
+    already gone would leave a note that can never be deleted. An *unexpected* failure is logged
+    and raised rather than swallowed, because that is the case where an orphan is being created
+    and somebody has to know.
     """
     if not is_valid_id(note_id):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid love note id"
+        )
+
+    with db.sessions() as session:
+        existing = session.get(LoveNoteRecord, str(note_id))
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Love note not found"
+            )
+        image_public_id = existing.image_public_id
+
+    try:
+        storage_service.delete_love_note_asset(image_public_id)
+    except Exception:
+        # Logged with the note id so the orphan can be found and cleaned up later. Raising here
+        # leaves the row intact, which is the recoverable half of the trade.
+        logger.error(
+            "Deleted love note %s but failed to destroy its image %s; the object is orphaned",
+            note_id, image_public_id, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not delete the love note's image. The note was left in place.",
         )
 
     with db.sessions.begin() as session:
         love_note = session.get(LoveNoteRecord, str(note_id))
         if love_note:
             session.delete(love_note)
-    if not love_note:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Love note not found"
-        )
     return {"deleted": note_id}

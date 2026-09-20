@@ -590,7 +590,10 @@ def test_a_created_account_starts_from_the_declared_defaults(admin_client, db):
 
     with db.sessions() as session:
         row = session.scalar(select(UserRecord).where(UserRecord.id == created.json()["id"]))
-        assert row.profile_picture_url is None
+        # "No picture" is one state held in two columns, so both are asserted: an id with no
+        # format would render a broken image rather than no avatar at all.
+        assert row.profile_picture_public_id is None
+        assert row.profile_picture_format is None
         assert row.emoji is None
         assert row.bio is None
         assert list(row.interests) == []

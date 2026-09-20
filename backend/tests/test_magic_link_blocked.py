@@ -20,7 +20,8 @@ OWNER_ID = "11111111-1111-1111-1111-111111111111"
 def make_user_row(regno: str, **overrides) -> UserRecord:
     values = dict(
         id=OWNER_ID, regno=regno, name=regno.title(), email=f"{regno}@example.com",
-        emoji=None, bio=None, year=2, department="Test_Class", profile_picture_url=None,
+        emoji=None, bio=None, year=2, department="Test_Class",
+        profile_picture_public_id=None, profile_picture_format=None,
         gender="male", interests=[], matchmaking_enabled=True, notifications_enabled=True,
         love_notes_receive_enabled=True, love_notes_send_enabled=False, is_blocked=False,
         last_login_at=None, last_login_ip=None, last_login_user_agent=None,

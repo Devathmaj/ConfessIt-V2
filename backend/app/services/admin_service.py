@@ -14,6 +14,7 @@ from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionReco
     resolve_account_by_id)
 from ..accounts import AccountType, normalize_account_type
 from ..services.report_resolution_service import pending_report_totals, resolve_status_filter
+from ..services.storage_service import storage_service
 from .report_counters import tally_for_row
 
 
@@ -47,7 +48,13 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
         "email": row.email,
         "account_type": account_type,
         "gender": row.gender,
-        "profile_picture_url": row.profile_picture_url,
+        # Derived here rather than read from a column: the row holds the picture's identity, and
+        # the address the admin client renders is built from it on the way out. Nothing is
+        # authorised by this -- a profile picture is a public Cloudinary object -- so the same URL
+        # goes to every admin, moderator and participant who can see the profile.
+        "profile_picture_url": storage_service.profile_delivery_url(
+            row.profile_picture_public_id, row.profile_picture_format
+        ),
         "notifications_enabled": row.notifications_enabled,
         "is_blocked": row.is_blocked,
         "last_login_at": serialize_datetime(row.last_login_at),

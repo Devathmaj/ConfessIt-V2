@@ -166,7 +166,16 @@ class AccountColumns:
     regno: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    profile_picture_url: Mapped[Optional[str]] = mapped_column(Text)
+    # The *identity* of the picture, never a URL. A profile picture is a public Cloudinary
+    # object served straight from the CDN, so nothing about it needs to be authorised at
+    # fetch time and nothing about it can be revoked by re-signing anything here; the only
+    # question a stored URL answered -- "which object is this?" -- is what these two columns
+    # answer directly. ``profile_picture_format`` is stored separately rather than appended to
+    # the public_id because Cloudinary's own ``public_id`` never carries the extension, and
+    # folding it in here would put a dot in the middle of the identifier for no gain.
+    # The delivery URL is derived on the way out by ``storage_service.profile_delivery_url``.
+    profile_picture_public_id: Mapped[Optional[str]] = mapped_column(Text)
+    profile_picture_format: Mapped[Optional[str]] = mapped_column(String(16))
     gender: Mapped[str] = mapped_column(String(24))
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
@@ -377,9 +386,11 @@ class RemovedContentColumns:
     * every participant-facing query filters on ``removed_at IS NULL``;
     * staff surfaces do not filter, and carry the flag instead, because a moderator deciding
       whether to remove something has to be able to see what is already removed;
-    * ``asset_delivery_service`` uses them to stop serving a removed love note's image, which
-      closing the inbox query alone would not do -- an already-minted delivery URL would
-      otherwise keep working.
+    * ``love_note_service.may_view_love_note_image`` uses them to stop handing out a delivery
+      token for a removed love note's image, which closing the inbox query alone would not do.
+      That check has become the load-bearing one: the image is fetched from Cloudinary's CDN
+      rather than from this application, so a URL already given out cannot be withdrawn by us --
+      it can only be given a short life and not be re-issued.
 
     No index on either column. Every read that matters filters ``removed_at IS NULL``, and this is
     a small table whose rows are added as content arrives rather than by retro-fitting a backlog;
@@ -585,8 +596,22 @@ class LoveNoteRecord(RemovedContentColumns, Base):
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     sender_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     recipient_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    image_url: Mapped[str] = mapped_column(Text)
-    body: Mapped[str] = mapped_column(String(LOVE_NOTE_BODY_MAX))
+    # The authenticated Cloudinary object behind this note. Not a URL: a usable URL for a
+    # love note image is a *derived, short-lived, signed* string, so storing one would bake a
+    # credential into the database and into every row that ever read it. What is durable is
+    # the object identity -- ``image_public_id`` (which is ``love_notes/{note_id}/image``, so
+    # it cannot outlive or be re-pointed at another note) plus the format needed to build the
+    # delivery URL. Permanent deletion reads this column to know what to destroy; see
+    # ``storage_service.delete_love_note_asset``.
+    image_public_id: Mapped[str] = mapped_column(Text)
+    image_format: Mapped[str] = mapped_column(String(16))
+    # ``Text`` rather than ``String(LOVE_NOTE_BODY_MAX)``, like every other body column in this
+    # file. A length-bounded ``varchar`` refuses an over-long write during input, before any
+    # CHECK is evaluated, so ``ck_love_notes_body_length_1000`` below could never reject
+    # anything -- the database would raise ``StringDataRightTruncation`` instead, and the rule
+    # that is supposed to be the enforcement path would be unreachable dead weight. The CHECK is
+    # the enforcement path here, exactly as it is for confessions and messages.
+    body: Mapped[str] = mapped_column(Text)
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -650,6 +675,16 @@ class LoveNoteReportRecord(Base):
 
 
 class LoveNoteTemplateRecord(Base):
+    """A pre-made illustration offered when composing a note, not a participant's content.
+
+    ``image_url`` here is an ordinary public CDN address and stays one. It is not the column that
+    used to hold a *sent* note's image address (``love_notes.image_public_id``): these are artwork
+    the application ships, addressed like any other public asset and readable without a signature.
+    Keeping them apart is what stops a change meant for private content from accidentally making
+    these signed-and-private -- which would break every compose screen -- or, worse, the other
+    way round.
+    """
+
     __tablename__ = "love_note_templates"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)

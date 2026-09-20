@@ -13,6 +13,7 @@ quietly undone later by someone tidying up the endpoint, so it is asserted direc
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -27,9 +28,30 @@ from app.db_models import (
 from app.main import app
 from app.models import UserDetails
 from app.services.auth_service import get_current_user
+from app.services.storage_service import storage_service
 
 REASON = "harassment"
 RECIPIENT = "recipient"
+
+
+@pytest.fixture(autouse=True)
+def destroyed_images(monkeypatch):
+    """Record Cloudinary destroys instead of performing them.
+
+    Deleting a love note now destroys the image it owns before the row goes, so any test that
+    reaches the delete route has a side effect outside the database. Without this stub such a
+    test would make a real API call for a fixture object that never existed.
+    """
+    calls = []
+
+    def _destroy(public_id, **kwargs):
+        calls.append((public_id, kwargs.get("type"), kwargs.get("invalidate")))
+        return {"result": "ok"}
+
+    monkeypatch.setattr(
+        "app.services.storage_service.cloudinary_destroy", _destroy, raising=True
+    )
+    return calls
 
 
 def make_user(db, regno, name=None):
@@ -49,14 +71,21 @@ def make_user(db, regno, name=None):
 def make_note(db, sender, recipient, *, status="approved", body="a love note", anonymous=False):
     with db.sessions.begin() as session:
         row = LoveNoteRecord(
+            id=str(uuid4()),
             sender_id=sender["id"],
             recipient_id=recipient["id"],
-            image_url="love-notes/mock/note.png",
+            # The object's identity is derived from the note's own id in production, so the
+            # fixture builds it that way rather than inventing a shared placeholder. A row whose
+            # stored identity is not its own would fail the shape check on the delete path and
+            # make this file's tests depend on how forgiving that check is.
+            image_public_id=None,
+            image_format="png",
             body=body,
             anonymous=anonymous,
             status=status,
             created_at=datetime.now(timezone.utc),
         )
+        row.image_public_id = storage_service.love_note_public_id(str(row.id))
         session.add(row)
         session.flush()
         return str(row.id)
@@ -377,7 +406,7 @@ def test_reporting_a_note_changes_nothing_about_the_note(client, login_as, db):
         assert session.get(LoveNoteRecord, note_id).status == "approved"
 
 
-def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as, db):
+def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as, db, destroyed_images):
     """The foreign key cascades, so a report cannot outlive the note it is about and the
     queue can never show a note that no longer exists.
 
@@ -391,6 +420,9 @@ def test_deleting_a_note_takes_its_report_with_it(admin_client, client, login_as
     with db.sessions() as session:
         assert session.scalar(select(LoveNoteReportRecord)) is None
     assert admin_client.get("/admin/love-notes/reports").json()["reports"] == []
+    # The image went with it, as an authenticated object with the cache dropped -- otherwise the
+    # CDN could still serve the picture of a note the platform has just deleted.
+    assert destroyed_images == [(f"love_notes/{note_id}/image", "authenticated", True)]
 
 
 # ---------------------------------------------------------- a rejection is final

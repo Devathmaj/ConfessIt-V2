@@ -67,7 +67,7 @@ def _participants() -> list[dict]:
                     "emoji": EMOJIS[index % len(EMOJIS)],
                     "bio": f"Seeded {gender} participant {regno}.",
                     "interests": list(INTERESTS[index % len(INTERESTS) : index % len(INTERESTS) + 2]),
-                    "profile_picture_url": None,
+                    "profile_picture_public_id": None, "profile_picture_format": None,
                     "matchmaking_enabled": index % 10 != 0,
                     "notifications_enabled": True,
                     "love_notes_receive_enabled": True,
@@ -93,11 +93,11 @@ def _staff() -> list[tuple[str, dict]]:
     return [
         (AccountType.ADMIN.value, {
             "regno": "admin", "name": "Test Admin", "email": "admin@test.com",
-            "gender": "male", "profile_picture_url": None, "notifications_enabled": True,
+            "gender": "male", "profile_picture_public_id": None, "profile_picture_format": None, "notifications_enabled": True,
         }),
         (AccountType.MODERATOR.value, {
             "regno": "moderator", "name": "Test Moderator", "email": "moderator@test.com",
-            "gender": "female", "profile_picture_url": None, "notifications_enabled": True,
+            "gender": "female", "profile_picture_public_id": None, "profile_picture_format": None, "notifications_enabled": True,
         }),
     ]
 

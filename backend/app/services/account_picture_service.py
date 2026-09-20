@@ -1,32 +1,37 @@
 # app/services/account_picture_service.py
-"""Profile-picture upload for *any* account, whatever table it lives in.
+"""Profile-picture upload: the rules, in one place, with the database write left to the caller.
 
-This exists because the upload has two callers with two different needs and one shared set of
-hard rules. A participant uploads their own picture from ``ProfilePage``; an admin uploads
-somebody else's from Profile Review, and that upload works on ``admin`` and ``moderator`` rows
-too, not only ``users``. The rules -- cap the read before buffering, validate that it is
-actually an image, upload under the owner's own folder, verify what landed, store the URL, and
-retire the previous object *only once the new one is saved* -- are identical in both cases, and
-they are the rules that matter: they are what stops one account's upload writing into another
-account's folder, and what stops a failed upload from leaving an account pointing at something
-that has already been deleted.
+The hard part of a profile-picture upload is not the Cloudinary call, it is the ordering and the
+ownership. Cap the read before buffering it, validate that it really is an image, store the
+object under the owner's own folder, and retire the previous object *only once the replacement
+is saved*. Get the last one wrong and a failed upload leaves the account pointing at bytes that
+have already been destroyed -- a broken avatar that no retry can recover, because the image is
+gone.
 
-The save-before-delete rule spans the database write, so it cannot live entirely inside this
-module. :func:`upload_account_picture` does everything up to and including the upload; the caller
-persists the new URL, and only then calls :func:`retire_previous_picture` for the old one. Both
-halves live here so the rule is written down once.
+Those rules do not fit inside one service function, because the rule that matters spans the
+database write: :func:`upload_account_picture` does everything up to and including the upload and
+returns the new identity, the caller persists it, and only then calls
+:func:`retire_previous_picture` for the old one. Writing that sequence down twice -- once in a
+comment claiming the write already happened, once in whatever order the code actually runs -- is
+how the bug above got shipped the first time. So both halves live here and the caller only has to
+know the order.
 
-The alternative was a second copy in the admin router with the participant's row lookup swapped
-for a generic one. That version is a bug generator with a long fuse: the deletion-ordering rule
-above is easy to get subtly wrong in the copy, and the copy is the one that never gets read
-again after it works. So the shared logic lives here once, and both routes call it.
+It is a separate module from ``profile_service`` because the upload is not participant-specific:
+nothing in the rules mentions which table the row lives in, only which account it belongs to. That
+is deliberate, because ``actor_regno`` is separate from ``owner_regno`` below -- a staff member
+setting somebody else's picture is the same code path with two different regnos in it, and the
+separation is what makes "who changed this person's picture" answerable from the log afterwards.
+
+Profile pictures are delivered as ordinary public Cloudinary URLs. That is a deliberate choice
+rather than a gap: they appear in matchmaking lists, chat headers and moderation screens to
+people who are not the owner, so per-viewer authorisation would mean a round trip per avatar on
+every page. Authorisation is still required to *change* a picture, and the object lives under a
+per-account folder with an unguessable id, so a URL cannot be walked from a list of regnos.
 """
 
 from fastapi import HTTPException, UploadFile, status
 
-from ..accounts import AccountRef
 from ..logger import get_logger
-from ..services import asset_delivery_service
 from ..services.storage_service import storage_service
 
 logger = get_logger(__name__)
@@ -36,39 +41,27 @@ async def upload_account_picture(
     *,
     file: UploadFile,
     owner_regno: str,
-    account: AccountRef,
-    previous_picture_url: str | None = None,
     actor_regno: str,
 ) -> dict:
-    """Upload ``file`` as ``owner_regno``'s picture and return the delivery URL.
-
-    ``account`` is the reference used to build a proxy delivery URL, which is what callers are
-    handed: the browser is given the proxy's address rather than the raw Cloudinary one, so a
-    client cannot lift a stored URL and replay it outside the proxy's authorisation check.
-
-    ``previous_picture_url`` is the value *before* this upload. It is passed in rather than
-    read from the row because the caller has already loaded the account and re-reading it here
-    would be a second query for a value it is holding; passing it also keeps this function free
-    of any table-specific lookup, which is what makes it usable for the staff tables.
+    """Upload ``file`` as ``owner_regno``'s picture and return the new identity.
 
     ``actor_regno`` is who is performing the upload and is only used for logging. On the
     participant route the actor is the account owner; on the admin route it is the admin, and
-    keeping the two apart in the log is what makes "who changed this person's picture, and
-    when" answerable afterwards from the log alone.
+    keeping the two apart in the log is what makes "who changed this person's picture, and when"
+    answerable afterwards from the log alone.
 
-    The return value carries two URLs because they are deliberately not the same string. The
-    caller persists ``stored_identifier`` -- the raw Cloudinary URL -- because that is what
-    ``asset_delivery_service`` needs to resolve the object later, and it hands ``response`` back
-    to the browser. Persisting the proxy URL instead would mean every later resolution had to
-    unwrap it again first, and the value in the database would stop matching what
-    ``delete_profile_asset`` and the proxy's own lookups expect to find.
+    The return value carries the object's identity -- ``public_id`` and ``format`` -- because
+    that is what the caller persists. The delivery URL in ``response`` is *derived*, for the
+    browser: persisting a URL instead would put an address in the database that has to be parsed
+    back into an identity before it can be deleted or re-signed, and the value would stop
+    matching what ``delete_profile_asset`` expects to find.
 
-    This function deliberately does **not** retire ``previous_picture_url``. It cannot: the
-    replacement is not stored until the caller writes it, and the caller writes it after this
-    returns. An earlier version deleted the old object here while its comment claimed the
-    opposite, which meant a failed database write left the row pointing at an object that had
-    already been destroyed -- the account showed a broken image and no retry could recover it,
-    because the bytes were gone.
+    This function does not retire any previous object, and is not told what one is. The caller
+    owns the row, so the caller is the only thing that can read the value being replaced, and it
+    must read it in the same transaction that writes the new one -- see
+    :func:`retire_previous_picture`. An earlier version deleted the old object here, which meant
+    a failed database write left the row pointing at an object that had already been destroyed:
+    the account showed a broken image and no retry could recover it, because the bytes were gone.
     """
     # Read through the bounded reader rather than ``await file.read()``, which would buffer the
     # whole body before anything had looked at it -- a 2 GB upload would sit in the process's
@@ -90,18 +83,14 @@ async def upload_account_picture(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file"
         )
 
-    upload_target_name = owner_regno or "user"
     try:
-        upload_result = storage_service.upload_profile_image(
+        stored = storage_service.upload_profile_image(
             file=file,
             content=contents,
-            user_folder=upload_target_name,
+            owner_regno=owner_regno,
         )
-        storage_service.verify_uploaded_asset("profile", upload_result["object_path"])
     except HTTPException:
-        logger.error(
-            "Cloudinary upload failed for %s (actor %s)", owner_regno, actor_regno
-        )
+        logger.error("Cloudinary upload failed for %s (actor %s)", owner_regno, actor_regno)
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
@@ -113,23 +102,13 @@ async def upload_account_picture(
             detail="Failed to upload profile picture",
         )
 
-    # Store the full Cloudinary URL in the database (not just the object path).
-    cloudinary_url = upload_result["cloudinary_url"]
-    delivery_url = asset_delivery_service.build_delivery_url(
-        kind="profile", stored_identifier=cloudinary_url, account=account
-    )
+    delivery_url = storage_service.profile_delivery_url(stored["public_id"], stored["format"])
 
-    # Only now that the replacement is stored -- by the caller, which has the row open -- do we
-    # retire the old object. Deleting it before the upload was attempted meant a failed upload
-    # left the account pointing at an asset that had already been destroyed, which no retry
-    # could recover from. ``delete_profile_asset`` re-checks that the path is under this
-    # account's folder, so a stored value naming somebody else's object is refused rather than
-    # acted on.
     return {
-        "stored_identifier": cloudinary_url,
+        "public_id": stored["public_id"],
+        "format": stored["format"],
         "response": {
-            "profile_picture_url": delivery_url or cloudinary_url,
-            "url": delivery_url or cloudinary_url,
+            "profile_picture_url": delivery_url,
             "message": "Profile picture uploaded successfully",
         },
     }
@@ -137,37 +116,34 @@ async def upload_account_picture(
 
 def retire_previous_picture(
     *,
-    previous_picture_url: str | None,
+    previous_public_id: str | None,
+    new_public_id: str | None,
     owner_regno: str,
-    new_stored_identifier: str,
     actor_regno: str,
 ) -> None:
-    """Delete the object ``previous_picture_url`` named, now that the new one is committed.
+    """Delete the object ``previous_public_id`` named, now that the new one is committed.
 
     Called by each route *after* its transaction has committed, which is the only point at which
     the ordering is actually true. Calling it earlier bought nothing and cost the one property
     that matters: a row that still points at something which exists.
 
-    Three guards, in order:
+    Two guards, in order:
 
-    * ``normalize_stored_path`` refuses a stored value that does not resolve to an object under
-      this account's own folder, so a URL naming somebody else's picture is not acted on.
-    * The previous path is compared against the new one. Re-uploading the same object is a
+    * ``delete_profile_asset`` re-checks that the object sits under this account's own folder, so
+      a stored value naming somebody else's picture is refused rather than acted on.
+    * The previous identity is compared against the new one. Re-uploading the same object is a
       no-op, not a deletion of the file the account still points at.
     * Failures are logged and never raised. The new picture is saved and the row already names
       it, so an orphaned object is a cleanup problem; raising would answer the operator's
       successful upload with a 500.
     """
-    if not previous_picture_url:
+    if not previous_public_id:
         return
-
-    previous_path = storage_service.normalize_stored_path(previous_picture_url, "profile")
-    new_path = storage_service.normalize_stored_path(new_stored_identifier, "profile")
-    if not previous_path or previous_path == new_path:
+    if new_public_id and previous_public_id == new_public_id:
         return
 
     try:
-        storage_service.delete_profile_asset(previous_picture_url, owner_regno=owner_regno)
+        storage_service.delete_profile_asset(previous_public_id, owner_regno=owner_regno)
     except HTTPException as exc:
         logger.warning(
             "Failed to delete previous profile asset for %s (actor %s): %s",

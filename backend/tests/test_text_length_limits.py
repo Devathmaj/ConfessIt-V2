@@ -17,7 +17,7 @@ import warnings
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import CheckConstraint, Text, text
 from sqlalchemy.exc import IntegrityError
 
 from app.db_models import UserRecord, _non_character_code_points
@@ -298,18 +298,31 @@ def test_profile_fields_are_capped_on_the_participant_payload(field, limit):
         UserProfileUpdate(**{field: "x" * (limit + 1)})
 
 
-def test_the_love_note_caps_match_the_columns():
-    """The payload cap and the column width are the same number, deliberately.
+def test_the_love_note_caps_match_the_constraints():
+    """The payload cap and the database rule are the same number, deliberately.
 
-    Same reason as the profile fields above, and load-bearing in a specific way for a love note:
-    the message is not stored as text that anyone reads back -- it is drawn onto a PNG and
-    uploaded -- so the body column is the only durable copy. A payload cap and a column width
-    that disagree means either an over-long note fails on insert with a 500, or a column wider
-    than the payload is a wider rasterised card than the renderer was built to lay out.
+    Same reason as the profile fields below, and load-bearing in a specific way for a love
+    note: the message is not stored as text that anyone reads back -- it is drawn onto a PNG
+    and uploaded -- so the body column is the only durable copy. A payload cap and a database
+    rule that disagree means either an over-long note is accepted and stored, or a note is
+    refused on insert with a 500 the sender cannot act on.
+
+    The rule is a CHECK rather than a column width. A ``varchar(1000)`` refuses an over-long
+    write during input, before any CHECK is evaluated, which left
+    ``ck_love_notes_body_length_1000`` unable to reject anything: the database raised
+    ``StringDataRightTruncation`` and the constraint was unreachable. ``Text`` plus the CHECK
+    is how ``confessions.body`` and ``messages.body`` already enforce the same invariant.
     """
     from app.db_models import LoveNoteRecord
 
-    assert LoveNoteRecord.__table__.c.body.type.length == LOVE_NOTE_BODY_MAX
+    body = LoveNoteRecord.__table__.c.body
+    assert isinstance(body.type, Text)
+    lengths = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in LoveNoteRecord.__table__.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    assert lengths == {f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}": f"length(body) <= {LOVE_NOTE_BODY_MAX}"}
     assert (
         LoveNoteCreate.model_fields["body"].metadata[0].max_length == LOVE_NOTE_BODY_MAX
     )
@@ -707,12 +720,15 @@ def test_database_rejects_over_long_text_written_outside_the_api(db, table, limi
                 "SELECT gen_random_uuid(), cid, 'limits-owner', 'limits-peer', :body, now() FROM c2"
             ),
             "love_notes": (
-                "INSERT INTO love_notes (id, sender_id, recipient_id, image_url, body, "
-                "anonymous, created_at) VALUES "
+                # ``image_public_id``/``image_format`` are what the row holds now; the old test
+                # inserted a full proxy path here and the insert only ever needed *some*
+                # non-null image, since the point of this statement is the body length.
+                "INSERT INTO love_notes (id, sender_id, recipient_id, image_public_id, "
+                "image_format, body, anonymous, created_at) VALUES "
                 "(gen_random_uuid(), "
                 "(SELECT id FROM users WHERE regno = 'limits-owner'), "
                 "(SELECT id FROM users WHERE regno = 'limits-recipient'), "
-                "'testuser/AbCdEfGhIjKlMnOpQrStUv/20240101_120000_000000_love_note.png', "
+                "'love_notes/00000000-0000-0000-0000-000000000000/image', 'png', "
                 ":body, false, now())"
             ),
         }[table]
@@ -853,27 +869,40 @@ def test_the_character_constraint_is_installed_not_valid(db):
     A confession written before the rule existed may contain a character the rule now
     refuses. Validating it on boot would refuse to start, and quietly deleting or rewriting
     someone's confession to satisfy a constraint is not a decision this should make.
+
+    The invariant belongs to ``apply_check_constraints``, so it is exercised by removing the
+    constraints and letting it install them again. Asserting only that whatever is currently
+    installed is NOT VALID cannot work: on a database created from the models -- a fresh test
+    database, or a first deployment -- ``create_all`` builds these constraints from
+    ``__table_args__`` and PostgreSQL has them validated, because there is no history to spare.
+    The flag is therefore a fact about how a constraint was installed, not about the schema,
+    and the only way to test it is to install one.
     """
+    names = ("ck_confessions_body_characters", "ck_confessions_body_unicode_noncharacters")
     with db.engine.begin() as connection:
-        validated = {
-            name: flag
-            for name, flag in connection.execute(
-                text(
-                    "SELECT conname, convalidated FROM pg_constraint "
-                    # Two rules, both added NOT VALID. ck_confessions_body_length is excluded
-                    # deliberately: it is validated history in a normal database, so its flag
-                    # depends on whether the migration test above has just re-added it, and
-                    # asserting on it here would be asserting on test order.
-                    "WHERE conname IN ('ck_confessions_body_characters', "
-                    "'ck_confessions_body_unicode_noncharacters')"
+        for name in names:
+            connection.execute(text(f'ALTER TABLE confessions DROP CONSTRAINT "{name}"'))
+
+    try:
+        db.apply_check_constraints()
+        with db.engine.begin() as connection:
+            validated = {
+                name: flag
+                for name, flag in connection.execute(
+                    text(
+                        "SELECT conname, convalidated FROM pg_constraint "
+                        "WHERE conname IN ('ck_confessions_body_characters', "
+                        "'ck_confessions_body_unicode_noncharacters')"
+                    )
                 )
-            )
-        }
-    assert set(validated) == {
-        "ck_confessions_body_characters",
-        "ck_confessions_body_unicode_noncharacters",
-    }
-    assert set(validated.values()) == {False}
+            }
+        assert set(validated) == set(names)
+        assert set(validated.values()) == {False}
+    finally:
+        # Both are back by now, NOT VALID, which is the state a deployed database is in and the
+        # state every other test in this file expects to find them in. Re-running is harmless:
+        # apply_check_constraints adds only what is missing.
+        db.apply_check_constraints()
 
 
 def test_the_non_character_pattern_has_no_four_digit_escape_trap(db):

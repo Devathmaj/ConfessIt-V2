@@ -7,8 +7,8 @@ either allocation, so a single request could hand the process tens of megabytes 
 then hand PIL a small file that describes an arbitrarily large bitmap.
 
 These tests pin the three bounds that close that off -- encoded length (checked before
-decoding), decoded length, and header dimensions -- plus the ``crop="limit"``
-transformation that bounds anything which still reaches Cloudinary.
+decoding), decoded length, and header dimensions -- plus the fact that the stored object
+is the original, kept private by a Cloudinary token ACL rather than by resizing it.
 """
 
 import base64
@@ -18,6 +18,7 @@ import tracemalloc
 import pytest
 from fastapi import HTTPException
 from PIL import Image
+from sqlalchemy import CheckConstraint
 
 from app.db_models import LoveNoteRecord
 from app.limits import LOVE_NOTE_BODY_MAX
@@ -275,27 +276,78 @@ def test_non_string_payload_is_rejected():
 # ----------------------------------------------------------------------
 
 
-def test_upload_bounds_the_stored_asset_via_a_limit_crop(monkeypatch, enabled):
-    """The upload must carry w/h so nothing unbounded can be stored or delivered.
+def test_upload_stores_the_original_untransformed_but_token_gated(monkeypatch, enabled):
+    """Two things at once, because they are the same decision.
 
-    "limit" scales to fit inside the box and never upscales, so a legitimate note is
-    stored untouched while an oversized one is still bounded at the CDN.
+    Nothing is resized on the way in: the validator has already refused anything over the
+    dimension and pixel ceilings, so a ``crop="limit"`` transformation would only ever fire
+    on an image that was already refused. What the upload *must* carry is ``type="authenticated"``
+    and nothing else -- that storage type is what makes the object unreadable from a plain CDN
+    URL, and it is the only reason a signed delivery URL is needed at all.
     """
     recorded = {}
 
     def _upload(file, **kwargs):
         recorded.update(kwargs)
-        return {"public_id": kwargs["public_id"], "secure_url": "https://res.example/x.png", "version": 1}
+        return {
+            "public_id": kwargs["public_id"],
+            "secure_url": "https://res.example/x.png",
+            "type": "authenticated",
+        }
 
     monkeypatch.setattr(storage_service_module, "cloudinary_upload", _upload, raising=True)
 
-    result = enabled.upload_love_note_image(image_base64=b64(png_bytes(48, 24)), sender_name="Alice")
+    result = enabled.upload_love_note_image(
+        image_base64=b64(png_bytes(48, 24)),
+        love_note_id="22222222-2222-2222-2222-222222333333",
+    )
 
-    transformation = recorded["transformation"]
-    assert transformation["width"] == enabled.max_image_dimension
-    assert transformation["height"] == enabled.max_image_dimension
-    assert transformation["crop"] == "limit"
-    assert (result["width"], result["height"]) == (48, 24)
+    assert "transformation" not in recorded, "the original is stored as sent"
+    assert recorded["type"] == "authenticated"
+    assert "access_control" not in recorded, (
+        "a token ACL makes Cloudinary reject the signed delivery URLs this plan relies on"
+    )
+    assert recorded["public_id"] == "love_notes/22222222-2222-2222-2222-222222333333/image"
+    assert result == {
+        "public_id": "love_notes/22222222-2222-2222-2222-222222333333/image",
+        "format": "png",
+    }
+
+
+def test_upload_fails_when_the_account_stored_it_publicly(monkeypatch, enabled):
+    """A private type the account ignored must not look like a successful private upload.
+
+    If Cloudinary accepted the upload but stored it publicly, the note would be readable by
+    anyone holding the URL and the signature in the inbox would be decoration. The object is
+    destroyed and the request is refused instead, so the failure is a 503 at send time
+    rather than a leak discovered later.
+    """
+    destroyed = []
+
+    def _upload(file, **kwargs):
+        return {
+            "public_id": kwargs["public_id"],
+            "secure_url": "https://res.example/x.png",
+            "type": "upload",
+            "access_mode": "public",
+        }
+
+    monkeypatch.setattr(storage_service_module, "cloudinary_upload", _upload, raising=True)
+    monkeypatch.setattr(
+        storage_service_module,
+        "cloudinary_destroy",
+        lambda public_id, **kwargs: destroyed.append(public_id) or {"result": "ok"},
+        raising=True,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        enabled.upload_love_note_image(
+            image_base64=b64(png_bytes(8, 8)),
+            love_note_id="22222222-2222-2222-2222-222222333333",
+        )
+
+    assert excinfo.value.status_code == 503
+    assert destroyed == ["love_notes/22222222-2222-2222-2222-222222333333/image"]
 
 
 def test_upload_rejects_an_oversized_image_before_contacting_cloudinary(monkeypatch, enabled):
@@ -307,7 +359,7 @@ def test_upload_rejects_an_oversized_image_before_contacting_cloudinary(monkeypa
     with pytest.raises(HTTPException) as excinfo:
         enabled.upload_love_note_image(
             image_base64=b64(png_bytes(enabled.max_image_dimension + 1, 1)),
-            sender_name="Alice",
+            love_note_id="22222222-2222-2222-2222-222222333333",
         )
 
     assert excinfo.value.status_code == 413
@@ -322,7 +374,10 @@ def test_upload_failure_does_not_leak_the_upstream_error(monkeypatch, enabled):
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        enabled.upload_love_note_image(image_base64=b64(png_bytes(8, 8)), sender_name="Alice")
+        enabled.upload_love_note_image(
+            image_base64=b64(png_bytes(8, 8)),
+            love_note_id="22222222-2222-2222-2222-222222333333",
+        )
 
     assert excinfo.value.status_code == 500
     assert "cloud-name" not in excinfo.value.detail
@@ -357,13 +412,26 @@ def test_model_accepts_a_payload_at_the_cap():
 
 
 def test_model_caps_the_note_body_to_the_column_width():
-    """love_notes.body is String(LOVE_NOTE_BODY_MAX); without this the message is unbounded.
+    """love_notes.body is bounded by a CHECK constraint; without this the message is unbounded.
 
     The cap is read from the model rather than restated as 1000, so that a limit moved in
     backend/app/limits.py cannot leave this test asserting a number the code no longer uses --
     a test that keeps passing at the wrong limit is worse than no test at all.
+
+    The database rule is the CHECK and not the column width. ``varchar(n)`` refuses an over-long
+    write during input, before any CHECK is evaluated, so ``ck_love_notes_body_length_1000``
+    could never reject anything and ``love_notes.body`` is ``Text`` like every other body
+    column. What matters is that the limit is declared once and enforced below the API, so the
+    payload model and the constraint are asserted together.
     """
-    assert LoveNoteRecord.__table__.c.body.type.length == LOVE_NOTE_BODY_MAX
+    lengths = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in LoveNoteRecord.__table__.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    assert lengths == {
+        f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}": f"length(body) <= {LOVE_NOTE_BODY_MAX}"
+    }
 
     with pytest.raises(ValueError):
         LoveNoteCreate(

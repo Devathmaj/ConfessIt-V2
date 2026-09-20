@@ -593,15 +593,33 @@ class LoveNoteTemplate(BaseModel):
         
         populate_by_name = True
 
+class LoveNoteImageIdentity(BaseModel):
+    """The durable identity of a love note's image, and nothing derived from it.
+
+    A love note image is an ``authenticated`` Cloudinary object, so the only thing worth keeping
+    about it is *which object it is*. A usable address for it is short-lived, signed by
+    Cloudinary against a token this application mints per viewer, and therefore cannot be stored:
+    it would be a credential in a database column, and in every response that ever read it back.
+    The delivery URL is derived at the moment it is handed out, after the viewer has been
+    authorised -- see ``storage_service.love_note_delivery_url``.
+    """
+
+    public_id: str
+    format: str
+
+
 class LoveNote(BaseModel):
+    """A love note as it is stored: identity for the image, no address for it.
+
+    ``image`` replaces the ``image_url`` this used to carry. Nothing on the read path takes a
+    stored note and needs an address without first deciding the reader is entitled to one, so
+    holding one here would only invite a caller to hand it out unchecked.
     """
-    Represents an individual Love Note sent from one user to another.
-    Persistent image URL for the note.
-    """
+
     id: str = Field(default_factory=new_id)
     sender_id: str
     recipient_id: str
-    image_url: str
+    image: LoveNoteImageIdentity
     body: str
     anonymous: bool = False
     status: str = "pending_review"
@@ -610,7 +628,7 @@ class LoveNote(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        
+            
         populate_by_name = True
 
 

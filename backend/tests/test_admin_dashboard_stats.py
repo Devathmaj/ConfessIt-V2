@@ -76,7 +76,7 @@ def make_note(db, sender, recipient, *, status="pending_review", body="a love no
         row = LoveNoteRecord(
             sender_id=sender["id"],
             recipient_id=recipient["id"],
-            image_url="love-notes/mock/note.png",
+            image_public_id="love_notes/mock-note-id/image", image_format="png",
             body=body,
             anonymous=False,
             status=status,

@@ -16,7 +16,7 @@ from ..services.account_picture_service import (
     retire_previous_picture,
     upload_account_picture,
 )
-from ..accounts import AccountRef
+from ..services.storage_service import storage_service
 
 # Logger
 logger = get_logger(__name__)
@@ -84,7 +84,12 @@ async def update_user_profile_service(
             "id": str(user.id), "regno": user.regno, "name": user.name,
             "email": user.email, "emoji": user.emoji, "bio": user.bio,
             "year": user.year, "department": user.department,
-            "profile_picture_url": user.profile_picture_url,
+            # The row holds the picture's identity; the URL the client receives is derived from
+            # it below, so nothing durable ever depends on an address that could be regenerated
+            # differently by a later build.
+            "profile_picture_url": storage_service.profile_delivery_url(
+                user.profile_picture_public_id, user.profile_picture_format
+            ),
             "gender": user.gender, "interests": user.interests or [],
             "matchmaking_enabled": user.matchmaking_enabled, "notifications_enabled": user.notifications_enabled,
             "love_notes_receive_enabled": user.love_notes_receive_enabled, "love_notes_send_enabled": user.love_notes_send_enabled,
@@ -96,10 +101,6 @@ async def update_user_profile_service(
             "account_type": "users",
         }
 
-    # Profile images are delivered through the asset proxy.
-    updated_user_doc["profile_picture_url"] = asset_delivery_service.profile_image_url(
-        updated_user_doc.get("profile_picture_url"), account=AccountRef.of(current_user)
-    )
     return UserDetails(**updated_user_doc)
 
 
@@ -116,25 +117,31 @@ async def upload_profile_picture_service(
     result = await upload_account_picture(
         file=file,
         owner_regno=current_user.regno,
-        account=AccountRef.of(current_user),
-        previous_picture_url=current_user.profile_picture_url,
         actor_regno=current_user.regno,
     )
 
-    # Written after the upload succeeded and committed, and only then is the old object retired.
+    # The replacement is written and committed before the old object is retired, and the value
+    # being replaced is read inside that same transaction rather than from the caller's model.
     # The order is the whole point: a row that still names a deleted object is worse than a
-    # leftover one, because nothing the owner does can bring the picture back.
+    # leftover one, because nothing the owner does can bring the picture back. Reading it here
+    # also means two uploads racing each other cannot both decide they are replacing the same
+    # object and delete the winner's picture out from under the row.
+    previous_public_id: Optional[str] = None
     with db.sessions.begin() as session:
-        user = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.regno == current_user.regno).with_for_update()
+        )
         if user:
-            user.profile_picture_url = result["stored_identifier"]
+            previous_public_id = user.profile_picture_public_id
+            user.profile_picture_public_id = result["public_id"]
+            user.profile_picture_format = result["format"]
 
     # Outside the transaction. If the write above rolled back, the row would be pointing at the old
     # object, and deleting it here is what would make that unrecoverable.
     retire_previous_picture(
-        previous_picture_url=current_user.profile_picture_url,
+        previous_public_id=previous_public_id,
+        new_public_id=result["public_id"],
         owner_regno=current_user.regno,
-        new_stored_identifier=result["stored_identifier"],
         actor_regno=current_user.regno,
     )
 

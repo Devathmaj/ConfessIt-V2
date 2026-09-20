@@ -20,6 +20,7 @@ from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
                         has_capability, is_valid_account_type,
                         normalize_account_type)
 from ..logger import get_console_only_logger, get_logger
+from .storage_service import storage_service
 
 logger = get_logger(__name__)
 
@@ -28,11 +29,6 @@ logger = get_logger(__name__)
 # debugging, but the OTLP handler is never attached, so it is not exported to the
 # collector and never lands in Loki (or any log store with a retention period).
 magic_link_logger = get_console_only_logger(__name__ + ".magic_link")
-
-# Claim set by the asset delivery proxy on its own short-lived tokens. Access tokens must
-# never be minted from one, and asset tokens must not be accepted as access tokens: they
-# travel in <img src> query strings and therefore leak into logs, referrers and history.
-ASSET_TOKEN_TYPE = "asset_delivery"
 
 # Single wording for every blocked-account rejection so the frontend can show
 # one message regardless of which endpoint refused the request.
@@ -52,8 +48,12 @@ ACCOUNT_CATEGORY_LABELS: Dict[str, str] = {
 
 # The columns every account table shares. Read generically so one serialiser serves all
 # three, and so a field added to the mixin cannot be added to only one of the tables.
+#
+# ``profile_picture_public_id``/``profile_picture_format`` are deliberately absent from this
+# list. They are read separately, below, because what an API response carries is an address the
+# browser can fetch -- not the internal identity of the object behind it.
 _ACCOUNT_SERIALIZED_FIELDS: Tuple[str, ...] = (
-    "id", "regno", "name", "email", "profile_picture_url", "gender",
+    "id", "regno", "name", "email", "gender",
     "notifications_enabled", "is_blocked", "last_login_at",
     "last_login_ip", "last_login_user_agent", "created_at", "updated_at",
 )
@@ -64,6 +64,13 @@ def _account_payload(row: Any, account_type: str) -> Dict[str, Any]:
     payload: Dict[str, Any] = {name: getattr(row, name) for name in _ACCOUNT_SERIALIZED_FIELDS}
     payload["id"] = str(row.id)
     payload["last_login_ip"] = str(row.last_login_ip) if row.last_login_ip else None
+    # A profile picture is a public object on Cloudinary's CDN, so the address is derived from the
+    # stored identity rather than stored itself. Nothing here authorises anything: the same URL
+    # goes to every account that can see the profile, which is why it is cheap to build and why
+    # building it must not be confused with a permission check.
+    payload["profile_picture_url"] = storage_service.profile_delivery_url(
+        row.profile_picture_public_id, row.profile_picture_format
+    )
     payload["account_type"] = account_type
     return payload
 
@@ -103,39 +110,6 @@ def _ensure_not_blocked(row: Any) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ACCOUNT_UNAVAILABLE_DETAIL,
         )
-
-def _reject_asset_token(payload: dict) -> None:
-    """Refuse an asset delivery token presented as an API access token."""
-    if payload.get("typ") == ASSET_TOKEN_TYPE:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-def load_active_user_service(db: Database, account: AccountRef):
-    """
-    Load the account a delivery token was minted for, and reject it if unknown or blocked.
-
-    Used when a request is authenticated by an asset delivery token rather than by the
-    normal bearer flow. The token names the table and primary key of the account it was
-    issued to, so this reads one row in one table: re-resolving by regno would let a token
-    for one account stand in for a different account that happens to share its regno.
-    """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    if not account or not is_valid_account_type(account.account_type):
-        raise credentials_exception
-    with db.sessions() as session:
-        row = resolve_account(session, account.account_type, account.account_id)
-    if row is None:
-        raise credentials_exception
-    _ensure_not_blocked(row)
-    return account_from_row(account.account_type, row)
-
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
@@ -186,8 +160,6 @@ def _account_from_bearer_token(token: Optional[str], db: Database) -> Optional[A
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except jwt.PyJWTError as exc:
         logger.error(f"JWT decode error: {exc}")
-        return None
-    if payload.get("typ") == ASSET_TOKEN_TYPE:
         return None
     account_type = payload.get("account_type")
     account_id = payload.get("account_id")

@@ -25,6 +25,13 @@ settings.DATABASE_URL = settings.TEST_DATABASE_URL
 settings.DATABASE_POOL_SIZE = 2
 settings.DATABASE_MAX_OVERFLOW = 2
 
+# ``app.main`` refuses to start unless the Cloudinary cloud name, API key and API secret are
+# all present, because those three are what sign the private love note delivery URLs and there
+# is no second code path to fall back to. That is the behaviour we want in every environment,
+# so the suite does not weaken it and does not inject credentials of its own -- the API secret is
+# a deployment secret, and a test that needed a specific one would be testing the secret rather
+# than the behaviour. The suite only ever needs to *shape* URLs, which the real configured
+# credentials do as well as any fake, and no test here talks to Cloudinary.
 from app.main import app
 from app.accounts import AccountType
 from app.models import AccountDetails, UserDetails

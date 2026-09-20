@@ -34,7 +34,7 @@ from app.db_models import (
     UserRecord,
 )
 from app.models import AccountDetails, UserDetails
-from app.services import asset_delivery_service, love_note_service, matchmaking_service
+from app.services import love_note_service, matchmaking_service
 from app.services.message_service import message_service
 
 
@@ -175,25 +175,47 @@ def test_a_staff_id_cannot_be_a_love_note_recipient(db, staff_type):
 # --- love-note images ------------------------------------------------------------
 
 
-def _make_note(db, sender_id, recipient_id, path="love-notes/a.png", status="pending_review"):
-    """Store a note whose image is genuinely servable, so a positive assertion means something.
+def _make_note(
+    db,
+    sender_id,
+    recipient_id,
+    note_id="11111111-1111-1111-1111-111111111111",
+    status="pending_review",
+    removed_at=None,
+):
+    """Store a note carrying a real image identity, so a positive assertion means something.
 
-    An unparseable stored value would make every 'may not view' test pass for the wrong
-    reason, so the URL here is built to be recognised by the same normaliser production uses.
+    The row now holds the object's identity rather than an address, and the object is one-to-one
+    with the note id -- that is the whole reason an entitlement check can be made about "this
+    note" instead of about "whatever path the request named". A placeholder here would make
+    every 'may not view' assertion pass for the wrong reason.
     """
-    stored = f"https://res.cloudinary.com/demo/image/upload/v1/{path}"
     with db.sessions.begin() as session:
         session.add(
             LoveNoteRecord(
+                id=note_id,
                 sender_id=sender_id,
                 recipient_id=recipient_id,
                 body="hello",
                 status=status,
-                image_url=stored,
+                image_public_id=f"love_notes/{note_id}/image",
+                image_format="png",
+                removed_at=removed_at,
                 created_at=datetime.now(timezone.utc),
             )
         )
         session.flush()
+
+
+def _note_row(db, note_id="11111111-1111-1111-1111-111111111111"):
+    with db.sessions() as session:
+        return session.get(LoveNoteRecord, note_id)
+
+
+def _may_view(note, viewer):
+    return love_note_service.may_view_love_note_image(
+        note, viewer_id=viewer.id, viewer_account_type=viewer.account_type
+    )
 
 
 def _account_with_id(account_id, regno, account_type):
@@ -209,11 +231,27 @@ def test_staff_may_view_a_love_note_image_they_are_not_part_of(db, staff_type):
     Without this the moderator can list the note in the queue but not see the image, which is
     the dead end the route-level capability was meant to prevent.
     """
-    sender_id = make_user(db, "sender")
-    recipient_id = make_user(db, "recipient")
-    _make_note(db, sender_id, recipient_id)
+    _make_note(db, make_user(db, "sender"), make_user(db, "recipient"))
     reviewer = _account_with_id(make_staff(db, "mod", staff_type), "mod", staff_type)
-    assert asset_delivery_service._may_view_love_note_asset(db, reviewer, "love-notes/a.png")
+    assert _may_view(_note_row(db), reviewer)
+
+
+@pytest.mark.parametrize("staff_type", STAFF_TYPES)
+def test_staff_may_view_a_removed_note(db, staff_type):
+    """Removal must not blind the reviewer ruling on it.
+
+    The one case where the "removed means nobody but staff" rule cuts the other way: staff see
+    removed notes deliberately, so a moderator can answer why something was taken down.
+    """
+    _make_note(
+        db,
+        make_user(db, "sender"),
+        make_user(db, "recipient"),
+        status="rejected",
+        removed_at=datetime.now(timezone.utc),
+    )
+    reviewer = _account_with_id(make_staff(db, "mod", staff_type), "mod", staff_type)
+    assert _may_view(_note_row(db), reviewer)
 
 
 def test_a_recipient_cannot_view_a_note_that_is_not_yet_approved(db):
@@ -222,7 +260,7 @@ def test_a_recipient_cannot_view_a_note_that_is_not_yet_approved(db):
     recipient_id = make_user(db, "recipient")
     _make_note(db, sender_id, recipient_id, status="pending_review")
     recipient = _account_with_id(recipient_id, "recipient", AccountType.USERS.value)
-    assert not asset_delivery_service._may_view_love_note_asset(db, recipient, "love-notes/a.png")
+    assert not _may_view(_note_row(db), recipient)
 
 
 def test_a_recipient_can_view_an_approved_note(db):
@@ -230,40 +268,72 @@ def test_a_recipient_can_view_an_approved_note(db):
     recipient_id = make_user(db, "recipient")
     _make_note(db, sender_id, recipient_id, status="approved")
     recipient = _account_with_id(recipient_id, "recipient", AccountType.USERS.value)
-    assert asset_delivery_service._may_view_love_note_asset(db, recipient, "love-notes/a.png")
+    assert _may_view(_note_row(db), recipient)
+
+
+def test_a_recipient_cannot_view_a_removed_approved_note(db):
+    """The removed check has to come after the approval one, or removal buys back access."""
+    sender_id = make_user(db, "sender")
+    recipient_id = make_user(db, "recipient")
+    _make_note(
+        db,
+        sender_id,
+        recipient_id,
+        status="approved",
+        removed_at=datetime.now(timezone.utc),
+    )
+    recipient = _account_with_id(recipient_id, "recipient", AccountType.USERS.value)
+    assert not _may_view(_note_row(db), recipient)
 
 
 def test_a_sender_can_always_view_their_own_note(db):
+    """Any review state, including one that has been taken down -- they wrote it."""
     sender_id = make_user(db, "sender")
-    recipient_id = make_user(db, "recipient")
-    _make_note(db, sender_id, recipient_id, status="rejected")
+    _make_note(db, sender_id, make_user(db, "recipient"), status="rejected")
     sender = _account_with_id(sender_id, "sender", AccountType.USERS.value)
-    assert asset_delivery_service._may_view_love_note_asset(db, sender, "love-notes/a.png")
+    assert _may_view(_note_row(db), sender)
 
 
 def test_an_uninvolved_participant_may_not_view_a_love_note_image(db):
-    sender_id = make_user(db, "sender")
-    recipient_id = make_user(db, "recipient")
-    stranger_id = make_user(db, "stranger")
-    _make_note(db, sender_id, recipient_id, status="approved")
-    stranger = _account_with_id(stranger_id, "stranger", AccountType.USERS.value)
-    assert not asset_delivery_service._may_view_love_note_asset(db, stranger, "love-notes/a.png")
+    _make_note(db, make_user(db, "sender"), make_user(db, "recipient"), status="approved")
+    stranger = _account_with_id(
+        make_user(db, "stranger"), "stranger", AccountType.USERS.value
+    )
+    assert not _may_view(_note_row(db), stranger)
 
 
-def test_staff_review_access_does_not_grant_a_different_notes_image(db):
-    """The capability widens the query, not the match on the asset.
+def test_an_anonymous_viewer_may_not_view_anything(db):
+    """No id at all is not a participant. The check has to fail closed, not open."""
+    _make_note(db, make_user(db, "sender"), make_user(db, "recipient"), status="approved")
+    assert not love_note_service.may_view_love_note_image(
+        _note_row(db), viewer_id=None, viewer_account_type=None
+    )
 
-    A moderator reviewing one note must not thereby be entitled to every other image in the
-    system; the returned path still has to equal the one requested.
+
+def test_entitlement_is_decided_per_note_not_per_account(db):
+    """Staff review access must not become blanket access to a note they are not reviewing.
+
+    The identity is per-note by construction -- the object is named after the note id -- so
+    this is really a check that the second note's row is a different row and that an
+    entitlement for one is never reused for the other.
     """
     sender_id = make_user(db, "sender")
     recipient_id = make_user(db, "recipient")
-    _make_note(db, sender_id, recipient_id, path="love-notes/a.png")
-    _make_note(db, sender_id, recipient_id, path="love-notes/b.png", status="approved")
+    _make_note(db, sender_id, recipient_id, note_id="11111111-1111-1111-1111-111111111111")
+    _make_note(
+        db,
+        sender_id,
+        recipient_id,
+        note_id="22222222-2222-2222-2222-222222222222",
+        status="approved",
+    )
     reviewer = _account_with_id(
         make_staff(db, "mod", AccountType.MODERATOR.value), "mod", AccountType.MODERATOR.value
     )
-    assert not asset_delivery_service._may_view_love_note_asset(db, reviewer, "love-notes/other.png")
+
+    first, second = _note_row(db), _note_row(db, "22222222-2222-2222-2222-222222222222")
+    assert first.image_public_id != second.image_public_id
+    assert _may_view(first, reviewer) and _may_view(second, reviewer)
 
 
 # --- conversation transcripts ----------------------------------------------------

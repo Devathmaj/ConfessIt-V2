@@ -113,9 +113,12 @@ def instrumented(monkeypatch):
 
         app = FastAPI()
 
-        # Mirrors the asset delivery routes in app.main, which take the scoped token
-        # as a query parameter because an <img src> cannot send an Authorization
-        # header.
+        # A route of the shape this application used to have, declared on a throwaway app. There
+        # is no such route in app.main any more -- images are fetched straight from Cloudinary --
+        # but the redaction being tested is redaction of a *credential in a query string*, which
+        # is the shape a Cloudinary ``__cld_token__`` had and any future credential-bearing query
+        # parameter would have. If the hook stopped scrubbing these parameters, such a delivery
+        # URL would put its credential in every span the app emits.
         @app.get("/api/profile/files/{path:path}")
         def get_profile_file(
             path: str,

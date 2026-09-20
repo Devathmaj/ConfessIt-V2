@@ -14,14 +14,13 @@ from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
-from .config import settings
+from .config import settings, validate_cloudinary_settings
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
-from .services.auth_service import oauth2_scheme, verify_token_service, load_active_user_service
-from .dependencies import get_db 
+from .services.auth_service import oauth2_scheme, verify_token_service
+from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
 from .services.matchmaking_service import MatchmakingRefusal
-from .services import asset_delivery_service
 from .models import AccountDetails
 import uvicorn
 from .logger import get_logger, otlp_transport
@@ -266,6 +265,19 @@ async def on_startup():
             if attempt == 29:
                 raise
             await asyncio.sleep(2)
+
+    # Before any schema work: a deployment that cannot deliver love note images should not come up
+    # looking healthy and then 503 in the inbox of the person who was sent one. The failure is
+    # raised, not logged and continued past, because there is no degraded mode for a private image
+    # store -- serving love notes from anywhere weaker than a private signed-delivery object is not
+    # a fallback this application has.
+    validate_cloudinary_settings()
+    logger.info(
+        "Cloudinary image delivery validated; love note images are private signed-delivery "
+        "objects. Note that these signatures do not expire: expiry would require Cloudinary "
+        "authentication tokens and the account-wide Auth token key that is not available on "
+        "this plan. Entitlement is therefore re-checked on every response that mints a URL."
+    )
 
     postgres.initialize()
     # No accounts are created here. Booting the application used to seed a test participant
@@ -513,101 +525,22 @@ FastAPIInstrumentor.instrument_app(
 )
 
 # ----------------------
-# Asset Delivery Routes
+# Image delivery
 # ----------------------
-# These are the only paths user-uploaded images are served from. The backend mints the
-# URLs it hands out (see asset_delivery_service) and re-checks entitlement on every
-# request, so an image URL is never a standalone bearer capability.
-def _resolve_asset_requester(
-    db: Database,
-    kind: str,
-    object_path: str,
-    query_token: Optional[str],
-    bearer_token: Optional[str],
-) -> AccountDetails:
-    """Identify the caller of an asset route.
-
-    A scoped query token is preferred because ``<img src>`` cannot send an Authorization
-    header; a normal bearer token is still accepted for programmatic callers.
-
-    Returns the shared account model, because the asset proxy authorises staff as well as
-    participants -- a moderator must be able to open a love note image it is reviewing --
-    and the caller's capabilities are carried on ``capabilities`` rather than assumed from
-    a participant profile type.
-    """
-    if query_token:
-        account = asset_delivery_service.verify_asset_token(
-            query_token, kind=kind, object_path=object_path
-        )
-        return load_active_user_service(db, account)
-    if bearer_token:
-        return verify_token_service(bearer_token, db)
-    raise HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-def _serve_asset(
-    kind: str,
-    path: str,
-    query_token: Optional[str],
-    bearer_token: Optional[str],
-    db: Database,
-) -> Response:
-    """Validate, authorise and stream one stored object."""
-    # Defined as a sync route so the blocking origin fetch runs in FastAPI's threadpool.
-    object_path = storage_service.validate_object_path(path)
-    requester = _resolve_asset_requester(db, kind, object_path, query_token, bearer_token)
-
-    if not asset_delivery_service.is_entitled_to_asset(
-        db, kind=kind, object_path=object_path, user=requester
-    ):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    try:
-        origin_url = storage_service.get_origin_url(kind, object_path)
-    except HTTPException:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    payload, content_type = asset_delivery_service.fetch_asset_bytes(origin_url)
-    return Response(
-        content=payload,
-        media_type=content_type,
-        headers={
-            # Private so the bytes are only reused by the browser that was entitled.
-            "Cache-Control": f"private, max-age={asset_delivery_service.asset_token_ttl_seconds()}",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
-
-
-@app.get("/api/profile/files/{path:path}")
-def get_profile_file(
-    path: str,
-    t: Optional[str] = Query(default=None, description="Scoped asset delivery token"),
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    db: Database = Depends(get_db),
-):
-    """Serve a profile image to any signed-in account.
-
-    Profiles appear across matchmaking, confessions and chat, so these are not
-    owner-only; love note images remain restricted to the note's parties.
-    """
-    return _serve_asset("profile", path, t, bearer_token, db)
-
-
-@app.get("/api/love-notes/files/{path:path}")
-def get_love_note_file(
-    path: str,
-    t: Optional[str] = Query(default=None, description="Scoped asset delivery token"),
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    db: Database = Depends(get_db),
-):
-    """Serve a love note image to its recipient (once approved), its sender, or an admin."""
-    return _serve_asset("love-notes", path, t, bearer_token, db)
-
+# There are no image routes here, and that is the design rather than a gap.
+#
+# Profile pictures are served straight from Cloudinary's CDN as ordinary public HTTPS URLs, and
+# love note images are served from the same CDN as ``authenticated`` objects behind a
+# short-lived Cloudinary authentication token that this application mints only after deciding the
+# viewer is entitled. In both cases the bytes never pass through this process: there is no origin
+# fetch, no per-request entitlement re-check on an image GET, no ``<img>``-friendly query token
+# leaking into access logs and referrers, and no second copy of every picture in this process's
+# memory.
+#
+# What moved here instead of out of the codebase is the *authorisation*, and it moved to the point
+# where a URL is minted -- inside the services that build these responses. That is the only place
+# it can be enforced now: a love note delivery URL is a capability, and unlike a URL naming this
+# API it is consumed by somebody else's server, so nothing on our side can later re-check it.
 
 
 # ----------------------

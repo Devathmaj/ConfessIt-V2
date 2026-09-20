@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from ..db_models import LoveNoteRecord, UserRecord
@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 from ..dependencies import get_db
 from ..accounts import AccountRef
 from ..models import Cohort, UserDetails
-from ..services import asset_delivery_service
 from ..services.authorization import require_participant
 from ..services.love_note_service import (
     LoveNoteCreate,
     LoveNoteReportCreate,
     get_all_users_service,
     get_all_cohorts_service,
+    love_note_image_url,
     send_love_note_service,
     report_love_note_service
 )
@@ -79,11 +79,17 @@ async def get_all_cohorts(
 async def send_love_note(
     note_data: LoveNoteCreate,
     current_user: Annotated[UserDetails, Depends(require_participant)],
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
+    response: Response = None
 ):
     """
     Used to send a love note. The note is marked as 'pending_review'.
     """
+    # A signed image URL does not expire, so the response that carries it must not be cached:
+    # a copy in a browser or proxy cache would keep the capability alive long after the user
+    # closed the page. ``no-store`` is the point, not ``no-cache`` -- revalidation only helps
+    # if the revalidation is against a server that can *retract* the URL, and this one cannot.
+    response.headers["Cache-Control"] = "no-store"
     # Used to check if the user has already sent a love note
     if current_user.love_notes_send_enabled:
         raise HTTPException(
@@ -116,11 +122,16 @@ async def send_love_note(
 @router.get("/inbox", response_model=List[Dict[str, Any]])
 async def get_received_love_notes(
     current_user: Annotated[UserDetails, Depends(require_participant)],
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
+    response: Response = None
 ):
     """
     Used to fetch all accepted love notes sent to the current user.
     """
+    # Same reasoning as the send response: the signed URLs in this body do not expire, so
+    # nothing downstream may cache them. The inbox is also exactly where the URLs *cluster*,
+    # which is why the header matters as much here as on the response that first issued one.
+    response.headers["Cache-Control"] = "no-store"
     # Find all love notes sent to current user with status 'approved'
     with db.sessions() as session:
         love_notes = session.scalars(select(LoveNoteRecord).where(
@@ -139,13 +150,17 @@ async def get_received_love_notes(
             sender_name = "Anonymous" if note.anonymous or not sender else sender.name or "Unknown"
             result.append({
                 "id": str(note.id), "from": sender_name, "body": note.body,
-                # Only approved, non-removed notes reach this list, so the recipient is
-                # entitled to the image and the proxy will serve it.
-                "image_url": asset_delivery_service.build_delivery_url(
-                    kind="love-notes",
-                    stored_identifier=note.image_url,
-                    account=AccountRef.of(current_user),
-                ) or note.image_url,
+                # The address is minted here, per reader, from the note's stored identity -- and
+                # only because this query has already established that the caller is the recipient
+                # of an approved, not-removed note. The signature inside it covers this one image's
+                # path and cannot be moved onto another, but it does **not** expire, which is why
+                # the response carrying it is ``Cache-Control: no-store`` and why minting a URL for
+                # an unentitled viewer would be a permanent leak, not a bounded one.
+                "image_url": love_note_image_url(
+                    note,
+                    viewer_id=current_user.id,
+                    viewer_account_type=current_user.account_type,
+                ),
                 "anonymous": note.anonymous,
                 "created_at": isoformat_datetime(note.created_at),
                 "read_at": isoformat_datetime(note.read_at),

@@ -11,14 +11,12 @@ from datetime import datetime, timedelta, timezone
 
 from ..models import UserDetails
 from ..services.storage_service import storage_service
-from ..services import asset_delivery_service
 from ..services.matchmaking_slot_service import (
     candidate_shares_a_slot_predicate,
     cohort_is_configured,
     cohort_label,
     slots_are_configured,
 )
-from ..accounts import AccountRef
 
 # Logger
 logger = get_logger(__name__)
@@ -256,7 +254,9 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         "id": str(matched_user_row.id), "regno": matched_user_row.regno, "name": matched_user_row.name,
         "email": matched_user_row.email, "emoji": matched_user_row.emoji, "bio": matched_user_row.bio,
         "year": matched_user_row.year, "department": matched_user_row.department,
-        "profile_picture_url": matched_user_row.profile_picture_url,
+        "profile_picture_url": storage_service.profile_delivery_url(
+            matched_user_row.profile_picture_public_id, matched_user_row.profile_picture_format
+        ),
         "gender": matched_user_row.gender, "interests": matched_user_row.interests or [],
         "matchmaking_enabled": matched_user_row.matchmaking_enabled, "notifications_enabled": matched_user_row.notifications_enabled,
         "love_notes_receive_enabled": matched_user_row.love_notes_receive_enabled, "love_notes_send_enabled": matched_user_row.love_notes_send_enabled,
@@ -335,10 +335,10 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         db=db
     )
 
-    # Return match details immediately with full user information
-    matched_user_picture_url = asset_delivery_service.profile_image_url(
-        matched_user.profile_picture_url, account=AccountRef.of(current_user)
-    )
+    # Return match details immediately with full user information. ``matched_user`` was built
+    # above from the matched row, so its ``profile_picture_url`` is already the derived public CDN
+    # address; re-deriving it here would be the same answer computed twice.
+    matched_user_picture_url = matched_user.profile_picture_url
 
     matched_user_details = {
         "regno": matched_user.regno,

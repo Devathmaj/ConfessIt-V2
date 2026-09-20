@@ -1,202 +1,258 @@
-import os
-import io
-import time
-import secrets
+# app/services/storage_service.py
+"""Cloudinary-backed image storage.
+
+Two kinds of image live here and they are deliberately not treated alike:
+
+* **Profile pictures are public.** They are uploaded as ``type="upload"`` with no
+  ``access_mode`` and no access control list, so Cloudinary serves them straight from its CDN
+  over ordinary HTTPS. Nothing about them needs to be authorised at fetch time: a profile
+  picture is shown in matchmaking lists, chat headers and moderation screens to people who are
+  not the owner, and gating it per-viewer would mean a request per avatar on every page. What
+  the application still owns is *which object a row points at* -- upload, replace and delete
+  all stay here and all require authorisation -- and the unguessable per-account folder, so
+  the URL cannot be enumerated from somebody else's regno.
+
+* **Love note images are private.** They are uploaded as ``type="authenticated"``, which is
+  what makes Cloudinary refuse the object outright unless the request carries a valid signed URL.
+  Each delivery URL therefore carries a SHA-1 signature over that one object's exact URL path,
+  keyed by the API secret, so it authorises one image and nothing else. There is no fallback: if
+  the signature cannot be produced the request fails loudly rather than quietly serving the
+  image from somewhere weaker.
+
+  Note *what a signed URL is not*: it does not expire, and it cannot be revoked short of
+  destroying and re-uploading the object. Cloudinary's expiring alternative, an authentication
+  token (``?__cld_token__=exp=...~hmac=...``), needs a separate account-wide Auth token key that
+  is not available on this plan -- and applying a token ACL on top of ``type="authenticated"``
+  would make Cloudinary reject the signature as well. So the ACL is deliberately absent, and
+  :func:`love_note_delivery_url` signs instead. See ``config`` for the full trade-off.
+
+**What is stored is identity, not a URL.** Both kinds return ``(public_id, format)`` and that
+is what the database holds. A URL is not a durable fact about an object: for a love note it is
+a credential, and storing one would mean a signed string sitting in a column and in every
+response that ever read it. The delivery URL is derived at the moment it is handed out, after
+the application has decided the viewer is entitled to it.
+"""
+
+from __future__ import annotations
+
 import base64
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
-from fastapi import HTTPException, UploadFile
-from urllib.parse import quote, unquote, urlparse
-from dotenv import load_dotenv
-import cloudinary
-from cloudinary.uploader import upload as cloudinary_upload, destroy as cloudinary_destroy
-from cloudinary.utils import cloudinary_url, api_sign_request, private_download_url
-from PIL import Image
+import io
 import re
-import cloudinary.api as cloudinary_api
+import secrets
+from typing import Any, Dict, Optional, Tuple
+
+import cloudinary
+from cloudinary.uploader import destroy as cloudinary_destroy, upload as cloudinary_upload
+from cloudinary.utils import cloudinary_url
+from fastapi import HTTPException, UploadFile, status
+from PIL import Image
+
+from ..config import settings
 from ..logger import get_logger
 
-# Load environment variables from a .env file
-load_dotenv()
-
-# Logger
 logger = get_logger(__name__)
 
 
-def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
-    """Read a positive integer from the environment, falling back to ``default``.
+# The single fixed object layout. These are not configurable: a layout that can be changed by an
+# environment variable is a layout that a deployment can change *after* rows were written, which
+# would orphan every object already stored under the old prefix.
+PROFILE_FOLDER = "profile_pics"
+LOVE_NOTES_FOLDER = "love_notes"
 
-    A malformed value must not silently disable a limit, so anything unparseable or
-    below ``minimum`` falls back to the built-in default rather than being trusted.
+# The formats an upload is accepted as. Checked against the decoded image header, not the
+# client-supplied content type or filename, because both of those are attacker-controlled.
+BASE_ALLOWED_FORMATS = frozenset({"jpg", "jpeg", "png", "gif", "webp"})
+BASE_ALLOWED_MIME_TYPES = frozenset(
+    {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
+)
+
+# A public_id segment may only hold these. Cloudinary would accept far more, but the layout above
+# is generated from a regno and a random token, and constraining the alphabet means a stored
+# value can never contain a separator, a traversal sequence or anything that would silently
+# re-point a delete at a neighbouring object.
+_PUBLIC_ID_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Cloudinary's signed-URL signature appears as an ``s--<sig>--`` path segment immediately after
+# the delivery type. It is checked rather than assumed: an unsigned URL for an ``authenticated``
+# object is one the CDN refuses on every single fetch, and the failure needs to surface here
+# where it can be reported, not in a browser as a permanently broken image. Deliberately does
+# not match ``__cld_token__``, which is the *other* mechanism and is not used here.
+SIGNED_URL_PATTERN = re.compile(r"/image/authenticated/s--[A-Za-z0-9_-]+--/")
+
+
+def _slug_segment(value: str, *, limit: int = 64) -> str:
+    """Reduce ``value`` to characters that are safe inside a Cloudinary public_id segment.
+
+    A regno is server-owned data, but it is still a human-chosen string, and a public_id is a
+    path. Anything outside ``[A-Za-z0-9._-]`` becomes a dash so that a regno such as
+    ``cs/2024`` cannot introduce a path segment of its own. Truncation is bounded and a trailing
+    dash is stripped so the result is still a single, stable segment.
     """
-    try:
-        return max(minimum, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return default
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-")
+    return (cleaned[:limit].strip("-")) or "account"
 
 
 class CloudinaryStorageService:
-    """Storage service implementation backed by Cloudinary."""
+    """Image storage backed by Cloudinary.
 
-    # TTL Constants
-    DEFAULT_SIGNED_URL_TTL = 3600  # 1 hour for viewing
-    UPLOAD_SIGNATURE_TTL = 900     # 15 minutes for uploads
-    TEMP_URL_TTL = 300            # 5 minutes for temporary access
+    A single process-wide instance (:data:`storage_service`) configures the Cloudinary SDK's
+    global config once, which is what that SDK expects.
+    """
 
-    # Object path validation limits
-    OBJECT_PATH_MAX_LENGTH = 512
-    OBJECT_PATH_MIN_SEGMENTS = 2   # {folder}/{token}/{timestamp}_{name}.{ext}
-    _OBJECT_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-    # Granularity of the bounded upload read. Small enough that the peak buffer stays
-    # close to the cap instead of overshooting it by a whole chunk.
+    # Granularity of the bounded upload read. Small enough that the peak buffer stays close to
+    # the cap instead of overshooting it by a whole chunk.
     UPLOAD_READ_CHUNK_BYTES = 64 * 1024
 
-    def __init__(self):
-        self.cloudinary_url = os.getenv("CLOUDINARY_URL", "")
-        self.api_key = os.getenv("CLOUDINARY_API_KEY")
-        self.api_secret = os.getenv("CLOUDINARY_API_SECRET")
-        self.cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+    # Per-side and total-pixel ceilings. A byte cap alone does not bound image processing: a
+    # few hundred KB of compressed data can describe a bitmap that costs gigabytes to decode, so
+    # both the per-side dimensions and the total pixel count are capped and read from the image
+    # header before any pixel data is touched.
+    DEFAULT_MAX_IMAGE_DIMENSION = 6000
+    DEFAULT_MAX_IMAGE_PIXELS = 12_000_000
+    DEFAULT_MAX_IMAGE_SIZE_MB = 2
 
-        # Bucket names are reused from existing env vars to avoid touching other parts of the app.
-        self.bucket_name = os.getenv("CLOUDINARY_PROFILE_FOLDER")
-        self.events_bucket = os.getenv("CLOUDINARY_EVENTS_FOLDER")
-        self.gallery_bucket = os.getenv("CLOUDINARY_GALLERY_FOLDER")
-        self.love_notes_bucket = os.getenv("CLOUDINARY_LOVE_NOTES_FOLDER", "love_notes")
+    def __init__(self) -> None:
+        self._configure_cloudinary()
+        self._apply_limits()
 
-        try:
-            self.max_image_size_mb = max(1, int(os.getenv("MAX_IMAGE_SIZE_MB", "2")))
-        except ValueError:
-            self.max_image_size_mb = 2
+    # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+    def _apply_limits(self) -> None:
+        """Read the image limits from settings.
+
+        Read on every construction rather than captured at import so a test that sets a limit is
+        obeyed immediately and a value changed in the environment does not need a module reload.
+        A malformed value falls back to the built-in default rather than disabling the limit,
+        because a limit that quietly stops existing is worse than one that is merely wrong.
+        """
+
+        def positive_int(value: Any, default: int) -> int:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return default
+            return parsed if parsed > 0 else default
+
+        self.max_image_size_mb = positive_int(
+            settings.MAX_IMAGE_SIZE_MB, self.DEFAULT_MAX_IMAGE_SIZE_MB
+        )
         self.max_image_bytes = self.max_image_size_mb * 1024 * 1024
-        self.allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
+        self.max_image_dimension = positive_int(
+            settings.MAX_IMAGE_DIMENSION, self.DEFAULT_MAX_IMAGE_DIMENSION
+        )
+        self.max_image_pixels = positive_int(
+            settings.MAX_IMAGE_PIXELS, self.DEFAULT_MAX_IMAGE_PIXELS
+        )
 
-        # Geometry limits. A byte cap alone does not bound image processing: a few
-        # hundred KB of compressed data can describe a bitmap that costs gigabytes
-        # to decode, so both the per-side dimensions and the total pixel count are
-        # capped and checked from the header before any pixel data is touched.
-        self.max_image_dimension = _env_int("MAX_IMAGE_DIMENSION", 6000)
-        self.max_image_pixels = _env_int("MAX_IMAGE_PIXELS", 12_000_000)
-
-        # Upper bound on a base64 image payload, used for JSON-body uploads (love
-        # notes) where the encoded string arrives as a request field. base64 spends
-        # 4 characters per 3 bytes, plus slack for a data URI prefix and the padding
-        # on the final group. Enforced *before* b64decode so an oversized body is
-        # rejected without the decode ever allocating a second copy of it.
+        # Upper bound on a base64 image payload, used by the JSON-body love note upload where the
+        # encoded string arrives as a request field rather than as a multipart part. base64 spends
+        # 4 characters per 3 bytes, plus slack for a data URI prefix and the padding on the final
+        # group. Enforced *before* b64decode, so an oversized body is rejected without the decode
+        # ever allocating a second copy of it.
         self.max_base64_chars = (self.max_image_bytes // 3) * 4 + 4096
 
-        # Optional public base URL to construct absolute URLs (e.g., http://localhost:8080)
-        self.public_base = (os.getenv("PUBLIC_BASE_URL", "") or "").rstrip("/")
-
-        self.enabled = bool(self.cloudinary_url)
-        self.can_sign = False
-
-        # Feature toggles / security knobs
-        self.use_advanced_transforms = os.getenv("CLOUDINARY_USE_ADVANCED_TRANSFORMS", "true").lower() in {"1", "true", "yes"}
-        # Delivery scheme for every generated asset URL. Defaults to HTTPS: emitting plain
-        # HTTP would hand the browser a downgradeable URL, so a deployment has to opt out
-        # deliberately rather than inherit it from a development default.
-        self.secure_urls = os.getenv("CLOUDINARY_SECURE_URLS", "true").lower() in {"1", "true", "yes"}
-        self.default_view_ttl = int(os.getenv("CLOUDINARY_DEFAULT_VIEW_TTL", str(self.DEFAULT_SIGNED_URL_TTL)))
-        self.max_view_ttl = int(os.getenv("CLOUDINARY_MAX_VIEW_TTL", "7200"))  # 2 hours cap by default
-        # Additional allowed formats override (comma separated) if provided
-        extra_formats = os.getenv("CLOUDINARY_ALLOWED_FORMATS")
+        self.allowed_extensions = set(BASE_ALLOWED_FORMATS)
+        extra_formats = settings.CLOUDINARY_ALLOWED_FORMATS
         if extra_formats:
             for fmt in extra_formats.split(","):
-                fmt_clean = fmt.strip().lower()
-                if fmt_clean:
-                    self.allowed_extensions.add(fmt_clean)
+                cleaned = fmt.strip().lower()
+                # An operator can widen the accepted formats, never by adding something that is
+                # not an image at all -- a value carrying a dot or a slash would end up in a
+                # public_id and a URL.
+                if cleaned and re.fullmatch(r"[a-z0-9]{2,8}", cleaned):
+                    self.allowed_extensions.add(cleaned)
 
-        if not self.enabled:
-            print("Cloudinary storage disabled: CLOUDINARY_URL not configured")
+    def _configure_cloudinary(self) -> None:
+        """Push this deployment's Cloudinary credentials into the SDK's global config.
+
+        Read from ``settings`` rather than ``os.environ`` so there is exactly one place that
+        decides what this process is configured with.
+        """
+        self.cloud_name = settings.CLOUDINARY_CLOUD_NAME
+        self.api_key = settings.CLOUDINARY_API_KEY
+        self.api_secret = settings.CLOUDINARY_API_SECRET
+
+        self.enabled = bool(self.cloud_name and self.api_key and self.api_secret)
+        if self.enabled:
+            cloudinary.config(
+                cloud_name=self.cloud_name,
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                # HTTPS only. Emitting a plain-HTTP delivery URL would hand the browser a
+                # downgradeable address, so a deployment cannot opt out of this by accident.
+                secure=True,
+            )
         else:
-            # Public (non-authenticated) delivery; the scheme comes from CLOUDINARY_SECURE_URLS.
-            cfg_kwargs = {"secure": self.secure_urls}
-            self.use_authenticated = False  # Always use public URLs with random strings for security
-            if self.cloud_name:
-                cfg_kwargs["cloud_name"] = self.cloud_name
-                if self.api_key:
-                    cfg_kwargs["api_key"] = self.api_key
-                if self.api_secret:
-                    cfg_kwargs["api_secret"] = self.api_secret
-            else:
-                if self.cloudinary_url:
-                    cfg_kwargs["cloudinary_url"] = self.cloudinary_url
-                if self.api_key:
-                    cfg_kwargs["api_key"] = self.api_key
-                if self.api_secret:
-                    cfg_kwargs["api_secret"] = self.api_secret
+            logger.warning(
+                "Cloudinary is not fully configured; image upload and delivery are unavailable."
+            )
 
-            cfg = cloudinary.config(**cfg_kwargs)
-            self.can_sign = bool(getattr(cfg, "api_secret", self.api_secret))
-            if not self.can_sign:
-                print("Cloudinary signing disabled: api_secret not configured")
-            print("Cloudinary storage service initialized successfully (using public URLs with random strings)")
-
-        # Route to bucket map used for parsing stored values
-        self._route_bucket_map = {
-            "profile": self.bucket_name,
-            "events": self.events_bucket,
-            "gallery": self.gallery_bucket,
-            "committee": self.gallery_bucket,
-            "love-notes": self.love_notes_bucket,
-        }
-
-    def _ensure_enabled(self):
-        """Check if Cloudinary storage is enabled and properly configured."""
+    def _ensure_enabled(self) -> None:
         if not self.enabled:
-            raise RuntimeError("Cloudinary storage is not enabled. Please configure CLOUDINARY_URL environment variable.")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Image storage is not configured",
+            )
+
+    @staticmethod
+    def _asset_tags(*configured: Optional[str]) -> list[str]:
+        """Normalise the grouping tags for one upload.
+
+        A tag is organisational metadata and nothing else: it does not appear in a delivery URL
+        and it grants nothing. Cloudinary rejects an upload outright if a tag contains anything
+        outside ``[A-Za-z0-9_-]``, so an operator who types a space or a dot into the setting would
+        otherwise turn a mis-spelled label into every upload failing with a Cloudinary error. The
+        characters are dropped, the tag is skipped entirely if that leaves nothing, and the
+        mistake is logged rather than raised -- losing a label is recoverable, losing the picture
+        is not.
+        """
+        tags = []
+        for value in configured:
+            cleaned = re.sub(r"[^A-Za-z0-9_-]", "", value or "")
+            if not cleaned:
+                if value:
+                    logger.warning(
+                        "Ignoring unusable Cloudinary asset tag %r: a tag may only contain "
+                        "letters, digits, underscores and hyphens",
+                        value,
+                    )
+                continue
+            if cleaned not in tags:
+                tags.append(cleaned)
+        return tags
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Upload reading and validation
     # ------------------------------------------------------------------
-    def _publicize(self, path: str) -> str:
-        """Used to prefix a path with the PUBLIC_BASE_URL if configured."""
-        if not path:
-            return path
-        return f"{self.public_base}{path}" if self.public_base else path
-
-    def get_public_url_for_bucket(self, bucket_name: str, object_path: str, route_key: Optional[str] = None) -> str:
-        """Construct the public API route for a stored object."""
-        if route_key == "committee" and bucket_name == self.gallery_bucket:
-            base = "/api/committee/files/"
-        elif bucket_name == self.events_bucket:
-            base = "/api/events/files/"
-        elif bucket_name == self.gallery_bucket:
-            base = "/api/gallery/files/"
-        elif bucket_name == self.bucket_name:
-            base = "/api/profile/files/"
-        else:
-            base = f"/api/files/{bucket_name}/"
-        return self._publicize(f"{base}{quote(object_path)}")
-
     async def read_upload_capped(
         self, file: UploadFile, max_bytes: Optional[int] = None
     ) -> bytes:
         """Read an upload into memory without ever buffering more than ``max_bytes``.
 
-        ``await file.read()`` with no size argument pulls the entire body into the
-        process before any validation has run, so a single request can pin an arbitrary
-        amount of RAM for as long as the client keeps sending. Two guards, because
-        either one alone is bypassable:
+        ``await file.read()`` with no size argument pulls the entire body into the process
+        before any validation has run, so a single request can pin an arbitrary amount of RAM
+        for as long as the client keeps sending. Two guards, because either one alone is
+        bypassable:
 
-        1. the size the multipart parser already read off the part headers, which
-           refuses an oversize upload without touching its body at all;
-        2. a chunked read that stops as soon as the accumulated bytes pass the cap. This
-           is the one that matters, because a chunked request carries no declared
-           length for the first guard to check.
+        1. the size the multipart parser already read off the part headers, which refuses an
+           oversize upload without touching its body at all;
+        2. a chunked read that stops as soon as the accumulated bytes pass the cap. This is the
+           one that matters, because a chunked request carries no declared length for the first
+           guard to check.
 
-        Defaults to ``max_image_bytes`` so a profile picture and a love note image are
-        held to the same limit.
+        Defaults to ``max_image_bytes`` so a profile picture and a love note image are held to
+        the same limit.
         """
         limit = self.max_image_bytes if max_bytes is None else max_bytes
 
-        # getattr because UploadFile.size only exists on newer Starlette releases; when
-        # it is absent the size is simply unknown and the chunked read below covers it.
+        # getattr because UploadFile.size only exists on newer Starlette releases; when it is
+        # absent the size is simply unknown and the chunked read below covers it.
         declared = getattr(file, "size", None)
         if declared is not None and declared > limit:
             raise HTTPException(
-                status_code=413, detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB"
+                status_code=413,
+                detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB",
             )
 
         buffered = bytearray()
@@ -207,46 +263,46 @@ class CloudinaryStorageService:
             buffered.extend(chunk)
             if len(buffered) > limit:
                 raise HTTPException(
-                    status_code=413, detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB"
+                    status_code=413,
+                    detail=f"File too large. Maximum size is {limit // (1024 * 1024)}MB",
                 )
 
         return bytes(buffered)
 
-    def validate_image_file(self, file: UploadFile, content: bytes, max_size_mb: Optional[int] = None) -> str:
-        """Validate image size and content type.
+    def validate_image_file(
+        self, file: UploadFile, content: bytes, max_size_mb: Optional[int] = None
+    ) -> str:
+        """Validate an uploaded image's size, type and geometry.
 
-        If max_size_mb is provided, enforce that size limit.
-        If max_size_mb is None, no size validation is performed.
+        Returns the detected image format, derived from the file's own header rather than its
+        name or its ``Content-Type``, both of which the client chose.
         """
-        # Enforce size limit only if specified
         if max_size_mb is not None:
             max_bytes = int(max_size_mb) * 1024 * 1024
             if len(content) > max_bytes:
-                raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {max_size_mb}MB")
+                raise HTTPException(
+                    status_code=413, detail=f"File too large. Maximum size is {max_size_mb}MB"
+                )
 
         kind = self._get_image_format(content)
-        allowed_types = {"jpeg", "png", "gif", "webp"}
-        allowed_mimes = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
-
-        if (kind not in allowed_types) and (file.content_type not in allowed_mimes):
+        if kind not in BASE_ALLOWED_FORMATS and file.content_type not in BASE_ALLOWED_MIME_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed"
+                detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed",
             )
 
         if kind:
-            # A byte cap does not bound decoding: the same few KB can describe a bitmap
-            # that costs gigabytes to materialise, so the header geometry is checked too.
-            width, height = self._get_image_size(content)
-            self._check_image_dimensions(width, height)
+            # A byte cap does not bound decoding: the same few KB can describe a bitmap that
+            # costs gigabytes to materialise, so the header geometry is checked too.
+            self._check_image_dimensions(*self._get_image_size(content))
 
         return kind or "jpeg"
 
     def _check_image_dimensions(self, width: Optional[int], height: Optional[int]) -> None:
         """Reject images whose decoded pixel grid is too large to process safely.
 
-        Called with dimensions read from the image header, before any pixel data is
-        decoded, so the cost of the rejection is independent of the claimed size.
+        Called with dimensions read from the image header, before any pixel data is decoded, so
+        the cost of the rejection is independent of the claimed size.
         """
         if not width or not height or width < 1 or height < 1:
             raise HTTPException(status_code=400, detail="Invalid image data")
@@ -266,32 +322,51 @@ class CloudinaryStorageService:
                 detail=f"Image too large. Maximum total size is {self.max_image_pixels} pixels.",
             )
 
+    @staticmethod
+    def _get_image_format(content: bytes) -> Optional[str]:
+        """The image format read from the file's header, or None if it is not an image."""
+        try:
+            with Image.open(io.BytesIO(content)) as img:
+                return (img.format or "").lower() or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _get_image_size(content: bytes) -> Tuple[Optional[int], Optional[int]]:
+        """Read ``(width, height)`` from the header.
+
+        ``Image.open`` is lazy, so this does not decompress the image: a decompression bomb is
+        rejected here without ever being materialised.
+        """
+        try:
+            with Image.open(io.BytesIO(content)) as img:
+                return img.size
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
     def decode_base64_image(self, image_base64: str) -> Tuple[bytes, str, Tuple[int, int]]:
         """Decode and validate a base64-encoded image, bounding work at every stage.
 
-        Used by JSON-body upload paths, where the encoded string is already fully
-        resident in memory by the time this runs. The order of the checks is the point:
+        Used by the love note upload, where the encoded string is already fully resident in
+        memory by the time this runs. The order of the checks is the point:
 
-        1. the encoded length, because ``b64decode`` allocates a second buffer of the
-           same order and an unbounded body is the cheapest way to exhaust memory;
+        1. the encoded length, because ``b64decode`` allocates a second buffer of the same order
+           and an unbounded body is the cheapest way to exhaust memory;
         2. the decoded length, before the buffer is handed to an image parser;
-        3. format and header dimensions, read from the image header only -- PIL's
-           ``Image.open`` is lazy, so nothing is decompressed until ``.size`` is
-           compared against the limits above.
+        3. format and header dimensions, read from the image header only.
 
-        The first check is O(1) and happens before the payload is even scanned, so the
-        cost of refusing a large body does not grow with the size of that body.
+        The first check is O(1) and happens before the payload is even scanned, so the cost of
+        refusing a large body does not grow with the size of that body.
 
-        Returns:
-            Tuple of (decoded bytes, lowercase format, (width, height)).
+        Returns ``(decoded bytes, lowercase format, (width, height))``.
         """
         if not isinstance(image_base64, str):
             raise HTTPException(status_code=400, detail="Image data is required")
 
-        # Checked against the raw field, before anything scans it. Stripping the data
-        # URI prefix and folding whitespace out can only make the string shorter, so
-        # this is exact and it costs O(1) -- an oversized body is turned away without
-        # walking its tens of megabytes, let alone decoding it.
+        # Checked against the raw field, before anything scans it. Stripping the data URI prefix
+        # and folding whitespace out can only make the string shorter, so this is exact and it
+        # costs O(1) -- an oversized body is turned away without walking its tens of megabytes,
+        # let alone decoding it.
         if len(image_base64) > self.max_base64_chars:
             raise HTTPException(
                 status_code=413,
@@ -300,8 +375,8 @@ class CloudinaryStorageService:
 
         # Accept both a bare base64 string and a data URI ("data:image/png;base64,...").
         payload = image_base64.split(",", 1)[1] if "," in image_base64 else image_base64
-        # Fold out any whitespace, which is legal in base64 but would otherwise count
-        # against the encoded-length budget without contributing any decoded bytes.
+        # Fold out any whitespace, which is legal in base64 but would otherwise count against the
+        # encoded-length budget without contributing any decoded bytes.
         payload = "".join(payload.split())
         if not payload:
             raise HTTPException(status_code=400, detail="Image data is required")
@@ -320,17 +395,7 @@ class CloudinaryStorageService:
                 detail=f"File too large. Maximum size is {self.max_image_size_mb}MB",
             )
 
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            width, height = img.size
-            image_format = (img.format or "").lower() or None
-            img.close()
-        except HTTPException:
-            raise
-        except Exception:
-            # Unreadable, truncated, or a decompression bomb PIL refused outright.
-            raise HTTPException(status_code=400, detail="Invalid image data")
-
+        image_format = self._get_image_format(image_bytes)
         if not image_format:
             raise HTTPException(status_code=400, detail="Invalid image data")
         if image_format not in self.allowed_extensions:
@@ -339,812 +404,407 @@ class CloudinaryStorageService:
                 detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed",
             )
 
+        width, height = self._get_image_size(image_bytes)
         self._check_image_dimensions(width, height)
         return image_bytes, image_format, (width, height)
 
-    def generate_object_path(self, user_folder: str, filename: str, image_type: str) -> str:
-        """Generate a unique path with a random string for security (prevents URL guessing).
-        
-        Format: {user_folder}/{random_string}/{timestamp}_{filename}
-        The random string makes URLs unpredictable while keeping them organized by user.
+    # ------------------------------------------------------------------
+    # Public identifier layout
+    # ------------------------------------------------------------------
+    @staticmethod
+    def new_asset_id() -> str:
+        """An unguessable, path-safe identifier for one uploaded object.
+
+        18 url-safe bytes is 144 bits of entropy, which is far more than is needed to make a
+        single object's path unguessable and costs nothing to store. The alphabet is restricted to
+        the one :data:`_PUBLIC_ID_SEGMENT_RE` allows, so the generated value cannot introduce a
+        path separator or a traversal sequence into somebody else's folder.
         """
-        # Generate a secure random string (16 chars = 96 bits of entropy)
-        random_string = secrets.token_urlsafe(16)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        safe_filename = os.path.basename(filename or f"profile.{image_type}")
-        if not safe_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-            safe_filename = f"{safe_filename}.{image_type}"
-        # Sanitize filename to avoid spaces/special chars
-        safe_filename = re.sub(r"[^A-Za-z0-9_.-]+", "-", safe_filename)
-        return f"{user_folder}/{random_string}/{timestamp}_{safe_filename}"
+        return secrets.token_urlsafe(18).replace("-", "A").replace("_", "B")
 
-    def generate_generic_object_path(self, filename: str, image_type: Optional[str] = None, prefix: Optional[str] = None) -> str:
-        """Generate a unique path for non-user specific uploads with random string."""
-        random_string = secrets.token_urlsafe(16)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        base_name = filename or (f"image.{image_type}" if image_type else "file")
-        safe_filename = os.path.basename(base_name)
-        if image_type and not safe_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-            safe_filename = f"{safe_filename}.{image_type}"
-        # Sanitize filename
-        safe_filename = re.sub(r"[^A-Za-z0-9_.-]+", "-", safe_filename)
-        if prefix:
-            return f"{prefix}/{random_string}/{timestamp}_{safe_filename}"
-        return f"{random_string}/{timestamp}_{safe_filename}"
+    @classmethod
+    def profile_public_id(cls, owner_regno: str, asset_id: str) -> str:
+        """The public_id of a profile picture: ``profile_pics/{regno}/{opaque_id}/profile``.
 
-    def _build_public_id(self, bucket_name: str, object_path: str) -> str:
-        """Construct the Cloudinary public ID from a bucket and object path."""
-        combined = f"{bucket_name}/{object_path.lstrip('/')}" if bucket_name else object_path.lstrip("/")
-        base, _ = os.path.splitext(combined)
-        return base.rstrip("-_")
-
-    def build_public_id(self, bucket_name: str, object_path: str) -> str:
-        """Public helper to derive the Cloudinary public ID for an object path."""
-        return self._build_public_id(bucket_name, object_path)
-
-    def validate_object_path(self, object_path: Any) -> str:
-        """Validate an untrusted object path before it is turned into a public ID.
-
-        Upload helpers always generate paths shaped like
-        ``{folder}/{token}/{timestamp}_{name}.{ext}`` (see ``generate_object_path`` and
-        ``generate_generic_object_path``). Anything that cannot be produced by those
-        helpers is rejected here, so a caller-supplied path can never escape its
-        configured Cloudinary folder.
-
-        Returns the normalised path, or raises ``HTTPException`` with 400.
+        Grouping by regno keeps an account's pictures together and makes the folder obvious in a
+        Cloudinary console; the opaque middle segment is what stops a third party from guessing
+        somebody else's picture URL from their regno alone.
         """
-        if not isinstance(object_path, str):
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        return (
+            f"{PROFILE_FOLDER}/{_slug_segment(owner_regno)}/"
+            f"{_slug_segment(asset_id, limit=64)}/profile"
+        )
 
-        candidate = object_path.strip()
-        if not candidate or len(candidate) > self.OBJECT_PATH_MAX_LENGTH:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+    @staticmethod
+    def love_note_public_id(love_note_id: str) -> str:
+        """The public_id of a love note image: ``love_notes/{love_note_id}/image``.
 
-        # Absolute paths, Windows separators and traversal sequences are never generated,
-        # and are the only ways a path could reach a neighbouring folder or bucket.
-        if candidate.startswith("/") or "\\" in candidate or ".." in candidate:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        Keyed on the note's own id rather than on anything the sender supplied. That makes the
+        object one-to-one with the row: it cannot be re-pointed at a different note, a note's
+        image cannot be guessed from a display name, and a note's id -- which is already only
+        visible to the people entitled to see it -- is enough to find the object for deletion.
+        """
+        note_segment = _slug_segment(love_note_id)
+        if not re.fullmatch(r"[A-Za-z0-9-]{32,36}", note_segment):
+            raise HTTPException(status_code=400, detail="Invalid love note id")
+        return f"{LOVE_NOTES_FOLDER}/{note_segment}/image"
 
-        # Percent signs are excluded by the segment allow-list below; this explicit check
-        # keeps double-encoded traversal attempts from being silently normalised later.
-        if "%" in candidate:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+    @classmethod
+    def profile_owner_segment(cls, public_id: Optional[str]) -> Optional[str]:
+        """The regno segment of a profile public_id, or None if it is not one.
 
-        # NUL and other control characters can truncate paths in downstream consumers.
-        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in candidate):
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        Used by :meth:`delete_profile_asset` to refuse destroying an object that does not belong
+        to the account asking. The shape is fixed by :meth:`profile_public_id`, so this reads the
+        second segment and refuses anything that does not have exactly that shape.
+        """
+        if not public_id:
+            return None
+        segments = str(public_id).split("/")
+        if len(segments) != 4:
+            return None
+        root, owner, asset_id, filename = segments
+        if root != PROFILE_FOLDER or filename != "profile":
+            return None
+        if not all(_PUBLIC_ID_SEGMENT_RE.match(segment) for segment in (owner, asset_id)):
+            return None
+        return owner
 
-        segments = candidate.split("/")
-        if len(segments) < self.OBJECT_PATH_MIN_SEGMENTS:
-            raise HTTPException(status_code=400, detail="Invalid file path")
-        for segment in segments:
-            # Rejects empty segments ("//") and dot-only segments (".", "...") alike.
-            if not segment or set(segment) == {"."}:
-                raise HTTPException(status_code=400, detail="Invalid file path")
-            if not self._OBJECT_PATH_SEGMENT_RE.match(segment):
-                raise HTTPException(status_code=400, detail="Invalid file path")
+    @staticmethod
+    def love_note_id_segment(public_id: Optional[str]) -> Optional[str]:
+        """The note id segment of a love note public_id, or None if it is not one.
 
-        _, ext = os.path.splitext(segments[-1])
-        if ext.lstrip(".").lower() not in self.allowed_extensions:
-            raise HTTPException(status_code=400, detail="Unsupported file type")
+        Symmetric with :meth:`profile_owner_segment`, and used for the same reason: a delete has
+        to be provably about the object the caller named, not about something that merely shares
+        a prefix.
+        """
+        if not public_id:
+            return None
+        segments = str(public_id).split("/")
+        if len(segments) != 3 or segments[0] != LOVE_NOTES_FOLDER or segments[2] != "image":
+            return None
+        if not all(_PUBLIC_ID_SEGMENT_RE.match(segment) for segment in segments):
+            return None
+        return segments[1]
 
-        return candidate
+    # ------------------------------------------------------------------
+    # Delivery URLs
+    # ------------------------------------------------------------------
+    def profile_delivery_url(
+        self, public_id: Optional[str], image_format: Optional[str]
+    ) -> Optional[str]:
+        """The ordinary public HTTPS URL for a profile picture.
 
-    def _validate_extension(self, filename: str) -> str:
-        """Used to validate the file extension for allowed image types."""
-        _, ext = os.path.splitext(filename)
-        clean = ext.lstrip(".").lower()
-        if not clean:
-            raise HTTPException(status_code=400, detail="Filename must include an image extension")
-        if clean not in self.allowed_extensions:
-            raise HTTPException(status_code=400, detail="Unsupported image type. Allowed: JPG, JPEG, PNG, GIF, WEBP")
-        return clean
-
-    def prepare_signed_upload(
-        self,
-        *,
-        route_key: str,
-        filename: str,
-        user_folder: Optional[str] = None,
-        prefix: Optional[str] = None,
-        resource_type: str = "image",
-        ttl_seconds: int = 900,
-    ) -> Dict[str, object]:
-        """Generate a short-lived Cloudinary signature for direct client uploads."""
+        No transformation is requested: a delivery URL that is only valid for the original upload
+        cannot be used to smuggle a different rendition past the checks above, and the frontend
+        already renders these through ``<img>`` with its own CSS sizing. What is left out is
+        exactly what a URL could otherwise be used for -- re-encoding the stored object into
+        whatever shape a caller liked.
+        """
+        if not public_id:
+            return None
         self._ensure_enabled()
-
-        bucket_name = self._route_bucket_map.get(route_key)
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="Invalid upload target")
-
-        cfg = cloudinary.config(secure=True)
-        api_secret = getattr(cfg, "api_secret", None)
-        api_key = getattr(cfg, "api_key", None)
-        cloud_name = getattr(cfg, "cloud_name", None)
-
-        if not api_key or not api_secret or not cloud_name:
-            raise HTTPException(status_code=500, detail="Cloudinary credentials are not fully configured")
-
-        extension = self._validate_extension(filename)
-
-        if route_key == "profile":
-            if not user_folder:
-                raise HTTPException(status_code=400, detail="display name is required for profile uploads")
-            object_path = self.generate_object_path(user_folder, filename, extension)
-        else:
-            resolved_prefix = prefix
-            if route_key == "committee" and not resolved_prefix:
-                resolved_prefix = "committee"
-            object_path = self.generate_generic_object_path(filename, extension, prefix=resolved_prefix)
-
-        public_id = self._build_public_id(bucket_name, object_path)
-        timestamp = int(time.time())
-        expires_at = timestamp + int(ttl_seconds)
-
-        # Decide the suggested max bytes to return to the client BEFORE building the params
-        # so that it can be included in the signature parameters.
-        # Profile uploads: strict small size (2MB). Others: generous large cap (100MB).
-        suggested_max_bytes = 2 * 1024 * 1024 if route_key == "profile" else 100 * 1024 * 1024
-
-        # Enhanced security parameters for upload (must be assembled after suggested_max_bytes is defined)
-        # IMPORTANT: Only include parameters here that the client will ALSO send to Cloudinary.
-        # Excluding max_file_size from signing because the frontend currently omits it, causing signature mismatch.
-        params_to_sign = {
-            "public_id": public_id,
-            "created_at": timestamp,
-            "invalidate": "true",
-            "overwrite": "false",
-            "access_mode": "public",  # Use public access with random strings
-            # Add file type restrictions
-            "allowed_formats": ",".join(sorted(self.allowed_extensions)),
-        }
-
-        # Optionally include transformation hints (only if explicitly enabled)
-        if self.use_advanced_transforms:
-            params_to_sign.update({
-                "eager": "q_auto,f_auto",
-                "colors": "true",
-                "faces": "true",
-            })
-
-        signature = api_sign_request(params_to_sign, api_secret)
-
-        upload_url = f"https://api.cloudinary.com/v1_1/{cloud_name}/{resource_type}/upload"
-        asset_url = self.get_public_url_for_bucket(bucket_name, object_path, route_key)
-        secure_url = self.get_secure_url_for_bucket(bucket_name, object_path)
-
-        params = {k: str(v) for k, v in params_to_sign.items()}
-        # Provide advisory (not signed) limits separately so frontend can enforce client-side if desired
-        params_advisory = {
-            "max_file_size": str(suggested_max_bytes)
-        }
-
-        response: Dict[str, object] = {
-            "upload_url": upload_url,
-            "api_key": api_key,
-            "cloud_name": cloud_name,
-            "signature": signature,
-            "created_at": timestamp,
-            "public_id": public_id,
-            "object_path": object_path,
-            "asset_url": asset_url,
-            "secure_url": secure_url,
-            "expires_at": expires_at,
-            "resource_type": resource_type,
-            "params": params,
-            "advisory": params_advisory,
-            "allowed_extensions": tuple(sorted(self.allowed_extensions)),
-            "max_file_bytes": suggested_max_bytes,
-        }
-
-        return response
-
-    # ------------------------------------------------------------------
-    # Signed Delivery URL helpers (view / download)
-    # ------------------------------------------------------------------
-    def generate_temporary_view_url(self, route_key: str, object_path: str, ttl_seconds: Optional[int] = None) -> str:
-        """Generate a short-lived signed URL for viewing an existing stored asset.
-
-        NOTE: This MUST only be called from an authenticated backend route; do not
-        expose this method directly to untrusted callers. ``object_path`` is validated
-        because routes forward request paths straight into it.
-        """
-        if not self.enabled:
-            raise HTTPException(status_code=503, detail="Object storage disabled")
-        if not self.can_sign:
-            raise HTTPException(status_code=503, detail="Cloudinary signing credentials are not configured")
-        bucket_name = self._route_bucket_map.get(route_key)
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="Invalid route key")
-        object_path = self.validate_object_path(object_path)
-        # The caller's window is honoured but clamped by _resolve_view_ttl, which makes
-        # CLOUDINARY_DEFAULT_VIEW_TTL the default and CLOUDINARY_MAX_VIEW_TTL the ceiling.
-        # Overriding the caller's value here instead would make both settings inert.
-        return self.get_signed_url_for_bucket(bucket_name, object_path, expires_in_seconds=ttl_seconds)
-
-    def build_dynamic_transform_url(self, route_key: str, object_path: str, *, width: Optional[int] = None,
-                                    height: Optional[int] = None, quality: str = "auto", format_auto: bool = True,
-                                    crop: Optional[str] = None, secure: Optional[bool] = None) -> str:
-        """Build (optionally transformed) public delivery URL for an image.
-
-        Use for on-demand thumbnails instead of storing multiple variants. ``secure``
-        defaults to the configured CLOUDINARY_SECURE_URLS rather than plain HTTP.
-        """
-        if not self.enabled:
-            raise HTTPException(status_code=503, detail="Object storage disabled")
-        if secure is None:
-            secure = self.secure_urls
-        bucket_name = self._route_bucket_map.get(route_key)
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="Invalid route key")
-        public_id = self._build_public_id(bucket_name, object_path)
-        transformation = []
-        if width or height:
-            t = {k: v for k, v in {"width": width, "height": height}.items() if v}
-            if crop:
-                t["crop"] = crop
-            transformation.append(t)
-        fmt = None
-        if format_auto:
-            fmt = None  # let Cloudinary decide via fetch_format=auto
         url, _ = cloudinary_url(
             public_id,
-            secure=secure,
             resource_type="image",
-            quality=quality,
-            fetch_format="auto" if format_auto else None,
-            type="upload",  # Use standard upload type
-            transformation=transformation if transformation else None,
+            type="upload",
+            format=image_format or None,
+            secure=True,
         )
         return url
 
-    # ------------------------------------------------------------------
-    # Post-upload verification (defense-in-depth for advisory limits)
-    # ------------------------------------------------------------------
-    def verify_uploaded_asset(self, route_key: str, object_path: str) -> Dict[str, object]:
-        """Fetch the asset metadata from Cloudinary and enforce server-side policies.
+    def love_note_delivery_url(
+        self, public_id: Optional[str], image_format: Optional[str]
+    ) -> Optional[str]:
+        """A signed HTTPS URL for one love note image.
 
-        Intended to be called AFTER the client reports a successful direct upload.
-        You can store returned metadata in DB if needed.
+        Cloudinary refuses an ``authenticated`` object unless the request carries a valid
+        signature over its URL path, and validates that signature itself against the API secret.
+        The signature minted here covers this one object's path, so it authorises this URL and
+        nothing else -- a signature taken from one note cannot be moved onto another, because
+        the public ID is part of what gets signed.
+
+        The caller is responsible for having decided the viewer is entitled: a signature proves
+        *when* someone was allowed to see this image, not *that* they were, so minting one for
+        an unentitled viewer would hand out the capability it is supposed to gate.
+
+        The signature does not expire. Cloudinary's expiring mechanism is the authentication
+        token, which needs an account-wide Auth token key that is not available on this plan,
+        and which is a different thing entirely from a URL signature -- see ``config``. That
+        makes an issued URL a durable bearer capability, so the entitlement check above is the
+        only gate there ever is, and the URL is derived per-response rather than stored.
+
+        Fails closed. A URL that came back unsigned is a URL Cloudinary will refuse on every
+        fetch, so the failure is raised here where the message can say why, rather than in the
+        browser as a broken image. There is no public or proxied fallback: serving a love note
+        from a weaker path because the strong one was unconfigured would be a privacy incident,
+        not a degradation.
         """
-        if not self.enabled:
-            raise HTTPException(status_code=503, detail="Object storage disabled")
-        bucket_name = self._route_bucket_map.get(route_key)
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="Invalid route key")
-        public_id = self._build_public_id(bucket_name, object_path)
-        try:
-            info = cloudinary_api.resource(public_id, resource_type="image", type="upload")
-        except Exception as exc:  # broad catch: Cloudinary raises different exceptions
-            raise HTTPException(status_code=404, detail=f"Asset not found: {exc}")
-
-        bytes_size = info.get("bytes")
-        fmt = (info.get("format") or "").lower()
-        if bytes_size and bytes_size > self.max_image_bytes:
-            # Optional: schedule deletion for oversize asset
-            try:
-                cloudinary_destroy(public_id, resource_type="image", invalidate=True)
-            except Exception:
-                pass
-            raise HTTPException(status_code=413, detail="Uploaded file exceeds allowed size")
-        if fmt and fmt not in self.allowed_extensions:
-            try:
-                cloudinary_destroy(public_id, resource_type="image", invalidate=True)
-            except Exception:
-                pass
-            raise HTTPException(status_code=415, detail="Unsupported media format")
-        return {
-            "public_id": public_id,
-            "bytes": bytes_size,
-            "format": fmt,
-            "width": info.get("width"),
-            "height": info.get("height"),
-            "created_at": info.get("created_at"),
-            "secure_url": info.get("secure_url"),
-        }
-
-    def upload_profile_image(self, *, file: UploadFile, content: bytes, user_folder: str) -> Dict[str, object]:
-        """Upload a profile image to Cloudinary as a public asset with random URL."""
+        if not public_id:
+            return None
         self._ensure_enabled()
-        if not self.bucket_name:
-            raise HTTPException(status_code=500, detail="Profile storage bucket is not configured")
 
-        resolved_name = (user_folder or "user").strip() or "user"
-        image_format = self.validate_image_file(file, content, max_size_mb=self.max_image_size_mb)
-        object_path = self.generate_object_path(resolved_name, file.filename or "profile", image_format)
-        public_id = self.build_public_id(self.bucket_name, object_path)
+        url, _ = cloudinary_url(
+            public_id,
+            resource_type="image",
+            type="authenticated",
+            format=image_format or None,
+            secure=True,
+            # This is the SDK's SHA-1 URL signature, keyed by the API secret -- the same
+            # credential the upload already used, so nothing account-side has to be configured.
+            # No ``auth_token`` is passed: supplying one would make the SDK skip this signature
+            # and emit an ``__cld_token__`` parameter instead, which needs the account's Auth
+            # token key and is unavailable here.
+            sign_url=True,
+        )
+        if not url or not SIGNED_URL_PATTERN.search(url):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Love note image delivery is not configured",
+            )
+        return url
+
+    # ------------------------------------------------------------------
+    # Uploads
+    # ------------------------------------------------------------------
+    def upload_profile_image(
+        self, *, file: UploadFile, content: bytes, owner_regno: str
+    ) -> Dict[str, str]:
+        """Upload a profile picture as a public object and return its identity.
+
+        Returns ``{"public_id": ..., "format": ...}``. There is deliberately no URL in the return
+        value: the caller stores what identifies the object, and every consumer that needs an
+        address derives one for itself.
+        """
+        self._ensure_enabled()
+        image_format = self.validate_image_file(
+            file, content, max_size_mb=self.max_image_size_mb
+        )
+        public_id = self.profile_public_id(owner_regno, self.new_asset_id())
 
         try:
-            upload_result = cloudinary_upload(
+            result = cloudinary_upload(
                 io.BytesIO(content),
                 public_id=public_id,
                 resource_type="image",
-                overwrite=True,
-                invalidate=True,
-                access_mode="public",  # Use public access instead of authenticated
-                type="upload",  # Use standard upload type
-                filename=file.filename or f"{resolved_name}-profile.{image_format}",
+                type="upload",
+                overwrite=False,
+                # Deliberately no ``access_mode`` and no ``access_control``. An explicit
+                # ``access_mode`` is how a deployment ends up with a public CDN URL for an object
+                # that is actually stored private (the URL still resolves, it just 401s, which
+                # looks like a broken image rather than a misconfiguration); omitting both is what
+                # leaves Cloudinary's own public default in place for an ordinary ``upload``.
+                filename=f"profile.{image_format}",
+                tags=self._asset_tags(settings.CLOUDINARY_PROFILE_ASSET_TAG),
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to upload profile image: {exc}")
+            logger.error("Cloudinary profile upload failed for %s: %s", owner_regno, exc)
+            raise HTTPException(
+                status_code=500, detail="Failed to upload profile image"
+            ) from exc
 
-        # Get the public URL from Cloudinary's response
-        cloudinary_url_result = upload_result.get("secure_url") or upload_result.get("url")
-        
-        # Also generate our own clean URL for consistency
-        _, ext = os.path.splitext(object_path)
-        fmt = ext.lstrip(".") or None
-        url, _ = cloudinary_url(
-            public_id,
-            format=fmt,
-            secure=self.secure_urls,
-            resource_type="image",
-            type="upload",
-        )
+        stored_public_id = result.get("public_id") or public_id
+        stored_format = (result.get("format") or image_format).lower()
 
-        return {
-            "object_path": object_path,
-            "public_id": upload_result.get("public_id", public_id),
-            "cloudinary_url": cloudinary_url_result or url,  # Full Cloudinary URL
-            "url": cloudinary_url_result or url,  # Alias for consistency
-            "version": upload_result.get("version"),
-        }
-
-    def get_signed_profile_url(self, identifier: Optional[str]) -> Optional[str]:
-        """Return the profile URL. Since we now store full Cloudinary URLs with random strings,
-        we can return them directly without additional signing.
-        
-        If identifier is already a full URL, return it.
-        If it's an object path, construct the public URL from it.
-        """
-        if not self.enabled:
-            return None
-        
-        if not identifier:
-            return None
-            
-        # If it's already a full URL (http/https), return it directly
-        if identifier.startswith("http://") or identifier.startswith("https://"):
-            return identifier
-            
-        # If it's a data URL, return it
-        if identifier.startswith("data:"):
-            return identifier
-            
-        # Otherwise, it's an object path - construct the public URL
-        try:
-            return self._build_public_url(self.bucket_name, identifier)
-        except Exception:
-            return None
-
-    def with_profile_signed_url(self, user_doc: Optional[Dict[str, Any]], *, field: str = "profile_picture_url") -> Optional[Dict[str, Any]]:
-        """Return a shallow copy of ``user_doc`` with a signed profile picture URL."""
-        if not user_doc:
-            return user_doc
-        doc_copy: Dict[str, Any] = dict(user_doc)
-        doc_copy[field] = self.get_signed_profile_url(doc_copy.get(field))
-        return doc_copy
-
-    def _build_secure_url(self, bucket_name: str, object_path: str) -> str:
-        """Construct a direct URL to a Cloudinary asset."""
-        _, ext = os.path.splitext(object_path)
-        fmt = ext.lstrip(".") or None
-        public_id = self._build_public_id(bucket_name, object_path)
-        url, _ = cloudinary_url(
-            public_id,
-            format=fmt,
-            secure=self.secure_urls,
-            resource_type="image",
-            type="upload",
-        )
-        return url
-
-    def _build_public_url(self, bucket_name: str, object_path: str) -> str:
-        """Construct a public URL to a Cloudinary asset (alias for _build_secure_url)."""
-        return self._build_secure_url(bucket_name, object_path)
-
-    def get_secure_url_for_bucket(self, bucket_name: str, object_path: str) -> str:
-        """Public helper to get a public URL for an object in a specific bucket."""
-        return self._build_secure_url(bucket_name, object_path)
-
-    def get_origin_url(self, route_key: str, object_path: str, secure: bool = True) -> str:
-        """Return the untransformed Cloudinary origin URL for an object.
-
-        Used by the asset delivery proxy, which fetches bytes server-side. Unlike
-        ``_build_secure_url`` this defaults to HTTPS so the backend never issues a
-        plain-HTTP request to the object store.
-        """
-        if not self.enabled:
-            raise HTTPException(status_code=503, detail="Object storage is disabled")
-        bucket_name = self._route_bucket_map.get(route_key)
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="Invalid route key")
-        public_id = self._build_public_id(bucket_name, object_path)
-        _, ext = os.path.splitext(object_path)
-        url, _ = cloudinary_url(
-            public_id,
-            format=ext.lstrip(".") or None,
-            secure=secure,
-            resource_type="image",
-            type="upload",
-        )
-        return url
-
-    def _resolve_view_ttl(self, requested: Optional[int]) -> int:
-        """Clamp a requested view lifetime into the configured window.
-
-        CLOUDINARY_DEFAULT_VIEW_TTL supplies the window when a caller does not ask for one
-        and CLOUDINARY_MAX_VIEW_TTL caps it, so a caller cannot mint a link that outlives
-        the policy just by passing a large ttl_seconds.
-        """
-        ttl = self.default_view_ttl if requested is None else int(requested)
-        return max(1, min(ttl, self.max_view_ttl))
-
-    def get_signed_url_for_bucket(self, bucket_name: str, object_path: str, expires_in_seconds: Optional[int] = None) -> str:
-        """Generate a signed, time-limited delivery URL for an image in a specific bucket.
-
-        The expiry is enforced by Cloudinary against a signature over ``expires_at``, not
-        by this service, so the link really does stop working once the window closes. That
-        enforcement only holds for assets uploaded with ``access_mode="authenticated"``;
-        the upload paths in this service still upload public assets, which stay reachable
-        at their unsigned URL regardless of what this returns. Treat these links as
-        short-lived convenience URLs, not as the access-control boundary for public assets.
-
-        Args:
-            bucket_name: The name of the bucket containing the object
-            object_path: The path to the object within the bucket
-            expires_in_seconds: Requested lifetime; clamped to the configured window
-        """
-        if not self.enabled:
-            raise HTTPException(status_code=503, detail="Object storage is disabled")
-        if not self.can_sign:
-            raise HTTPException(status_code=503, detail="Cloudinary signing credentials are not configured")
-
-        public_id = self._build_public_id(bucket_name, object_path)
-        _, ext = os.path.splitext(object_path)
-        expires_at = int(time.time()) + self._resolve_view_ttl(expires_in_seconds)
-        return private_download_url(
-            public_id,
-            ext.lstrip(".") or None,
-            resource_type="image",
-            type="authenticated",
-            expires_at=expires_at,
-        )
-
-    def _extract_from_cloudinary_url(self, url: str, bucket_name: str) -> Optional[str]:
-        """Used to parse an object path from a full Cloudinary URL."""
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return None
-
-        path = parsed.path.lstrip("/")
-        if not path:
-            return None
-
-        segments = path.split("/")
-        if len(segments) < 3:
-            return None
-
-        # Skip cloud_name, resource_type, delivery_type
-        rest = segments[3:]  # Skip /cloud_name/image/upload/
-
-        # Find the version part (v followed by digits)
-        version_index = None
-        for i, part in enumerate(rest):
-            if part.startswith("v") and part[1:].isdigit():
-                version_index = i
-                break
-
-        if version_index is None:
-            return None
-
-        # Public ID is everything after the version
-        public_id_parts = rest[version_index + 1:]
-        if not public_id_parts:
-            return None
-
-        public_id = "/".join(public_id_parts)
-
-        # Remove bucket prefix if present
-        if bucket_name and public_id.startswith(f"{bucket_name}/"):
-            public_id = public_id[len(bucket_name) + 1:]
-
-        return public_id
-
-    def _extract_object_path(self, identifier: Optional[str], route_key: str, bucket_name: Optional[str]) -> Optional[str]:
-        """Used to extract a clean object path from various identifier formats."""
-        if not identifier:
-            return None
-
-        value = str(identifier).strip()
-        if not value:
-            return None
-
-        if value.startswith("/api/"):
-            remainder = value[len("/api/"):]
-            parts = remainder.split("/", 2)
-            if len(parts) >= 3 and parts[1] == "files":
-                route = parts[0]
-                if route == route_key:
-                    return unquote(parts[2])
-            # Generic pattern: /api/files/<bucket>/<object>
-            if remainder.startswith("files/"):
-                generic = remainder[len("files/"):]
-                if bucket_name and generic.startswith(f"{bucket_name}/"):
-                    generic = generic[len(bucket_name) + 1:]
-                return unquote(generic)
-
-        if value.startswith("http://") or value.startswith("https://"):
-            return self._extract_from_cloudinary_url(value, bucket_name or "")
-
-        return unquote(value.lstrip("/"))
-
-    def normalize_stored_path(self, identifier: Optional[str], route_key: str) -> Optional[str]:
-        """Used to normalize a stored identifier into a consistent object path."""
-        bucket_name = self._route_bucket_map.get(route_key)
-        return self._extract_object_path(identifier, route_key, bucket_name)
-
-    def _get_image_format(self, content: bytes) -> Optional[str]:
-        """Determine the image format from its binary content."""
-        try:
-            img = Image.open(io.BytesIO(content))
-            return img.format.lower() if img.format else None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _get_image_size(content: bytes) -> Tuple[Optional[int], Optional[int]]:
-        """Read (width, height) from the image header, without decoding any pixels."""
-        try:
-            img = Image.open(io.BytesIO(content))
-            width, height = img.size
-            img.close()
-            return width, height
-        except Exception:
-            return None, None
-    # ------------------------------------------------------------------
-    # Deletion operations
-    # ------------------------------------------------------------------
-    def delete_file(self, object_path: str) -> bool:
-        """Used to delete a file from the default bucket."""
-        return self.delete_file_from_bucket(self.bucket_name, object_path)
-
-    def delete_file_from_bucket(
-        self,
-        bucket_name: str,
-        object_path: Optional[str],
-        *,
-        actor: Optional[str] = None,
-        asset_kind: Optional[str] = None,
-    ) -> bool:
-        """Used to delete a file from a specified bucket.
-
-        ``actor`` and ``asset_kind`` are recorded on both the success and failure paths.
-        Destructive Cloudinary calls are otherwise invisible after the fact: a wrong
-        public_id is destroyed immediately and there is no way to tell afterwards which
-        account caused it.
-        """
-        if not object_path:
-            return False
-        if not self.enabled:
-            return False
-        public_id = self._build_public_id(bucket_name, object_path)
-        try:
-            result = cloudinary_destroy(public_id, resource_type="image", invalidate=True)
-        except Exception as exc:
-            # Log the full detail server-side; the client only ever sees a generic
-            # message, because the raw Cloudinary error embeds the bucket and public_id.
+        # Defence in depth against an account-level setting that forces non-public delivery. The
+        # upload itself is harmless either way -- the URL above is derived, not stored -- but
+        # leaving an object behind that the CDN will not serve is an orphan nobody can find.
+        access_mode = (result.get("access_mode") or "").lower()
+        if result.get("access_control") or access_mode in {"authenticated", "private"}:
             logger.error(
-                "Cloudinary delete failed bucket=%s kind=%s actor=%s public_id=%s: %s",
-                bucket_name, asset_kind, actor, public_id, exc, exc_info=True,
+                "Cloudinary returned a non-public profile upload for %s (access_mode=%s, "
+                "access_control=%s); destroying it",
+                owner_regno, access_mode, result.get("access_control"),
             )
-            raise HTTPException(status_code=500, detail="Failed to delete file")
-        deleted = result.get("result") in {"ok", "not found"}
+            self._destroy(stored_public_id, delivery_type="authenticated")
+            raise HTTPException(
+                status_code=500, detail="Failed to upload profile image"
+            )
+
         logger.info(
-            "Cloudinary delete bucket=%s kind=%s actor=%s public_id=%s result=%s",
-            bucket_name, asset_kind, actor, public_id, result.get("result"),
+            "Stored profile image for %s as %s.%s", owner_regno, stored_public_id, stored_format
         )
-        return deleted
+        return {"public_id": stored_public_id, "format": stored_format}
 
-    @staticmethod
-    def asset_owner_segment(object_path: Optional[str]) -> Optional[str]:
-        """Return the account folder that owns ``object_path``, or None if unknowable.
+    def upload_love_note_image(
+        self, *, image_base64: str, love_note_id: str
+    ) -> Dict[str, str]:
+        """Upload a love note image as a private, signed-delivery object and return its identity.
 
-        Every generated path is ``{owner}/{token}/{filename}`` (see
-        ``generate_object_path``), so the first segment is the owner. This is the same
-        fact ``asset_delivery_service`` relies on to authorise reads; deletion has to
-        agree with it, or an account could be unable to see an asset yet still destroy it.
-        """
-        if not object_path:
-            return None
-        head = str(object_path).split("/", 1)[0].strip()
-        return head or None
-
-    def delete_profile_asset(
-        self, identifier: Optional[str], *, owner_regno: str
-    ) -> bool:
-        """Used to delete a user's profile asset, refusing anything they do not own.
-
-        The identifier is a stored column, not a trusted input, and the URL parser
-        accepts any host -- so a value that was copied, or written by an admin creating
-        a user, can name a different account's object. Requiring the parsed path to sit
-        under the caller's own folder makes that impossible regardless of how the column
-        came to hold the value.
-
-        ``owner_regno`` is keyword-only and required so that no new call site can forget
-        it: an unowned delete is exactly the bug this guards against.
-        """
-        object_path = self.normalize_stored_path(identifier, "profile")
-        if not object_path:
-            return False
-
-        if not owner_regno or not str(owner_regno).strip():
-            # Without a known owner there is nothing to check against, so refuse rather
-            # than risk destroying an asset that belongs to somebody else.
-            logger.warning(
-                "Refused profile asset delete: no owning account supplied (actor=%s, public_id=%s)",
-                owner_regno, self._build_public_id(self.bucket_name, object_path),
-            )
-            return False
-
-        owner_segment = self.asset_owner_segment(object_path)
-        if owner_segment != str(owner_regno).strip():
-            logger.warning(
-                "Refused profile asset delete: path is not owned by the requesting "
-                "account (actor=%s, path_owner=%s, public_id=%s)",
-                owner_regno, owner_segment,
-                self._build_public_id(self.bucket_name, object_path),
-            )
-            return False
-
-        return self.delete_file_from_bucket(
-            self.bucket_name, object_path, actor=owner_regno, asset_kind="profile"
-        )
-
-    def delete_event_asset(self, identifier: Optional[str]) -> bool:
-        """Used to delete an asset associated with an event."""
-        object_path = self.normalize_stored_path(identifier, "events")
-        return self.delete_file_from_bucket(
-            self.events_bucket, object_path, asset_kind="events"
-        )
-
-    def delete_gallery_asset(self, identifier: Optional[str]) -> bool:
-        """Used to delete an asset from the gallery."""
-        object_path = self.normalize_stored_path(identifier, "gallery")
-        return self.delete_file_from_bucket(
-            self.gallery_bucket, object_path, asset_kind="gallery"
-        )
-
-    def delete_committee_asset(self, identifier: Optional[str]) -> bool:
-        """Used to delete a committee-related asset."""
-        object_path = self.normalize_stored_path(identifier, "committee")
-        return self.delete_file_from_bucket(
-            self.gallery_bucket, object_path, asset_kind="committee"
-        )
-
-    def upload_love_note_image(self, *, image_base64: str, sender_name: str) -> Dict[str, Any]:
-        """Upload a love note image (base64) to Cloudinary with a secure random URL.
-        
-        This method:
-        1. Decodes the base64 image data, refusing payloads that exceed the encoded,
-           decoded, or per-side/total-pixel limits
-        2. Validates it's a proper, supported image
-        3. Generates a secure, unpredictable path using random tokens
-        4. Uploads to Cloudinary in a dedicated love_notes folder
-        5. Returns the Cloudinary URL for storage in the database
-        
-        Args:
-            image_base64: Base64 encoded image string (with or without data URI prefix)
-            sender_name: display name of the sender (used for organizing files)
-            
-        Returns:
-            Dictionary containing the Cloudinary URL and metadata
-
-        Raises:
-            HTTPException: 400 for undecodable/invalid data, 413 when the payload
-                exceeds a size or dimension limit, 415 for an unsupported format.
+        Returns ``{"public_id": ..., "format": ...}``, the same shape as
+        :meth:`upload_profile_image` and for the same reason: identity is durable, a URL is not.
         """
         self._ensure_enabled()
-        
-        # Create a dedicated folder for love notes if not configured
-        love_notes_bucket = os.getenv("CLOUDINARY_LOVE_NOTES_FOLDER", "love_notes")
-        
+        image_bytes, image_format, _dimensions = self.decode_base64_image(image_base64)
+        public_id = self.love_note_public_id(love_note_id)
+
         try:
-            # Decoding and validation are bounded before the buffer is parsed; see
-            # decode_base64_image for why the checks run in that order.
-            image_bytes, image_format, (width, height) = self.decode_base64_image(image_base64)
-            
-            # Generate a secure random path for the love note
-            random_string = secrets.token_urlsafe(16)
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", sender_name)
-            filename = f"love_note_{timestamp}.{image_format}"
-            object_path = f"{safe_name}/{random_string}/{filename}"
-            
-            # Build the Cloudinary public_id
-            public_id = self._build_public_id(love_notes_bucket, object_path)
-            
-            # Upload to Cloudinary
-            upload_result = cloudinary_upload(
+            result = cloudinary_upload(
                 io.BytesIO(image_bytes),
                 public_id=public_id,
                 resource_type="image",
-                overwrite=False,  # Don't overwrite - each note should be unique
-                invalidate=True,
-                access_mode="public",
-                type="upload",
-                filename=filename,
-                # Second line of defence, for anything that reached Cloudinary without
-                # passing the local checks. "limit" scales to fit inside the box and
-                # never upscales, so a note at or below the limits is stored untouched
-                # while an oversized one cannot be stored or delivered unbounded.
-                transformation={
-                    "width": self.max_image_dimension,
-                    "height": self.max_image_dimension,
-                    "crop": "limit",
-                },
+                # ``authenticated`` is what makes Cloudinary refuse delivery without a valid
+                # signature; ``upload`` on a public account would be served to anybody who had the
+                # URL.
+                type="authenticated",
+                # Deliberately no ``access_control``. This used to apply
+                # ``[{"access_type": "token"}]``, and that was a trap: Cloudinary *accepted* and
+                # stored the ACL on an account with no Auth token key, reported it back in the
+                # upload response so the verification below "passed", and then rejected the
+                # signature-based URL the app actually issues -- so every love note image would
+                # have been undeliverable while the upload log claimed it was protected.
+                #
+                # The ACL is now actively harmful and is asserted absent. A token ACL is not a
+                # stronger version of a signed URL, it is a *different* requirement: it makes
+                # Cloudinary demand a real token and treat the signature as insufficient. See
+                # ``config`` for why the expiring token mechanism is unavailable on this plan.
+                overwrite=False,
+                filename=f"love-note.{image_format}",
+                tags=self._asset_tags(settings.CLOUDINARY_LOVE_NOTE_ASSET_TAG),
             )
-            
-            # Get the secure URL from Cloudinary
-            cloudinary_secure_url = upload_result.get("secure_url") or upload_result.get("url")
-            
-            return {
-                "object_path": object_path,
-                "public_id": upload_result.get("public_id", public_id),
-                "cloudinary_url": cloudinary_secure_url,
-                "url": cloudinary_secure_url,
-                "version": upload_result.get("version"),
-                "format": upload_result.get("format", image_format),
-                "width": width,
-                "height": height,
-            }
-            
-        except HTTPException:
-            raise
-        except Exception:
-            # Log the cause server-side; the raw Cloudinary error embeds the bucket and
-            # public_id, so the client only ever sees a generic message.
-            logger.error("Failed to upload love note image to Cloudinary", exc_info=True)
+        except Exception as exc:
+            logger.error("Cloudinary love note upload failed for note %s: %s", love_note_id, exc)
             raise HTTPException(
-                status_code=500, 
-                detail="Failed to upload love note image to Cloudinary"
+                status_code=500, detail="Failed to upload love note image"
+            ) from exc
+
+        stored_public_id = result.get("public_id") or public_id
+        stored_format = (result.get("format") or image_format).lower()
+        stored_type = (result.get("type") or "").lower()
+        stored_access_control = result.get("access_control") or []
+
+        # Verify Cloudinary stored what was asked for, in the direction that actually matters.
+        # Two failure modes, and the second is the one that bites:
+        #
+        # * Not stored as ``authenticated`` -- the object would be publicly fetchable, so it is
+        #   destroyed rather than left behind.
+        # * Stored with a token ACL -- the object is private but *undeliverable*, because nothing
+        #   here can mint a valid token. Destroying it makes the deployment fail loudly at send
+        #   time, which is the only honest outcome; keeping it would produce a note whose image
+        #   silently 403s in the recipient's inbox forever.
+        token_acl = any(
+            isinstance(entry, dict) and entry.get("access_type") == "token"
+            for entry in stored_access_control
+        )
+        if stored_type != "authenticated" or token_acl:
+            logger.error(
+                "Cloudinary stored love note %s in a state we cannot deliver "
+                "(type=%s, access_control=%s); destroying it",
+                love_note_id, stored_type, stored_access_control,
+            )
+            self._destroy(stored_public_id, delivery_type=stored_type or "authenticated")
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Love note image delivery is not available: the configured Cloudinary "
+                    "account did not store the image as private signed-delivery content."
+                ),
             )
 
-    def delete_love_note_image(self, cloudinary_url: str) -> bool:
-        """Delete a love note image from Cloudinary using its URL.
-        
-        Args:
-            cloudinary_url: The Cloudinary URL of the love note image
-            
-        Returns:
-            True if deletion was successful, False otherwise
+        logger.info("Stored love note image for note %s as %s", love_note_id, stored_public_id)
+        return {"public_id": stored_public_id, "format": stored_format}
+
+    # ------------------------------------------------------------------
+    # Deletion
+    # ------------------------------------------------------------------
+    def _destroy(self, public_id: str, *, delivery_type: str) -> None:
+        """Destroy one object, raising on an unexpected Cloudinary failure.
+
+        ``invalidate=True`` drops the cached rendition as well as the original. Without it a
+        deleted object can still be served from Cloudinary's CDN cache for a while afterwards,
+        which would make "the note is gone" untrue at the CDN for as long as the cache entry lived.
         """
         try:
-            # Extract public_id from the Cloudinary URL
-            # Cloudinary URLs typically look like: https://res.cloudinary.com/{cloud_name}/image/upload/v{version}/{public_id}.{format}
-            love_notes_bucket = os.getenv("CLOUDINARY_LOVE_NOTES_FOLDER", "love_notes")
-            
-            # Try to extract the object path from the URL
-            if love_notes_bucket in cloudinary_url:
-                # Parse out the path after the bucket name
-                parts = cloudinary_url.split(love_notes_bucket + "/")
-                if len(parts) > 1:
-                    # Get everything after the bucket name, remove extension
-                    object_path = parts[1].split("?")[0]  # Remove query params
-                    base, _ = os.path.splitext(object_path)
-                    return self.delete_file_from_bucket(love_notes_bucket, base)
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"Failed to delete love note image: {str(e)}")
+            cloudinary_destroy(
+                public_id, resource_type="image", type=delivery_type, invalidate=True
+            )
+        except Exception as exc:
+            logger.error("Cloudinary destroy failed for %s: %s", public_id, exc, exc_info=True)
+            raise
+
+    def delete_profile_asset(self, public_id: Optional[str], *, owner_regno: str) -> bool:
+        """Destroy a profile picture, refusing anything the requesting account does not own.
+
+        ``public_id`` comes from a database column and ``owner_regno`` from the account asking, so
+        neither is trusted on its own: the identity is checked to sit under that account's own
+        folder before anything is destroyed. ``owner_regno`` is keyword-only and required so a new
+        call site cannot forget it -- an unowned delete is exactly the bug this guards against.
+
+        Returns True when the object is gone afterwards, whether or not it was there to begin
+        with: "already deleted" is the outcome the caller wanted, and treating a missing object as
+        a failure would make a retried deletion look like an error forever.
+        """
+        self._ensure_enabled()
+        if not public_id:
             return False
 
-    def list_user_files(self, user_folder: str, limit: int = 10) -> list:
-        """List files for a specific user. Currently a placeholder."""
-        # Cloudinary listing not currently required; return empty list for compatibility.
-        return []
+        owner_segment = self.profile_owner_segment(public_id)
+        if not owner_regno or not str(owner_regno).strip():
+            logger.warning(
+                "Refused profile asset delete: no owning account supplied (public_id=%s)",
+                public_id,
+            )
+            return False
+        if owner_segment is None or owner_segment != _slug_segment(owner_regno):
+            logger.warning(
+                "Refused profile asset delete: %s is not owned by %s",
+                public_id, owner_regno,
+            )
+            return False
+
+        try:
+            result = cloudinary_destroy(
+                public_id, resource_type="image", type="upload", invalidate=True
+            )
+        except Exception as exc:
+            logger.error(
+                "Cloudinary profile delete failed for %s (owner %s): %s",
+                public_id, owner_regno, exc, exc_info=True,
+            )
+            return False
+        logger.info(
+            "Deleted profile asset %s for %s (result=%s)",
+            public_id, owner_regno, result.get("result"),
+        )
+        return True
+
+    def delete_love_note_asset(self, public_id: Optional[str]) -> bool:
+        """Destroy a love note image.
+
+        Takes the public_id read from the authoritative row, not a value derived from a request,
+        and checks it has the love note layout before acting -- so a corrupt or hand-written value
+        cannot make a note's deletion destroy an unrelated object.
+
+        A missing object is success. The row is being deleted either way, and the alternative --
+        treating "Cloudinary has never heard of it" as an error -- would leave a note that cannot
+        be deleted at all because its image was removed by hand.
+
+        An unexpected failure raises an :class:`HTTPException` carrying a fixed message rather than
+        the SDK's exception. Cloudinary's error text embeds the cloud name and the public_id, so a
+        re-raise would hand both to any caller that forwards ``exc.detail`` -- and "wrap it in a
+        handler" is exactly the kind of rule a future caller forgets. The real cause is logged with
+        a traceback first, so nothing is lost by not propagating it.
+        """
+        self._ensure_enabled()
+        if not public_id:
+            return False
+        if self.love_note_id_segment(public_id) is None:
+            logger.error("Refused love note asset delete: %s is not a love note public_id", public_id)
+            return False
+
+        try:
+            result = cloudinary_destroy(
+                public_id, resource_type="image", type="authenticated", invalidate=True
+            )
+        except Exception as exc:
+            logger.error("Cloudinary love note delete failed for %s: %s", public_id, exc, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete file",
+            )
+
+        outcome = (result or {}).get("result")
+        logger.info("Deleted love note asset %s (result=%s)", public_id, outcome)
+        return outcome in {"ok", "not found"}
 
 
 # Create a global instance for use across the application

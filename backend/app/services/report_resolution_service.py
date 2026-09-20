@@ -23,8 +23,9 @@ complaint. Only the reporter is told, and what they are told is that it was revi
 about it, because the report's foreign key cascades from the content -- deleting the post
 would delete the record that it was reported and ruled on, and the audit trail with it. What
 changes is visibility: every participant-facing read filters on ``removed_at IS NULL``, staff
-surfaces do not and carry the flag instead, and the asset proxy stops serving a removed love
-note's image even to a delivery URL that was minted while it was still live.
+surfaces do not and carry the flag instead, and the image itself is destroyed at the store, so
+a delivery URL that was minted while the note was live stops resolving rather than going on
+serving a picture of something a moderator took down.
 
 **What the author is told depends on how the content came down, not on what happened to it.**
 The same write is reached two ways: a ``removed`` ruling on a report, and a direct hide from a
@@ -416,7 +417,7 @@ def resolve_love_note_report(
     as a love note, and a report is one person's word about a note that is judged on its own
     merits -- overwriting the two into one column is how a queue and a note list end up
     disagreeing about a note's state. Removal is recorded on ``removed_at``, which is what the
-    recipient's inbox and the image proxy both read.
+    recipient's inbox and the entitlement check behind a delivery URL both read.
     """
     _assert_resolution_status(status_value)
     if not is_valid_id(report_id):
