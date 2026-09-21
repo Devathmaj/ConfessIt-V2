@@ -1,5 +1,6 @@
 import os
 import secrets
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -103,6 +104,51 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REDIS_URL: str = "redis://redis:6379"
     CLOUD: bool = False
+
+    # --- Passwordless login: magic-link token lifetime ---
+    #
+    # One login link is good for one redemption inside this window and then it is gone
+    # for good. The bounds are enforced rather than documented: a link that outlives a
+    # few minutes is a bearer credential sitting in a browser history entry, and a link
+    # that expires too fast to be clicked is a support ticket. Ten to fifteen minutes is
+    # the range where both failure modes stay rare.
+    LOGIN_TOKEN_EXPIRE_MINUTES: int = Field(default=15, ge=10, le=15)
+
+    # --- Passwordless login: layered request limits ---
+    #
+    # Three independent keys, deliberately in increasing order of breadth, because they
+    # defend against three different attacks:
+    #
+    #   account  one link per registration number per window, so one account cannot be
+    #            spammed. Keyed by the *submitted* registration number rather than by a
+    #            resolved account id, so the cooldown behaves identically for a regno
+    #            that exists and one that does not -- otherwise the cooldown itself
+    #            would be a username-enumeration oracle.
+    #   client   one server-generated id in a secure cookie, so cycling through
+    #            sequential regnos (user1001, user1002, ...) hits a limit that does not
+    #            move when the username does. Strictest of the three.
+    #   ip       a coarse throttle on total request volume. Deliberately generous and
+    #            never permanent: many legitimate users share one address (campus NAT,
+    #            mobile carrier), so this is a brake, not a ban.
+    #
+    # The long account window is a second, wider catch on the same key: the short window
+    # alone allows one request every window forever, which is still a steady drip of
+    # link-minting for one account over an hour.
+    LOGIN_ACCOUNT_COOLDOWN_SECONDS: int = 300
+    LOGIN_ACCOUNT_LONG_WINDOW_SECONDS: int = 3600
+    LOGIN_ACCOUNT_LONG_WINDOW_LIMIT: int = 5
+    LOGIN_CLIENT_WINDOW_SECONDS: int = 300
+    LOGIN_CLIENT_LIMIT: int = 5
+    LOGIN_IP_WINDOW_SECONDS: int = 300
+    LOGIN_IP_LIMIT: int = 15
+
+    # The client id is opaque rate-limit state, not a credential: it grants nothing on
+    # its own and is only meaningful as a key. It is still a *server-generated* secret
+    # in the sense that no part of it is derived from anything the caller controls
+    # (user-agent, headers), so it cannot be forged into somebody else's bucket by
+    # rewriting a header.
+    LOGIN_CLIENT_COOKIE_NAME: str = "confessit_client_id"
+    LOGIN_CLIENT_COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
 
     # --- Hard ceilings on how many accounts of each kind may ever exist ---
     #

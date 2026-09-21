@@ -20,6 +20,9 @@ from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
                         has_capability, is_valid_account_type,
                         normalize_account_type)
 from ..logger import get_console_only_logger, get_logger
+from .login_rate_limit import (SCOPE_ACCOUNT, SCOPE_ACCOUNT_LONG, SCOPE_CLIENT,
+                               SCOPE_IP, RateLimitVerdict, evaluate_login_rate_limits,
+                               resolve_client_id)
 from .storage_service import storage_service
 
 logger = get_logger(__name__)
@@ -33,6 +36,29 @@ magic_link_logger = get_console_only_logger(__name__ + ".magic_link")
 # Single wording for every blocked-account rejection so the frontend can show
 # one message regardless of which endpoint refused the request.
 ACCOUNT_UNAVAILABLE_DETAIL = "Your account is currently not available. Please contact an administrator."
+
+# The one body every login request gets back, whether the registration number resolved,
+# did not resolve, belonged to a blocked account or was refused by a rate limit further
+# up. A response that changed shape with the answer would turn the sign-in form into an
+# existence oracle for registration numbers, which is exactly the probe the uniformity
+# exists to defeat. The details below are the only variation a caller can observe, and
+# none of them mentions an account, an address or whether anything was found.
+LOGIN_LINK_RESPONSE_MESSAGE = (
+    "If an account exists for that registration number, a login link has been generated. "
+    "Check the backend console."
+)
+
+_RATE_LIMIT_DETAILS: Dict[str, str] = {
+    SCOPE_CLIENT: "Too many login requests from this browser. Please try again in a few minutes.",
+    SCOPE_IP: "Too many login requests from this network. Please try again in a few minutes.",
+    SCOPE_ACCOUNT: (
+        "A login link for this registration number can be requested only once every few "
+        "minutes. Please try again shortly."
+    ),
+    SCOPE_ACCOUNT_LONG: (
+        "Too many login requests for this registration number. Please try again later."
+    ),
+}
 
 # What each sign-in page calls the kind of account it is for. Used in the one message a
 # person sees when their regno is not in that category, so that "no account for that
@@ -222,7 +248,58 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
     return _account_from_bearer_token(token, db)
 
 
-async def generate_magic_link_service(request: Request, db: Database, account_type: str):
+def _rate_limit_rejection(
+    verdict: RateLimitVerdict,
+    *,
+    account_type: str,
+    regno: str,
+    client_id: str,
+    ip: str,
+) -> HTTPException:
+    """Log which limiter refused a login request, and build the 429 that says so.
+
+    The log lines are the observability contract: one per scope, named the way an
+    operator would search for them. They carry the key that was counted -- a client id
+    or an ip, neither of which grants anything -- and never the token, because no token
+    exists yet at this point in the request and none ever needs to be in a log line.
+    """
+    if verdict.scope == SCOPE_CLIENT:
+        logger.warning(
+            f"Client rate limit triggered: client_id={client_id} ip={ip} "
+            f"retry_after={verdict.retry_after}s"
+        )
+    elif verdict.scope == SCOPE_IP:
+        logger.warning(
+            f"IP rate limit triggered: ip={ip} client_id={client_id} "
+            f"retry_after={verdict.retry_after}s"
+        )
+    elif verdict.scope == SCOPE_ACCOUNT:
+        logger.warning(
+            f"Account cooldown triggered: account_type={normalize_account_type(account_type)} "
+            f"regno={regno!r} retry_after={verdict.retry_after}s"
+        )
+    elif verdict.scope == SCOPE_ACCOUNT_LONG:
+        logger.warning(
+            f"Account rate limit triggered (long window): "
+            f"account_type={normalize_account_type(account_type)} regno={regno!r} "
+            f"retry_after={verdict.retry_after}s"
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=_RATE_LIMIT_DETAILS.get(
+            verdict.scope or "", "Too many login requests. Please try again later."
+        ),
+        headers={"Retry-After": str(verdict.retry_after)},
+    )
+
+
+async def generate_magic_link_service(
+    request: Request,
+    db: Database,
+    account_type: str,
+    client_id: Optional[str] = None,
+):
     """
     Mint a magic link for an account in one named account table.
 
@@ -235,6 +312,17 @@ async def generate_magic_link_service(request: Request, db: Database, account_ty
 
     The table is recorded on the token as well, so redemption reads the same one table
     rather than searching for the regno again.
+
+    Every path out of here that reaches the caller -- link minted, account unknown,
+    account blocked -- returns the same body, so nothing about the response distinguishes
+    a registration number that exists from one that does not. The rate limits run before
+    the lookup for the same reason: they are keyed on the submitted registration number,
+    so being cooled down says nothing about whether the account is real.
+
+    ``client_id`` is the caller's browser identity for the client-scoped limit. The
+    router resolves it from the request cookie and passes it in so the same value can be
+    written back into the response; a direct caller that supplies none gets one resolved
+    here instead.
     """
     if not is_valid_account_type(account_type):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown account type")
@@ -245,28 +333,51 @@ async def generate_magic_link_service(request: Request, db: Database, account_ty
     if not regno:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number is required")
 
+    if client_id is None:
+        client_id, _ = resolve_client_id(request)
+    client = getattr(request, "client", None)
+    ip = client.host if client is not None else "unknown"
+
+    verdict = evaluate_login_rate_limits(
+        db,
+        account_type=account_type,
+        regno=regno,
+        client_id=client_id,
+        ip=ip,
+    )
+    if not verdict.allowed:
+        raise _rate_limit_rejection(
+            verdict, account_type=account_type, regno=regno, client_id=client_id, ip=ip
+        )
+
     with db.sessions() as session:
         found = find_account_in_table(session, account_type, regno)
     if not found:
-        logger.warning(f"No {category} account found with registration number: {regno}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No {category} account with that registration number.",
-        )
+        logger.info(f"Login request accepted: no {category} account holds registration number {regno!r}")
+        return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
 
     resolved_type, account = found
 
-    # Reject blocked accounts before a token is minted, so no magic link is ever
-    # generated or logged for an account that could not use it.
-    _ensure_not_blocked(account)
+    # A blocked account gets the same answer as an unknown one and no token either way.
+    # Refusing it by name -- the 403 this used to return -- confirmed that the
+    # registration number exists, which is the disclosure the uniform body exists to
+    # remove. The block itself is still enforced: nothing is minted, and redemption
+    # re-checks it for a link that was issued before the block was set.
+    if account.is_blocked:
+        logger.warning(
+            f"Login request accepted but no link minted: {category} account "
+            f"{regno!r} is blocked"
+        )
+        return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
 
     from ..create_token import create_and_store_magic_token
     token = create_and_store_magic_token(db, str(account.id), resolved_type, request)
 
     magic_link = f"http://localhost:5173/verify-login?token={token}"
     magic_link_logger.info(f"Magic Link for {account.name}: {magic_link}")
+    logger.info(f"Login request accepted: magic link minted for {category} account {regno!r}")
 
-    return {"message": "Magic link generated. Check the backend console."}
+    return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
 
 
 def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):
@@ -290,12 +401,36 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     with db.sessions.begin() as session:
         login_token = session.scalar(select(LoginTokenRecord).where(
             LoginTokenRecord.token_hash == hashed_token,
-            LoginTokenRecord.used.is_(False),
-            LoginTokenRecord.revoked.is_(False),
-            LoginTokenRecord.expires_at > now,
         ))
 
-    if not login_token:
+    # The lookup reads by hash alone and the state is classified here, deliberately
+    # separate from the consume below: the client is told one thing ("invalid or
+    # expired") for all of these, while the log says which one actually happened, so
+    # an operator can tell a link that aged out from one an attacker is replaying
+    # without the answer to either becoming a signal to the caller.
+    if login_token is None:
+        logger.warning(
+            f"Invalid magic link token: no matching token "
+            f"(hash_hint={hashed_token[:12]}, ip={request.client.host})"
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+    if login_token.revoked:
+        logger.warning(f"Invalid magic link token: token {login_token.id} is revoked")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+    if login_token.used:
+        logger.warning(
+            f"Already-used magic link token: token {login_token.id} was consumed at "
+            f"{login_token.consumed_at}"
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+
+    expires_at = login_token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now:
+        logger.warning(
+            f"Expired magic link token: token {login_token.id} expired at {expires_at}"
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
 
     login_token_id = str(login_token.id)
@@ -348,11 +483,36 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
             )
         )
         if result.rowcount != 1:
+            # The conditional UPDATE is the only thing that makes single-use true under
+            # concurrency: two requests can both pass the classification read above, but
+            # they serialise on this row and PostgreSQL re-evaluates the predicate
+            # against the committed version, so exactly one of them updates it. Whoever
+            # loses re-reads the row to say which of the three refusals actually
+            # happened -- a loss to a racing request reads back as used.
+            fresh = session.get(LoginTokenRecord, login_token_id)
+            if fresh is None or fresh.revoked:
+                logger.warning(f"Invalid magic link token during redemption: token {login_token_id}")
+            elif fresh.used:
+                logger.warning(
+                    f"Already-used magic link token during redemption: token {login_token_id} "
+                    f"was consumed at {fresh.consumed_at}"
+                )
+            else:
+                logger.warning(
+                    f"Expired magic link token during redemption: token {login_token_id} "
+                    f"expired at {fresh.expires_at}"
+                )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
         account.last_login_at = now
         account.last_login_ip = consume_ip
         account.last_login_user_agent = consume_user_agent
         account_regno = account.regno
+
+    logger.info(
+        f"Magic link token verification success: token={login_token_id} "
+        f"account={account_id} account_type={normalize_account_type(account_type)}"
+    )
+
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     # The account's table and primary key, not just its regno. Every later request resolves

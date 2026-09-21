@@ -1,6 +1,6 @@
 # app/routers/auth.py
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from ..postgres import Database
 from typing import Annotated
 
@@ -13,6 +13,7 @@ from ..services.auth_service import (
     verify_magic_link_service,
     get_current_user
 )
+from ..services.login_rate_limit import client_cookie_options, resolve_client_id
 from pydantic import BaseModel
 
 router = APIRouter(
@@ -29,6 +30,7 @@ class Token(BaseModel):
 async def generate_magic_link(
     account_type: AccountType,
     request: Request,
+    response: Response,
     db: Database = Depends(get_db),
 ):
     """
@@ -40,8 +42,19 @@ async def generate_magic_link(
     used is the only thing that can say which account they mean when one regno exists as a
     participant and as staff at the same time. An unrecognised account type is a 404 from
     the path parser, not a default to some other table.
+
+    The client id lives here rather than in the service because it is an HTTP concern:
+    the service needs the value as a rate-limit key, and this layer is what writes it
+    back into the cookie when it was just created. Resolving it once and passing it down
+    keeps the key that was counted and the key that is stored the same value.
     """
-    return await generate_magic_link_service(request, db, account_type.value)
+    client_id, is_new_client = resolve_client_id(request)
+    payload = await generate_magic_link_service(
+        request, db, account_type.value, client_id=client_id
+    )
+    if is_new_client:
+        response.set_cookie(value=client_id, **client_cookie_options(request))
+    return payload
 
 @router.get("/login/magic/verify", response_model=Token)
 async def verify_magic_link(token: str, request: Request, db: Database = Depends(get_db)):

@@ -610,6 +610,29 @@ class LoginTokenRecord(Base):
     device: Mapped[Optional[str]] = mapped_column(String(512))
 
 
+class LoginRateLimitRecord(Base):
+    """One fixed-window counter for the passwordless-login request limits.
+
+    The whole of the rate-limit state is this table: one row per key, where the key names
+    the scope it counts (account cooldown, client id, source ip). A row is born with the
+    window it belongs to and ``expires_at`` set to the end of that window, so state that
+    is no longer being hit ages out on the next sweep instead of accumulating forever.
+
+    The window is reset by the increment itself rather than by a separate job: the
+    upsert in ``login_rate_limit`` compares ``window_started_at`` against the window it
+    is applying, and writes a fresh window when the stored one has run out. That keeps
+    read-modify-write in a single statement, so concurrent requests serialise on the row
+    lock and cannot both observe "one more request allowed" from the same snapshot.
+    """
+
+    __tablename__ = "login_rate_limits"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    hits: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class LoveNoteRecord(RemovedContentColumns, Base):
     __tablename__ = "love_notes"
 

@@ -4,6 +4,7 @@ import logging
 import secrets
 import hashlib
 from datetime import datetime, timedelta, timezone
+from .config import settings
 from .postgres import Database
 from .db_models import LoginTokenRecord
 from fastapi import Request
@@ -28,13 +29,16 @@ def create_and_store_magic_token(db: Database, account_id: str, account_type: st
     """
     # 1. Generate a new, secure token
     token = secrets.token_urlsafe(32)
-    
+
     # 2. Hash the token for database storage
     token_hash = hash_token(token)
-    
-    # 3. Set the token's issuance and expiration timestamps
+
+    # 3. Set the token's issuance and expiration timestamps. The lifetime is short and
+    # bounded by configuration (10-15 minutes): the plaintext token is a bearer
+    # credential that exists only in the developer console and the browser that clicks
+    # it, and it must stop working on its own whether or not anybody consumes it.
     issued_at = datetime.now(timezone.utc)
-    expires_at = issued_at + timedelta(hours=1)
+    expires_at = issued_at + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES)
     
     # 4. Create the LoginToken document
     login_token_entry = LoginToken(

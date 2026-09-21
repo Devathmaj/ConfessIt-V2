@@ -6,6 +6,7 @@ import psycopg
 from sqlalchemy import select
 
 from .accounts import AccountType
+from .config import settings
 from .db_models import ACCOUNT_MODELS, LoginTokenRecord
 from .postgres import PostgresClient
 
@@ -142,7 +143,8 @@ def main():
                 token_row = LoginTokenRecord(
                     account_id=account_row.id, account_type=account_type,
                     token_hash=hash_token(token), issued_at=issued_at,
-                    expires_at=issued_at + timedelta(hours=1), used=False, revoked=False,
+                    expires_at=issued_at + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES),
+                    used=False, revoked=False,
                     request_ip="127.0.0.1", request_user_agent="Test Script", attempt_count=0,
                     session_status="issued",
                 )
@@ -153,7 +155,7 @@ def main():
             seeded = [entry for entry in issued_tokens if entry[2] == account_type]
             print(f"\nSeeded {len(seeded)} account(s) in {account_type}.")
 
-        print("\nMagic link tokens, valid for one hour:")
+        print(f"\nMagic link tokens, valid for {settings.LOGIN_TOKEN_EXPIRE_MINUTES} minutes:")
         for regno, name, account_type, token in issued_tokens:
             print(f"  {regno:<10} {account_type:<10} {name:<22} {token}")
 

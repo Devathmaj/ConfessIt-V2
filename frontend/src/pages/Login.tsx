@@ -36,6 +36,11 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         headers: {
           'Content-Type': 'application/json',
         },
+        // The API answers these requests with an opaque client-id cookie used only to
+        // rate-limit login attempts per browser. Cross-origin fetches drop cookies
+        // unless they opt in, so without this the server would mint a fresh identity
+        // on every request and the per-browser limit would never engage.
+        credentials: 'include',
         body: JSON.stringify({ regno }),
       });
 

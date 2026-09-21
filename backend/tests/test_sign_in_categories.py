@@ -148,21 +148,34 @@ def test_each_sign_in_page_mints_a_link_for_its_own_account(client_with_no_auth_
 
 
 def test_a_page_refuses_a_regno_that_only_exists_in_another_table(client_with_no_auth_override, db):
-    """A moderator's regno typed on the participant page is not a participant."""
+    """A moderator's regno typed on the participant page is not a participant.
+
+    It is also indistinguishable from a regno nobody ever registered: the two requests
+    below get byte-for-byte the same answer, and neither mints a token. The old version
+    of this test asserted a 404 that named the page the person was on, which was a
+    working existence oracle -- it answered "no such participant" loudly enough to mean
+    "but it exists somewhere", and enumerating staff regnos is exactly what the sign-in
+    form must not become.
+    """
     with db.sessions.begin() as session:
         session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com"))
 
-    response = client_with_no_auth_override.post(
+    wrong_door = client_with_no_auth_override.post(
         f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": STAFF_ONLY}
     )
+    never_registered = client_with_no_auth_override.post(
+        f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": "never-registered"}
+    )
 
-    assert response.status_code == 404
-    # The message names the page the person is on, so they know which door to use. It does
-    # not confirm the regno exists anywhere, or in which other table.
-    detail = response.json()["detail"]
-    assert "participant" in detail
+    assert wrong_door.status_code == 200, wrong_door.text
+    assert never_registered.status_code == 200, never_registered.text
+    assert wrong_door.json() == never_registered.json()
+    # The answer names neither the regno it was given nor any other table it might live
+    # in, and it promises nothing about which door to try instead.
+    detail = wrong_door.json()["message"]
     assert STAFF_ONLY not in detail
     assert "moderator" not in detail
+    assert _minted_tokens(db) == []
 
 
 def test_a_refused_page_mints_nothing(client_with_no_auth_override, db):
