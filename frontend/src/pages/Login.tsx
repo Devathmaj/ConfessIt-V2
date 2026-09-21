@@ -26,6 +26,13 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   const [regno, setRegno] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // The same whitelist the backend enforces (app.services.auth_service._REGNO_PATTERN):
+  // Unicode letters and digits from any script, underscore, and the . / - a real regno
+  // carries. Rejecting here stops the request before it is made; the server is still the
+  // gate, this only stops a wasted round trip and explains the mistake in the person's
+  // own language.
+  const REGNO_PATTERN = /^[\p{L}\p{N}_.\-/]{1,100}$/u;
+
   /**
    * Turn the server's wait (seconds, from the `Retry-After` header on a 429) into the
    * sentence a person can act on. The rate-limited detail already says "try again
@@ -42,6 +49,15 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
     e.preventDefault();
     setIsLoading(true);
 
+    const trimmedRegno = regno.trim();
+    if (!REGNO_PATTERN.test(trimmedRegno)) {
+      toast.error(
+        'Registration number must be 1 to 100 characters long and may contain only letters, numbers and the punctuation . / - _.',
+      );
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch(magicLinkEndpoint(category.accountType), {
         method: 'POST',
@@ -53,13 +69,18 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         // unless they opt in, so without this the server would mint a fresh identity
         // on every request and the per-browser limit would never engage.
         credentials: 'include',
-        body: JSON.stringify({ regno }),
+        body: JSON.stringify({ regno: trimmedRegno }),
       });
 
+      const body = await response.json().catch(() => null);
       if (response.ok) {
-        toast.success('Magic link sent! Check your backend console.');
+        // The server's message, not a hand-written one. It answers plainly: a real
+        // account is told a link was generated, and a 404/403 explains the reason in
+        // the error toast below. The fallback only covers a body that never came back.
+        const message =
+          typeof body?.message === 'string' ? body.message : 'Magic link sent! Check your backend console.';
+        toast.success(message);
       } else {
-        const body = await response.json().catch(() => null);
         const detail = typeof body?.detail === 'string' ? body.detail : null;
         // A 429 names the wait it keeps in `Retry-After`, so the toast can say how long
         // instead of leaving "try again shortly" as the last word.
@@ -91,6 +112,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
             placeholder={category.regnoPlaceholder}
             value={regno}
             onChange={(e) => setRegno(e.target.value)}
+            maxLength={100}
             className={
               category.themed
                 ? 'pl-10 bg-background/80 border-romantic/30 focus:border-romantic'

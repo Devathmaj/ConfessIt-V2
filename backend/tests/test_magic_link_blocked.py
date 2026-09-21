@@ -4,20 +4,26 @@ The block used to be enforced only when the link was redeemed, so a blocked acco
 still handed a live, logged magic link on every request. These tests pin the refusal to
 the point where the link would have been minted.
 
-A blocked account now gets the same body as an unknown one rather than a 403 naming the
-block: a distinct error for "exists but blocked" confirms the registration number is
-real, which is the existence probe the sign-in response no longer answers. What these
-tests hold onto is the part that matters for abuse -- no token is minted, and nothing
-about the answer distinguishes the blocked account from one that was never registered.
+The sign-in form now answers plainly rather than uniformly: a blocked account is told it
+is blocked (403), an unregistered registration number is told it does not exist (404),
+and a real, unblocked account is told a link was generated. What these tests hold onto
+is the part that matters for abuse -- no token is ever minted for either refused outcome,
+and the account-scoped rate counter still runs for both.
 """
 
 import pytest
+from fastapi import HTTPException
 
 from app import create_token as create_token_module
 from app.accounts import AccountType
 from app.db_models import UserRecord
 from app.services import auth_service as auth_service_module
-from app.services.auth_service import LOGIN_LINK_RESPONSE_MESSAGE, generate_magic_link_service
+from app.services.auth_service import (
+    ACCOUNT_BLOCKED_DETAIL,
+    ACCOUNT_NOT_FOUND_DETAIL,
+    LOGIN_LINK_SENT_MESSAGE,
+    generate_magic_link_service,
+)
 from app.services.login_rate_limit import RateLimitVerdict
 
 
@@ -125,33 +131,32 @@ def minted_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_blocked_account_gets_no_link_and_no_block_specific_answer(minted_tokens):
+async def test_blocked_account_gets_no_link_and_is_refused_by_name(minted_tokens):
     db = _FakeDatabase({"blocked": make_user_row("blocked", is_blocked=True)})
 
-    result = await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
+    with pytest.raises(HTTPException) as exc:
+        await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
 
-    assert result == {"message": LOGIN_LINK_RESPONSE_MESSAGE}
-    assert "not available" not in result["message"]
+    assert exc.value.status_code == 403
+    assert exc.value.detail == ACCOUNT_BLOCKED_DETAIL
     assert minted_tokens == []
     assert db.added == []
 
 
 @pytest.mark.asyncio
-async def test_a_blocked_account_answers_identically_to_an_unknown_one(minted_tokens):
-    """Same body, same status, no token: the block must not read as confirmation.
+async def test_an_unknown_registration_number_is_refused_by_name(minted_tokens):
+    """No row, nothing minted, and the reason named instead of a cheerful non-answer."""
+    db = _FakeDatabase({})
 
-    The two requests differ only in whether a row exists behind them, which is the one
-    fact a sign-in form must never reveal. If they diverged, an attacker who had already
-    guessed a registration number could verify it by blocking... or simply by noticing
-    that every other answer looks different.
-    """
-    db = _FakeDatabase({"blocked": make_user_row("blocked", is_blocked=True)})
+    with pytest.raises(HTTPException) as exc:
+        await generate_magic_link_service(
+            _FakeRequest("never-registered"), db, AccountType.USERS.value
+        )
 
-    blocked = await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
-    unknown = await generate_magic_link_service(_FakeRequest("never-registered"), db, AccountType.USERS.value)
-
-    assert blocked == unknown
+    assert exc.value.status_code == 404
+    assert exc.value.detail == ACCOUNT_NOT_FOUND_DETAIL
     assert minted_tokens == []
+    assert db.added == []
 
 
 @pytest.mark.asyncio
@@ -160,5 +165,5 @@ async def test_active_account_still_gets_a_link(minted_tokens):
 
     result = await generate_magic_link_service(_FakeRequest("active"), db, AccountType.USERS.value)
 
-    assert result == {"message": LOGIN_LINK_RESPONSE_MESSAGE}
+    assert result == {"message": LOGIN_LINK_SENT_MESSAGE}
     assert minted_tokens == [(OWNER_ID, "users")]

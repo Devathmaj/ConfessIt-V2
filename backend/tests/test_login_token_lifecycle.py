@@ -30,7 +30,7 @@ from app.db_models import LoginTokenRecord, UserRecord, find_account_in_table
 from app.main import app
 from app.services import auth_service as auth_service_module
 from app.services import login_rate_limit as login_rate_limit_module
-from app.services.auth_service import LOGIN_LINK_RESPONSE_MESSAGE, hash_token
+from app.services.auth_service import ACCOUNT_NOT_FOUND_DETAIL, LOGIN_LINK_SENT_MESSAGE, hash_token
 
 LOGIN_ENDPOINT = f"/auth/login/{AccountType.USERS.value}/magic"
 VERIFY_ENDPOINT = "/auth/login/magic/verify"
@@ -252,13 +252,20 @@ def test_an_unrecognised_token_is_refused(db, auth_log):
 
 
 # ----------------------------------------------------------------------
-# The response never varies with whether the account exists
+# The answer varies with whether the account exists -- plainly
 # ----------------------------------------------------------------------
 
 
-def test_the_login_response_is_identical_for_a_real_and_an_invented_registration_number(
+def test_an_invented_registration_number_is_plainly_refused_and_still_rate_limited(
     db, clock
 ):
+    """A typo is told it is a typo, and the refusal still costs the next cooldown.
+
+    The account-scoped limit keys on the submitted registration number and runs before
+    the lookup, so hammering a registration number that does not exist burns the same
+    per-account budget as one that does: the refusal spends the window, and the follow-up
+    is refused with a 429 exactly like a real account's repeat request.
+    """
     _seed_user(db, "real-user")
     real_browser = _browser()
     invented_browser = _browser()
@@ -266,12 +273,18 @@ def test_the_login_response_is_identical_for_a_real_and_an_invented_registration
     real = real_browser.post(LOGIN_ENDPOINT, json={"regno": "real-user"})
     invented = invented_browser.post(LOGIN_ENDPOINT, json={"regno": "never-registered"})
 
-    assert real.status_code == invented.status_code == 200
-    assert real.json() == invented.json() == {"message": LOGIN_LINK_RESPONSE_MESSAGE}
+    # The real account is told a link was generated -- and no details about it leak.
+    assert real.status_code == 200
+    assert real.json() == {"message": LOGIN_LINK_SENT_MESSAGE}
     assert "real-user" not in real.text
     assert "real-user@example.com" not in real.text
     assert "Real User" not in real.text
 
+    # The invented one is plainly told it does not exist.
+    assert invented.status_code == 404
+    assert invented.json() == {"detail": ACCOUNT_NOT_FOUND_DETAIL}
+
+    # Both answers spent the account cooldown for that registration number.
     cooled_real = real_browser.post(LOGIN_ENDPOINT, json={"regno": "real-user"})
     cooled_invented = invented_browser.post(LOGIN_ENDPOINT, json={"regno": "never-registered"})
 
@@ -288,7 +301,7 @@ def test_the_login_response_never_echoes_account_details(db):
     assert response.status_code == 200
     assert "shy-user@example.com" not in response.text
     assert "Very Private Name" not in response.text
-    assert LOGIN_LINK_RESPONSE_MESSAGE in response.text
+    assert LOGIN_LINK_SENT_MESSAGE in response.text
 
 
 # ----------------------------------------------------------------------

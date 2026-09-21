@@ -3,6 +3,7 @@
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..postgres import Database
@@ -88,9 +89,26 @@ async def generate_magic_link(
     keeps the key that was counted and the key that is stored the same value.
     """
     client_id, is_new_client = resolve_client_id(request)
-    payload = await generate_magic_link_service(
-        request, db, account_type.value, client_id=client_id
-    )
+    try:
+        payload = await generate_magic_link_service(
+            request, db, account_type.value, client_id=client_id
+        )
+    except HTTPException as exc:
+        # FastAPI's own handler would build the error response from scratch and drop a
+        # client id this request just issued, so the refusal is built here, where the
+        # id is known. A request refused by the lookup or the rate limiter has already
+        # counted against this client, and unless the browser is given the id back it
+        # will be treated as a brand-new client -- handed a fresh budget -- on the very
+        # next request. That is what lets repeated sweeps of unknown registration
+        # numbers dodge the per-browser limit.
+        refusal = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+        if is_new_client:
+            refusal.set_cookie(value=client_id, **client_cookie_options(request))
+        return refusal
     if is_new_client:
         response.set_cookie(value=client_id, **client_cookie_options(request))
     return payload

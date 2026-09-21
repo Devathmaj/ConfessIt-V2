@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -16,6 +17,7 @@ from ..postgres import Database, is_valid_id
 
 from ..config import settings
 from ..dependencies import get_db
+from ..limits import USER_REGNO_MAX
 from ..models import AccountDetails, UserDetails
 from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
                         has_capability, is_valid_account_type,
@@ -69,16 +71,15 @@ SESSION_SUPERSEDED_DETAIL = (
 )
 _SESSION_SUPERSEDED_WWW_AUTHENTICATE = 'Bearer error="session_superseded"'
 
-# The one body every login request gets back, whether the registration number resolved,
-# did not resolve, belonged to a blocked account or was refused by a rate limit further
-# up. A response that changed shape with the answer would turn the sign-in form into an
-# existence oracle for registration numbers, which is exactly the probe the uniformity
-# exists to defeat. The details below are the only variation a caller can observe, and
-# none of them mentions an account, an address or whether anything was found.
-LOGIN_LINK_RESPONSE_MESSAGE = (
-    "If an account exists for that registration number, a login link has been generated. "
-    "Check the backend console."
-)
+# The sign-in form answers plainly. A real, unblocked account is told a link went out;
+# a registration number with no account is named as such; a blocked account is refused
+# by name. None of these answers echoes the submitted registration number or any account
+# field -- the only variation a caller can observe is the outcome itself. A request the
+# rate limiter refuses gets its own 429 instead of any of them, and a request the
+# validation gate refuses gets a 400.
+LOGIN_LINK_SENT_MESSAGE = "A login link has been generated. Check the backend console."
+ACCOUNT_NOT_FOUND_DETAIL = "No account is registered with that registration number."
+ACCOUNT_BLOCKED_DETAIL = "This account is blocked and cannot sign in."
 
 _RATE_LIMIT_DETAILS: Dict[str, str] = {
     SCOPE_CLIENT: "Too many login requests from this browser. Please try again in a few minutes.",
@@ -428,6 +429,42 @@ def _rate_limit_rejection(
     )
 
 
+# The only characters a registration number may be made of, enforced at sign-in so no
+# unvalidated string reaches a lookup, a rate-limit key or a log line. ``\w`` is Unicode
+# in a str pattern: letters and digits from any script, plus ``_``. The punctuation
+# ``. / -`` is what real regnos carry (e.g. ``22/CS0455``). Everything else -- whitespace,
+# control characters, quotes, angle brackets, ``&``, ``=``, ``;``, backslashes and the
+# rest -- is refused with a 400 before it can do anything. The length is ``USER_REGNO_MAX``,
+# the same bound the ``regno`` column and the admin account payloads enforce.
+_REGNO_PATTERN = re.compile(rf"^[\w./-]{{1,{USER_REGNO_MAX}}}$")
+
+
+def _validated_regno(value: Any) -> str:
+    """The submitted registration number, narrowed to what a regno may be, or a 400.
+
+    Runs before the rate limits so invalid input is refused without spending any budget,
+    and before the lookup so no unvalidated string ever reaches a query, a key or a log
+    line. Surrounding whitespace is trimmed first -- a pasted value with a stray space
+    still signs in -- and the trimmed value is what is searched and what keys the limits.
+    A value that is not a string (a list, a dict, a number) is invalid, never coerced.
+    """
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Registration number is required.",
+        )
+    candidate = value.strip()
+    if not candidate or not _REGNO_PATTERN.fullmatch(candidate):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Registration number must be 1 to 100 characters long and may contain "
+                "only letters, numbers and the punctuation . / - _."
+            ),
+        )
+    return candidate
+
+
 async def generate_magic_link_service(
     request: Request,
     db: Database,
@@ -447,11 +484,11 @@ async def generate_magic_link_service(
     The table is recorded on the token as well, so redemption reads the same one table
     rather than searching for the regno again.
 
-    Every path out of here that reaches the caller -- link minted, account unknown,
-    account blocked -- returns the same body, so nothing about the response distinguishes
-    a registration number that exists from one that does not. The rate limits run before
-    the lookup for the same reason: they are keyed on the submitted registration number,
-    so being cooled down says nothing about whether the account is real.
+    The answer names the outcome: a link for a real, unblocked account, a 404 naming the
+    unknown registration number for it, and a 403 naming the block. The rate limits run
+    before the lookup for a reason: they are keyed on the submitted registration number,
+    so being cooled down -- and paying the cooldown down -- happens for an invented
+    registration number exactly as it does for a real one.
 
     ``client_id`` is the caller's browser identity for the client-scoped limit. The
     router resolves it from the request cookie and passes it in so the same value can be
@@ -462,10 +499,19 @@ async def generate_magic_link_service(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown account type")
     category = ACCOUNT_CATEGORY_LABELS[normalize_account_type(account_type)]
 
-    form_data = await request.json()
-    regno = form_data.get("regno")
-    if not regno:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number is required")
+    try:
+        form_data = await request.json()
+    except ValueError:  # a malformed body carries no fields to gate; refuse it cleanly
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The request body must be valid JSON.",
+        ) from None
+    if not isinstance(form_data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The request body must be a JSON object.",
+        )
+    regno = _validated_regno(form_data.get("regno"))
 
     if client_id is None:
         client_id, _ = resolve_client_id(request)
@@ -487,22 +533,27 @@ async def generate_magic_link_service(
     with db.sessions() as session:
         found = find_account_in_table(session, account_type, regno)
     if not found:
-        logger.info(f"Login request accepted: no {category} account holds registration number {regno!r}")
-        return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
+        logger.info(
+            f"Login request refused: no {category} account holds registration number {regno!r}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ACCOUNT_NOT_FOUND_DETAIL,
+        )
 
     resolved_type, account = found
 
-    # A blocked account gets the same answer as an unknown one and no token either way.
-    # Refusing it by name -- the 403 this used to return -- confirmed that the
-    # registration number exists, which is the disclosure the uniform body exists to
-    # remove. The block itself is still enforced: nothing is minted, and redemption
-    # re-checks it for a link that was issued before the block was set.
+    # A blocked account is refused by name, and the block bites here -- nothing is
+    # minted -- while redemption re-checks it for a link that was issued before the
+    # block was set.
     if account.is_blocked:
         logger.warning(
-            f"Login request accepted but no link minted: {category} account "
-            f"{regno!r} is blocked"
+            f"Login request refused: {category} account {regno!r} is blocked"
         )
-        return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ACCOUNT_BLOCKED_DETAIL,
+        )
 
     from ..create_token import create_and_store_magic_token
     token = create_and_store_magic_token(db, str(account.id), resolved_type, request)
@@ -511,7 +562,7 @@ async def generate_magic_link_service(
     magic_link_logger.info(f"Magic Link for {account.name}: {magic_link}")
     logger.info(f"Login request accepted: magic link minted for {category} account {regno!r}")
 
-    return {"message": LOGIN_LINK_RESPONSE_MESSAGE}
+    return {"message": LOGIN_LINK_SENT_MESSAGE}
 
 
 def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):

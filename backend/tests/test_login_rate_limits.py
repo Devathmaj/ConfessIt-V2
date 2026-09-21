@@ -218,7 +218,7 @@ def test_the_client_limit_is_per_browser_not_per_ip(db):
     _seed_user(db, "colocated-user")
     throttled_browser = _browser()
     for regno in ("ghost-a", "ghost-b", "ghost-c", "ghost-d", "ghost-e"):
-        assert _login(throttled_browser, regno).status_code == 200
+        assert _login(throttled_browser, regno).status_code == 404
     assert _login(throttled_browser, "ghost-f").status_code == 429
 
     fresh_browser = _browser()
@@ -240,7 +240,7 @@ def test_the_ip_limit_throttles_many_distinct_clients_on_one_address(db):
         responses.append(_login(browser, f"ghost-{index}"))
 
     statuses = [response.status_code for response in responses]
-    assert statuses[:limit] == [200] * limit, statuses
+    assert statuses[:limit] == [404] * limit, statuses
     assert statuses[limit] == 429, statuses
     assert "network" in responses[limit].json()["detail"]
     assert int(responses[limit].headers["Retry-After"]) > 0
@@ -293,7 +293,7 @@ def test_the_client_id_is_issued_once_and_then_reused(db):
     assert row.hits == 2
 
     other_browser = _browser()
-    assert _login(other_browser, "ghost-c").status_code == 200
+    assert _login(other_browser, "ghost-c").status_code == 404
     assert other_browser.cookies.get(cookie_name) != issued
 
 
@@ -304,7 +304,7 @@ def test_a_malformed_client_cookie_is_reissued_rather_than_honoured(db):
 
     response = _login(browser, "ghost-a")
 
-    assert response.status_code == 200
+    assert response.status_code == 404
     issued = [cookie.value for cookie in browser.cookies.jar
               if cookie.name == cookie_name and cookie.value != "short"]
     assert issued, "the malformed value must be replaced with a fresh id"
@@ -317,7 +317,7 @@ def test_the_client_cookie_is_marked_secure_when_the_request_arrives_over_https(
 
     response = _login(browser, "ghost-a")
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 404
     assert "secure" in (response.headers.get("set-cookie") or "").lower()
 
 
@@ -329,7 +329,7 @@ def test_the_client_cookie_is_marked_secure_when_the_request_arrives_over_https(
 def test_rate_limit_state_expires_and_is_swept(db, clock):
     """Rows leave with their window, so the table only holds limits still being hit."""
     browser = _browser()
-    assert _login(browser, "ghost-expiry").status_code == 200
+    assert _login(browser, "ghost-expiry").status_code == 404
 
     stale_key = "login:ip:203.0.113.9"
     past = clock.current - timedelta(minutes=10)
@@ -342,7 +342,7 @@ def test_rate_limit_state_expires_and_is_swept(db, clock):
         ))
 
     clock.advance(settings.LOGIN_IP_WINDOW_SECONDS + 1)
-    assert _login(_browser(), "ghost-after-sweep").status_code == 200
+    assert _login(_browser(), "ghost-after-sweep").status_code == 404
 
     with db.sessions() as session:
         assert session.get(LoginRateLimitRecord, stale_key) is None
