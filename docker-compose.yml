@@ -42,8 +42,12 @@ services:
       - redis
       - postgres
     environment:
-      WATCHFILES_FORCE_POLLING: "true"
-      WATCHFILES_POLL_DELAY: "0.5"
+      # Auto-reload uses uvicorn's StatReload (mtime polling), not watchfiles: the
+      # Dockerfile uninstalls watchfiles, whose Rust-backed watcher crash-loops with
+      # `WatchfilesRustInternalError: os error 5` on this host's bind-mounted
+      # filesystem. `WATCHFILES_FORCE_POLLING`/`WATCHFILES_POLL_DELAY` used to force
+      # polling on that watcher and were removed once it was gone -- they no longer do
+      # anything, and StatReload needs no configuration to trust the mount.
       # Read by both the --limit-concurrency flag above and the app's own settings, so
       # the ceiling cannot differ between how the server is started and how it is
       # configured. Raising it widens what one process will hold at once, so the request

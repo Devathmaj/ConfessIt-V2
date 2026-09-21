@@ -471,6 +471,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `Retry-After` is a plain response header, so a cross-origin fetch cannot read it
+    # unless it is named here: the browser withholds non-safelisted response headers
+    # from JS unless the server publicly lists them. The login page turns the value it
+    # carries into "You can try again in about N minutes", so without this line that
+    # toast could never know how long the wait is. One name is listed, not a wildcard:
+    # the `*` value is not honoured with credentials, and this is the one header the
+    # client actually reads.
+    expose_headers=["Retry-After"],
 )
 
 # ----------------------
