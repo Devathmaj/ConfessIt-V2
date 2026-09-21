@@ -19,7 +19,7 @@ const getAuthHeaders = () => {
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
-    endSessionIfTokenWasRejected(error?.response?.status);
+    endSessionIfTokenWasRejected(error);
     return Promise.reject(error);
   }
 );

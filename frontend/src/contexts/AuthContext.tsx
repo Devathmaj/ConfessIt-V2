@@ -2,8 +2,9 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { jwtDecode } from 'jwt-decode';
+import { toast } from 'sonner';
 import { getCurrentUser } from '../services/api';
-import { AUTH_EXPIRED_EVENT } from '../lib/authEvents';
+import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
 import type { UserGender } from '../lib/accountFields';
@@ -181,6 +182,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+  }, [logout]);
+
+  // A session replaced by a newer login is also an ended session, but it deserves to be
+  // heard about: the token was valid, and the only thing that killed it was a sign-in on
+  // another device. The interceptor has already cleared the token and carried the server's
+  // explanation on the event, so this listener signs the person out and tells them why.
+  useEffect(() => {
+    const handleSessionSuperseded = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      console.warn('Access token was rejected because the session was replaced by a new login.', detail);
+      logout();
+      toast.error(detail);
+    };
+
+    window.addEventListener(SESSION_SUPERSEDED_EVENT, handleSessionSuperseded);
+    return () => window.removeEventListener(SESSION_SUPERSEDED_EVENT, handleSessionSuperseded);
   }, [logout]);
 
 

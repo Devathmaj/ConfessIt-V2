@@ -598,6 +598,8 @@ class LoginToken(BaseModel):
     session_status: str = "issued"
     last_seen_at: Optional[datetime] = None
     device: Optional[str] = None
+    superseded_at: Optional[datetime] = None
+    superseded_by: Optional[str] = None
 
     class Config:
         arbitrary_types_allowed = True

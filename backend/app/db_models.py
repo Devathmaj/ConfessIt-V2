@@ -608,6 +608,11 @@ class LoginTokenRecord(Base):
     session_status: Mapped[str] = mapped_column(String(16), default="issued", server_default=text("'issued'"), index=True)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     device: Mapped[Optional[str]] = mapped_column(String(512))
+    # One live session per account: when a newer login supersedes this one it records
+    # which session replaced it and when, so the old session's next request can tell its
+    # holder that they were signed out by a login on another device.
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    superseded_by: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False))
 
 
 class LoginRateLimitRecord(Base):

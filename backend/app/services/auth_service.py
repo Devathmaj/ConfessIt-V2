@@ -6,12 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, find_account_in_table,
                          resolve_account)
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from ..postgres import Database
+from ..postgres import Database, is_valid_id
 
 from ..config import settings
 from ..dependencies import get_db
@@ -36,6 +36,22 @@ magic_link_logger = get_console_only_logger(__name__ + ".magic_link")
 # Single wording for every blocked-account rejection so the frontend can show
 # one message regardless of which endpoint refused the request.
 ACCOUNT_UNAVAILABLE_DETAIL = "Your account is currently not available. Please contact an administrator."
+
+# The one live-session-per-account rule: exactly one of an account's sessions is `active`,
+# and every older login is `superseded` by the newest one. Read here so the wording of the
+# response, the comparison in the token check, and the state written at login cannot drift
+# apart.
+SESSION_STATUS_ACTIVE = "active"
+SESSION_STATUS_SUPERSEDED = "superseded"
+
+# What the superseded holder is told on their very next request, and what the frontend
+# surfaces as the reason they were signed out. Kept distinguishable from the generic
+# credentials wording so the client can show "signed in elsewhere" rather than "try again".
+# The `WWW-Authenticate` error is the machine-readable half, the detail the human one.
+SESSION_SUPERSEDED_DETAIL = (
+    "You have been signed out because a new session was opened on another device."
+)
+_SESSION_SUPERSEDED_WWW_AUTHENTICATE = 'Bearer error="session_superseded"'
 
 # The one body every login request gets back, whether the registration number resolved,
 # did not resolve, belonged to a blocked account or was refused by a rate limit further
@@ -168,7 +184,34 @@ def hash_token(token: str) -> str:
     """
     return hashlib.sha256(token.encode()).hexdigest()
 
-def _account_from_bearer_token(token: Optional[str], db: Database) -> Optional[Any]:
+def _session_advisory_lock_key(account_type: str, account_id: str) -> int:
+    """The advisory-lock key that serialises logins for *one* account.
+
+    ``account_cap`` serialises per account *table* with a fixed key; one-live-session needs
+    the same serialisation per account, because two logins racing for the same account would
+    otherwise both observe "no other active session" from the same snapshot and both go
+    active. The key is derived from the two identity facts a login already has (the table and
+    the row), masked to the positive bigint range advisory locks accept, so two logins for
+    different accounts never block each other.
+    """
+    digest = hashlib.sha256(f"{account_type}:{account_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
+
+
+def _session_superseded_exception() -> HTTPException:
+    """The 401 that tells the holder of a replaced session they were signed out elsewhere."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=SESSION_SUPERSEDED_DETAIL,
+        headers={"WWW-Authenticate": _SESSION_SUPERSEDED_WWW_AUTHENTICATE},
+    )
+
+def _account_from_bearer_token(
+    token: Optional[str],
+    db: Database,
+    *,
+    require_active_session: bool = True,
+) -> Optional[Any]:
     """Decode an access token and resolve it to a live account, or None.
 
     Shared by the three entry points so the re-read cannot drift between them. The token
@@ -181,10 +224,19 @@ def _account_from_bearer_token(token: Optional[str], db: Database) -> Optional[A
     demoted account is refused on its very next call, and a token minted for one table
     cannot be replayed as another.
 
+    The token also carries the id of the login-token row that became the session. That row
+    is re-read on every request too, which is what enforces one live session per account:
+    a session replaced by a newer login is ``superseded`` in the database, and its token is
+    refused here even though the JWT itself is still valid and unexpired. When
+    ``require_active_session`` is set (the mandatory dependencies), a superseded session is
+    refused with the dedicated 401 so its holder can be told they were signed in elsewhere;
+    the optional dependency treats it as no account at all, like an absent token.
+
     A token without those claims is rejected rather than resolved by regno. Such a token
-    was minted before the account's table was recorded in it, and honouring it by searching
-    is exactly the ambiguity this design removes; the cost is that sessions issued by an
-    older build end at their next request and their users sign in again.
+    was minted before the account's table -- or the session it belongs to -- was recorded in
+    it, and honouring it by searching is exactly the ambiguity this design removes; the cost
+    is that sessions issued by an older build end at their next request and their users sign
+    in again.
     """
     if token is None:
         return None
@@ -195,10 +247,38 @@ def _account_from_bearer_token(token: Optional[str], db: Database) -> Optional[A
         return None
     account_type = payload.get("account_type")
     account_id = payload.get("account_id")
+    session_id = payload.get("session_id")
     if not is_valid_account_type(account_type) or not account_id:
         logger.error("Access token is missing account_id/account_type claims")
         return None
+    if not session_id or not is_valid_id(session_id):
+        logger.error("Access token is missing session_id claim")
+        return None
     with db.sessions() as session:
+        session_row = session.get(LoginTokenRecord, session_id)
+        if session_row is None:
+            logger.error(f"Access token session {session_id} does not exist")
+            return None
+        if (
+            str(session_row.account_id) != str(account_id)
+            or normalize_account_type(session_row.account_type) != account_type
+        ):
+            logger.error(f"Access token session {session_id} belongs to a different account")
+            return None
+        if session_row.session_status == SESSION_STATUS_SUPERSEDED:
+            if not require_active_session:
+                return None
+            logger.warning(
+                f"Session superseded: session {session_id} was replaced by session "
+                f"{session_row.superseded_by}"
+            )
+            raise _session_superseded_exception()
+        if session_row.session_status != SESSION_STATUS_ACTIVE:
+            logger.error(
+                f"Access token session {session_id} is not active "
+                f"(status={session_row.session_status!r})"
+            )
+            return None
         row = resolve_account(session, account_type, account_id)
     if row is None or row.is_blocked:
         return None
@@ -245,7 +325,10 @@ def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db:
     Used to decode the JWT and return account details if the token is valid,
     but does not raise an error if the token is missing or invalid.
     """
-    return _account_from_bearer_token(token, db)
+    # A replaced session is "no account" here rather than a 401: this dependency is for the
+    # one surface that works while signed out, and a superseded token has lost the right to
+    # claim an identity on it exactly like a token that never had one.
+    return _account_from_bearer_token(token, db, require_active_session=False)
 
 
 def _rate_limit_rejection(
@@ -503,6 +586,41 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                     f"expired at {fresh.expires_at}"
                 )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+
+        # One live session per account. This login is now this account's session, so any
+        # older one is replaced -- recorded as superseded, with this session named as the
+        # replacement, so the old session's next request can tell its holder why it stopped
+        # working. This runs inside the same transaction as the consume above, behind an
+        # advisory lock keyed to *this* account, for the same reason account creation is
+        # locked: two logins racing for one account would otherwise both read "no other
+        # active session" from the same snapshot and both go active, and neither would have
+        # superseded the other. The lock serialises the pair, so whichever commits second
+        # sees the first's active session and replaces it -- exactly one stays live.
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _session_advisory_lock_key(account_type, account_id)},
+        )
+        superseded_count = session.execute(
+            update(LoginTokenRecord)
+            .where(
+                LoginTokenRecord.account_id == account_id,
+                LoginTokenRecord.account_type == account_type,
+                LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
+                LoginTokenRecord.id != login_token_id,
+            )
+            .values(
+                session_status=SESSION_STATUS_SUPERSEDED,
+                superseded_at=now,
+                superseded_by=login_token_id,
+            )
+        ).rowcount
+        if superseded_count:
+            logger.info(
+                f"Magic link verification superseded {superseded_count} older active session(s): "
+                f"account={account_id} account_type={normalize_account_type(account_type)} "
+                f"new_session={login_token_id}"
+            )
+
         account.last_login_at = now
         account.last_login_ip = consume_ip
         account.last_login_user_agent = consume_user_agent
@@ -520,11 +638,16 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     # participant and a moderator cannot move the session from one account to the other
     # between two requests. ``sub`` is kept alongside as the human-readable identity for
     # logs and for anything that wants to know who a token was for.
+    #
+    # ``session_id`` is the login-token row this session became. It is what ties the JWT to
+    # the live-session state that is re-read on every request, so a JWT whose session has
+    # been replaced by a newer login is refused even though the JWT itself is unexpired.
     access_token = create_access_token(
         data={
             "sub": account_regno,
             "account_id": str(account_id),
             "account_type": normalize_account_type(account_type),
+            "session_id": login_token_id,
         },
         expires_delta=access_token_expires
     )
