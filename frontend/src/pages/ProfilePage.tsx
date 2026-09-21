@@ -24,6 +24,13 @@ import { Navigation } from '@/components/Navigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
+import { describeApiError } from '@/lib/apiError';
+import {
+  PICTURE_COOLDOWN_DAYS,
+  formatPictureCooldownRemaining,
+  readPictureCooldownRejection,
+  secondsUntilPictureChange,
+} from '@/lib/pictureCooldown';
 
 // The interest checklist is the shared vocabulary, not a local copy. It used to be spelled out
 // here as well as in Profile Review, which meant the two screens could disagree about what an
@@ -48,6 +55,28 @@ export const ProfilePage = () => {
   // State for UI elements
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The three-day wait, counted down from a clock that only runs while there is something
+  // to count. Derived from the timestamp the server sends rather than from anything this
+  // page did, because the server's row is what the upload claims against: a screen that
+  // remembered "I uploaded five minutes ago" locally would disagree with it the moment the
+  // two were refreshed at different times.
+  const [clock, setClock] = useState(() => Date.now());
+  const lastPictureChange = user?.last_profile_picture_at;
+  const secondsUntilPictureChangeOpens = secondsUntilPictureChange(lastPictureChange, clock);
+  const pictureChangeBlocked = secondsUntilPictureChangeOpens > 0;
+
+  // A new timestamp starts the wait from now rather than from the clock's last tick, which
+  // may be minutes old on a page nobody has touched.
+  useEffect(() => {
+    setClock(Date.now());
+  }, [lastPictureChange]);
+
+  useEffect(() => {
+    if (!pictureChangeBlocked) return;
+    const id = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [pictureChangeBlocked]);
 
   // Memoize the initial state of the user profile from AuthContext
   const initialProfileState = useMemo(() => {
@@ -112,7 +141,18 @@ export const ProfilePage = () => {
         await fetchAndSetUser(token);
       }
     } catch (error) {
-      toast.error('Failed to upload profile picture.');
+      // The refusal is the server's to explain. A page can sit open past the moment it
+      // loaded, so a 429 -- not the timestamp this screen loaded with -- is what starts the
+      // wait the participant is actually under, and it comes with its own sentence.
+      const rejection = readPictureCooldownRejection(error);
+      if (rejection) {
+        toast.error(rejection.message);
+        if (token) {
+          await fetchAndSetUser(token);
+        }
+      } else {
+        toast.error(describeApiError(error, 'Failed to upload profile picture.'));
+      }
       console.error(error);
     }
   };
@@ -186,6 +226,12 @@ export const ProfilePage = () => {
                         size="icon" 
                         className="absolute bottom-0 right-0 rounded-full bg-gradient-romantic"
                         onClick={() => fileInputRef.current?.click()}
+                        disabled={pictureChangeBlocked}
+                        aria-label={
+                            pictureChangeBlocked
+                                ? 'Profile picture cannot be changed right now'
+                                : 'Change profile picture'
+                        }
                     >
                         <Upload className="w-5 h-5" />
                     </Button>
@@ -197,6 +243,20 @@ export const ProfilePage = () => {
                         onChange={handleProfilePictureUpload}
                     />
                 </div>
+                {/* The rule, stated where the control is rather than only in the refusal.
+                    Stated even when nothing is running: a participant who has never hit the
+                    wait deserves to know it exists before choosing a picture. */}
+                <p className="text-xs text-muted-foreground text-center max-w-xs">
+                    You can change your profile picture once every {PICTURE_COOLDOWN_DAYS} days.
+                    {pictureChangeBlocked && (
+                        <>
+                            {' '}Next change available in{' '}
+                            <span className="font-medium text-foreground tabular-nums">
+                                {formatPictureCooldownRemaining(secondsUntilPictureChangeOpens)}
+                            </span>.
+                        </>
+                    )}
+                </p>
             </div>
 
             {/* Non-Editable Info */}

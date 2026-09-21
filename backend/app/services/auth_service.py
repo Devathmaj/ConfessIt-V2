@@ -94,6 +94,7 @@ def _user_payload(row: Any) -> Dict[str, Any]:
         "love_notes_send_enabled": row.love_notes_send_enabled,
         "last_matchmaking_at": row.last_matchmaking_at,
         "last_confession_at": row.last_confession_at,
+        "last_profile_picture_at": row.last_profile_picture_at,
     }
 
 

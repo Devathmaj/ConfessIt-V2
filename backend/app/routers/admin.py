@@ -57,6 +57,7 @@ def _user_payload(user):
         "last_login_at": user.last_login_at, "last_login_ip": str(user.last_login_ip) if user.last_login_ip else None,
         "last_login_user_agent": user.last_login_user_agent, "last_matchmaking_at": user.last_matchmaking_at,
         "last_confession_at": user.last_confession_at,
+        "last_profile_picture_at": user.last_profile_picture_at,
         "created_at": user.created_at, "updated_at": user.updated_at,
         "is_blocked": user.is_blocked,
     }

@@ -265,6 +265,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         "last_login_user_agent": matched_user_row.last_login_user_agent,
         "last_matchmaking_at": matched_user_row.last_matchmaking_at,
         "last_confession_at": matched_user_row.last_confession_at,
+        "last_profile_picture_at": matched_user_row.last_profile_picture_at,
     })
 
     # Create the match with current UTC time

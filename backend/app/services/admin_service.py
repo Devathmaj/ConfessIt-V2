@@ -76,6 +76,7 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
             "love_notes_send_enabled": row.love_notes_send_enabled,
             "last_matchmaking_at": serialize_datetime(row.last_matchmaking_at),
             "last_confession_at": serialize_datetime(row.last_confession_at),
+            "last_profile_picture_at": serialize_datetime(row.last_profile_picture_at),
             # Six counts, grouped by the kind of content they are about. Participant-only
             # because only a participant has content anyone can report: a staff row would show
             # "0 removals", which reads as a clean record rather than as a field that does not
@@ -126,6 +127,7 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
             "love_notes_send_enabled": doc.get("love_notes_send_enabled", False),
             "last_matchmaking_at": serialize_datetime(doc.get("last_matchmaking_at")),
             "last_confession_at": serialize_datetime(doc.get("last_confession_at")),
+            "last_profile_picture_at": serialize_datetime(doc.get("last_profile_picture_at")),
             # Passed through rather than recomputed: these are denormalised columns written by
             # report_counters at filing and removal time, and the number an administrator is
             # shown has to be the stored one. ``{}`` rather than omitted for a participant

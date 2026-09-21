@@ -249,10 +249,30 @@ def _user_details(regno):
     return Mock(regno=regno, account_type="users")
 
 
-def _fake_db(previous_public_id=None):
+def _fake_db(previous_public_id=None, *, last_profile_picture_at=None, claim_wins=True):
+    """A database whose read paths answer the two questions this service now asks.
+
+    The cooldown is why there are two sessions here rather than one: the wait is read
+    *before* anything is uploaded (a session of its own, standing in for the committed row)
+    and the window is claimed *after* it (the transactional one, whose conditional UPDATE
+    answers ``claim_wins``). Both default to "eligible", which is the state every ordering
+    test below is written in.
+    """
     db = Mock()
+
+    advisory_session = Mock()
+    advisory_session.scalar.return_value = last_profile_picture_at
+    advisory_context = Mock()
+    advisory_context.__enter__ = Mock(return_value=advisory_session)
+    advisory_context.__exit__ = Mock(return_value=False)
+    db.sessions.return_value = advisory_context
+
     session = Mock()
-    session.scalar.return_value = Mock(profile_picture_public_id=previous_public_id)
+    session.scalar.return_value = Mock(
+        profile_picture_public_id=previous_public_id,
+        last_profile_picture_at=last_profile_picture_at,
+    )
+    session.execute.return_value = Mock(rowcount=1 if claim_wins else 0)
     ctx = Mock()
     ctx.__enter__ = Mock(return_value=session)
     ctx.__exit__ = Mock(return_value=False)
@@ -379,6 +399,11 @@ async def test_the_old_object_survives_a_failed_database_write(monkeypatch, dest
         def scalar(self, *args, **kwargs):
             return Mock(profile_picture_public_id=OWNED_ID)
 
+        def execute(self, *args, **kwargs):
+            # The cooldown claim is a conditional UPDATE, and it has to succeed here or the
+            # service would refuse with a 429 instead of reaching the write that fails.
+            return Mock(rowcount=1)
+
     class _FailingContext:
         def __enter__(self):
             return _FailingSession()
@@ -388,7 +413,7 @@ async def test_the_old_object_survives_a_failed_database_write(monkeypatch, dest
                 return False
             raise RuntimeError("commit failed")
 
-    db = Mock()
+    db = _fake_db(OWNED_ID)
     db.sessions.begin.return_value = _FailingContext()
 
     _upload_stub(monkeypatch, fail=False)

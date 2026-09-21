@@ -570,6 +570,11 @@ class UserDetails(AccountDetails):
     love_notes_send_enabled: bool = False
     last_matchmaking_at: Optional[datetime] = None
     last_confession_at: Optional[datetime] = None
+    # When the participant last changed their profile picture. Read by the profile screen to
+    # show the wait before anybody picks a file; the refusal itself is the conditional UPDATE
+    # on the column, which answers for itself. Nullable because never having uploaded is a
+    # real state -- see ``db_models.UserRecord``.
+    last_profile_picture_at: Optional[datetime] = None
 
 
 class LoginToken(BaseModel):

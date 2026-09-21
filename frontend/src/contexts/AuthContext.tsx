@@ -54,6 +54,15 @@ export interface User {
   /** Whether the server reports this account as staff. Informational, for labels only. */
   is_staff?: boolean;
   is_blocked?: boolean;
+  /**
+   * When the participant last replaced their profile picture, as ISO text.
+   *
+   * Participant-only, like the picture itself: a staff row has no upload route, so the
+   * server omits the key rather than sending null for a column the row does not have. Read
+   * by the Profile screen to show the three-day wait before a file is chosen; the refusal
+   * itself is the server's to give. See src/lib/pictureCooldown.ts.
+   */
+  last_profile_picture_at?: string | null;
 }
 
 interface VerifyTokenResult {

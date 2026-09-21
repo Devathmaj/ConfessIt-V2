@@ -284,6 +284,16 @@ class UserRecord(AccountColumns, Base):
     # together -- a row with a public_id and no format would render a broken image.
     profile_picture_public_id: Mapped[Optional[str]] = mapped_column(Text)
     profile_picture_format: Mapped[Optional[str]] = mapped_column(String(16))
+    # When this participant last replaced the picture the two columns above name. The whole
+    # state of the "one change every three days" rule, and nullable in the same sense
+    # ``last_confession_at`` is: an account that has never uploaded may change its picture
+    # now, so "no value" is eligibility rather than a missing answer. Claimed by a
+    # conditional UPDATE rather than read-then-written, so two simultaneous uploads cannot
+    # both pass the check -- see ``profile_service.upload_profile_picture_service``.
+    #
+    # On ``users`` alone for the same reason as the picture columns: the upload route is
+    # participant-only, so a staff table's copy could only ever hold NULL.
+    last_profile_picture_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # NOT NULL and closed to ``USER_GENDER_VALUES`` by ``ck_accounts_gender`` above. Staff rows
     # deliberately have none: a moderator is never a matchmaking candidate, so a gender on
     # ``admin`` or ``moderator`` was a value nothing read and a field every staff payload had

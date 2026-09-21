@@ -22,11 +22,23 @@ is deliberate, because ``actor_regno`` is separate from ``owner_regno`` below --
 setting somebody else's picture is the same code path with two different regnos in it, and the
 separation is what makes "who changed this person's picture" answerable from the log afterwards.
 
+**Why there are two public functions as well as the composed one.** :func:`read_and_prepare_account_picture`
+performs everything up to and including validation, and :func:`store_account_picture` performs the
+Cloudinary call; :func:`upload_account_picture` is the two in sequence, which is the whole of what
+the admin route wants. The participant route stops in between, because it has a refusal of its own
+to make -- the three-day cooldown -- and that refusal has to land *after* the body has been bounded
+and checked (an oversized upload must still be a 413, and a file that is not an image must still be
+a 400, neither of them costing the participant their one change) and *before* anything is stored.
+Splitting the sequence at exactly that point is the only way to have both; duplicating the read and
+the validation to get it would be two copies of the rules to keep in step. The order the two halves
+spell out in the module docstring is unchanged by the split -- validation still precedes storage, and
+the caller still persists before anything is retired.
+
 Profile pictures are delivered as ordinary public Cloudinary URLs. That is a deliberate choice
 rather than a gap: they appear in matchmaking lists, chat headers and moderation screens to
 people who are not the owner, so per-viewer authorisation would mean a round trip per avatar on
-every page. Authorisation is still required to *change* a picture, and the object lives under a
-per-account folder with an unguessable id, so a URL cannot be walked from a list of regnos.
+every page. Authorisation is still required to *change* a picture, and the object lives under
+a per-account folder with an unguessable id, so a URL cannot be walked from a list of regnos.
 """
 
 from fastapi import HTTPException, UploadFile, status
@@ -37,35 +49,22 @@ from ..services.storage_service import storage_service
 logger = get_logger(__name__)
 
 
-async def upload_account_picture(
+async def read_and_prepare_account_picture(
     *,
     file: UploadFile,
     owner_regno: str,
     actor_regno: str,
-) -> dict:
-    """Upload ``file`` as ``owner_regno``'s picture and return the new identity.
+) -> bytes:
+    """Read ``file`` through the bounded reader and validate it. Returns the bytes to store.
 
-    ``actor_regno`` is who is performing the upload and is only used for logging. On the
-    participant route the actor is the account owner; on the admin route it is the admin, and
-    keeping the two apart in the log is what makes "who changed this person's picture, and when"
-    answerable afterwards from the log alone.
+    Nothing is written anywhere: the refusal for an oversized or non-image upload happens
+    here, before a database row is touched or an object exists to clean up. The size cap
+    comes before the buffering rather than after it -- ``await file.read()`` would sit a 2 GB
+    upload in the process's memory before the check that exists to prevent exactly that.
 
-    The return value carries the object's identity -- ``public_id`` and ``format`` -- because
-    that is what the caller persists. The delivery URL in ``response`` is *derived*, for the
-    browser: persisting a URL instead would put an address in the database that has to be parsed
-    back into an identity before it can be deleted or re-signed, and the value would stop
-    matching what ``delete_profile_asset`` expects to find.
-
-    This function does not retire any previous object, and is not told what one is. The caller
-    owns the row, so the caller is the only thing that can read the value being replaced, and it
-    must read it in the same transaction that writes the new one -- see
-    :func:`retire_previous_picture`. An earlier version deleted the old object here, which meant
-    a failed database write left the row pointing at an object that had already been destroyed:
-    the account showed a broken image and no retry could recover it, because the bytes were gone.
+    ``owner_regno`` and ``actor_regno`` are only used for logging, the same as in
+    :func:`store_account_picture`.
     """
-    # Read through the bounded reader rather than ``await file.read()``, which would buffer the
-    # whole body before anything had looked at it -- a 2 GB upload would sit in the process's
-    # memory before the size check that exists to prevent exactly that ever ran.
     contents = await storage_service.read_upload_capped(file)
 
     try:
@@ -83,10 +82,35 @@ async def upload_account_picture(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file"
         )
 
+    return contents
+
+
+def store_account_picture(
+    *,
+    file: UploadFile,
+    content: bytes,
+    owner_regno: str,
+    actor_regno: str,
+) -> dict:
+    """Send already-validated ``content`` to Cloudinary and return the new identity.
+
+    The return value carries the object's identity -- ``public_id`` and ``format`` -- because
+    that is what the caller persists. The delivery URL in ``response`` is *derived*, for the
+    browser: persisting a URL instead would put an address in the database that has to be parsed
+    back into an identity before it can be deleted or re-signed, and the value would stop
+    matching what ``delete_profile_asset`` expects to find.
+
+    This function does not retire any previous object, and is not told what one is. The caller
+    owns the row, so the caller is the only thing that can read the value being replaced, and it
+    must read it in the same transaction that writes the new one -- see
+    :func:`retire_previous_picture`. An earlier version deleted the old object here, which meant
+    a failed database write left the row pointing at an object that had already been destroyed:
+    the account showed a broken image and no retry could recover it, because the bytes were gone.
+    """
     try:
         stored = storage_service.upload_profile_image(
             file=file,
-            content=contents,
+            content=content,
             owner_regno=owner_regno,
         )
     except HTTPException:
@@ -112,6 +136,36 @@ async def upload_account_picture(
             "message": "Profile picture uploaded successfully",
         },
     }
+
+
+async def upload_account_picture(
+    *,
+    file: UploadFile,
+    owner_regno: str,
+    actor_regno: str,
+) -> dict:
+    """Upload ``file`` as ``owner_regno``'s picture and return the new identity.
+
+    ``actor_regno`` is who is performing the upload and is only used for logging. On the
+    participant route the actor is the account owner; on the admin route it is the admin, and
+    keeping the two apart in the log is what makes "who changed this person's picture, and when"
+    answerable afterwards from the log alone.
+
+    This is :func:`read_and_prepare_account_picture` followed by :func:`store_account_picture`,
+    which is the sequence a caller with no refusal of its own in between wants. See the module
+    docstring for why the participant route takes the two halves separately.
+    """
+    contents = await read_and_prepare_account_picture(
+        file=file,
+        owner_regno=owner_regno,
+        actor_regno=actor_regno,
+    )
+    return store_account_picture(
+        file=file,
+        content=contents,
+        owner_regno=owner_regno,
+        actor_regno=actor_regno,
+    )
 
 
 def retire_previous_picture(
