@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { toast } from 'sonner';
-import { getCurrentUser } from '../services/api';
+import { getCurrentUser, serverLogout } from '../services/api';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
@@ -116,6 +116,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const lastAccountType = useRef<AccountType | undefined>(undefined);
 
   const logout = useCallback(() => {
+    // The server revokes the session row it holds; the browser does not wait for the reply,
+    // because signing out must not hang on the network and the local session clears either
+    // way. If the call never lands, the refresh cookie simply lapses at its deadline.
+    void serverLogout();
     setUser(null);
     setToken(null);
     localStorage.removeItem('accessToken');
@@ -204,7 +208,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const verifyMagicToken = async (magicToken: string): Promise<VerifyTokenResult> => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8001/auth/login/magic/verify?token=${magicToken}`);
+      const response = await fetch(`http://localhost:8001/auth/login/magic/verify?token=${magicToken}`, {
+        credentials: 'include',
+      });
 
       if (!response.ok) {
         console.error("Magic token verification failed with status:", response.status);

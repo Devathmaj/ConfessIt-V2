@@ -144,6 +144,8 @@ class PostgresClient:
         # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
         # unlike the others it may have to *rewrite rows* before it can be applied.
         self.apply_not_null_constraints()
+        # After the columns exist, so it can name session_expires_at.
+        self.backfill_session_deadlines()
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.
@@ -520,6 +522,36 @@ class PostgresClient:
                 # is how a 2000-character ceiling survives alongside a 100-character one.
                 superseded.append(name)
         return superseded
+
+    def backfill_session_deadlines(self) -> None:
+        """Give sessions that predate the deadline column the deadline their age implies.
+
+        ``login_tokens.session_expires_at`` is written at redemption
+        (``consumed_at + LOGIN_SESSION_EXPIRE_HOURS``) and never moved, but a session
+        redeemed by an earlier build has no value yet. Without this, the first request
+        after deploy would read "no deadline" as "already past" and sign out every
+        currently-logged-in account the moment the new build ships. Instead the deadline
+        is derived once, from the login time the row already records, so a session minted
+        less than a day ago keeps its remaining time and one older than that ends as it
+        should.
+
+        Idempotent by construction: it only touches rows whose deadline is still NULL,
+        so re-running on later boots does nothing.
+        """
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    "UPDATE login_tokens "
+                    "SET session_expires_at = consumed_at + make_interval(hours => :hours) "
+                    "WHERE session_expires_at IS NULL AND consumed_at IS NOT NULL"
+                ),
+                {"hours": settings.LOGIN_SESSION_EXPIRE_HOURS},
+            )
+            if result.rowcount:
+                logger.info(
+                    "Backfilled session deadlines for %s login token(s)",
+                    result.rowcount,
+                )
 
     def close(self) -> None:
         self.engine.dispose()

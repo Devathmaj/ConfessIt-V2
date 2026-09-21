@@ -1,11 +1,17 @@
 // src/services/api.ts
 
 import axios from 'axios';
-import { endSessionIfTokenWasRejected } from '@/lib/authEvents';
+import { endSessionIfTokenWasRejected, isSessionSupersededError } from '@/lib/authEvents';
 import type { AccountType } from '@/lib/capabilities';
 import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
 const API_URL = 'http://localhost:8001';
+
+// The refresh cookie is an HttpOnly cookie scoped to `Path=/auth`, so the browser only
+// attaches it to /auth requests. That is the whole point, but it means the attachment is
+// opt-in: every request must send credentials cross-origin or the cookie never travels,
+// and /auth/refresh would find no session to extend.
+axios.defaults.withCredentials = true;
 
 // Used to get authentication headers from local storage
 const getAuthHeaders = () => {
@@ -13,15 +19,122 @@ const getAuthHeaders = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-// Registered on the shared instance because every endpoint in this file uses it, so this
-// is the one place an expired token is noticed. Requests that fail for any other reason
-// are passed through untouched for their own caller to handle.
-axios.interceptors.response.use(
-  (response) => response,
-  (error) => {
+/**
+ * Ask the server to mint a fresh access token for the session held by the refresh cookie.
+ *
+ * The cookie itself stays out of sight in page scripts; the server rotates it on every use,
+ * so the proven holder of a cookie comes back with a new cookie and a short-lived access
+ * token, which is stored where the rest of the app reads it. Any failure — a lapsed or
+ * revoked cookie, a superseded session, a network gap — answers null so the caller can end
+ * the session instead of looping.
+ */
+export const refreshAccessToken = async (): Promise<string | null> => {
+  try {
+    const response = await axios.post(`${API_URL}/auth/refresh`);
+    const accessToken = response.data?.access_token;
+    if (typeof accessToken !== 'string') return null;
+    localStorage.setItem('accessToken', accessToken);
+    return accessToken;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Tell the server the session is over, without waiting for it.
+ *
+ * Signing out must not hang on the network, and the local session is cleared either way; a
+ * failed call only means the refresh cookie lapses at its deadline instead of being revoked
+ * now, which changes nothing the account can still reach.
+ */
+export const serverLogout = async (): Promise<void> => {
+  try {
+    await axios.post(`${API_URL}/auth/logout`);
+  } catch {
+    // The browser has already forgotten the session; a stale cookie is refused later.
+  }
+};
+
+// 401s from the auth routes answer on their own terms: a failed login, a stale magic link,
+// or a refused refresh must not be mistaken for an access token that needs extending. They
+// are passed through untouched, and only they are -- `/auth/me` still gets the retry path.
+const isAuthRoute = (url: string | undefined) =>
+  !!url && (url.includes('/auth/login/') || url.endsWith('/auth/refresh') || url.endsWith('/auth/logout'));
+
+// One refresh at a time. A page with several requests in flight can fail together, and each
+// failure shares this in-flight refresh instead of starting its own: exactly one rotation
+// reaches the server, which matters because the server rotates on every use and two
+// concurrent refreshes would race that rule.
+let refreshInFlight: Promise<string | null> | null = null;
+
+// A request replayed once is not replayed again; a second 401 after a fresh access token is
+// authoritative rather than a reason to keep trying. Weak for the request's config object,
+// so nothing is held onto after the request completes.
+const alreadyRetried = new WeakSet<object>();
+
+/**
+ * The one place an access token stops being accepted. A 401 that the refresh cookie can
+ * cure is retried once with a fresh token; a 401 that nothing can cure ends the session and
+ * lets the auth context explain why.
+ *
+ * Requests that 401 for any reason other than the access token are passed through untouched
+ * for their own callers, exactly as they were before the refresh existed.
+ */
+export const handleResponseError = async (error: any): Promise<any> => {
+  const status = error?.response?.status;
+  const original = error?.config;
+  const url = typeof original?.url === 'string' ? original.url : undefined;
+
+  if (status !== 401 || !original || isAuthRoute(url)) {
+    return Promise.reject(error);
+  }
+
+  // A request that already rode a fresh access token and still failed is over; the retry
+  // did not save it, so the session is not worth keeping.
+  if (alreadyRetried.has(original)) {
     endSessionIfTokenWasRejected(error);
     return Promise.reject(error);
   }
+
+  // A 401 from a request that never carried an access token is not a sign-out.
+  if (!localStorage.getItem('accessToken')) {
+    return Promise.reject(error);
+  }
+
+  // A superseded session is over regardless of refresh: the newer login owns the account
+  // now, and extending the old session would fight the single-session rule. The dedicated
+  // event carries the server's explanation to the "signed in elsewhere" toast.
+  if (isSessionSupersededError(error)) {
+    endSessionIfTokenWasRejected(error);
+    return Promise.reject(error);
+  }
+
+  if (!refreshInFlight) {
+    refreshInFlight = refreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  const freshToken = await refreshInFlight;
+  if (!freshToken) {
+    endSessionIfTokenWasRejected(error);
+    return Promise.reject(error);
+  }
+
+  alreadyRetried.add(original);
+  if (original.headers) {
+    original.headers.Authorization = `Bearer ${freshToken}`;
+  } else {
+    original.headers = { Authorization: `Bearer ${freshToken}` };
+  }
+  return axios(original);
+};
+
+// Registered on the shared instance because every endpoint in this file uses it, so this is
+// the one place an expired token is noticed and a stale one is refreshed. Requests that fail
+// for any other reason are passed through untouched for their own caller to handle.
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => handleResponseError(error)
 );
 
 // --- Confession Endpoints ---

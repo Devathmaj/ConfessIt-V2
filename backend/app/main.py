@@ -15,7 +15,7 @@ from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import settings, validate_cloudinary_settings
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, messages
-from .services.auth_service import oauth2_scheme, verify_token_service
+from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service

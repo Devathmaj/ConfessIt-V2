@@ -35,6 +35,19 @@ export const SESSION_SUPERSEDED_MESSAGE =
 const SESSION_SUPERSEDED_ERROR = 'session_superseded';
 
 /**
+ * Whether a rejected response carries the marker for a session replaced by a newer login.
+ *
+ * The interceptor needs this before it decides what to do: a superseded 401 has to end the
+ * session rather than be silently refreshed, and the story has to reach the person as
+ * "signed in somewhere else". It is the same header `endSessionIfTokenWasRejected` reads,
+ * factored out so the decision can be made without side effects.
+ */
+export const isSessionSupersededError = (error?: {
+  response?: { headers?: Record<string, string | undefined> };
+}) =>
+  error?.response?.headers?.['www-authenticate']?.includes(SESSION_SUPERSEDED_ERROR) ?? false;
+
+/**
  * End the session if a rejected request failed *because of* the access token.
  *
  * The stored token is what decides, not the status alone: a 401 from a request that never
@@ -60,8 +73,7 @@ export const endSessionIfTokenWasRejected = (error?: {
   if (typeof window === 'undefined') return;
   if (!localStorage.getItem('accessToken')) return;
 
-  const superseded =
-    error?.response?.headers?.['www-authenticate']?.includes(SESSION_SUPERSEDED_ERROR) ?? false;
+  const superseded = isSessionSupersededError(error);
   localStorage.removeItem('accessToken');
 
   if (superseded) {

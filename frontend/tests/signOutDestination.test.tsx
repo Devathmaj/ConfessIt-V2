@@ -78,8 +78,13 @@ const authMe = vi.hoisted(() => ({
 
 vi.mock('axios', () => ({
   default: {
+    // The API layer sets `defaults.withCredentials` once at import time.
+    defaults: {},
     interceptors: authMe.interceptors,
     get: async () => ({ data: authMe.current }),
+    // Server-side logout (`serverLogout`) posts and never awaits success; answer a boring
+    // success so signing out exercises the local part, not a real network call.
+    post: async () => ({ data: {} }),
   },
 }));
 

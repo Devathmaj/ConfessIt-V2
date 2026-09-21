@@ -613,6 +613,26 @@ class LoginTokenRecord(Base):
     # holder that they were signed out by a login on another device.
     superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     superseded_by: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False))
+    # The absolute ceiling on this session's life, written once at redemption to
+    # ``consumed_at + LOGIN_SESSION_EXPIRE_HOURS`` and never moved forward. A refresh
+    # rotates the refresh token but inherits this deadline, so refreshing extends the
+    # access token, not the session. Read on every request (access and refresh alike), so
+    # a token minted before the deadline cannot outlive it either. NULL for a row that
+    # never became a session (``consumed_at`` NULL); the boot path backfills a deadline
+    # for sessions that predate the column so existing logins are not cut off at deploy.
+    session_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # SHA-256 hash of the session's current refresh token. The raw value is minted at
+    # redemption, hashed before storage, and rotated on every refresh; it is unique so a
+    # token is found and consumed by hash alone (the unique index is what makes rotation a
+    # conditional UPDATE that exactly one racing caller can win). NULL for a session that
+    # predates this column, which then cannot refresh and simply lapses with its access
+    # token.
+    refresh_token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
+    # Hash of the refresh token value this session most recently rotated *away from*.
+    # Never a credential itself: it is kept so a replayed old token -- a second use of an
+    # already-consumed value -- is recognisable in the logs as a replay rather than as
+    # random noise.
+    refresh_token_replaced_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
 
 class LoginRateLimitRecord(Base):

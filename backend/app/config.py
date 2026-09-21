@@ -150,6 +150,24 @@ class Settings(BaseSettings):
     LOGIN_CLIENT_COOKIE_NAME: str = "confessit_client_id"
     LOGIN_CLIENT_COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
 
+    # --- Sessions: the hard lifetime of a login ---
+    #
+    # The access token expires on its own (30 minutes) and is renewed by refresh tokens
+    # for as long as the *session* is alive, but nothing can push a session past this many
+    # hours from the moment its magic link was redeemed. After it the account must sign in
+    # again with a fresh magic link; a refresh that finds the deadline passed answers 401
+    # like any other expired credential, and an access token cannot outlive it either
+    # because the deadline is re-read from the session row on every request.
+    LOGIN_SESSION_EXPIRE_HOURS: int = 24
+
+    # The refresh token travels in an HttpOnly cookie scoped to /auth, so page scripts
+    # cannot read it and the browser only attaches it to authentication endpoints. The
+    # stored copy is a SHA-256 hash, never the raw value. SameSite and Secure follow the
+    # client-cookie pattern in login_rate_limit (Lax, and secure when the request arrived
+    # over HTTPS) rather than being configurable here.
+    REFRESH_COOKIE_NAME: str = "confessit_refresh"
+    REFRESH_COOKIE_PATH: str = "/auth"
+
     # --- Hard ceilings on how many accounts of each kind may ever exist ---
     #
     # A cap on *total rows per account table*, enforced when an account is created. It is a

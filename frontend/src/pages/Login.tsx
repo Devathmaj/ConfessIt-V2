@@ -26,6 +26,18 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   const [regno, setRegno] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  /**
+   * Turn the server's wait (seconds, from the `Retry-After` header on a 429) into the
+   * sentence a person can act on. The rate-limited detail already says "try again
+   * shortly"; the important part is how shortly, and the server is the only authority on
+   * that.
+   */
+  const retryWaitSentence = (retryAfterSeconds: number): string => {
+    if (retryAfterSeconds < 60) return 'You can try again in less than a minute.';
+    const minutes = Math.ceil(retryAfterSeconds / 60);
+    return `You can try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -49,8 +61,15 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       } else {
         const body = await response.json().catch(() => null);
         const detail = typeof body?.detail === 'string' ? body.detail : null;
+        // A 429 names the wait it keeps in `Retry-After`, so the toast can say how long
+        // instead of leaving "try again shortly" as the last word.
+        const retryAfter = Number(response.headers.get('Retry-After'));
+        const retryNote =
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryWaitSentence(retryAfter) : null;
         if (response.status === 403) {
           toast.error(detail ?? 'Your account is currently not available.');
+        } else if (retryNote) {
+          toast.error(detail ? `${detail} ${retryNote}` : retryNote);
         } else {
           toast.error(detail ?? 'Failed to generate magic link. Please try again.');
         }

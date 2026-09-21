@@ -4,7 +4,26 @@ import {
   SESSION_SUPERSEDED_EVENT,
   SESSION_SUPERSEDED_MESSAGE,
   endSessionIfTokenWasRejected,
+  isSessionSupersededError,
 } from '@/lib/authEvents';
+
+describe('isSessionSupersededError', () => {
+  const rejected401 = (headers?: Record<string, string | undefined>) =>
+    ({ response: { status: 401, headers: headers ?? {} } }) as never;
+
+  it('is true only when the header carries the superseded marker', () => {
+    expect(
+      isSessionSupersededError(rejected401({ 'www-authenticate': 'Bearer error="session_superseded"' }))
+    ).toBe(true);
+  });
+
+  it('is false for a plain 401, a 401 with other details, or no response', () => {
+    expect(isSessionSupersededError(rejected401({ 'www-authenticate': 'Bearer' }))).toBe(false);
+    expect(isSessionSupersededError(rejected401({ 'www-authenticate': 'Bearer error="invalid_token"' }))).toBe(false);
+    expect(isSessionSupersededError(rejected401())).toBe(false);
+    expect(isSessionSupersededError(undefined)).toBe(false);
+  });
+});
 
 describe('endSessionIfTokenWasRejected', () => {
   let expired = 0;

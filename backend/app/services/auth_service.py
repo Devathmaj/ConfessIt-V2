@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,7 +11,7 @@ from sqlalchemy import select, text, update
 from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, find_account_in_table,
                          resolve_account)
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ..postgres import Database, is_valid_id
 
 from ..config import settings
@@ -43,6 +44,21 @@ ACCOUNT_UNAVAILABLE_DETAIL = "Your account is currently not available. Please co
 # apart.
 SESSION_STATUS_ACTIVE = "active"
 SESSION_STATUS_SUPERSEDED = "superseded"
+SESSION_STATUS_REVOKED = "revoked"
+SESSION_STATUS_EXPIRED = "expired"
+
+# The one body a refused credential gets back. Every refresh/logout failure -- a token
+# that never existed, one that was rotated away, a session past its absolute deadline, an
+# account that was blocked or deleted -- answers identically, so nothing about the
+# response tells a caller whether a random refresh token belongs to a live account. Only
+# the superseded case is told apart, for the same reason an access token is: the person's
+# session is genuinely over and the frontend needs the "signed in elsewhere" wording.
+def credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 # What the superseded holder is told on their very next request, and what the frontend
 # surfaces as the reason they were signed out. Kept distinguishable from the generic
@@ -160,7 +176,25 @@ def _ensure_not_blocked(row: Any) -> None:
         )
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
+# ``HTTPBearer`` rather than ``OAuth2PasswordBearer``: there is no password grant and no
+# ``/auth/token`` endpoint (the tokenUrl in the old scheme's constructor advertised one
+# that does not exist). The bearer scheme extracts the ``Authorization: Bearer`` header,
+# which is exactly the shape every authenticated endpoint already uses.
+bearer_scheme = HTTPBearer(auto_error=False)
+
+def _deadline_passed(deadline: Optional[datetime], now: datetime) -> bool:
+    """Whether an absolute session deadline is missing or already behind us.
+
+    A missing deadline is treated as passed. The boot path backfills a deadline for every
+    *redeemed* session, so a NULL here means a row that either never became a session or
+    belongs to a build before the deadline existed -- and a session without a ceiling is
+    precisely the unbounded-renewal case the deadline exists to forbid.
+    """
+    if deadline is None:
+        return True
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline <= now
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     """
@@ -183,6 +217,15 @@ def hash_token(token: str) -> str:
     Used to hash a token using SHA-256.
     """
     return hashlib.sha256(token.encode()).hexdigest()
+
+def generate_refresh_token() -> str:
+    """A fresh opaque refresh token.
+
+    The raw value is secrets.token_urlsafe(64) -- 256 bits of entropy, so guessing one is
+    not a threat worth defending against. It is shown exactly once (the router sets it as
+    an HttpOnly cookie on the way through) and stored only as ``hash_token``.
+    """
+    return secrets.token_urlsafe(64)
 
 def _session_advisory_lock_key(account_type: str, account_id: str) -> int:
     """The advisory-lock key that serialises logins for *one* account.
@@ -279,6 +322,12 @@ def _account_from_bearer_token(
                 f"(status={session_row.session_status!r})"
             )
             return None
+        if _deadline_passed(session_row.session_expires_at, datetime.now(timezone.utc)):
+            logger.warning(
+                f"Access token session {session_id} has passed its absolute deadline "
+                f"({session_row.session_expires_at})"
+            )
+            return None
         row = resolve_account(session, account_type, account_id)
     if row is None or row.is_blocked:
         return None
@@ -301,7 +350,10 @@ def verify_token_service(token: str, db: Database) -> AccountDetails:
         raise credentials_exception
     return account
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends(get_db)) -> AccountDetails:
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Database = Depends(get_db),
+) -> AccountDetails:
     """
     Used to decode the JWT, validate the account, and return its details.
 
@@ -309,22 +361,21 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Database = Depends
     row in ``admin`` or ``moderator``, which is what lets a participant route depend on
     ``require_participant`` and be handed a fully-populated participant model.
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
+    token = credentials.credentials if credentials is not None else None
     account = _account_from_bearer_token(token, db)
     if account is None:
-        raise credentials_exception
+        raise credentials_exception()
     return account
 
-def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme), db: Database = Depends(get_db)) -> Optional[AccountDetails]:
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Database = Depends(get_db),
+) -> Optional[AccountDetails]:
     """
     Used to decode the JWT and return account details if the token is valid,
     but does not raise an error if the token is missing or invalid.
     """
+    token = credentials.credentials if credentials is not None else None
     # A replaced session is "no account" here rather than a 401: this dependency is for the
     # one surface that works while signed out, and a superseded token has lost the right to
     # claim an identity on it exactly like a token that never had one.
@@ -533,6 +584,14 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     consume_ip = request.client.host
     consume_user_agent = request.headers.get("user-agent", "unknown")
 
+    # The refresh token is minted here, once, and hashed before storage. The raw value is
+    # returned to the caller a single time (the router hands it to the browser as an
+    # HttpOnly cookie); every later refresh rotates to a fresh value under the same
+    # immutable deadline. ``session_expires_at`` is the absolute lifetime of the session,
+    # written now from the login time and never moved forwards by any number of refreshes.
+    refresh_token = generate_refresh_token()
+    session_expires_at = now + timedelta(hours=settings.LOGIN_SESSION_EXPIRE_HOURS)
+
     with db.sessions.begin() as session:
         login_token_row = session.get(LoginTokenRecord, login_token_id)
         # Read from the table recorded on the token rather than searching all three: the
@@ -563,6 +622,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 session_status="active",
                 last_seen_at=now,
                 device=consume_user_agent or request_user_agent or "unknown",
+                session_expires_at=session_expires_at,
+                refresh_token_hash=hash_token(refresh_token),
             )
         )
         if result.rowcount != 1:
@@ -671,7 +732,182 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     else:
         redirect_url = "/dashboard"
 
-    return {"access_token": access_token, "token_type": "bearer", "redirect_url": redirect_url}
+    # ``refresh_token`` is carried out to the router so it can be set as the HttpOnly
+    # cookie; the ``Token`` response model does not declare it, so the raw value never
+    # reaches the response body. The stored copy is its SHA-256 hash, and this is the last
+    # moment the plaintext is in this process before the router's cookie transition.
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "redirect_url": redirect_url,
+        "refresh_token": refresh_token,
+    }
+
+
+def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]:
+    """Rotate a refresh token and mint a fresh access token for its session.
+
+    Returns ``{"access_token", "token_type", "refresh_token"}`` (the new refresh token
+    still being the session's one live value). Raises the generic 401 for any refusal,
+    and the dedicated superseded 401 when the session was replaced by a newer login.
+
+    The transformation is one conditional UPDATE, keyed on the incoming token's hash, in a
+    single transaction, and it is the only thing that makes rotation single-use under
+    concurrency: two refresh calls that both present the same value serialise on this row
+    and PostgreSQL re-evaluates the ``refresh_token_hash == :incoming`` predicate against
+    the committed version, so exactly one of them updates it and the other re-reads the row
+    to say what happened. There is no lock to hold and no path by which a second chain can
+    start from the same token.
+
+    A token that was already rotated away is refused generically and logged as a replay:
+    a second use of a consumed value means someone may be holding a stale copy of it. The
+    session itself is *not* revoked -- the value can never succeed again anyway, and killing
+    the freshly rotated token too would punish the legitimate user (or a second tab of
+    theirs that lost a concurrent refresh race) rather than the replay.
+
+    Nothing about the account's authority is taken from the token. The session row is
+    re-read, the account is re-resolved from the current table, and the blocked/deleted
+    states are applied on this request, so a revoked or demoted account stops refreshing on
+    the very next call.
+    """
+    if not raw_token:
+        raise credentials_exception()
+
+    hashed = hash_token(raw_token)
+    now = datetime.now(timezone.utc)
+
+    with db.sessions.begin() as session:
+        row = session.scalar(
+            select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
+        )
+        if row is None:
+            logger.warning(
+                f"Refresh rejected: no session holds refresh token "
+                f"(hash_hint={hashed[:12]})"
+            )
+            raise credentials_exception()
+
+        session_id = str(row.id)
+        account_type = str(row.account_type)
+        account_id = str(row.account_id)
+
+        if row.session_status == SESSION_STATUS_SUPERSEDED:
+            logger.warning(
+                f"Refresh rejected: session {session_id} was superseded by "
+                f"session {row.superseded_by}"
+            )
+            raise _session_superseded_exception()
+        if row.session_status != SESSION_STATUS_ACTIVE:
+            logger.warning(
+                f"Refresh rejected: session {session_id} is not active "
+                f"(status={row.session_status!r})"
+            )
+            raise credentials_exception()
+
+        if _deadline_passed(row.session_expires_at, now):
+            # The session has hit its hard ceiling. No write is needed here: the admin
+            # "active sessions" sweep already moves a session past its 24-hour window to
+            # `expired`, and this refusal is the enforcement.
+            logger.warning(
+                f"Refresh rejected: session {session_id} passed its absolute deadline "
+                f"({row.session_expires_at})"
+            )
+            raise credentials_exception()
+
+        account = resolve_account(session, account_type, account_id)
+        if account is None:
+            logger.warning(
+                f"Refresh rejected: session {session_id} account {account_id} does not exist"
+            )
+            raise credentials_exception()
+        if account.is_blocked:
+            logger.warning(
+                f"Refresh rejected: session {session_id} account {account_id} is blocked"
+            )
+            raise credentials_exception()
+
+        new_raw = generate_refresh_token()
+        result = session.execute(
+            update(LoginTokenRecord)
+            .where(
+                LoginTokenRecord.id == session_id,
+                LoginTokenRecord.refresh_token_hash == hashed,
+            )
+            .values(
+                refresh_token_hash=hash_token(new_raw),
+                refresh_token_replaced_hash=hashed,
+                last_seen_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            # Lost the race against a concurrent rotation of the same value, or the session
+            # changed underneath us. Re-read the row to say which.
+            fresh = session.get(LoginTokenRecord, session_id)
+            if fresh is not None and fresh.session_status == SESSION_STATUS_SUPERSEDED:
+                logger.warning(
+                    f"Refresh raced with a login: session {session_id} superseded by "
+                    f"session {fresh.superseded_by}"
+                )
+                raise _session_superseded_exception()
+            if fresh is not None and fresh.refresh_token_replaced_hash == hashed:
+                logger.warning(
+                    f"Refresh token replayed: session {session_id} already rotated away "
+                    f"this value (hash_hint={hashed[:12]})"
+                )
+            else:
+                logger.warning(f"Refresh race lost for session {session_id}")
+            raise credentials_exception()
+
+    new_access_token = create_access_token(
+        data={
+            "sub": account.regno,
+            "account_id": str(account_id),
+            "account_type": normalize_account_type(account_type),
+            "session_id": session_id,
+        },
+    )
+    return {
+        "access_token": new_access_token,
+        "token_type": "bearer",
+        "refresh_token": new_raw,
+    }
+
+
+def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
+    """Revoke the session that holds a refresh token. Returns whether anything was revoked.
+
+    A logout is idempotent and deliberately silent about whether the token existed: the
+    browser is clearing its own cookie either way, and answering differently would let a
+    caller probe whether an arbitrary refresh token is live. Only an *active* session is
+    marked revoked -- a superseded one keeps its superseded state, because that state
+    records which newer session replaced it, and an unredeemed magic-link row is untouched
+    (its pre-redemption `revoked` column is the mechanism for that, not the session status).
+    The raw value is looked up by its hash and never logged.
+    """
+    if not raw_token:
+        return False
+    hashed = hash_token(raw_token)
+    with db.sessions.begin() as session:
+        row = session.scalar(
+            select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
+        )
+        if row is None:
+            return False
+        if row.session_status != SESSION_STATUS_ACTIVE:
+            return False
+        session.execute(
+            update(LoginTokenRecord)
+            .where(
+                LoginTokenRecord.id == row.id,
+                LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
+            )
+            .values(session_status=SESSION_STATUS_REVOKED)
+        )
+        logger.info(
+            f"Logout revoked session {row.id} for account {row.account_id}"
+        )
+        return True
+
 
 def decode_token(token: str) -> dict:
     """
