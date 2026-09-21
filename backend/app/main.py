@@ -1,7 +1,6 @@
 # app/main.py
 
 import asyncio
-import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -55,7 +54,7 @@ logger = get_logger(__name__)
 
 # Diagnostic endpoints are opt-in so raw database/driver internals are never reachable
 # from an unauthenticated request in a deployed environment.
-ENABLE_DEBUG_ENDPOINTS = os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() in {"1", "true", "yes"}
+ENABLE_DEBUG_ENDPOINTS = bool(settings.ENABLE_DEBUG_ENDPOINTS)
 
 # The dimensions the http.server.* instruments are allowed to keep. The
 # instrumentation's own modern attribute set for the duration histogram is
@@ -98,11 +97,11 @@ BOUNDED_HTTP_METRIC_ATTRIBUTES = {
 
 
 def _init_tracing():
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
     if not endpoint:
         return
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
+    service_name = settings.OTEL_SERVICE_NAME
     resource = Resource.create({"service.name": service_name})
 
     insecure, credentials = otlp_transport()
@@ -136,11 +135,11 @@ def _init_metrics():
     recorded, so a provider registered afterwards would never be seen and the
     instruments would stay bound to the NoOp one.
     """
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
     if not endpoint:
         return
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
+    service_name = settings.OTEL_SERVICE_NAME
     resource = Resource.create({"service.name": service_name})
 
     insecure, credentials = otlp_transport()
@@ -464,12 +463,7 @@ app.add_exception_handler(MatchmakingRefusal, _matchmaking_refusal_response)
 # ----------------------
 # CORS Middleware
 # ----------------------
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-]
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -614,9 +608,9 @@ if __name__ == "__main__":
     # developer running this entrypoint is not testing a less protected configuration.
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8001,
-        reload=True,
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.RELOAD,
         limit_concurrency=settings.MAX_CONCURRENCY,
         h11_max_incomplete_event_size=16 * 1024,
     )

@@ -1,5 +1,5 @@
 import logging
-import os
+from .config import settings
 import sys
 
 import grpc
@@ -44,11 +44,11 @@ def otlp_transport():
     OTEL_EXPORTER_OTLP_CERTIFICATE is loaded to verify it, so telemetry is never
     exported over TLS while trusting an unverified collector.
     """
-    insecure = os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() in {"1", "true", "yes"}
+    insecure = str(settings.OTEL_EXPORTER_OTLP_INSECURE).lower() in {"1", "true", "yes"}
     if insecure:
         return True, None
 
-    certificate = os.getenv("OTEL_EXPORTER_OTLP_CERTIFICATE")
+    certificate = settings.OTEL_EXPORTER_OTLP_CERTIFICATE
     if not certificate:
         raise RuntimeError(
             "OTEL_EXPORTER_OTLP_INSECURE is false but OTEL_EXPORTER_OTLP_CERTIFICATE is unset; "
@@ -65,11 +65,11 @@ def _get_otel_log_handler():
     if _OTEL_LOG_HANDLER is not None:
         return _OTEL_LOG_HANDLER
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
     if not endpoint:
         return None
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "confessit-backend")
+    service_name = settings.OTEL_SERVICE_NAME
     resource = Resource.create({"service.name": service_name})
 
     insecure, credentials = otlp_transport()

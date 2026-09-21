@@ -130,6 +130,21 @@ class Settings(BaseSettings):
     MAX_ADMIN_COUNT: int = 10
     MAX_MODERATOR_COUNT: int = 25
 
+    # --- Observability / Telemetry ---
+    OTEL_EXPORTER_OTLP_INSECURE: bool = True
+    OTEL_EXPORTER_OTLP_CERTIFICATE: str | None = None
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    OTEL_SERVICE_NAME: str = "confessit-backend"
+
+    # --- Feature flags ---
+    ENABLE_DEBUG_ENDPOINTS: bool = False
+
+    # --- CORS / server ---
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"
+    HOST: str = "0.0.0.0"
+    PORT: int = 8001
+    RELOAD: bool = True
+
     class Config:
         env_file = ".env"
         extra = "allow"
