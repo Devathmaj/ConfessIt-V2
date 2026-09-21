@@ -2,9 +2,10 @@
 """Profile-picture upload: the rules, in one place, with the database write left to the caller.
 
 The hard part of a profile-picture upload is not the Cloudinary call, it is the ordering and the
-ownership. Cap the read before buffering it, validate that it really is an image, store the
-object under the owner's own folder, and retire the previous object *only once the replacement
-is saved*. Get the last one wrong and a failed upload leaves the account pointing at bytes that
+ownership. Cap the read before buffering it, validate that the bytes really are an image rather
+than that the request said they were, re-encode what is left down to its pixels, store the object
+under the owner's own folder, and retire the previous object *only once the replacement is
+saved*. Get the last one wrong and a failed upload leaves the account pointing at bytes that
 have already been destroyed -- a broken avatar that no retry can recover, because the image is
 gone.
 
@@ -55,12 +56,18 @@ async def read_and_prepare_account_picture(
     owner_regno: str,
     actor_regno: str,
 ) -> bytes:
-    """Read ``file`` through the bounded reader and validate it. Returns the bytes to store.
+    """Read ``file`` through the bounded reader and prepare it for storage. Returns the bytes.
 
     Nothing is written anywhere: the refusal for an oversized or non-image upload happens
     here, before a database row is touched or an object exists to clean up. The size cap
     comes before the buffering rather than after it -- ``await file.read()`` would sit a 2 GB
     upload in the process's memory before the check that exists to prevent exactly that.
+
+    Preparation is the validation the storage layer enforces (bytes cap, header format,
+    geometry, full decode -- see :meth:`storage_service.validate_image_file`) followed by the
+    re-encode that drops everything in the file which is not pixels
+    (:meth:`storage_service.normalize_image`). Both operate on bytes already read here, so
+    neither the client's filename nor its ``Content-Type`` takes part in any of it.
 
     ``owner_regno`` and ``actor_regno`` are only used for logging, the same as in
     :func:`store_account_picture`.
@@ -68,9 +75,10 @@ async def read_and_prepare_account_picture(
     contents = await storage_service.read_upload_capped(file)
 
     try:
-        storage_service.validate_image_file(
-            file, contents, max_size_mb=storage_service.max_image_size_mb
+        image_format = storage_service.validate_image_file(
+            contents, max_size_mb=storage_service.max_image_size_mb
         )
+        contents = storage_service.normalize_image(contents, image_format)
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive
@@ -82,12 +90,21 @@ async def read_and_prepare_account_picture(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file"
         )
 
+    # Re-encoding can only grow the file in unusual cases (a noisy photograph re-saved at a
+    # higher quality than it arrived at), and the cap is a rule about what may be stored, not
+    # merely about what may be read -- so it is checked again here, before the cooldown is even
+    # consulted, rather than left to fail later inside the upload.
+    if len(contents) > storage_service.max_image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {storage_service.max_image_size_mb}MB",
+        )
+
     return contents
 
 
 def store_account_picture(
     *,
-    file: UploadFile,
     content: bytes,
     owner_regno: str,
     actor_regno: str,
@@ -109,7 +126,6 @@ def store_account_picture(
     """
     try:
         stored = storage_service.upload_profile_image(
-            file=file,
             content=content,
             owner_regno=owner_regno,
         )
@@ -161,7 +177,6 @@ async def upload_account_picture(
         actor_regno=actor_regno,
     )
     return store_account_picture(
-        file=file,
         content=contents,
         owner_regno=owner_regno,
         actor_regno=actor_regno,

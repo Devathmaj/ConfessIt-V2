@@ -39,13 +39,14 @@ import base64
 import io
 import re
 import secrets
+import warnings
 from typing import Any, Dict, Optional, Tuple
 
 import cloudinary
 from cloudinary.uploader import destroy as cloudinary_destroy, upload as cloudinary_upload
 from cloudinary.utils import cloudinary_url
 from fastapi import HTTPException, UploadFile, status
-from PIL import Image
+from PIL import Image, ImageOps
 
 from ..config import settings
 from ..logger import get_logger
@@ -62,9 +63,6 @@ LOVE_NOTES_FOLDER = "love_notes"
 # The formats an upload is accepted as. Checked against the decoded image header, not the
 # client-supplied content type or filename, because both of those are attacker-controlled.
 BASE_ALLOWED_FORMATS = frozenset({"jpg", "jpeg", "png", "gif", "webp"})
-BASE_ALLOWED_MIME_TYPES = frozenset(
-    {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}
-)
 
 # A public_id segment may only hold these. Cloudinary would accept far more, but the layout above
 # is generated from a regno and a random token, and constraining the alphabet means a stored
@@ -269,13 +267,17 @@ class CloudinaryStorageService:
 
         return bytes(buffered)
 
-    def validate_image_file(
-        self, file: UploadFile, content: bytes, max_size_mb: Optional[int] = None
-    ) -> str:
-        """Validate an uploaded image's size, type and geometry.
+    def validate_image_file(self, content: bytes, max_size_mb: Optional[int] = None) -> str:
+        """Validate an uploaded image's size, type and geometry. Returns its format.
 
-        Returns the detected image format, derived from the file's own header rather than its
-        name or its ``Content-Type``, both of which the client chose.
+        The bytes have to *be* an image, not say that they are one. The format comes from the
+        file's own header; neither the filename nor the ``Content-Type`` is consulted anywhere,
+        because the client chose both and a header that merely claims ``image/png`` over a body
+        of arbitrary bytes is the ordinary way to smuggle something past a type check.
+
+        The order is what makes each refusal safe: the byte cap before anything parses the
+        file, the geometry read from the header before any pixel is materialised, and the full
+        decode last, once the geometry has bounded what that decode can cost.
         """
         if max_size_mb is not None:
             max_bytes = int(max_size_mb) * 1024 * 1024
@@ -285,18 +287,61 @@ class CloudinaryStorageService:
                 )
 
         kind = self._get_image_format(content)
-        if kind not in BASE_ALLOWED_FORMATS and file.content_type not in BASE_ALLOWED_MIME_TYPES:
+        if kind not in BASE_ALLOWED_FORMATS:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid file type. Only images (JPEG, PNG, GIF, WebP) are allowed",
             )
 
-        if kind:
-            # A byte cap does not bound decoding: the same few KB can describe a bitmap that
-            # costs gigabytes to materialise, so the header geometry is checked too.
-            self._check_image_dimensions(*self._get_image_size(content))
+        self._check_image_dimensions(*self._get_image_size(content))
+        self._decode_fully(content)
 
-        return kind or "jpeg"
+        return kind
+
+    def normalize_image(self, content: bytes, image_format: str) -> bytes:
+        """Re-encode a validated image, so the object stored is its pixels and nothing else.
+
+        Everything a file can carry that is not picture data is dropped here: EXIF, which holds
+        when and where a photo was taken and the device that took it, ICC profiles, XMP and
+        comments. The EXIF *orientation* is baked into the pixels first, which is what keeps a
+        phone photo the right way up after the tag that said which way up it was has gone.
+
+        Animated images are returned as they arrived. Only their first frame is validated, and
+        re-encoding them would mean decoding every frame -- the unbounded work the geometry
+        check exists to avoid -- so the safer of the two options is to store bytes that have
+        already been read, sniffed and decoded rather than bytes that have been partly rebuilt.
+
+        Falls back to the input on any failure. Those bytes passed :meth:`validate_image_file`,
+        so they are safe to store; refusing a good picture because an optimisation failed would
+        be trading a working upload for tidier metadata.
+        """
+        if image_format not in BASE_ALLOWED_FORMATS:
+            return content
+
+        try:
+            with Image.open(io.BytesIO(content)) as image:
+                if getattr(image, "n_frames", 1) > 1:
+                    return content
+                frame = ImageOps.exif_transpose(image)
+                save_format = "JPEG" if image_format in {"jpg", "jpeg"} else image_format.upper()
+                save_kwargs: Dict[str, Any] = {"optimize": True}
+                if save_format == "JPEG":
+                    # Orientation is already applied above, and JPEG has no alpha to lose.
+                    frame = frame.convert("RGB")
+                    save_kwargs["quality"] = 85
+                elif save_format == "WEBP":
+                    save_kwargs.pop("optimize")
+                    save_kwargs["quality"] = 85
+                reencoded = io.BytesIO()
+                frame.save(reencoded, format=save_format, **save_kwargs)
+                return reencoded.getvalue()
+        except Exception as exc:
+            logger.warning(
+                "Could not re-encode a validated %s image (%s); storing it as received",
+                image_format,
+                exc,
+            )
+            return content
 
     def _check_image_dimensions(self, width: Optional[int], height: Optional[int]) -> None:
         """Reject images whose decoded pixel grid is too large to process safely.
@@ -328,6 +373,14 @@ class CloudinaryStorageService:
         try:
             with Image.open(io.BytesIO(content)) as img:
                 return (img.format or "").lower() or None
+        except Image.DecompressionBombError:
+            # The header describes a bitmap past the point where materialising it could be
+            # attempted at all. It is a size refusal rather than a type one, and PIL raises it
+            # while opening -- before anything here could read the dimensions to say how much
+            # too large it is, so the answer is stated in terms of what is known.
+            raise HTTPException(
+                status_code=413, detail="Image too large. The image claims too many pixels to process."
+            )
         except Exception:
             return None
 
@@ -341,6 +394,28 @@ class CloudinaryStorageService:
         try:
             with Image.open(io.BytesIO(content)) as img:
                 return img.size
+        except Image.DecompressionBombError:
+            raise HTTPException(
+                status_code=413, detail="Image too large. The image claims too many pixels to process."
+            )
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+
+    @staticmethod
+    def _decode_fully(content: bytes) -> None:
+        """Materialise every pixel, so a header that lies about its own body is caught.
+
+        ``Image.open`` only reads the header: a file can declare itself a PNG and then stop, or
+        carry damage PIL merely warns about. Decoding turns both into a refusal, and it runs
+        only after the geometry check has bounded what the decode may cost. Warnings become
+        errors for the same reason -- "the image may be truncated" is a verdict, not a note to
+        log and continue from.
+        """
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                with Image.open(io.BytesIO(content)) as img:
+                    img.load()
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
@@ -567,17 +642,21 @@ class CloudinaryStorageService:
     # Uploads
     # ------------------------------------------------------------------
     def upload_profile_image(
-        self, *, file: UploadFile, content: bytes, owner_regno: str
+        self, *, content: bytes, owner_regno: str
     ) -> Dict[str, str]:
         """Upload a profile picture as a public object and return its identity.
 
         Returns ``{"public_id": ..., "format": ...}``. There is deliberately no URL in the return
         value: the caller stores what identifies the object, and every consumer that needs an
         address derives one for itself.
+
+        Takes bytes rather than the upload part, because the format the object is stored under
+        comes from :meth:`validate_image_file` reading those bytes -- not from the part's name or
+        content type, which the client chose and which therefore never reach this call.
         """
         self._ensure_enabled()
         image_format = self.validate_image_file(
-            file, content, max_size_mb=self.max_image_size_mb
+            content, max_size_mb=self.max_image_size_mb
         )
         public_id = self.profile_public_id(owner_regno, self.new_asset_id())
 

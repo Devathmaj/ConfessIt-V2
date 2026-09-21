@@ -233,7 +233,7 @@ def test_owner_segment_helper():
 
 
 def _upload_stub(monkeypatch, *, fail: bool):
-    def _upload(*, file, content, owner_regno):
+    def _upload(*, content, owner_regno):
         if fail:
             raise HTTPException(status_code=500, detail="Failed to upload profile image: upstream down")
         return {

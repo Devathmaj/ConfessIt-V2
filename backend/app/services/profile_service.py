@@ -241,9 +241,10 @@ async def upload_profile_picture_service(
        coming into existence.
     3. The upload to Cloudinary, which can only now be worth doing.
     4. The claim itself, a conditional UPDATE, inside the same transaction that writes the
-       new identity. If it loses -- the race steps 2 cannot see -- the row is left as it
-       was, the transaction rolls back, and the object from step 3 is discarded because no
-       row names it.
+       new identity -- to the row named by the caller's own regno, and only if there is one.
+       If it loses -- the race step 2 cannot see -- the row is left as it was, the
+       transaction rolls back, and the object from step 3 is discarded because no row names
+       it.
 
     Steps 2 and 4 are two checks rather than one because only step 4 is atomic, and step 2
     is not there for correctness: it is there so the ordinary case (a page left open, a
@@ -267,7 +268,6 @@ async def upload_profile_picture_service(
         raise _picture_cooldown_rejection(seconds_left)
 
     result = store_account_picture(
-        file=file,
         content=contents,
         owner_regno=current_user.regno,
         actor_regno=current_user.regno,
@@ -285,14 +285,23 @@ async def upload_profile_picture_service(
             user = session.scalar(
                 select(UserRecord).where(UserRecord.regno == current_user.regno).with_for_update()
             )
-            if user:
-                if not _consume_picture_attempt(session, user.regno, now):
-                    raise _picture_cooldown_rejection(
-                        _seconds_until_picture_eligible(session, user.regno, now)
-                    )
-                previous_public_id = user.profile_picture_public_id
-                user.profile_picture_public_id = result["public_id"]
-                user.profile_picture_format = result["format"]
+            # The only row this service can write is the one selected by the caller's own regno,
+            # so authorisation here means "there is a row for this account to be authorised
+            # against". An authenticated session whose account has since disappeared gets a
+            # refusal rather than a success that changed nothing, and the object uploaded above
+            # is dropped by the handler below along with every other refusal.
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to change this profile picture",
+                )
+            if not _consume_picture_attempt(session, user.regno, now):
+                raise _picture_cooldown_rejection(
+                    _seconds_until_picture_eligible(session, user.regno, now)
+                )
+            previous_public_id = user.profile_picture_public_id
+            user.profile_picture_public_id = result["public_id"]
+            user.profile_picture_format = result["format"]
     except HTTPException:
         # The transaction above rolled back, so the row still names the previous picture and
         # the object just uploaded is named by nothing at all. Dropping it here is what keeps

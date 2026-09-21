@@ -220,7 +220,7 @@ def test_profile_upload_rejects_an_oversized_but_small_file():
     f = upload(png_bytes(storage_service.max_image_dimension + 1, 1))
 
     with pytest.raises(HTTPException) as excinfo:
-        storage_service.validate_image_file(f, f.file.getvalue(), max_size_mb=2)
+        storage_service.validate_image_file(f.file.getvalue(), max_size_mb=2)
 
     assert excinfo.value.status_code == 413
     assert "dimensions" in excinfo.value.detail.lower()
@@ -228,8 +228,7 @@ def test_profile_upload_rejects_an_oversized_but_small_file():
 
 def test_profile_upload_accepts_a_normal_picture():
     data = png_bytes(320, 240)
-    f = upload(data)
-    assert storage_service.validate_image_file(f, data, max_size_mb=2) == "png"
+    assert storage_service.validate_image_file(data, max_size_mb=2) == "png"
 
 
 # ----------------------------------------------------------------------

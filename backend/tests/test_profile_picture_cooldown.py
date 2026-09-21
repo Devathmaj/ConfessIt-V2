@@ -60,7 +60,7 @@ def live_storage(monkeypatch):
     uploads: list[str] = []
     destroyed: list[str] = []
 
-    def _upload(*, file, content, owner_regno):
+    def _upload(*, content, owner_regno):
         public_id = (
             f"profile_pics/{owner_regno}/Stored{len(uploads) + 1:04d}IdUnique/profile"
         )
@@ -324,11 +324,11 @@ async def test_the_losing_side_of_a_race_cleans_up_its_own_upload(db, live_stora
     barrier = threading.Barrier(2, timeout=30)
     real_store = storage_service.upload_profile_image
 
-    def store_together(*, file, content, owner_regno):
+    def store_together(*, content, owner_regno):
         # Neither caller can commit until both have stored, so both are past the pre-check
         # and both reach the claim. That is the race, made to happen rather than waited for.
         barrier.wait()
-        return real_store(file=file, content=content, owner_regno=owner_regno)
+        return real_store(content=content, owner_regno=owner_regno)
 
     monkeypatch.setattr(
         storage_service, "upload_profile_image", store_together, raising=True

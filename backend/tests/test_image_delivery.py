@@ -607,13 +607,7 @@ def _upload_kwargs(monkeypatch, enabled, *, result_overrides=None):
 def test_a_profile_upload_is_tagged_for_grouping(monkeypatch, enabled):
     recorded = _upload_kwargs(monkeypatch, enabled)
 
-    class _Upload:
-        filename = "photo.png"
-        content_type = "image/png"
-
-    enabled.upload_profile_image(
-        file=_Upload(), content=_png_bytes(), owner_regno=OWNER
-    )
+    enabled.upload_profile_image(content=_png_bytes(), owner_regno=OWNER)
 
     assert recorded["tags"] == ["profile_picture"]
     # A tag is metadata. It must not become part of where the object lives or how it is reached.
