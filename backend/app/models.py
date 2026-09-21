@@ -13,7 +13,6 @@ from .limits import (
     REPORT_REASON_MAX,
     USER_BIO_MAX,
     USER_DEPARTMENT_MAX,
-    USER_EMOJI_MAX,
     USER_GENDER_VALUES,
     USER_NAME_MAX,
     USER_REGNO_MAX,
@@ -220,7 +219,6 @@ class UserInfo(BaseModel):
     """
     id: str
     name: str
-    avatar: Optional[str] = None
     # Derived on read from the stored Cloudinary identity, never stored on the post. It is
     # withheld for an anonymous confession so the author's photo cannot unmask them; the
     # render layer hides the name on the same condition.
@@ -306,7 +304,7 @@ class AdminUserCreate(BaseModel):
     answer is a required field that can only ever be dropped on arrival.
 
     **Everything an account owns about itself is absent, and the model refuses it by name.**
-    There is no ``profile_picture_url``, no ``emoji``, no ``bio``, no ``interests``, and none of
+    There is no ``profile_picture_url``, no ``bio``, no ``interests``, and none of
     the four preference flags (``notifications_enabled``, ``matchmaking_enabled``,
     ``love_notes_receive_enabled``, ``love_notes_send_enabled``). An admin mints the identity
     of an account -- who it is, which cohort it belongs to, how to reach it -- and the account
@@ -328,7 +326,7 @@ class AdminUserCreate(BaseModel):
     Every removed column still has a value on the new row, because the database declares the
     default rather than the payload: ``notifications_enabled``, ``matchmaking_enabled`` and
     ``love_notes_receive_enabled`` default to true, ``love_notes_send_enabled`` to false, and
-    ``interests`` to the empty set -- see ``db_models.UserRecord``. ``emoji``, ``bio`` and
+    ``interests`` to the empty set -- see ``db_models.UserRecord``. ``bio`` and
     ``profile_picture_url`` are nullable and start NULL. The defaults live in one place and are
     stated identically in Pydantic's ``UserDetails``, so a participant and an admin-created
     account begin life in the same state.
@@ -404,8 +402,8 @@ class AdminUserUpdate(BaseModel):
     hood. Which table an account lives in is therefore fixed when it is created; minting a
     staff account is a create, and demoting one is a matter of not using it.
 
-    For the same reasons as :class:`AdminUserCreate`, there is no ``profile_picture_url``, no
-    ``emoji``, no ``bio``, no ``interests``, no ``is_blocked``, and none of the four preference
+    For the same reasons as :class:`AdminUserCreate`, there is no ``profile_picture_url``,
+    no ``bio``, no ``interests``, no ``is_blocked``, and none of the four preference
     flags. A picture is bytes through a participant-only upload route rather than a string
     named in a JSON body; the profile fields belong to the participant; and blocking is its own
     route. ``extra="forbid"`` refuses any of them by name rather than accepting the request and
@@ -557,7 +555,6 @@ class UserDetails(AccountDetails):
     # ``profile_picture_format``), never stored as a URL. Nullable because a participant who has
     # never uploaded has no picture, which is a real state and not a missing answer.
     profile_picture_url: Optional[str] = None
-    emoji: Optional[str] = None
     bio: Optional[str] = None
     # Both NOT NULL on ``users``, so both are required here. ``year`` is a plain ``int`` rather
     # than narrowed to ``Year`` for the reason ``interests`` is: a CHECK constraint added by

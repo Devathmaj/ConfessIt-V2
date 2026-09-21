@@ -78,15 +78,19 @@ PLACEHOLDER_EMAIL_SQL = (
 # a named list rather than "anything the models do not mention": a column created by a script or
 # an operator is not the application's to delete.
 #
-# The three entries below are participant fields that were once on the shared account mixin.
-# ``gender`` is the load-bearing one: it is NOT NULL with no server default, so a deployed
+# The entries below are two groups of one kind: columns that were once on every account table
+# and are now participant-only, and a column the model dropped altogether. ``gender`` is the
+# load-bearing one of the first group: it is NOT NULL with no server default, so a deployed
 # ``admin`` table that kept it would reject every ORM insert the application makes into it,
 # because the model no longer writes the column. Dropping ``gender`` also drops
 # ``ck_accounts_gender`` with it -- PostgreSQL removes any CHECK constraint involving a dropped
 # column -- which is the whole reason the staff side of that constraint needs no entry here.
+# ``emoji`` is the second group on its own: the profile-emoji option was removed entirely, so
+# the ``users`` column that held it has no reader and no writer left.
 RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "admin": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "moderator": ("gender", "profile_picture_public_id", "profile_picture_format"),
+    "users": ("emoji",),
 }
 
 
@@ -211,18 +215,19 @@ class PostgresClient:
         Run on every boot and idempotent: each column is looked up first, so an already
         converged database costs one catalogue query per table and changes nothing.
 
-        Dropping the column is the whole migration for these three. PostgreSQL removes any
+        Dropping the column is the whole migration in each case. PostgreSQL removes any
         CHECK constraint involving a dropped column, so ``ck_accounts_gender`` leaves ``admin``
         and ``moderator`` with the ``gender`` they were holding, while ``users`` -- which keeps
         the column -- keeps the constraint. Nothing reads the dropped values: the picture columns
-        were always NULL on staff (the upload route is participant-only) and gender was only
-        ever read by matchmaking, which queries ``users``.
+        were always NULL on staff (the upload route is participant-only), gender was only ever
+        read by matchmaking, which queries ``users``, and ``emoji`` had every reader deleted
+        with the profile-emoji option itself.
 
         The values are logged as dropped rather than silently discarded, because this is the one
         step in :meth:`initialize` that destroys stored data. It cannot be made conditional on
-        the data being empty -- a non-null ``gender`` on a staff row is exactly the state this
-        change declares invalid -- but an operator watching the boot log should be able to see
-        that it happened.
+        the data being empty -- a non-null ``gender`` on a staff row, or a profile emoji anybody
+        chose, is exactly the state these changes declare invalid -- but an operator watching the
+        boot log should be able to see that it happened.
         """
         with self.engine.begin() as connection:
             for table_name, columns in RETIRED_COLUMNS.items():

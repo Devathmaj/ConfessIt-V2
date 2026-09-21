@@ -496,7 +496,7 @@ describe('ProfileReview: creating an account from its own group', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create moderator' }));
     const dialog = await screen.findByRole('dialog');
 
-    // The `moderator` table has no year, department, gender, bio, interests, emoji, matchmaking or
+    // The `moderator` table has no year, department, gender, bio, interests, matchmaking or
     // love-note columns. Offering those inputs asked for values the server silently dropped.
     expect(
       within(dialog).getByRole('heading', { name: 'Create moderator account' }),
@@ -508,7 +508,6 @@ describe('ProfileReview: creating an account from its own group', () => {
     // neither, and offering the department alone would invite an answer with nowhere to go.
     expect(within(dialog).queryByLabelText('Year *')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Department/Division *')).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
@@ -566,7 +565,6 @@ describe('ProfileReview: creating an account from its own group', () => {
       'year',
       'department',
       'bio',
-      'emoji',
       'interests',
       'matchmaking_enabled',
       'love_notes_receive_enabled',
@@ -820,7 +818,6 @@ describe('ProfileReview: editing a staff account', () => {
     // and overwrite someone's face without them being in the room or able to refuse.
     expect(within(dialog).queryByLabelText('Profile picture')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Email notifications')).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Interests')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();
@@ -892,7 +889,6 @@ describe('ProfileReview: editing a staff account', () => {
     expect(within(dialog).getByLabelText('Year')).toHaveTextContent('2');
     expect(within(dialog).getByLabelText('Department/Division')).toHaveValue('Class_9');
     // Everything below is the owner's, so it is not on an admin's form at all -- not even read-only.
-    expect(within(dialog).queryByLabelText('Emoji tag')).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Bio')).not.toBeInTheDocument();
     expect(within(dialog).queryAllByRole('checkbox')).toHaveLength(0);
     expect(within(dialog).queryByText('Allow matchmaking')).not.toBeInTheDocument();

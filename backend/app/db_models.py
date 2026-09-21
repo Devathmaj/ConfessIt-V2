@@ -126,7 +126,7 @@ class AccountColumns:
     absent for staff would be a bug no type checker would catch, and the whole point of
     splitting the tables is that the shared shape stays honest.
 
-    Deliberately *not* here: emoji, bio, year, department, interests, matchmaking_enabled, the
+    Deliberately *not* here: bio, year, department, interests, matchmaking_enabled, the
     love-note toggles, ``gender`` and the two profile-picture columns. Those describe a
     participant, and a staff account is not a participant, so storing them would only create
     columns nothing writes and nothing reads.
@@ -193,7 +193,7 @@ class UserRecord(AccountColumns, Base):
     ``*_removal_count`` columns below describe *what a person has been reported for*, and
     only a participant is ever reported -- a moderator's posts are not in anybody's report
     queue, so a staff row would have six columns nothing ever writes and nothing reads. Same
-    reasoning as ``emoji``, ``bio`` and the matchmaking toggles being absent from the mixin,
+    reasoning as ``bio`` and the matchmaking toggles being absent from the mixin,
     and the same reasoning that moved ``gender`` and the two profile-picture columns here:
     matchmaking reads gender, and only a participant can upload a picture, so on a staff table
     both would be columns nothing reads and a payload field nothing can honestly answer for.
@@ -268,7 +268,6 @@ class UserRecord(AccountColumns, Base):
         ),
     )
 
-    emoji: Mapped[Optional[str]] = mapped_column(String(16))
     bio: Mapped[Optional[str]] = mapped_column(String(500))
 
     # The *identity* of the picture, never a URL. A profile picture is a public Cloudinary

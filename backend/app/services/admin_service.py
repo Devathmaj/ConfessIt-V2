@@ -67,7 +67,6 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
             "profile_picture_url": storage_service.profile_delivery_url(
                 row.profile_picture_public_id, row.profile_picture_format
             ),
-            "emoji": row.emoji,
             "bio": row.bio,
             "year": row.year,
             "department": row.department,
@@ -118,7 +117,6 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         payload.update({
             "gender": doc.get("gender"),
             "profile_picture_url": doc.get("profile_picture_url"),
-            "emoji": doc.get("emoji"),
             "bio": doc.get("bio"),
             "year": doc.get("year"),
             "department": doc.get("department"),
@@ -326,7 +324,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
                     "id": comment_id,
                     "body": comment_doc.body,
                     "created_at": serialize_datetime(comment_doc.created_at),
-                    "user": {"id": str(comment_doc.user_id), "name": (users_by_id.get(comment_doc.user_id).name if users_by_id.get(comment_doc.user_id) else "User"), "avatar": (users_by_id.get(comment_doc.user_id).emoji if users_by_id.get(comment_doc.user_id) else None)},
+                    "user": {"id": str(comment_doc.user_id), "name": (users_by_id.get(comment_doc.user_id).name if users_by_id.get(comment_doc.user_id) else "User")},
                     "report_count": comment_doc.report_count,
                     "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(comment_id, [])],
                     "like_count": comment_doc.like_count,

@@ -30,7 +30,6 @@ from app.limits import (
     RECIPIENT_NAME_MAX,
     REPORT_REASON_MAX,
     USER_BIO_MAX,
-    USER_EMOJI_MAX,
 )
 from app.models import CommentCreate, ConfessionCreate, ReportCreate
 from app.routers.messages import MessageCreate, MessageReport
@@ -264,7 +263,7 @@ def test_admin_user_fields_are_capped(field, limit):
     """What an admin may write, against the width of the column it lands in.
 
     ``bio`` and ``emoji`` used to appear here. They do not any more, because an admin can no
-    longer write them at all, and their cap is asserted on the participant's payload below.
+    longer write them at all, and ``bio``'s cap is asserted on the participant's payload below.
     Leaving them in this list would have kept asserting a constraint against a payload that
     refuses the key outright -- the test would pass for the wrong reason, and would go on
     passing if the cap were later dropped from the route that does write the field.
@@ -279,15 +278,14 @@ def test_admin_user_fields_are_capped(field, limit):
 @pytest.mark.parametrize(
     "field, limit",
     [
-        ("emoji", USER_EMOJI_MAX),
         ("bio", USER_BIO_MAX),
     ],
 )
 def test_profile_fields_are_capped_on_the_participant_payload(field, limit):
     """The cap follows the write, not the field.
 
-    These two fields are the account's own, so the admin payload no longer carries them and
-    ``PUT /profile/update`` is the only route that can set them. The cap therefore has to be
+    This field is the account's own, so the admin payload no longer carries it and
+    ``PUT /profile/update`` is the only route that can set it. The cap therefore has to be
     declared there too: without it the column width is the only limit, and an over-long bio
     comes back as a 500 from the database rather than a 422 that names the field.
     """
@@ -337,9 +335,7 @@ def test_the_profile_caps_match_the_columns():
     from app.db_models import UserRecord
     from app.services.profile_service import UserProfileUpdate
 
-    assert UserRecord.__table__.c.emoji.type.length == USER_EMOJI_MAX
     assert UserRecord.__table__.c.bio.type.length == USER_BIO_MAX
-    assert UserProfileUpdate.model_fields["emoji"].metadata[0].max_length == USER_EMOJI_MAX
     assert UserProfileUpdate.model_fields["bio"].metadata[0].max_length == USER_BIO_MAX
 
 

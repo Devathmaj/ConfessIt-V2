@@ -44,7 +44,7 @@ def _user_payload(user):
     if user is None: return None
     return {
         "id": str(user.id), "regno": user.regno, "name": user.name, "email": user.email,
-        "emoji": user.emoji, "bio": user.bio, "year": user.year, "department": user.department,
+        "bio": user.bio, "year": user.year, "department": user.department,
         "gender": user.gender,
         "profile_picture_url": storage_service.profile_delivery_url(
             user.profile_picture_public_id, user.profile_picture_format
@@ -260,7 +260,7 @@ async def create_user(
 
     What an admin supplies is an identity and a cohort -- regno, name, email, and, for a
     participant, gender, year and department. Everything else belongs to the account rather than
-    to whoever typed the form: the picture, emoji, bio, interests and the four preference
+    to whoever typed the form: the picture, bio, interests and the four preference
     flags are not on this payload at all, and ``AdminUserCreate`` forbids them by name so a
     curl that sends one is answered 422 rather than a 201 for an insert that dropped it.
 
@@ -429,7 +429,7 @@ async def update_user_details(
     moderator into a participant and strand the content that references it.
 
     The editable set is the account's identity: regno, name, email, and -- for a participant
-    only -- gender, year and department. The picture, emoji, bio, interests and the four
+    only -- gender, year and department. The picture, bio, interests and the four
     preference flags are not fields on this payload, and ``extra="forbid"`` refuses them by
     name -- so a caller still sending one gets a 422 rather than a 200 for an edit that silently
     did not happen. ``is_blocked`` is likewise absent, and blocking an account is the separate

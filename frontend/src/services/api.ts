@@ -496,7 +496,7 @@ export const getAdminUsers = async () => {
  *
  * An admin mints an identity and nothing else: regno, name, email, and for a participant the
  * gender, year and department that place them in a cohort. Every field the account owns about
- * itself -- picture, emoji, bio, interests, and the four preference flags -- is absent, and the
+ * itself -- picture, bio, interests, and the four preference flags -- is absent, and the
  * server forbids those names outright rather than ignoring them, so a payload carrying one is a
  * 422 and not a silent no-op. There is nothing to upload here either: a participant sets their
  * own picture through their profile once the account exists.

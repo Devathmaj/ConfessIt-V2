@@ -100,7 +100,6 @@ REACTION_MAX = 24
 # Admin-supplied profile fields, sized to the columns they are stored in.
 USER_NAME_MAX = 160
 USER_BIO_MAX = 500
-USER_EMOJI_MAX = 16
 USER_GENDER_MAX = 24
 USER_ROLE_MAX = 20
 USER_REGNO_MAX = 100

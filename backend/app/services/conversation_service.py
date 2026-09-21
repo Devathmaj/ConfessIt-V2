@@ -21,7 +21,7 @@ def _user_data(row):
         return None
     return {
         "id": str(row.id), "regno": row.regno, "name": row.name,
-"email": row.email, "emoji": row.emoji, "bio": row.bio,
+        "email": row.email, "bio": row.bio,
         "year": row.year, "department": row.department,
         "profile_picture_url": storage_service.profile_delivery_url(
             row.profile_picture_public_id, row.profile_picture_format

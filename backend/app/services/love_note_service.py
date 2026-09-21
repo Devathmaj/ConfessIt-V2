@@ -84,7 +84,7 @@ async def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
 
 def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
     payload = {
-        "id": str(user.id), "name": user.name, "emoji": user.emoji,
+        "id": str(user.id), "name": user.name,
         "year": user.year, "department": user.department, "gender": user.gender,
         "interests": user.interests or [],
         # A profile picture is public on Cloudinary's CDN, so this is a plain derivation from the

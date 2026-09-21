@@ -49,8 +49,6 @@ import {
 interface UserInfo {
   id: string;
   name: string;
-  /** Emoji chosen by the user. The API omits it when unset, so it is genuinely optional. */
-  avatar?: string | null;
   /** Author's photo; the API withholds it on an anonymous confession. */
   profile_picture_url?: string | null;
   user_reaction: 'like' | 'dislike' | null;

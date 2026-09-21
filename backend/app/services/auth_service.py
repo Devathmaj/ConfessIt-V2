@@ -77,7 +77,6 @@ def _user_payload(row: Any) -> Dict[str, Any]:
     """Build the full participant shape from a ``users`` row."""
     return {
         **_account_payload(row, AccountType.USERS.value),
-        "emoji": row.emoji,
         "bio": row.bio,
         "year": row.year,
         "department": row.department,

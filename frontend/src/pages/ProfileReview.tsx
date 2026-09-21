@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -171,7 +171,6 @@ interface AdminUserProfile {
   last_login_ip?: string | null;
   is_blocked?: boolean;
   bio?: string | null;
-  emoji?: string | null;
   profile_picture_url?: string | null;
   interests?: string[] | null;
   last_matchmaking_at?: string | null;
@@ -272,7 +271,7 @@ const focusField = (field: IdentityField | null): void => {
 
 /** Drop one field's message as soon as the operator starts correcting it. */
 const clearIssue = (
-  setter: (issues: FieldIssues) => void,
+  setter: Dispatch<SetStateAction<FieldIssues>>,
   field: IdentityField,
 ) => {
   setter((prev) => {
@@ -1706,7 +1705,7 @@ export const ProfileReview = () => {
                 )}
 
                 <p className="text-xs text-muted-foreground">
-                  Profile picture, emoji tag, bio, interests and the matchmaking, notification and
+                  Profile picture, bio, interests and the matchmaking, notification and
                   love-note settings belong to the account, not to this form. The participant sets
                   them from their own profile; the server refuses them here even if a request is
                   made by hand.
@@ -1919,7 +1918,7 @@ export const ProfileReview = () => {
               </div>
 
               <p className="text-xs text-muted-foreground">
-                The account starts with no picture, no emoji tag, no bio, no interests, and with
+                The account starts with no picture, no bio, no interests, and with
                 matchmaking, email notifications and receiving love notes switched on while
                 sending love notes is switched off. Those belong to the account, which sets them
                 from its own profile; the server refuses them on this request even if one is

@@ -25,9 +25,6 @@ import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
 
-// Used for the emoji selector
-const avatarOptions = ['💕', '🌟', '🎨', '🌺', '🦋', '✨', '🌸', '💖', '🌙', '🎵'];
-
 // The interest checklist is the shared vocabulary, not a local copy. It used to be spelled out
 // here as well as in Profile Review, which meant the two screens could disagree about what an
 // interest is -- and the server holds a third, authoritative copy that refuses anything else.
@@ -38,7 +35,6 @@ export const ProfilePage = () => {
   const { user, token, fetchAndSetUser } = useAuth();
 
   // State for form fields
-  const [emoji, setEmoji] = useState(user?.emoji || '💕');
   const [bio, setBio] = useState(user?.bio || '');
   // Seeded through `toInterests`, not straight from the server. A stored interest from before
   // the vocabulary was closed would otherwise sit in this state, invisible (there is no box for
@@ -57,7 +53,6 @@ export const ProfilePage = () => {
   const initialProfileState = useMemo(() => {
     if (!user) return null;
     return {
-      emoji: user.emoji || '💕',
       bio: user.bio || '',
       interests: toInterests(user.interests),
       matchmaking_enabled: user.matchmaking_enabled || false,
@@ -69,7 +64,6 @@ export const ProfilePage = () => {
   // Effect to sync local state when the user context changes
   useEffect(() => {
     if (user) {
-      setEmoji(user.emoji || '💕');
       setBio(user.bio || '');
       setInterests(toInterests(user.interests));
       setMatchmakingEnabled(user.matchmaking_enabled || false);
@@ -83,7 +77,6 @@ export const ProfilePage = () => {
     if (!initialProfileState) return;
 
     const currentState = {
-      emoji,
       bio,
       interests,
       matchmaking_enabled,
@@ -93,7 +86,7 @@ export const ProfilePage = () => {
     
     // Use lodash's isEqual for a deep comparison, especially for the interests array
     setHasUnsavedChanges(!isEqual(initialProfileState, currentState));
-  }, [emoji, bio, interests, matchmaking_enabled, notifications_enabled, love_notes_receive_enabled, initialProfileState]);
+  }, [bio, interests, matchmaking_enabled, notifications_enabled, love_notes_receive_enabled, initialProfileState]);
 
   const handleInterestChange = (interest: string) => {
     setInterests(prev => 
@@ -126,7 +119,6 @@ export const ProfilePage = () => {
 
   const handleSaveProfile = async () => {
     const updatedDetails = {
-      emoji,
       bio,
       interests,
       matchmaking_enabled,
@@ -149,7 +141,6 @@ export const ProfilePage = () => {
 
   const handleDiscardChanges = () => {
     if (initialProfileState) {
-      setEmoji(initialProfileState.emoji);
       setBio(initialProfileState.bio);
       setInterests(initialProfileState.interests);
       setMatchmakingEnabled(initialProfileState.matchmaking_enabled);
@@ -239,26 +230,6 @@ export const ProfilePage = () => {
                <div>
                 <Label className="text-romantic font-semibold">Gender</Label>
                 <Input value={user?.gender || ''} disabled className="bg-muted" />
-              </div>
-            </div>
-
-            {/* Emoji Selection */}
-            <div>
-              <Label className="text-romantic font-semibold">Profile Emoji</Label>
-              <div className="grid grid-cols-5 sm:grid-cols-10 gap-2 mt-2">
-                {avatarOptions.map((option) => (
-                  <button
-                    key={option}
-                    onClick={() => setEmoji(option)}
-                    className={`w-12 h-12 text-2xl rounded-lg border-2 transition-all duration-300 hover:scale-110 ${
-                      emoji === option 
-                        ? 'border-romantic bg-gradient-love' 
-                        : 'border-muted hover:border-romantic'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
               </div>
             </div>
 

@@ -77,7 +77,6 @@ const renderDashboard = () =>
             regno: 'ADM-1',
             name: 'An Admin',
             email: 'admin@example.com',
-            emoji: '🛡️',
             account_type: 'admin',
             capabilities: ADMIN_CAPABILITIES,
             is_blocked: false,

@@ -69,7 +69,6 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
 # run, and anything holding a value for them in ``login_tokens``-style references is what the
 # pre-flight check below looks for.
 PARTICIPANT_ONLY_COLUMNS: tuple[str, ...] = (
-    "emoji",
     "bio",
     # Two columns where there was once one ``class_name``. Both are NOT NULL on ``users`` and both
     # describe only a participant, so both are dropped from a staff row rather than being carried

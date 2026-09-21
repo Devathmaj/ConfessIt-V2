@@ -17,7 +17,7 @@ const asUser = (overrides: Partial<User> = {}): User => ({
   id: '1',
   name: 'Test User',
   regno: 'TEST001',
-  emoji: '🙂',
+  email: 'test@example.com',
   ...overrides,
 });
 

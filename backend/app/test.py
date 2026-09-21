@@ -25,7 +25,6 @@ PARTICIPANTS_PER_GENDER = 50
 YEARS = tuple(range(1, 13))
 DEPARTMENTS = ("Test_Department_A", "Test_Department_B", "Test_Department_C")
 INTERESTS = ("music", "games", "films", "books", "sports")
-EMOJIS = ("🎧", "📚", "🎮", "🎬", "⚽")
 
 
 def create_magic_link_token() -> str:
@@ -64,7 +63,6 @@ def _participants() -> list[dict]:
                     "gender": gender,
                     "year": YEARS[index % len(YEARS)],
                     "department": DEPARTMENTS[index % len(DEPARTMENTS)],
-                    "emoji": EMOJIS[index % len(EMOJIS)],
                     "bio": f"Seeded {gender} participant {regno}.",
                     "interests": list(INTERESTS[index % len(INTERESTS) : index % len(INTERESTS) + 2]),
                     "profile_picture_public_id": None, "profile_picture_format": None,

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from ..db_models import UserRecord
-from ..limits import USER_BIO_MAX, USER_EMOJI_MAX
+from ..limits import USER_BIO_MAX
 from ..logger import get_logger
 from ..postgres import Database
 
@@ -28,13 +28,12 @@ class UserProfileUpdate(BaseModel):
     same reason it is on the participant's own account: this is a list that something has to
     match on, so a bad value becomes a value nothing can match.
 
-    ``emoji`` and ``bio`` are capped against the column widths, and the cap lives here rather
-    than on the admin payload because this is now the only path that writes them. Without it
-    the ``String(16)``/``String(500)`` columns would be the only limit, which means the
-    participant gets a 500 from the database instead of a 422 naming the field -- and a
-    response that says "Internal Server Error" for a 17th emoji is not a useful one.
+    ``bio`` is capped against the column width, and the cap lives here rather than on the
+    admin payload because this is now the only path that writes it. Without it the
+    ``String(500)`` column would be the only limit, which means the participant gets a 500
+    from the database instead of a 422 naming the field -- and a response that says
+    "Internal Server Error" for a 501st character is not a useful one.
     """
-    emoji: Optional[str] = Field(default=None, max_length=USER_EMOJI_MAX)
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
@@ -74,7 +73,7 @@ async def update_user_profile_service(
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         field_map = {
-            "emoji": "emoji", "bio": "bio", "interests": "interests",
+            "bio": "bio", "interests": "interests",
             "matchmaking_enabled": "matchmaking_enabled", "notifications_enabled": "notifications_enabled",
             "love_notes_receive_enabled": "love_notes_receive_enabled",
         }
@@ -82,7 +81,7 @@ async def update_user_profile_service(
             setattr(user, field_map[field], value)
         updated_user_doc = {
             "id": str(user.id), "regno": user.regno, "name": user.name,
-            "email": user.email, "emoji": user.emoji, "bio": user.bio,
+            "email": user.email, "bio": user.bio,
             "year": user.year, "department": user.department,
             # The row holds the picture's identity; the URL the client receives is derived from
             # it below, so nothing durable ever depends on an address that could be regenerated

@@ -64,7 +64,6 @@ interface AdminComment {
   user: {
     id?: string | null;
     name?: string | null;
-    avatar?: string | null;
   };
   report_count: number;
   reported_by: string[];
@@ -224,7 +223,6 @@ export const ConfessionsAdmin = () => {
                     user: {
                       id: comment.user?.id ?? null,
                       name: comment.user?.name ?? null,
-                      avatar: comment.user?.avatar ?? null,
                     },
                     report_count: comment.report_count ?? 0,
                     reported_by: Array.isArray(comment.reported_by) ? comment.reported_by : [],

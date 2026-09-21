@@ -202,6 +202,9 @@ def test_duplicate_interests_collapse_rather_than_failing():
     "field, value",
     [
         ("interests", ["Music"]),
+        # Retired rather than merely private: the profile-emoji option is gone, so ``emoji`` is
+        # refused by name rather than ignored -- an older client still sending it gets a 422
+        # that names the key instead of a 201 for an insert that dropped it.
         ("emoji", "x"),
         ("bio", "x"),
         ("matchmaking_enabled", False),
@@ -238,6 +241,7 @@ def test_an_admin_cannot_write_a_field_the_account_owns(admin_client, field, val
     "field, value",
     [
         ("profile_picture_url", "https://example.test/whatever.png"),
+        # Same reason as on create: a retired key is refused, not absorbed.
         ("emoji", "x"),
         ("bio", "x"),
         ("interests", ["Music"]),
@@ -278,7 +282,6 @@ def test_an_admin_update_refuses_a_field_the_account_owns(admin_client, db, fiel
         row = session.scalar(select(UserRecord).where(UserRecord.id == user_id))
         assert row.name == "Someone"
         assert row.bio is None
-        assert row.emoji is None
         assert list(row.interests) == []
 
 
@@ -381,6 +384,26 @@ def test_only_participants_still_have_a_gender_column(db, table):
             {"table": table},
         ).scalar_one()
     assert present is (table == "users")
+
+
+@pytest.mark.parametrize("table", ["users", "admin", "moderator"])
+def test_no_account_table_keeps_an_emoji_column(db, table):
+    """The profile-emoji option is gone, and the column went with it.
+
+    ``emoji`` sits in ``RETIRED_COLUMNS`` rather than merely being undeclared, so this is the
+    check that the boot path actually dropped it from a deployed schema. A column nothing
+    declares would otherwise go on holding values no code can read -- the exact state the
+    removal was meant to end, and one a fresh database can reach by never having it at all.
+    """
+    with db.engine.begin() as connection:
+        present = connection.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :table AND column_name = 'emoji')"
+            ),
+            {"table": table},
+        ).scalar_one()
+    assert present is False
 
 
 def test_postgresql_refuses_a_gender_outside_the_vocabulary(db):
@@ -624,7 +647,6 @@ def test_a_created_account_starts_from_the_declared_defaults(admin_client, db):
         # format would render a broken image rather than no avatar at all.
         assert row.profile_picture_public_id is None
         assert row.profile_picture_format is None
-        assert row.emoji is None
         assert row.bio is None
         assert list(row.interests) == []
         assert row.notifications_enabled is True

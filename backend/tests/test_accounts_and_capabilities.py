@@ -211,7 +211,7 @@ def test_staff_tables_do_not_hold_participant_columns():
     declared on ``users`` alone, asserted below.
     """
     participant_only = {
-        "emoji", "bio", "year", "department", "interests",
+        "bio", "year", "department", "interests",
         "matchmaking_enabled", "love_notes_receive_enabled",
         "love_notes_send_enabled", "last_matchmaking_at",
         "gender", "profile_picture_public_id", "profile_picture_format",
@@ -282,7 +282,7 @@ def test_report_counts_live_on_participants_only():
     A staff account has no content in anybody's report queue, so a ``confession_removal_count``
     on ``moderator`` would be a column that reads 0 forever -- indistinguishable, in a staff
     list rendered beside participants, from a moderator with a clean record. Same reasoning as
-    ``emoji`` and ``bio`` being participant-only, and asserted separately from ``role`` above
+    ``bio`` being participant-only, and asserted separately from ``role`` above
     because this one is a deliberate feature rather than an absence.
 
     Two columns per kind of content, and never a single combined total: ``reports`` counts

@@ -316,9 +316,9 @@ export const notifyCooldown = (remaining: CooldownRemaining | null, { force = fa
 
 // Mock data for the "slot machine" animation while matching
 const mockMatches: User[] = [
-    { id: 'mock1', name: 'Alex', regno: '123', emoji: '😊', year: 2, department: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
-    { id: 'mock2', name: 'Jordan', regno: '456', emoji: '😎', year: 3, department: 'ECE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
-    { id: 'mock3', name: 'Taylor', regno: '789', emoji: '🤩', year: 1, department: 'MECH', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
+    { id: 'mock1', name: 'Alex', regno: '123', email: 'alex@example.com', year: 2, department: 'CSE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=A', interests: ['Gaming', 'Music'], bio: 'Just a mock user.' },
+    { id: 'mock2', name: 'Jordan', regno: '456', email: 'jordan@example.com', year: 3, department: 'ECE', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=J', interests: ['Sports', 'Movies'], bio: 'Another mock user.' },
+    { id: 'mock3', name: 'Taylor', regno: '789', email: 'taylor@example.com', year: 1, department: 'MECH', profile_picture_url: 'https://placehold.co/96x96/fecdd3/be123c?text=T', interests: ['Reading', 'Hiking'], bio: 'A third mock user.' },
 ];
 
 /**

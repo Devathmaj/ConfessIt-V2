@@ -16,7 +16,6 @@ export interface User {
   regno: string;
   /** Required on every account, so the server always sends one. */
   email: string;
-  emoji: string;
   bio?: string;
   /**
    * Year of study and department. Participant-only: a staff account has no row in `users`, so the

@@ -91,7 +91,6 @@ const renderWith = (ui: React.ReactElement, capabilities: string[]) =>
             regno: 'MOD-1',
             name: 'A Moderator',
             email: 'mod@example.com',
-            emoji: '🛡️',
             account_type: 'moderator',
             capabilities,
             is_blocked: false,

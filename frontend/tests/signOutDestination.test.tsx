@@ -90,7 +90,6 @@ const signIn = (accountType: 'users' | 'admin' | 'moderator') => {
     id: 'a-uuid',
     name: 'Someone',
     regno: 'SOME-REG',
-    emoji: '🙂',
     account_type: accountType,
     capabilities:
       accountType === 'users'

@@ -144,7 +144,7 @@ class ConfessionService:
             user_doc = session.get(UserRecord, str(user_id))
         if user_doc:
             return UserInfo(
-                id=str(user_doc.id), name=user_doc.name or "Anonymous User", avatar=user_doc.emoji,
+                id=str(user_doc.id), name=user_doc.name or "Anonymous User",
                 profile_picture_url=_profile_picture_url(user_doc),
             )
         return None
@@ -162,7 +162,6 @@ class ConfessionService:
     def _comment_payload(row, user=None):
         return {"id": str(row.id), "confession_id": str(row.confession_id), "user_id": str(row.user_id),
             "user_info": {"id": str(row.user_id), "name": user.name if user else "User",
-                "avatar": user.emoji if user else None,
                 "profile_picture_url": _profile_picture_url(user)},
             "body": row.body, "created_at": row.created_at, "likes": [str(x) for x in (row.likes or [])],
             "dislikes": [str(x) for x in (row.dislikes or [])], "like_count": row.like_count,
@@ -259,7 +258,6 @@ class ConfessionService:
             confession["user_info"] = {
                 "id": str(confession.get("author_id")),
                 "name": author.name if author else "Anonymous User",
-                "avatar": author.emoji if author else None,
                 # Withheld on an anonymous post: a photo identifies its owner far more
                 # directly than a name does, so it follows the same condition the client
                 # uses to hide that name.
@@ -497,7 +495,7 @@ class ConfessionService:
             if confession_row: confession_row.comment_count += 1
             session.flush()
             new_comment = self._comment_payload(row, user)
-            new_comment["user_info"].update({"name": user.name, "avatar": user.emoji})
+            new_comment["user_info"].update({"name": user.name})
         logger.info(f"Added comment {new_comment['id']} to confession {confession_id}")
         return ConfessionComment(**new_comment)
 

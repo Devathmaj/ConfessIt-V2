@@ -252,7 +252,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     matched_user_row = random.choice(candidate_users)
     matched_user = UserDetails(**{
         "id": str(matched_user_row.id), "regno": matched_user_row.regno, "name": matched_user_row.name,
-        "email": matched_user_row.email, "emoji": matched_user_row.emoji, "bio": matched_user_row.bio,
+        "email": matched_user_row.email, "bio": matched_user_row.bio,
         "year": matched_user_row.year, "department": matched_user_row.department,
         "profile_picture_url": storage_service.profile_delivery_url(
             matched_user_row.profile_picture_public_id, matched_user_row.profile_picture_format
