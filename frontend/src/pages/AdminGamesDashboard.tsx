@@ -23,6 +23,7 @@ const ACTIVITY_LABELS: Record<GamesActivityKind, string> = {
   availability: 'Availability',
   settings: 'Settings',
   leaderboard: 'Leaderboard',
+  puzzle: 'Puzzle',
   system: 'System',
 };
 

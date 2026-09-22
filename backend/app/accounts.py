@@ -92,6 +92,7 @@ class Capability(str, Enum):
     USERS_BLOCK = "users:block"
     MESSAGES_ARCHIVE = "messages:archive"
     APP_CONFIG_READ = "app_config:read"
+    GAMES_MANAGE = "games:manage"
 
 
 # What a moderator can do: read every content queue and act on what is in it. Nothing here can
@@ -121,6 +122,11 @@ MODERATION_CAPABILITIES: frozenset[str] = frozenset(
 # the backlog of the queues they can rule on: a number they can act on, read from the queue
 # endpoints. Keeping this one open to them would hand over a figure that describes nothing they
 # are able to change.
+#
+# ``games:manage`` is here for the same reason from the other side. Configuring a day's Wordle
+# puzzle publishes something to every player who opens the game that day; it is a statement
+# about the platform, not a ruling on a queue, and ruling on content is the whole of what the
+# moderator set is.
 ADMIN_ONLY_CAPABILITIES: frozenset[str] = frozenset(
     capability.value
     for capability in (
@@ -131,6 +137,7 @@ ADMIN_ONLY_CAPABILITIES: frozenset[str] = frozenset(
         Capability.USERS_BLOCK,
         Capability.MESSAGES_ARCHIVE,
         Capability.APP_CONFIG_READ,
+        Capability.GAMES_MANAGE,
     )
 )
 

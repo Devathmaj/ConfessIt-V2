@@ -190,3 +190,11 @@ INTEREST_VALUES: tuple[str, ...] = (
 # Widening an array element is a migration; refusing a value that is not in `INTEREST_VALUES` is
 # a 422.
 INTEREST_MAX_SELECTED = len(INTEREST_VALUES)
+
+
+# Wordle. The answer is five letters, and the length is the whole shape of the game: the
+# grid, the keyboard, the guess validation and the word list all assume it. One number, so
+# the column, the payload validator and the word-list check cannot drift apart -- a word
+# list written for one length and a column written for another would only meet at the
+# insert, as a value the database accepts and no screen can render.
+WORDLE_ANSWER_LENGTH = 5

@@ -79,6 +79,15 @@ SAMPLE_ROUTES = [
 ("DELETE", "/admin/love-notes/{note_id}"),
 ("GET", "/admin/love-notes/reports"),
 ("PATCH", "/admin/love-notes/reports/{report_id}"),
+    # Wordle configuration. ``GET /admin/wordle/preview`` is declared ahead of
+    # ``GET /admin/wordle/{game_id}`` in the router so the word "preview" is never read as an
+    # id, and the four together are the whole feature: draw, save, list, read one. Each is
+    # gated on ``games:manage``, which is in ``ADMIN_ONLY_CAPABILITIES`` -- publishing a
+    # puzzle is not a moderation action, so a moderator is refused on all four.
+    ("GET", "/admin/wordle/preview"),
+    ("POST", "/admin/wordle"),
+    ("GET", "/admin/wordle"),
+    ("GET", "/admin/wordle/{game_id}"),
 ]
 
 

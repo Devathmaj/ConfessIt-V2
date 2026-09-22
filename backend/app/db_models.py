@@ -5,11 +5,11 @@ for staff -- and an account's privileges are a function of which one its row is 
 any column it holds. Nothing in this schema stores a role.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, SmallInteger,
+    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, SmallInteger,
     ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
@@ -26,6 +26,7 @@ from .limits import (
     USER_GENDER_VALUES,
     USER_YEAR_MAX,
     USER_YEAR_MIN,
+    WORDLE_ANSWER_LENGTH,
 )
 from .accounts import (
     ACCOUNT_TYPE_VALUES,
@@ -965,6 +966,45 @@ class MessageReportRecord(Base):
     # account being deleted or renamed, which is what ``ON DELETE SET NULL`` was doing.
     reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
+
+
+class WordleGameRecord(Base):
+    """One day's Wordle puzzle, as an administrator configured it.
+
+    The row is the *configuration* of a puzzle -- which word that day runs on, and how that
+    word was chosen -- and not a play of it. Nothing a participant does writes here: there is
+    no attempt, no guess and no result column, because none of those exist yet and inventing
+    the columns would be inventing the game.
+
+    ``game_date`` is the identity that matters and is unique rather than merely indexed. A
+    second row for the same day would leave the player-facing page with two answers and no
+    rule for choosing between them, so the refusal belongs in the schema and not only in the
+    service that happens to check first -- two administrators saving at the same moment would
+    otherwise both be told 201.
+
+    ``mode`` records how the answer came to be: ``custom`` for a word the administrator typed,
+    ``random`` for one the server drew from the approved list. It is provenance rather than
+    behaviour -- the row plays identically either way -- which is why it is a plain column
+    with a CHECK rather than two nullable ones.
+    """
+
+    __tablename__ = "wordle_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    mode: Mapped[str] = mapped_column(String(10))
+    answer: Mapped[str] = mapped_column(String(WORDLE_ANSWER_LENGTH))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('custom', 'random')", name="ck_wordle_games_mode_known"),
+        CheckConstraint(
+            f"length(answer) = {WORDLE_ANSWER_LENGTH}", name="ck_wordle_games_answer_length"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

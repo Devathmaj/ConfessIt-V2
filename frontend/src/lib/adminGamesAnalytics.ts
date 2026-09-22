@@ -29,6 +29,7 @@ export interface GamePlayTotals {
 }
 
 const MOCK_PLAYS: Record<string, Omit<GamePlayTotals, 'gameId'>> = {
+  'wordle': { playsToday: 0, playsWeek: 0, playsAllTime: 0 },
   'truth-dare': { playsToday: 148, playsWeek: 903, playsAllTime: 8_640 },
   'compatibility-quiz': { playsToday: 121, playsWeek: 774, playsAllTime: 7_120 },
   'love-letter-builder': { playsToday: 64, playsWeek: 402, playsAllTime: 3_980 },
@@ -62,7 +63,13 @@ export interface GameTypeBreakdown {
   share: number;
 }
 
-export type GamesActivityKind = 'featured' | 'availability' | 'settings' | 'leaderboard' | 'system';
+export type GamesActivityKind =
+  | 'featured'
+  | 'availability'
+  | 'settings'
+  | 'leaderboard'
+  | 'puzzle'
+  | 'system';
 
 export interface GamesActivityEntry {
   id: string;

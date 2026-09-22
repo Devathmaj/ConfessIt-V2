@@ -687,3 +687,75 @@ export const updateAdminUser = async (userId: string, payload: AdminUserUpdatePa
     return response.data;
 };
 
+/**
+ * One configured Wordle puzzle, as `GET /admin/wordle` returns it.
+ *
+ * `answer` is present deliberately: this is the administrator's own configuration screen, and
+ * the endpoint it comes from is closed to everyone who may not publish it. There is no
+ * participant-facing read of this shape.
+ */
+export interface WordleGame {
+    id: string;
+    game_date: string;
+    mode: 'custom' | 'random';
+    answer: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** A word the server drew, with the signature that binds it to one day. */
+export interface WordleDraw {
+    word: string;
+    token: string;
+}
+
+/**
+ * The fields `POST /admin/wordle` accepts.
+ *
+ * `word` and `token` are both optional here and required by the *mode*: a custom game needs a
+ * word from the approved list, a random one needs the word a draw returned together with that
+ * draw's token. The server re-derives the signature, so a token minted for another day -- or
+ * one a client made up -- is a 400 rather than a second chance to choose the answer.
+ *
+ * `game_date` identifies the puzzle and defaults to today in UTC when omitted. It is sent on
+ * every save from the console rather than left to the default, so the day a draw was made for
+ * and the day the answer lands on are visibly the same field.
+ */
+export interface WordleGamePayload {
+    mode: 'custom' | 'random';
+    word?: string;
+    token?: string;
+    game_date?: string;
+}
+
+/** Draw an answer for `gameDate` (defaults to today in UTC). Read-only: nothing is stored. */
+export const drawWordleAnswer = async (gameDate?: string): Promise<WordleDraw> => {
+    const response = await axios.get(`${API_URL}/admin/wordle/preview`, {
+        headers: getAuthHeaders(),
+        params: { game_date: gameDate },
+    });
+    return response.data;
+};
+
+/** Configure one day's puzzle. A day that already has one answers 409. */
+export const createWordleGame = async (payload: WordleGamePayload): Promise<WordleGame> => {
+    const response = await axios.post(`${API_URL}/admin/wordle`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every configured puzzle, newest day first. */
+export const getAdminWordleGames = async (): Promise<WordleGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/wordle`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+/** One configured puzzle by id. A malformed id answers 400, an unknown one 404. */
+export const getAdminWordleGame = async (gameId: string): Promise<WordleGame> => {
+    const response = await axios.get(`${API_URL}/admin/wordle/${gameId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+

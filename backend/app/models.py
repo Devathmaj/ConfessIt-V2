@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator, validator
 from typing import Annotated, Literal, Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from .postgres import new_id
 from .limits import (
     COMMENT_BODY_MAX,
@@ -736,3 +736,80 @@ class Notification(BaseModel):
 
 # Update forward references to allow nested Pydantic models
 Confession.update_forward_refs()
+
+
+# --- Wordle configuration ------------------------------------------------------
+#
+# Admin-side only. These describe a *puzzle* -- a day, a word, and how the word was chosen --
+# and nothing about playing one: no guess, no attempt, no result, because none of those exist
+# yet and a field here would be a promise the rest of the application does not keep.
+
+# Same treatment as ``Gender`` above: a ``Literal`` so the generated schema hands the client
+# the two legal modes instead of a free-text string, and a value outside the set is a 422 at
+# validation rather than a check some other layer might forget to run. Mirrors the CHECK
+# constraint on ``wordle_games.mode`` -- all three must agree.
+WordleMode = Literal["custom", "random"]
+
+
+class WordleGameCreate(BaseModel):
+    """Configuring the answer for one day.
+
+    ``game_date`` is optional and defaults to the current day in UTC, because the usual
+    request *is* "today's puzzle" and making every caller restate the date would be a field
+    that is never anything else. Supplying it is for scheduling a day ahead or correcting a
+    save, and the date -- not the request, and not the row id -- is what identifies the
+    puzzle, so it is the field uniqueness is enforced on.
+
+    ``word`` and ``token`` are both optional in the type and required by the *mode*, which is
+    why neither is a ``model_validator`` here. Whether a word is five letters and on the
+    approved list is a question about the server's own list rather than about the shape of the
+    request, so it is answered in the service with a 400 that says which rule failed; a 422
+    from a length constraint would answer a question this payload is not asking.
+
+    ``token`` is the proof of a draw: the server signed it for exactly this word and date, and
+    ``mode="random"`` without one is refused rather than re-drawn. Re-drawing at save time
+    would mean the answer the admin was shown is not the answer that was published, which is
+    the one outcome this whole flow exists to prevent.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
+    accepted and dropped -- a caller told 201 for a field that never landed is a caller who
+    believes something false about the stored row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: WordleMode
+    word: Optional[str] = None
+    token: Optional[str] = None
+    game_date: Optional[date] = None
+
+
+class WordleGame(BaseModel):
+    """A configured puzzle as it is stored: the day, the word, and where the word came from.
+
+    ``answer`` is returned deliberately. This is the administrator's own configuration screen
+    -- the whole point of which is that the admin can see what will be published -- and the
+    endpoint is gated on the capability that may publish it. There is no participant-facing
+    read of this model; when one exists it will not be this one.
+    """
+
+    id: str
+    game_date: date
+    mode: WordleMode
+    answer: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class WordleDraw(BaseModel):
+    """A word the server drew, plus the signature that lets it be saved unchanged.
+
+    The two halves travel together and only the server can produce either: ``word`` is chosen
+    from the approved list here, and ``token`` is an HMAC over that word and the date it was
+    drawn for. The client shows the word, sends both back, and the service re-derives the
+    signature -- so what the admin saw is what gets stored, and nothing the client sends can
+    become an answer the server did not pick.
+    """
+
+    word: str
+    token: str

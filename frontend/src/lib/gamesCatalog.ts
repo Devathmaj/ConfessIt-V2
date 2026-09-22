@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Gift,
+  Grid3x3,
   Heart,
   MessageCircle,
   Scale,
@@ -89,6 +90,19 @@ export const GAME_CATEGORIES: GameCategory[] = [
 ];
 
 export const AVAILABLE_GAMES: GameDefinition[] = [
+  {
+    id: 'wordle',
+    name: 'Wordle',
+    tagline: 'Five letters, six guesses, one word a day.',
+    category: 'wordplay',
+    type: 'single',
+    difficulty: 'medium',
+    players: 'Solo',
+    duration: '~3 min',
+    icon: Grid3x3,
+    accent: 'bg-gradient-hero',
+    status: 'available',
+  },
   {
     id: 'truth-dare',
     name: 'Truth or Dare',
