@@ -83,6 +83,39 @@ export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
 };
 
 /**
+ * Used to protect routes that are only for participants (non-staff).
+ * Staff roles (admin and moderator) must not be able to access user-facing endpoints.
+ * If a staff user tries to access, redirect them to their appropriate landing page.
+ */
+export const ParticipantOnlyRoute = ({ children }: { children: ReactNode }) => {
+  const { isAuthenticated, isLoading, can, signInPath, user } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading session...</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to={signInPath} replace />;
+  }
+
+  // Staff users (those with staff capabilities) cannot access participant routes
+  const isStaff = can(CAPABILITIES.STATS_READ) || can(CAPABILITIES.REPORTS_REVIEW) ||
+    can(CAPABILITIES.CONFESSIONS_REVIEW) || can(CAPABILITIES.LOVE_NOTES_REVIEW) ||
+    can(CAPABILITIES.USERS_REVIEW) || can(CAPABILITIES.APP_CONFIG_READ);
+  const accountType = user?.account_type;
+  const isStaffByType = accountType === 'admin' || accountType === 'moderator';
+  if (isStaff || isStaffByType) {
+    return <Navigate to={landingPathFor(can)} replace />;
+  }
+
+  return <>{children}</>;
+};
+
+/**
  * Used to protect a moderation screen behind the one capability it needs.
  *
  * The requirement is per-route rather than "is staff", because moderator and admin do not
@@ -198,9 +231,9 @@ const AppRoutes = () => {
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <UserDashboard />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       
@@ -277,49 +310,49 @@ const AppRoutes = () => {
       <Route
         path="/confessions"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <ConfessionsPage />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       <Route
         path="/matchmaking"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <MatchmakingPage />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       <Route
         path="/notifications"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <InboxPage />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       <Route
         path="/inbox"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <MessageBoxPage />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       <Route
         path="/profile" // Changed from /settings
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <ProfilePage /> {/* Changed from SettingsPage */}
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       <Route
         path="/love-notes"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <LoveNotesPage />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
       {/* The Games section. One shell around every /games route, so the section's own
@@ -328,9 +361,9 @@ const AppRoutes = () => {
       <Route
         path="/games"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <GamesLayout />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       >
         <Route index element={<GamesDashboardPage />} />
@@ -344,9 +377,9 @@ const AppRoutes = () => {
       <Route
         path="/about"
         element={
-          <ProtectedRoute>
+          <ParticipantOnlyRoute>
             <About />
-          </ProtectedRoute>
+          </ParticipantOnlyRoute>
         }
       />
 
