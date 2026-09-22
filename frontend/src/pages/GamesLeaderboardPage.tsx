@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
 import {
   ALL_GAMES_FILTER,
@@ -59,6 +60,9 @@ const TrendIndicator = ({ delta }: { delta: number }) => {
 export const GamesLeaderboardPage = () => {
   const [scope, setScope] = useState<LeaderboardScope>('global');
   const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
+  // Only live titles are offered as filters; a switched-off game still has history, it just
+  // is not somewhere a player would go looking for it.
+  const { isEnabled } = useGamesConfig();
 
   const entries = useMemo(() => getLeaderboardEntries({ scope, gameId }), [scope, gameId]);
   const summary = useMemo(() => summarizeCurrentUser(entries), [entries]);
@@ -108,7 +112,9 @@ export const GamesLeaderboardPage = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_GAMES_FILTER}>All games</SelectItem>
-            {AVAILABLE_GAMES.filter((game) => game.status === 'available').map((game) => (
+            {AVAILABLE_GAMES.filter(
+              (game) => game.status === 'available' && isEnabled(game.id),
+            ).map((game) => (
               <SelectItem key={game.id} value={game.id}>
                 {game.name}
               </SelectItem>

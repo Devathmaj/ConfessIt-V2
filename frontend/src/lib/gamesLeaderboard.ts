@@ -10,7 +10,15 @@
  * the same roster and scores, so switching filters feels stable instead of reshuffling on
  * every render. Replacing this one function with an API call is the intended upgrade path;
  * no component needs to change as long as the returned shape stays as it is.
+ *
+ * The admin board lives here too, deliberately. It ranks the same roster over the same
+ * synthesis -- the two screens cannot drift apart, because there is only one of each -- and
+ * adds the columns an administrator needs: which game a standing belongs to, how often it was
+ * played, how the sessions ended and when. `getAdminLeaderboardRows` is its own query rather
+ * than a flag on the player's, because its row shape is genuinely different.
  */
+
+import { AVAILABLE_GAMES, getGameById, type GameTypeId } from './gamesCatalog';
 
 export type LeaderboardScope = 'global' | 'daily' | 'weekly' | 'monthly';
 
@@ -163,5 +171,222 @@ export const summarizeCurrentUser = (
     score: entry.score,
     topPercent: Math.max(1, Math.ceil((entry.rank / MOCK_RANKED_PLAYERS) * 100)),
     totalPlayers: MOCK_RANKED_PLAYERS,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// The administrative board
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the board covers every game or one title, and over what window.
+ *
+ * Two dimensions rather than the player board's single scope selector, because the admin
+ * filter set is bigger and a combined list of six overlapping options is unreadable: scope
+ * and period answer different questions and are shown as two short segmented controls.
+ * `all_time` maps onto the player board's `global` scope -- same roster, same scores, same
+ * synthesis -- so the two surfaces agree on who is leading.
+ */
+export type AdminBoardScope = 'global' | 'game';
+export type AdminBoardPeriod = 'daily' | 'weekly' | 'all_time';
+/** Single/Couple narrows the global board; a single game already knows which it is. */
+export type AdminBoardGameTypeFilter = 'all' | GameTypeId;
+
+export interface AdminBoardOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+export const ADMIN_BOARD_SCOPES: AdminBoardOption[] = [
+  { id: 'global', label: 'Global', hint: 'Every game on one board' },
+  { id: 'game', label: 'Game', hint: 'Standings for a single title' },
+];
+
+export const ADMIN_BOARD_PERIODS: AdminBoardOption[] = [
+  { id: 'daily', label: 'Daily', hint: 'Since midnight' },
+  { id: 'weekly', label: 'Weekly', hint: 'Since Monday' },
+  { id: 'all_time', label: 'All time', hint: 'Everything on record' },
+];
+
+export interface AdminLeaderboardQuery {
+  scope: AdminBoardScope;
+  period: AdminBoardPeriod;
+  /** A catalogue game id. Meaningful only when `scope` is `game`. */
+  gameId: string;
+  /** Meaningful only when `scope` is `global`; ignored for a single game. */
+  gameType: AdminBoardGameTypeFilter;
+}
+
+/**
+ * How a session ended, for the result column.
+ *
+ * Mock, and stated as an outcome rather than a score breakdown: there is no match record to
+ * read yet, and "completed / forfeited / abandoned" is the vocabulary a moderator actually
+ * acts on -- an abandoned session at the top of a board is the thing worth investigating.
+ */
+export type AdminLeaderboardResult = 'completed' | 'forfeited' | 'abandoned';
+
+export const ADMIN_LEADERBOARD_RESULTS: Array<{ id: AdminLeaderboardResult; label: string }> = [
+  { id: 'completed', label: 'Completed' },
+  { id: 'forfeited', label: 'Forfeited' },
+  { id: 'abandoned', label: 'Abandoned' },
+];
+
+export const adminResultLabel = (result: AdminLeaderboardResult): string =>
+  ADMIN_LEADERBOARD_RESULTS.find((entry) => entry.id === result)?.label ?? result;
+
+export interface AdminLeaderboardRow {
+  rank: number;
+  playerId: string;
+  displayName: string;
+  monogram: string;
+  /** The title this standing belongs to: the selected game, or the player's leading title. */
+  gameId: string;
+  gameType: GameTypeId;
+  score: number;
+  plays: number;
+  result: AdminLeaderboardResult;
+  /** Epoch milliseconds of the most recent session inside the selected period. */
+  lastPlayedAt: number;
+  trendDelta: number;
+}
+
+/** The player-board scope each admin period reads from. */
+const PERIOD_SCOPES: Record<AdminBoardPeriod, LeaderboardScope> = {
+  daily: 'daily',
+  weekly: 'weekly',
+  all_time: 'global',
+};
+
+const DAY_MS = 86_400_000;
+
+/** Play counts per period, so a daily board does not claim a month of sessions. */
+const PERIOD_PLAY_RANGES: Record<AdminBoardPeriod, { min: number; max: number }> = {
+  daily: { min: 1, max: 6 },
+  weekly: { min: 2, max: 26 },
+  all_time: { min: 5, max: 140 },
+};
+
+/** The instant the selected period opens. Local midnight, Monday, or 90 days back. */
+const periodStart = (period: AdminBoardPeriod, now: number): number => {
+  const date = new Date(now);
+  if (period === 'daily') {
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+  }
+  if (period === 'weekly') {
+    date.setHours(0, 0, 0, 0);
+    // Monday as the week's first day, matching the player board's "resets every Monday".
+    date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+    return date.getTime();
+  }
+  return now - 90 * DAY_MS;
+};
+
+const resultFor = (roll: number): AdminLeaderboardResult => {
+  if (roll < 0.7) return 'completed';
+  if (roll < 0.87) return 'forfeited';
+  return 'abandoned';
+};
+
+/**
+ * The admin board for one filter combination, ranked by score.
+ *
+ * Scores, roster and trend come from the very same `getLeaderboardEntries` the player board
+ * uses -- this module synthesises nothing twice -- and the extra columns are derived from the
+ * same deterministic hash, keyed on the full query, so re-rendering or re-opening a filter
+ * never reshuffles the metadata underneath the scores.
+ *
+ * Returns an empty list for a combination the UI does not offer (a game scope with no game
+ * chosen, a type filter that excludes the chosen game) rather than quietly widening the
+ * query: an impossible filter showing a full board would look like data nobody asked for.
+ */
+export const getAdminLeaderboardRows = (
+  query: AdminLeaderboardQuery,
+  now: number = Date.now(),
+): AdminLeaderboardRow[] => {
+  const { scope, period, gameType } = query;
+
+  let gameIdForBoard: string = ALL_GAMES_FILTER;
+  if (scope === 'game') {
+    const game = getGameById(query.gameId);
+    if (!game) return [];
+    if (gameType !== 'all' && game.type !== gameType) return [];
+    gameIdForBoard = game.id;
+  }
+
+  const baseEntries = getLeaderboardEntries({
+    scope: PERIOD_SCOPES[period],
+    gameId: gameIdForBoard,
+  });
+
+  const pool =
+    scope === 'game'
+      ? [getGameById(gameIdForBoard)!]
+      : gameType === 'all'
+        ? AVAILABLE_GAMES
+        : AVAILABLE_GAMES.filter((game) => game.type === gameType);
+
+  if (pool.length === 0) return [];
+
+  const playsRange = PERIOD_PLAY_RANGES[period];
+  const start = periodStart(period, now);
+  const span = Math.max(1, now - start);
+
+  const rows = baseEntries.map((entry) => {
+    const game =
+      scope === 'game'
+        ? pool[0]
+        : pool[Math.min(pool.length - 1, Math.floor(unitHash(`game:${period}:${gameType}:${entry.playerId}`) * pool.length))];
+    const playsRoll = unitHash(`plays:${scope}:${period}:${gameIdForBoard}:${entry.playerId}`);
+    const lastPlayedRoll = unitHash(`last:${scope}:${period}:${gameIdForBoard}:${entry.playerId}`);
+    const resultRoll = unitHash(`result:${scope}:${period}:${gameIdForBoard}:${entry.playerId}`);
+
+    return {
+      playerId: entry.playerId,
+      displayName: entry.displayName,
+      monogram: entry.monogram,
+      gameId: game.id,
+      gameType: game.type,
+      score: entry.score,
+      plays:
+        playsRange.min +
+        Math.floor(playsRoll * (playsRange.max - playsRange.min + 1)),
+      result: resultFor(resultRoll),
+      lastPlayedAt: now - Math.floor(lastPlayedRoll * span),
+      trendDelta: entry.trendDelta,
+    };
+  });
+
+  // Ranked after any type filter has been applied, so a board narrowed to one category still
+  // counts 1, 2, 3... instead of starting at whatever the combined board's first row was.
+  rows.sort((a, b) => b.score - a.score || a.displayName.localeCompare(b.displayName));
+  return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+};
+
+export interface AdminBoardSummary {
+  rows: number;
+  totalPlays: number;
+  topScore: number;
+  averageScore: number;
+  /** Sessions that did not complete, across every row on the board. */
+  incompleteSessions: number;
+}
+
+export const summarizeAdminBoard = (rows: AdminLeaderboardRow[]): AdminBoardSummary => {
+  if (rows.length === 0) {
+    return { rows: 0, totalPlays: 0, topScore: 0, averageScore: 0, incompleteSessions: 0 };
+  }
+
+  const totalPlays = rows.reduce((sum, row) => sum + row.plays, 0);
+  const totalScore = rows.reduce((sum, row) => sum + row.score, 0);
+
+  return {
+    rows: rows.length,
+    totalPlays,
+    topScore: rows[0].score,
+    averageScore: Math.round(totalScore / rows.length),
+    incompleteSessions: rows.filter((row) => row.result !== 'completed').length,
   };
 };

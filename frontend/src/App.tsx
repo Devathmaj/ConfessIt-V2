@@ -18,10 +18,15 @@ import { MessageBoxPage } from "./pages/MessageBoxPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LoveNotesPage } from "./pages/LoveNotesPage";
 import { GamesLayout } from "./components/games/GamesLayout";
+import { AdminGamesLayout } from "./components/AdminGamesLayout";
+import { GamesConfigProvider } from "./contexts/GamesConfigContext";
 import { GamesDashboardPage } from "./pages/GamesDashboardPage";
 import { GamesLeaderboardPage } from "./pages/GamesLeaderboardPage";
 import { GamesFeaturedPage } from "./pages/GamesFeaturedPage";
 import { GamesSelectPage } from "./pages/GamesSelectPage";
+import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
+import { AdminGamesManage } from "./pages/AdminGamesManage";
+import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
 import { About } from "./pages/About";
 import NotFound from "./pages/NotFound";
 import { MagicLinkVerification } from "./services/MagicLinkVerification";
@@ -306,6 +311,26 @@ const AppRoutes = () => {
         }
       />
 
+      {/* The Games console. One guard around the section rather than one per screen: every
+          screen below reads and writes the same catalogue state, so `stats:read` -- the
+          admin-only capability behind the console -- gates the layout and the three children
+          inherit it. Moderators are refused here, not merely left without a link. The stray
+          child route sends a mistyped deep link back to the overview instead of leaving the
+          shell rendered with nothing inside it. */}
+      <Route
+        path="/admin/games"
+        element={
+          <CapabilityRoute capability={CAPABILITIES.STATS_READ}>
+            <AdminGamesLayout />
+          </CapabilityRoute>
+        }
+      >
+        <Route index element={<AdminGamesDashboard />} />
+        <Route path="manage" element={<AdminGamesManage />} />
+        <Route path="leaderboard" element={<AdminGamesLeaderboard />} />
+        <Route path="*" element={<Navigate to="/admin/games" replace />} />
+      </Route>
+
       {/* User-specific protected routes */}
       <Route
         path="/confessions"
@@ -395,9 +420,14 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AuthProvider>
-        <BrowserRouter future={{ v7_relativeSplatPath: true }}>
-          <AppRoutes />
-        </BrowserRouter>
+        {/* Around the router rather than inside it: the configuration has nothing to do with
+            the URL, and both the player-facing Games pages and the admin console read the one
+            instance it owns. */}
+        <GamesConfigProvider>
+          <BrowserRouter future={{ v7_relativeSplatPath: true }}>
+            <AppRoutes />
+          </BrowserRouter>
+        </GamesConfigProvider>
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>

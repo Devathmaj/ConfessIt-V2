@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, ClipboardCheck, LogOut } from "lucide-react";
+import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, ClipboardCheck, LogOut, Gamepad2 } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -41,6 +41,10 @@ const navItems: NavItem[] = [
     without: CAPABILITIES.STATS_READ,
   },
   { to: "/admin/configuration", label: "Config", icon: Settings, capability: CAPABILITIES.APP_CONFIG_READ },
+  // The Games console manages the catalogue rather than a moderation queue, but it asks the
+  // route the same question every other item here does. `stats:read` is admin-only, which is
+  // exactly what the section is, so a moderator is never offered a link they would be refused.
+  { to: "/admin/games", label: "Games", icon: Gamepad2, capability: CAPABILITIES.STATS_READ },
   { to: "/admin/reports", label: "Reports", icon: Flag, capability: CAPABILITIES.REPORTS_REVIEW },
   { to: "/admin/confessions", label: "Confessions", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
   { to: "/admin/love-notes", label: "Notes", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },

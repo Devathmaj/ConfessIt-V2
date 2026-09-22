@@ -12,13 +12,14 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { GameCard } from '@/components/games/GameCard';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { StatCard } from '@/components/games/StatCard';
-import { AVAILABLE_GAMES, getFeaturedGame, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
+import { AVAILABLE_GAMES, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
 import {
   getLeaderboardEntries,
   summarizeCurrentUser,
@@ -45,9 +46,14 @@ export const GamesDashboardPage = () => {
 
   const globalBoard = getLeaderboardEntries({ scope: 'global', gameId: ALL_GAMES_FILTER });
   const summary = summarizeCurrentUser(globalBoard);
-  const featured = getFeaturedGame();
-  const FeaturedIcon = featured.icon;
-  const quickAccessGames = AVAILABLE_GAMES.filter((game) => game.status === 'available').slice(0, 4);
+  // The administrator's pick, resolved through the shared configuration -- the same source the
+  // featured page and the manage screen read, so all three can never disagree.
+  const { featured, isEnabled } = useGamesConfig();
+  const game = featured?.game;
+  const FeaturedIcon = game?.icon;
+  const quickAccessGames = AVAILABLE_GAMES.filter(
+    (game) => game.status === 'available' && isEnabled(game.id),
+  ).slice(0, 4);
   const firstName = user?.name?.trim().split(' ')[0];
   const challengePercent = Math.round(
     (MOCK_WEEKLY_CHALLENGE.current / MOCK_WEEKLY_CHALLENGE.target) * 100,
@@ -205,12 +211,16 @@ export const GamesDashboardPage = () => {
               </div>
               <div className="mt-4 flex items-center gap-3">
                 <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20">
-                  <FeaturedIcon className="h-6 w-6 text-white" />
+                  {FeaturedIcon ? (
+                    <FeaturedIcon className="h-6 w-6 text-white" />
+                  ) : (
+                    <Sparkles className="h-6 w-6 text-white" />
+                  )}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate font-bold">{featured.name}</p>
+                  <p className="truncate font-bold">{game?.name ?? 'Spotlight paused'}</p>
                   <p className="truncate text-xs text-white/80">
-                    {featured.players} · {featured.duration}
+                    {game ? `${game.players} · ${game.duration}` : 'No game in the spotlight'}
                   </p>
                 </div>
               </div>

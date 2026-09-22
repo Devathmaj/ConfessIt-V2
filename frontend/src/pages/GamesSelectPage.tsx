@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { GameCard } from '@/components/games/GameCard';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import {
   AVAILABLE_GAMES,
   GAME_CATEGORIES,
@@ -17,8 +18,10 @@ import { cn } from '@/lib/utils';
  *
  * The grid is rendered entirely from the catalogue in src/lib/gamesCatalog: adding a game is
  * a data change, and the category chips derive their counts from the same list, so this page
- * never needs restructuring as the library grows. Play is a placeholder toast because no game
- * screens exist yet.
+ * never needs restructuring as the library grows. Availability comes from the shared
+ * configuration, so a title an administrator switched off on the manage screen leaves this
+ * grid -- and the chip counts -- without this page knowing where the switch lives. Play is a
+ * placeholder toast because no game screens exist yet.
  */
 
 type CategoryFilter = 'all' | GameCategoryId;
@@ -29,24 +32,30 @@ const notifyPlay = (game: GameDefinition) => {
 
 export const GamesSelectPage = () => {
   const [filter, setFilter] = useState<CategoryFilter>('all');
+  const { isEnabled } = useGamesConfig();
+
+  const liveGames = useMemo(
+    () => AVAILABLE_GAMES.filter((game) => isEnabled(game.id)),
+    [isEnabled],
+  );
 
   const counts = useMemo(() => {
-    const map = new Map<CategoryFilter, number>([['all', AVAILABLE_GAMES.length]]);
+    const map = new Map<CategoryFilter, number>([['all', liveGames.length]]);
     GAME_CATEGORIES.forEach((category) => {
       map.set(
         category.id,
-        AVAILABLE_GAMES.filter((game) => game.category === category.id).length,
+        liveGames.filter((game) => game.category === category.id).length,
       );
     });
     return map;
-  }, []);
+  }, [liveGames]);
 
   const visibleGames = useMemo(
     () =>
       filter === 'all'
-        ? AVAILABLE_GAMES
-        : AVAILABLE_GAMES.filter((game) => game.category === filter),
-    [filter],
+        ? liveGames
+        : liveGames.filter((game) => game.category === filter),
+    [filter, liveGames],
   );
 
   const chips: Array<{ id: CategoryFilter; label: string }> = [

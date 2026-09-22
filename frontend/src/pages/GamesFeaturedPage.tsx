@@ -6,7 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
-import { categoryLabel, getFeaturedGame, type GameDefinition } from '@/lib/gamesCatalog';
+import { useGamesConfig } from '@/contexts/GamesConfigContext';
+import { categoryLabel, type GameDefinition } from '@/lib/gamesCatalog';
 
 /**
  * Today's featured game.
@@ -55,8 +56,39 @@ const notifyPlay = (game: GameDefinition) => {
 
 export const GamesFeaturedPage = () => {
   const countdown = useResetCountdown();
-  const featured = getFeaturedGame();
-  const FeaturedIcon = featured.icon;
+  // The shared configuration, not the catalogue's own rotation: the pick an administrator
+  // pinned on the manage screen is the pick shown here. Falls back to a freshly seeded
+  // configuration when the provider is absent, so the page also works standalone.
+  const { featured } = useGamesConfig();
+  const game = featured?.game;
+
+  if (!game) {
+    return (
+      <div>
+        <GamesPageHeader
+          eyebrow="Today's featured"
+          title="Game of the Day"
+          description="One mini-game takes the spotlight every day. The pick rotates at midnight."
+        />
+        <div className="mx-auto max-w-2xl rounded-3xl border border-dashed border-border/70 px-6 py-14 text-center">
+          <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />
+          <p className="mt-3 text-base font-bold">No featured game right now</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+            Every title is taking a break from the spotlight. The rest of the library is still
+            open.
+          </p>
+          <Button asChild variant="outline" size="sm" className="mt-5 rounded-full">
+            <NavLink to="/games/select">
+              <Gamepad2 />
+              Browse all games
+            </NavLink>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const FeaturedIcon = game.icon;
 
   return (
     <div>
@@ -76,14 +108,14 @@ export const GamesFeaturedPage = () => {
                 Game of the day
               </p>
               <h2 className="mt-2 break-words text-2xl font-extrabold tracking-tight sm:text-3xl">
-                {featured.name}
+                {game.name}
               </h2>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Badge className="border-transparent bg-white/20 text-white hover:bg-white/30">
-                  {categoryLabel(featured.category)}
+                  {categoryLabel(game.category)}
                 </Badge>
                 <Badge className="border-transparent bg-white/20 text-white hover:bg-white/30">
-                  {featured.difficulty}
+                  {game.difficulty}
                 </Badge>
               </div>
             </div>
@@ -101,7 +133,7 @@ export const GamesFeaturedPage = () => {
 
         <CardContent className="space-y-5 p-5 sm:p-8">
           <p className="text-sm leading-relaxed text-muted-foreground sm:text-base">
-            {featured.tagline} Play it today before the spotlight moves on to another game.
+            {game.tagline} Play it today before the spotlight moves on to another game.
           </p>
 
           <div className="grid grid-cols-3 overflow-hidden rounded-2xl border border-border/60 bg-background/40 text-center">
@@ -135,7 +167,7 @@ export const GamesFeaturedPage = () => {
             type="button"
             size="lg"
             className="w-full rounded-full font-bold"
-            onClick={() => notifyPlay(featured)}
+            onClick={() => notifyPlay(game)}
           >
             <Gamepad2 />
             Play today&apos;s featured game
