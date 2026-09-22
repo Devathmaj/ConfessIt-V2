@@ -236,14 +236,15 @@ const LeaderboardRow = ({ entry }: { entry: LeaderboardEntry }) => (
       {entry.monogram}
     </span>
     <div className="min-w-0 flex-1">
-      <p className="flex items-center gap-2 truncate text-sm font-semibold">
-        {entry.isCurrentUser ? 'You' : entry.displayName}
+      {/* A div, not a p: the Badge below is a div, and <div> inside <p> is invalid DOM. */}
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <span className="truncate">{entry.isCurrentUser ? 'You' : entry.displayName}</span>
         {entry.isCurrentUser && (
-          <Badge variant="secondary" className="hidden sm:inline-flex">
+          <Badge variant="secondary" className="hidden shrink-0 sm:inline-flex">
             Your rank
           </Badge>
         )}
-      </p>
+      </div>
       <div className="mt-0.5">
         <TrendIndicator delta={entry.trendDelta} />
       </div>

@@ -121,7 +121,8 @@ def _mint_for(db, account_type, regno=SHARED):
         client = type("C", (), {"host": "127.0.0.1"})()
         headers = {"user-agent": "Test Agent"}
 
-    return create_and_store_magic_token(db, str(row.id), resolved_type, _Request())  # type: ignore[arg-type]
+    token, _ = create_and_store_magic_token(db, str(row.id), resolved_type, _Request())  # type: ignore[arg-type]
+    return token
 
 
 # ----------------------------------------------------------------------

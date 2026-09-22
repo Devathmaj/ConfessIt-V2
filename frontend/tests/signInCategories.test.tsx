@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Login, AdminLogin, ModeratorLogin } from '@/pages/Login';
@@ -33,6 +33,13 @@ const stubFetch = (ok = true) => {
 
 const renderPage = (element: JSX.Element, path: string) =>
   render(<MemoryRouter initialEntries={[path]}>{element}</MemoryRouter>);
+
+beforeEach(() => {
+  // A successful send persists a verification-pending state under the door's own key; the
+  // page restores it on mount. Tests here would otherwise inherit the previous test's
+  // pending sign-in and render the verification screen instead of the door they assert.
+  window.localStorage.clear();
+});
 
 const typeAndSubmit = async () => {
   const input = screen.getByPlaceholderText(/registration number/i);

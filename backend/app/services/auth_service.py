@@ -556,13 +556,13 @@ async def generate_magic_link_service(
         )
 
     from ..create_token import create_and_store_magic_token
-    token = create_and_store_magic_token(db, str(account.id), resolved_type, request)
+    token, expires_at = create_and_store_magic_token(db, str(account.id), resolved_type, request)
 
     magic_link = f"http://localhost:5173/verify-login?token={token}"
     magic_link_logger.info(f"Magic Link for {account.name}: {magic_link}")
     logger.info(f"Login request accepted: magic link minted for {category} account {regno!r}")
 
-    return {"message": LOGIN_LINK_SENT_MESSAGE}
+    return {"message": LOGIN_LINK_SENT_MESSAGE, "expires_at": expires_at.isoformat()}
 
 
 def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):

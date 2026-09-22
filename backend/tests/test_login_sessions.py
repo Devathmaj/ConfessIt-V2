@@ -95,7 +95,8 @@ def _mint_token_for(db, regno, account_type=AccountType.USERS.value):
         client = type("C", (), {"host": "127.0.0.1"})()
         headers = {"user-agent": "Test Agent"}
 
-    return create_and_store_magic_token(db, str(row.id), resolved_type, _Request())
+    token, _ = create_and_store_magic_token(db, str(row.id), resolved_type, _Request())
+    return token
 
 
 def _token_row(db, plaintext):

@@ -12,6 +12,7 @@ and the account-scoped rate counter still runs for both.
 """
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 from app import create_token as create_token_module
@@ -124,7 +125,8 @@ def minted_tokens(monkeypatch):
 
     def _record(db, account_id, account_type, request):
         minted.append((account_id, account_type))
-        return "a-token"
+        # What the real mint function would have stored alongside the token it returns.
+        return ("a-token", datetime.now(timezone.utc) + timedelta(minutes=15))
 
     monkeypatch.setattr(create_token_module, "create_and_store_magic_token", _record)
     return minted
@@ -165,5 +167,7 @@ async def test_active_account_still_gets_a_link(minted_tokens):
 
     result = await generate_magic_link_service(_FakeRequest("active"), db, AccountType.USERS.value)
 
-    assert result == {"message": LOGIN_LINK_SENT_MESSAGE}
+    assert result["message"] == LOGIN_LINK_SENT_MESSAGE
+    # The sign-in page needs the token's exact deadline; it is carried in the response.
+    assert datetime.fromisoformat(result["expires_at"]) > datetime.now(timezone.utc)
     assert minted_tokens == [(OWNER_ID, "users")]

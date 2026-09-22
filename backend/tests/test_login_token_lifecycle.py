@@ -90,7 +90,8 @@ def _mint_token_for(db, regno, account_type=AccountType.USERS.value):
         client = type("C", (), {"host": "127.0.0.1"})()
         headers = {"user-agent": "Test Agent"}
 
-    return create_and_store_magic_token(db, str(row.id), resolved_type, _Request())
+    token, _ = create_and_store_magic_token(db, str(row.id), resolved_type, _Request())
+    return token
 
 
 def _token_row(db, plaintext):
@@ -275,7 +276,14 @@ def test_an_invented_registration_number_is_plainly_refused_and_still_rate_limit
 
     # The real account is told a link was generated -- and no details about it leak.
     assert real.status_code == 200
-    assert real.json() == {"message": LOGIN_LINK_SENT_MESSAGE}
+    data = real.json()
+    assert data["message"] == LOGIN_LINK_SENT_MESSAGE
+    # The expiry is the exact deadline the stored row was given, so a sign-in page can
+    # count the token's life down against the server's own clock.
+    now = datetime.now(timezone.utc)
+    assert now < datetime.fromisoformat(data["expires_at"]) <= now + timedelta(
+        minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES
+    )
     assert "real-user" not in real.text
     assert "real-user@example.com" not in real.text
     assert "Real User" not in real.text
