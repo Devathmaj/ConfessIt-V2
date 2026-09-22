@@ -17,7 +17,11 @@ import { InboxPage } from "./pages/InboxPage";
 import { MessageBoxPage } from "./pages/MessageBoxPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { LoveNotesPage } from "./pages/LoveNotesPage";
-import { MiniGamesPage } from "./pages/MiniGamesPage";
+import { GamesLayout } from "./components/games/GamesLayout";
+import { GamesDashboardPage } from "./pages/GamesDashboardPage";
+import { GamesLeaderboardPage } from "./pages/GamesLeaderboardPage";
+import { GamesFeaturedPage } from "./pages/GamesFeaturedPage";
+import { GamesSelectPage } from "./pages/GamesSelectPage";
 import { About } from "./pages/About";
 import NotFound from "./pages/NotFound";
 import { MagicLinkVerification } from "./services/MagicLinkVerification";
@@ -318,14 +322,25 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
+      {/* The Games section. One shell around every /games route, so the section's own
+          navigation (back to ConfessIt, dashboard, select, featured, leaderboard) is
+          declared once in GamesLayout and persists as the user moves between routes. */}
       <Route
-        path="/mini-games"
+        path="/games"
         element={
           <ProtectedRoute>
-            <MiniGamesPage />
+            <GamesLayout />
           </ProtectedRoute>
         }
-      />
+      >
+        <Route index element={<GamesDashboardPage />} />
+        <Route path="leaderboard" element={<GamesLeaderboardPage />} />
+        <Route path="featured" element={<GamesFeaturedPage />} />
+        <Route path="select" element={<GamesSelectPage />} />
+      </Route>
+      {/* The old /mini-games page is gone; deep links retire to the section that replaced
+          it rather than 404ing. */}
+      <Route path="/mini-games" element={<Navigate to="/games" replace />} />
       <Route
         path="/about"
         element={

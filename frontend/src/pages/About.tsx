@@ -86,11 +86,11 @@ export const About = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-3 text-2xl font-dancing text-romantic">
                 <Gamepad2 className="w-7 h-7" />
-                Mini-Games & Icebreakers
+                Games & Icebreakers
               </CardTitle>
             </CardHeader>
             <CardContent className="text-muted-foreground space-y-3">
-              <p>Break the ice with our fun and interactive mini-games. Play with your matches and get to know them in a fun and relaxed way. We have a variety of games to choose from, including Truth or Dare and Love Compatibility Quiz.</p>
+              <p>Break the ice in the Games section: pick from a growing library of mini-games, chase daily featured picks and climb the leaderboards. Play with your matches and get to know them in a fun and relaxed way — Truth or Dare, Compatibility Quiz and more are waiting.</p>
             </CardContent>
           </Card>
         </div>

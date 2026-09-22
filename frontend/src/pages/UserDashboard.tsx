@@ -69,9 +69,9 @@ const navigationItems: NavigationItem[] = [
     icon: Mail,
   },
   {
-    id: 'mini-games',
-    title: 'Mini-Games',
-    description: 'Break the ice',
+    id: 'games',
+    title: 'Games',
+    description: 'Play & compete',
     icon: Gamepad2,
   }
 ];
@@ -176,7 +176,7 @@ export const UserDashboard = () => {
       'confessions': '/confessions',
       'matchmaking': '/matchmaking',
       'love-notes': '/love-notes',
-      'mini-games': '/mini-games',
+      'games': '/games',
       'profile': '/profile',
       'about': '/about'
     };

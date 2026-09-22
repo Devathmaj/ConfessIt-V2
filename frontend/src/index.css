@@ -345,3 +345,15 @@
 .card-back {
   transform: rotateY(180deg);
 }
+
+/* Used by the Games section, whose tab and chip rows scroll sideways on small screens
+   instead of collapsing into a menu. Hiding the scrollbar keeps them looking like
+   segmented controls rather than overflow panels. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

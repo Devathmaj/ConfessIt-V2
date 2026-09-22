@@ -32,7 +32,7 @@ export const Navigation = () => {
     { to: "/notifications", text: "Alerts", icon: Bell },
     { to: "/inbox", text: "Inbox", icon: MessageCircle },
     { to: "/love-notes", text: "Notes", icon: Mail },
-    { to: "/mini-games", text: "Games", icon: Gamepad2 },
+    { to: "/games", text: "Games", icon: Gamepad2 },
   ];
 
   // Common Tailwind classes for NavLink components to ensure consistency.
