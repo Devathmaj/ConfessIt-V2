@@ -238,6 +238,24 @@ ANAGRAM_ANSWER_MAX = 100
 # touch shorter.
 ANAGRAM_MAX_ATTEMPTS = 5
 
+# Couple Prediction Game. The question bank is static application content: fifty
+# templates sharing one shape -- a question naming ``X`` and exactly four options.
+# One number for the count, so the seed, the sequence CHECK and any future player
+# surface cannot drift apart; one number for the options, so a question with three
+# or five is unwritable rather than merely discouraged.
+COUPLE_QUESTIONS_COUNT = 50
+COUPLE_OPTIONS_PER_QUESTION = 4
+
+# The longest question template or option the bank may hold. Not a rule about the
+# game -- a prediction plays the same at any length -- but the columns have to end
+# somewhere, and these sit far past the longest seeded entry while still being a
+# bound a write can be refused against rather than a value PostgreSQL truncates.
+# Enforced twice, like every other length here: the service refuses an over-long
+# template with a readable error, and a CHECK guards a write that never went
+# through the API.
+COUPLE_QUESTION_TEXT_MAX = 300
+COUPLE_OPTION_TEXT_MAX = 200
+
 # How old an open timing segment may be before it is treated as dead rather than played.
 #
 # The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``

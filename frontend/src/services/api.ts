@@ -834,6 +834,56 @@ export const getAdminAnagramGame = async (gameId: string): Promise<AnagramGame> 
     return response.data;
 };
 
+// --- Couple Configuration Endpoints ---
+
+/**
+ * One featured Couple Prediction game, as `GET /admin/couple` returns it.
+ *
+ * There is deliberately no mode, word or answer here: featuring a day stores the
+ * day and who featured it, and nothing else. The 50-question bank is shared
+ * application content seeded at startup, never per-day input, so there is no
+ * puzzle to preview and no content to select.
+ */
+export interface CoupleGame {
+    id: string;
+    game_date: string;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/**
+ * The fields `POST /admin/couple` accepts.
+ *
+ * Only the day. It identifies the featured instance and defaults to today in UTC
+ * when omitted, so a future day can be scheduled and a past day corrected.
+ */
+export interface CoupleGamePayload {
+    game_date?: string;
+}
+
+/** Mark the game featured for one day. A day that is already featured answers 409. */
+export const createCoupleGame = async (payload: CoupleGamePayload): Promise<CoupleGame> => {
+    const response = await axios.post(`${API_URL}/admin/couple`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every featured date, newest day first. */
+export const getAdminCoupleGames = async (): Promise<CoupleGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/couple`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+/** One featured date by id. A malformed id answers 400, an unknown one 404. */
+export const getAdminCoupleGame = async (gameId: string): Promise<CoupleGame> => {
+    const response = await axios.get(`${API_URL}/admin/couple/${gameId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 // --- Wordle Gameplay Endpoints ---
 
 /** The colour verdict a position in a guessed word earned. */

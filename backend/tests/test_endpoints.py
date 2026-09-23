@@ -55,6 +55,7 @@ ADMIN_READ_ROUTES = [
     "/admin/wordle/preview",
     "/admin/anagram",
     "/admin/anagram/preview",
+    "/admin/couple",
 ]
 
 

@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import settings, validate_cloudinary_settings
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, messages, wordle, anagram
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, messages, wordle, anagram
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -284,6 +284,14 @@ async def on_startup():
     # development database -- came up holding a ``Test Admin`` account whose regno is
     # guessable, and it fought the seed script for the same regnos. Seeding is a deliberate
     # act with a deliberate owner, so it lives in app/test.py and runs when asked for.
+    #
+    # The Couple Prediction question bank is the deliberate exception: fifty static
+    # templates the game cannot run without, seeded idempotently from the committed
+    # list. The database remains the source of truth after the first boot -- the
+    # seed inserts only what is missing, never a duplicate and never an overwrite.
+    from .services.couple_service import seed_couple_questions
+    seeded = seed_couple_questions(postgres)
+    logger.info("Couple game questions seeded: %s inserted.", seeded)
     logger.info("PostgreSQL storage initialized.")
 
     # Initialize matchmaking slots: fetch all classes and create initial slot
@@ -496,6 +504,7 @@ app.include_router(admin.router)
 app.include_router(admin_love_notes.router)
 app.include_router(admin_wordle.router)
 app.include_router(admin_anagram.router)
+app.include_router(admin_couple.router)
 app.include_router(wordle.router)
 app.include_router(anagram.router)
 

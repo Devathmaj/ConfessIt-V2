@@ -17,10 +17,12 @@ import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
 import { initialGamesConfig, resolveFeaturedGame } from '@/lib/gamesConfig';
 import {
   createAnagramGame,
+  createCoupleGame,
   createWordleGame,
   drawAnagramAnswer,
   drawWordleAnswer,
   getAdminAnagramGames,
+  getAdminCoupleGames,
   getAdminWordleGames,
   type AnagramGame,
   type WordleGame,
@@ -37,13 +39,14 @@ import {
  * tests drive the real components against each other rather than asserting each screen in
  * isolation.
  *
- * The Wordle and Anagram answers are the only controls on the manage screen that talk to a
- * server, so their calls are mocked here while everything around them is real: what is
- * asserted is the flow -- a word is drawn, shown, and then sent back as the save -- and the
- * reason a refused save leaves on screen, which is the part a toast would take away. The two
- * consoles have the same shape on purpose (a mode toggle, a "Save puzzle" button, an alert
- * slot, an empty state), so every query below is scoped to the card it is about: unscoped,
- * "save puzzle" and "Nothing configured yet" are simply two elements each.
+ * The Wordle and Anagram answers and the Couple Prediction featured day are the only
+ * controls on the manage screen that talk to a server, so their calls are mocked here while
+ * everything around them is real: what is asserted is the flow -- a word is drawn, shown,
+ * and then sent back as the save -- and the reason a refused save leaves on screen, which
+ * is the part a toast would take away. The puzzle consoles share their shape on purpose (a
+ * "Save puzzle" button, an alert slot, an empty state), so every query below is scoped to
+ * the card it is about: unscoped, "save puzzle" and "Nothing configured yet" are simply two
+ * elements each.
  *
  * `fireEvent` rather than `user-event`, matching the other component tests here. Radix `Select`
  * is driven the way `profileReviewCohortFilters` drives it -- pointer down on the trigger,
@@ -65,6 +68,9 @@ vi.mock('@/services/api', () => ({
   drawAnagramAnswer: vi.fn(),
   createAnagramGame: vi.fn(),
   getAdminAnagramGame: vi.fn(),
+  getAdminCoupleGames: vi.fn(),
+  createCoupleGame: vi.fn(),
+  getAdminCoupleGame: vi.fn(),
 }));
 
 type AuthContextValue = ContextType<typeof AuthContext>;
@@ -160,10 +166,11 @@ const seededFeatured = () => resolveFeaturedGame(initialGamesConfig());
 beforeEach(() => {
   vi.clearAllMocks();
   // The manage screen fetches the configured puzzles as it mounts; an empty list is the state
-  // every test below starts from, so the tests that care about rows state their own. Both
-  // consoles fetch on mount, so both are given their empty list here.
+  // every test below starts from, so the tests that care about rows state their own. All
+  // three consoles fetch on mount, so all three are given their empty list here.
   vi.mocked(getAdminWordleGames).mockResolvedValue([]);
   vi.mocked(getAdminAnagramGames).mockResolvedValue([]);
+  vi.mocked(getAdminCoupleGames).mockResolvedValue([]);
 });
 
 /** The day the server would default to, which is what the date field starts on. */
@@ -449,6 +456,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
 
     expect(screen.queryByRole('heading', { name: 'Wordle' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Anagram' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Couple Prediction' })).not.toBeInTheDocument();
     // The spotlight above is unaffected: pinning the day is local configuration, and the
     // section this gate hides is the one that publishes an answer.
     expect(screen.getByText("Today's featured")).toBeInTheDocument();

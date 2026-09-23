@@ -894,6 +894,95 @@ class AnagramDraw(BaseModel):
     token: str
 
 
+# --- Couple configuration ------------------------------------------------------
+#
+# Admin-side only, and a smaller surface than either puzzle above: these describe a
+# *featured date* -- which day the game is active for -- and nothing else. There is
+# no mode, no word, no answer and no per-day content selection, because there is
+# nothing per-day for an administrator to choose: the 50-question bank is shared
+# application content seeded at startup, and a featured date simply marks the game
+# active for that day.
+
+class CoupleGameCreate(BaseModel):
+    """Marking the Couple Prediction game featured for one day.
+
+    ``game_date`` is optional and defaults to the current day in UTC, because the
+    usual request *is* "feature it today" and making every caller restate the date
+    would be a field that is never anything else. Supplying it is for scheduling a
+    day ahead or correcting a save, and the date -- not the request, and not the
+    row id -- is what identifies the featured instance, so it is the field
+    uniqueness is enforced on.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped -- a caller told 201 for a field that never
+    landed is a caller who believes something false about the stored row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_date: Optional[date] = None
+
+
+class CoupleGame(BaseModel):
+    """A featured Couple game as it is stored: the day, and who marked it so.
+
+    There is no answer to return here, because there is nothing per-day to hide:
+    the question bank is shared and static, and the player surface does not exist
+    yet. ``created_by`` is the publishing account's ``regno``, so the list can show
+    who featured each day without a second lookup.
+    """
+
+    id: str
+    game_date: date
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Couple question bank ------------------------------------------------------
+#
+# The static, shared content the featured game runs on. These are read shapes for
+# the bank seeded at startup -- fifty templates naming ``X`` with exactly four
+# options each -- and the answer a participant selected for one of them. There is
+# no player workflow here yet: no pairing, no prediction submission, no scoring,
+# no completion state, no timer. The answer model below is the storage foundation
+# that workflow will later build on.
+
+class CoupleGameQuestion(BaseModel):
+    """One bank template as it is stored: the question naming ``X``, its options,
+    and where it sits in the sequence.
+
+    ``options`` is always four entries in display order. ``stable_key`` is the
+    deterministic identity (``couple-q-01`` … ``couple-q-50``) the startup seed
+    uses to decide whether the predefined question already exists.
+    """
+
+    id: str
+    stable_key: str
+    sequence_number: int
+    question_text: str
+    options: List[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CoupleGameAnswer(BaseModel):
+    """The answer one participant selected for one bank question.
+
+    ``selected_option_index`` is positional into the question's four options (0 for
+    the first … 3 for the fourth) rather than a copy of the option text, so the
+    stored answer keeps pointing at the right option even if bank wording is
+    ever corrected.
+    """
+
+    id: str
+    question_id: str
+    user_id: str
+    selected_option_index: int
+    created_at: datetime
+    updated_at: datetime
+
+
 # --- Anagram gameplay ----------------------------------------------------------
 #
 # The player-facing half of Anagram. The admin models above describe a puzzle -- a day, a

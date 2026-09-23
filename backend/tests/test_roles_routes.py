@@ -95,6 +95,12 @@ SAMPLE_ROUTES = [
     ("POST", "/admin/anagram"),
     ("GET", "/admin/anagram"),
     ("GET", "/admin/anagram/{game_id}"),
+    # Couple Prediction featuring. Three routes and no preview: there is no word to
+    # draw, only a day to feature, so the whole surface is save, list, read one. All
+    # three are gated on ``games:manage`` for the same reason the puzzles are.
+    ("POST", "/admin/couple"),
+    ("GET", "/admin/couple"),
+    ("GET", "/admin/couple/{game_id}"),
 ]
 
 

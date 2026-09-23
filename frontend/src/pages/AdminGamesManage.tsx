@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { CalendarClock, Dices, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
+import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
 import { AdminWordleConfig } from '@/components/AdminWordleConfig';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -40,10 +41,10 @@ const AUTO = 'auto';
  * `/games/featured` resolves against on the next render with no refresh step. Everything else
  * about the catalogue -- availability, per-game settings -- is not this screen's concern.
  *
- * Below them sit the Wordle and Anagram answers, which are a different kind of control: they
- * are the only things on this page that go to the server, so they render only for an account
- * holding `games:manage`, and the server refuses the same writes again regardless of what
- * this gate believes.
+ * Below them sit the Wordle and Anagram answers and the Couple Prediction featured day,
+ * which are a different kind of control: they are the only things on this page that go to
+ * the server, so they render only for an account holding `games:manage`, and the server
+ * refuses the same writes again regardless of what this gate believes.
  */
 export const AdminGamesManage = () => {
   const { featured, eligibleGames, isEnabled, featuredOn, setFeatured, clearFeatured, setRandomFeatured } =
@@ -67,8 +68,8 @@ export const AdminGamesManage = () => {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold">Manage games</h1>
         <p className="text-sm text-muted-foreground">
-          Today's spotlight, the week ahead, and the words today's Wordle and Anagram run on.
-          Changes here show up on the player-facing section straight away.
+          Today's spotlight, the week ahead, and the days Wordle, Anagram and the Couple
+          game run on. Changes here show up on the player-facing section straight away.
         </p>
       </header>
 
@@ -230,6 +231,7 @@ export const AdminGamesManage = () => {
 
       {can(CAPABILITIES.GAMES_MANAGE) && <AdminWordleConfig />}
       {can(CAPABILITIES.GAMES_MANAGE) && <AdminAnagramConfig />}
+      {can(CAPABILITIES.GAMES_MANAGE) && <AdminCoupleConfig />}
     </div>
   );
 };

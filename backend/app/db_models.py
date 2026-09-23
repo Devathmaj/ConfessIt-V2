@@ -20,6 +20,10 @@ from .limits import (
     ANAGRAM_MAX_ATTEMPTS,
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
+    COUPLE_OPTION_TEXT_MAX,
+    COUPLE_OPTIONS_PER_QUESTION,
+    COUPLE_QUESTION_TEXT_MAX,
+    COUPLE_QUESTIONS_COUNT,
     INTEREST_VALUES,
     LOVE_NOTE_BODY_MAX,
     MESSAGE_BODY_MAX,
@@ -1218,6 +1222,157 @@ class WordleUserGameRecord(Base):
         CheckConstraint(
             "status IN ('in_progress', 'won', 'lost')",
             name="ck_wordle_user_games_status_known",
+        ),
+    )
+
+
+class CoupleGameRecord(Base):
+    """One featured Couple Prediction game, as an administrator configured it.
+
+    The row is the *configuration* of a featured instance -- which day the game is
+    active for, and who marked it so -- and not a play of it. There is deliberately
+    no mode, no word, no answer and no puzzle-generation column here: unlike
+    Wordle/Anagram there is nothing per-day for an administrator to type, draw or
+    select. The 50-question bank is shared application content in
+    ``couple_game_questions`` and is never duplicated per date; a featured date
+    simply points at the game being active for that day.
+
+    ``game_date`` is unique for the same reason ``wordle_games.game_date`` is: one
+    day, one featured instance, and two rows for one day would leave any future
+    player surface with two games and no rule for choosing between them. The
+    refusal lives in the schema rather than only in the service so that two
+    administrators saving at the same moment cannot both be told 201.
+
+    ``created_by`` holds the creator's ``regno``, with no foreign key, for the same
+    reason ``message_reports.reviewed_by_regno`` has none: staff live in ``admin``
+    and ``moderator`` and never in ``users``, so a key into the participant table
+    would reject every creator this route can admit, and plain text lets the audit
+    trail survive the account being renamed or deleted.
+    """
+
+    __tablename__ = "couple_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+
+class CoupleGameQuestionRecord(Base):
+    """One static Couple Prediction question template, seeded at application startup.
+
+    The row is shared application content, not per-day configuration: the bank is
+    seeded once from the committed list in ``couple_service`` and a featured date
+    never copies it. ``stable_key`` (``couple-q-01`` … ``couple-q-50``) is the
+    deterministic identity the seed uses to decide whether a predefined question
+    already exists, so restarting the application never duplicates a row and never
+    needs to overwrite one.
+
+    The question text names ``X`` rather than a person -- ``What would X prefer
+    for a perfect date?`` -- and the application substitutes the answering
+    participant's name at presentation time. The stored template is never rewritten
+    per viewer; the same row serves both directions of a relationship.
+
+    The four options live in individual columns rather than a JSON array so that
+    each one is length-bounded by the schema like every other stored string here.
+    ``selected_option_index`` is intentionally absent: which option a participant
+    picked is a fact about that participant, stored per answer in
+    ``couple_game_answers``, and a column for it here would claim one shared answer
+    for every player.
+    """
+
+    __tablename__ = "couple_game_questions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    stable_key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    sequence_number: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    question_text: Mapped[str] = mapped_column(Text)
+    option_a: Mapped[str] = mapped_column(String(COUPLE_OPTION_TEXT_MAX))
+    option_b: Mapped[str] = mapped_column(String(COUPLE_OPTION_TEXT_MAX))
+    option_c: Mapped[str] = mapped_column(String(COUPLE_OPTION_TEXT_MAX))
+    option_d: Mapped[str] = mapped_column(String(COUPLE_OPTION_TEXT_MAX))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"sequence_number BETWEEN 1 AND {COUPLE_QUESTIONS_COUNT}",
+            name=f"ck_couple_game_questions_sequence_{COUPLE_QUESTIONS_COUNT}",
+        ),
+        CheckConstraint(
+            f"length(question_text) BETWEEN 1 AND {COUPLE_QUESTION_TEXT_MAX}",
+            name=f"ck_couple_game_questions_text_length_{COUPLE_QUESTION_TEXT_MAX}",
+        ),
+        CheckConstraint(
+            f"length(option_a) BETWEEN 1 AND {COUPLE_OPTION_TEXT_MAX}",
+            name=f"ck_couple_game_questions_option_a_length_{COUPLE_OPTION_TEXT_MAX}",
+        ),
+        CheckConstraint(
+            f"length(option_b) BETWEEN 1 AND {COUPLE_OPTION_TEXT_MAX}",
+            name=f"ck_couple_game_questions_option_b_length_{COUPLE_OPTION_TEXT_MAX}",
+        ),
+        CheckConstraint(
+            f"length(option_c) BETWEEN 1 AND {COUPLE_OPTION_TEXT_MAX}",
+            name=f"ck_couple_game_questions_option_c_length_{COUPLE_OPTION_TEXT_MAX}",
+        ),
+        CheckConstraint(
+            f"length(option_d) BETWEEN 1 AND {COUPLE_OPTION_TEXT_MAX}",
+            name=f"ck_couple_game_questions_option_d_length_{COUPLE_OPTION_TEXT_MAX}",
+        ),
+        # The placeholder mechanic, enforced where it cannot be bypassed. Every
+        # template names ``X`` so the player surface can substitute the answering
+        # participant's name at read time; a template without it is a row no screen
+        # can personalise.
+        CheckConstraint(
+            "question_text LIKE '%X%'",
+            name="ck_couple_game_questions_has_placeholder",
+        ),
+    )
+
+
+class CoupleGameAnswerRecord(Base):
+    """The answer one participant selected for one bank question.
+
+    The foundation the later two-person participation flow builds on, and nothing
+    more: which option this participant picked for this question. There is
+    deliberately no pairing, no attempt count, no scoring, no completion state, no
+    timer and no session column here -- those belong to the player workflow that
+    does not exist yet, and a column for any of them would be a promise the rest
+    of the application does not keep.
+
+    One row per participant per question, enforced by the unique pair rather than
+    a service check: two submissions at once each read "no answer yet" and each
+    try to insert, and the unique index is what lets exactly one of them own the
+    row. ``selected_option_index`` is positional into the question's four options
+    (0 for ``option_a`` … 3 for ``option_d``) rather than a copy of the option
+    text, so a bank edit cannot leave an answer pointing at words that moved.
+    """
+
+    __tablename__ = "couple_game_answers"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_questions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    selected_option_index: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "user_id"),
+        CheckConstraint(
+            f"selected_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
+            name=f"ck_couple_game_answers_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
         ),
     )
 
