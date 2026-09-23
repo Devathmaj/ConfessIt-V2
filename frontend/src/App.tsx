@@ -25,6 +25,7 @@ import { GamesLeaderboardPage } from "./pages/GamesLeaderboardPage";
 import { GamesFeaturedPage } from "./pages/GamesFeaturedPage";
 import { GamesSelectPage } from "./pages/GamesSelectPage";
 import { WordleGamePage } from "./pages/WordleGamePage";
+import { AnagramGamePage } from "./pages/AnagramGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
 import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
@@ -397,6 +398,7 @@ const AppRoutes = () => {
         <Route path="featured" element={<GamesFeaturedPage />} />
         <Route path="select" element={<GamesSelectPage />} />
         <Route path="wordle" element={<WordleGamePage />} />
+        <Route path="anagram" element={<AnagramGamePage />} />
       </Route>
       {/* The old /mini-games page is gone; deep links retire to the section that replaced
           it rather than 404ing. */}

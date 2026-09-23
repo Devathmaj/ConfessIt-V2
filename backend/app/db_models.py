@@ -17,6 +17,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .limits import (
     ANAGRAM_ANSWER_MAX,
+    ANAGRAM_MAX_ATTEMPTS,
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     INTEREST_VALUES,
@@ -1020,6 +1021,92 @@ class AnagramGameRecord(Base):
         CheckConstraint(
             f"length(answer) BETWEEN 1 AND {ANAGRAM_ANSWER_MAX}",
             name=f"ck_anagram_games_answer_length_{ANAGRAM_ANSWER_MAX}",
+        ),
+    )
+
+
+class AnagramUserGameRecord(Base):
+    """One player's attempt at one day's Anagram: the participation half of the game.
+
+    The row pairs a *player* with a *puzzle*: everything below is an answer to "where is
+    this user in today's game?", and nothing else. ``anagram_games`` still owns the answer
+    itself, and this table holds exactly one derived copy of it -- ``scrambled_word``, the
+    private permutation this player was dealt. That is the one deliberate exception to the
+    Wordle rule of never storing answer-adjacent text here: an anagram cannot be played
+    without the scrambled tiles on screen, the scramble is useless to anyone but its player,
+    and it is generated once and never re-dealt, so there is no second spelling to drift.
+
+    A player is bound to one puzzle by ``UniqueConstraint("anagram_game_id", "user_id")``,
+    and the constraint is the rule rather than a service check: two starts at once each
+    read "no participation yet" and each try to insert, and the unique index is what lets
+    exactly one of them become the owner of the row.
+
+    ``guesses`` is the only guess history stored, in play order. An anagram guess needs no
+    per-letter verdict -- the guess either is the answer or it is not -- so unlike Wordle
+    there is no ``results`` column and nothing to re-derive on read.
+
+    ``status`` is written by the service at the moment a guess settles the game, and is
+    the column the read decides by. ``success`` restates ``status = 'won'`` as a boolean so
+    a leaderboard query can count wins without comparing strings; the service always writes
+    the two together. ``solved_at`` is deliberately NULL on a loss, for the reason the
+    Wordle table's is: a time the player *failed* is not a stat.
+
+    The timer is authoritative here rather than on the client. ``active_time_seconds`` is
+    finished timing segments, summed; ``timer_started_at`` opens the current segment, and
+    is NULL while paused or finished. A segment is closed -- its seconds added to the total
+    and the column cleared -- on pause, on heartbeat, on a guess that settles the game, and
+    on resume-after-absence; a segment older than
+    ``ANAGRAM_TIMER_STALE_AFTER_SECONDS`` is discarded rather than counted, because a
+    browser that died mid-game never sends the close and the dead hours are not play.
+    """
+
+    __tablename__ = "anagram_user_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    anagram_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("anagram_games.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    scrambled_word: Mapped[str] = mapped_column(String(ANAGRAM_ANSWER_MAX))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    status: Mapped[str] = mapped_column(
+        String(20), default="in_progress", server_default=text("'in_progress'")
+    )
+    success: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    guesses: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'{}'::jsonb")
+    )
+    active_time_seconds: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    timer_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    last_guess_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    solved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("anagram_game_id", "user_id"),
+        # The suffix carries the limit, so tightening it and restarting supersedes the old
+        # constraint (see ``_superseded_constraints``). ``attempt_count`` is NOT NULL, so a
+        # plain BETWEEN cannot be satisfied by NULL.
+        CheckConstraint(
+            f"attempt_count BETWEEN 0 AND {ANAGRAM_MAX_ATTEMPTS}",
+            name=f"ck_anagram_user_games_attempt_count_{ANAGRAM_MAX_ATTEMPTS}",
+        ),
+        CheckConstraint(
+            "status IN ('in_progress', 'won', 'lost')",
+            name="ck_anagram_user_games_status_known",
         ),
     )
 

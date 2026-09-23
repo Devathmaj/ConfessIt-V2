@@ -5,6 +5,7 @@ from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import date, datetime, timezone
 from .postgres import new_id
 from .limits import (
+    ANAGRAM_MAX_ATTEMPTS,
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     INTEREST_MAX_SELECTED,
@@ -891,6 +892,123 @@ class AnagramDraw(BaseModel):
 
     word: str
     token: str
+
+
+# --- Anagram gameplay ----------------------------------------------------------
+#
+# The player-facing half of Anagram. The admin models above describe a puzzle -- a day, a
+# word, where the word came from -- and these describe one player's *place* in that
+# puzzle: their private scramble, their guesses, whether they are done, and how long they
+# have actually played. ``anagram_games.answer`` never travels on a participation that is
+# still in progress; it is present only on a completed one, which is the single moment the
+# feature exists to reveal it.
+
+# Whether a participation is still being played or has been settled. The database's CHECK
+# constraint on ``anagram_user_games.status`` mirrors this set; all three must agree.
+AnagramStatus = Literal["in_progress", "won", "lost"]
+
+
+class AnagramParticipation(BaseModel):
+    """One player's place in one day's puzzle: their scramble, their guesses, their time.
+
+    ``scrambled_word`` is the private permutation this player was dealt at reveal: the
+    tiles on their screen, in the order they arrived. It is dealt once and never re-dealt,
+    so a returning player -- refresh, navigation, logout and back -- always sees the same
+    tiles.
+
+    ``active_time_seconds`` is finished timing segments, summed; ``timer_started_at`` opens
+    the current segment and is NULL while paused or finished. ``timer_running`` restates
+    "there is an open, non-stale segment" as one boolean so the screen knows whether to
+    tick or to offer RESUME without doing clock arithmetic of its own. The client still
+    owns the visible ticking; the server owns every number that persists.
+
+    ``answer`` is the reveal. It is NULL on a participation still in progress and set only
+    once the game is over -- and then only a loss needs it shown, since a winner already
+    typed it. The service is the only place that decides when it is no longer a secret.
+    """
+
+    anagram_game_id: str
+    game_date: date
+    status: AnagramStatus
+    success: bool
+    attempt_count: int
+    max_attempts: int = ANAGRAM_MAX_ATTEMPTS
+    guesses: list[str]
+    scrambled_word: str
+    active_time_seconds: int = 0
+    timer_started_at: Optional[datetime] = None
+    timer_running: bool = False
+    started_at: datetime
+    last_guess_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    solved_at: Optional[datetime] = None
+    answer: Optional[str] = None
+
+
+class AnagramCurrentGame(BaseModel):
+    """Today's puzzle and this player's participation, as the game screen opens.
+
+    ``game_id`` and ``game_date`` are nullable because there may be *no* playable puzzle:
+    an administrator has not published anything, or published one ahead and the day has not
+    arrived. ``participation`` is NULL until the player presses REVEAL WORD -- reading the
+    screen must not create a row, or opening it twice would start two timers' worth of
+    confusion. ``max_attempts`` is carried so the screen can draw its attempts line without
+    a second round trip and without hardcoding the shape of the game in the client.
+    """
+
+    game_id: Optional[str] = None
+    game_date: Optional[date] = None
+    participation: Optional[AnagramParticipation] = None
+    max_attempts: int = ANAGRAM_MAX_ATTEMPTS
+
+
+class AnagramActionRequest(BaseModel):
+    """Starting, pausing or checkpointing one puzzle for this player.
+
+    ``game_id`` names the puzzle -- the one the player was shown -- so a stale screen
+    cannot start a timer on yesterday's game after midnight has moved the current one on.
+    The three timer transitions share this one shape because they differ only in which
+    segment edge they move; the guess, which also scores, carries its own payload below.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
+    accepted and dropped, matching ``WordleGuessRequest``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+
+
+class AnagramGuessRequest(BaseModel):
+    """Guessing one arrangement against one puzzle.
+
+    ``game_id`` names the puzzle the guess is for -- the one the player was shown -- and
+    ``guess`` is submitted raw. The uppercase letters-only normalisation happens in the
+    service rather than on the model, because the reason a guess is refused (not letters,
+    wrong length, not a rearrangement of the puzzle at all) is meant to reach the client as
+    a readable 400 rather than a generic 422 about the field's shape.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
+    accepted and dropped, matching ``WordleGuessRequest``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    guess: str
+
+
+class AnagramGuessResponse(AnagramParticipation):
+    """A participation after one guess, plus the verdict the guess earned.
+
+    The extra pair is redundant -- a correct guess is always the tail of ``guesses`` -- but
+    the toast needs the *one* outcome that just happened, and re-deriving "was the last
+    guess right" client-side is exactly the trust-the-client the server exists to avoid.
+    ``guess`` restates the submitted arrangement and ``correct`` whether it matched.
+    """
+
+    guess: str
+    correct: bool
 
 
 # --- Wordle gameplay --------------------------------------------------------------

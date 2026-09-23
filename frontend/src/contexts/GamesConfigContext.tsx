@@ -82,6 +82,17 @@ interface GamesConfigContextValue {
   setRandomFeatured: (dateKey?: FeaturedDateKey) => string | null;
   /** Appends an entry to the activity log; used by screens the context does not own. */
   logActivity: (entry: { kind: GamesActivityKind; message: string; gameId?: string }) => void;
+  /**
+   * Whether the Anagram page was left mid-game during this app session.
+   *
+   * Session UI state rather than configuration, kept here for one reason: this provider
+   * wraps the whole router, so the flag survives every in-site navigation and dies on a
+   * refresh -- exactly the split the Anagram resume gate needs. A refresh restores the
+   * board outright; navigating away and back hides the word until the first click.
+   */
+  anagramLeftMidGame: boolean;
+  /** Records leaving (or returning to) the Anagram page mid-game. */
+  setAnagramLeftMidGame: (left: boolean) => void;
 }
 
 export const GamesConfigContext = createContext<GamesConfigContextValue | undefined>(undefined);
@@ -110,6 +121,8 @@ const defaultGamesConfigValue = (): GamesConfigContextValue => {
       clearFeatured: () => undefined,
       setRandomFeatured: () => null,
       logActivity: () => undefined,
+      anagramLeftMidGame: false,
+      setAnagramLeftMidGame: () => undefined,
     };
   }
   return defaultContext;
@@ -120,6 +133,7 @@ export const GamesConfigProvider = ({ children }: { children: ReactNode }) => {
   const [activity, setActivity] = useState<GamesActivityEntry[]>(() =>
     seedGamesActivity(initialGamesConfig()),
   );
+  const [anagramLeftMidGame, setAnagramLeftMidGame] = useState(false);
 
   // Ids only have to be unique within the log, and a counter is stable across re-renders
   // where Date.now() would not be -- two entries written in the same millisecond would
@@ -264,6 +278,8 @@ export const GamesConfigProvider = ({ children }: { children: ReactNode }) => {
       clearFeatured,
       setRandomFeatured,
       logActivity: pushActivity,
+      anagramLeftMidGame,
+      setAnagramLeftMidGame,
     }),
     [
       config,
@@ -276,6 +292,7 @@ export const GamesConfigProvider = ({ children }: { children: ReactNode }) => {
       clearFeatured,
       setRandomFeatured,
       pushActivity,
+      anagramLeftMidGame,
     ],
   );
 

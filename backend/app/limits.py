@@ -227,3 +227,30 @@ ANAGRAM_RANDOM_MIN_LENGTH = 5
 # other length here: a 400 from the service for a request that asked for it, and a CHECK
 # constraint for a write that never went through the API.
 ANAGRAM_ANSWER_MAX = 100
+
+# How many guesses one player may make against a single Anagram puzzle, and therefore the
+# size of the whole game: five tiles of patience. Written down once here because it appears
+# three more places -- the CHECK constraint on ``anagram_user_games.attempt_count`` (named
+# after the number so the constraint supersedes itself when the limit changes), the
+# ``max_attempts`` field a participation answer carries, and the attempts-remaining line the
+# player-facing screen renders. Five rather than Wordle's six is the product decision: an
+# anagram guess costs a full rearrangement rather than a typed word, so the budget is a
+# touch shorter.
+ANAGRAM_MAX_ATTEMPTS = 5
+
+# How old an open timing segment may be before it is treated as dead rather than played.
+#
+# The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``
+# holds finished segments and ``timer_started_at`` opens the current one. A segment normally
+# closes on pause, heartbeat, guess or completion -- but a browser that dies mid-game sends
+# none of those, so the segment stays open across the dead period. When a segment older
+# than this is closed, its tail is discarded rather than counted: the alternative is
+# crediting hours a crashed tab never played.
+#
+# Two minutes is two heartbeat intervals plus grace. The client heartbeats every 30 seconds
+# while the game runs visibly, so a live game never has a segment older than about half a
+# minute; anything past two minutes means the heartbeats stopped, which means the page is
+# gone, hidden without pausing, or dead. Short enough that a quick logout and return inside
+# the window still counts honestly, long enough that a slow network never discards real
+# play.
+ANAGRAM_TIMER_STALE_AFTER_SECONDS = 120

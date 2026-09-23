@@ -907,3 +907,137 @@ export const submitWordleGuess = async (
     return response.data;
 };
 
+// --- Anagram Gameplay Endpoints ---
+
+/** Whether a participation is still being played or has been settled. */
+export type AnagramStatus = 'in_progress' | 'won' | 'lost';
+
+/**
+ * One player's place in one day's puzzle: their scramble, guesses, attempts and time.
+ *
+ * `scrambled_word` is the private permutation dealt at reveal -- the tiles on screen.
+ * `active_time_seconds` banks finished timing segments; `timer_started_at` opens the
+ * current one and is null while paused or finished. `timer_running` restates "an open,
+ * non-stale segment on a game still in progress" so the screen knows whether to tick or
+ * offer RESUME. `answer` is null until the game is over, and then only a loss needs it
+ * shown -- a winner already typed it.
+ */
+export interface AnagramParticipation {
+    anagram_game_id: string;
+    game_date: string;
+    status: AnagramStatus;
+    success: boolean;
+    attempt_count: number;
+    max_attempts: number;
+    guesses: string[];
+    scrambled_word: string;
+    active_time_seconds: number;
+    timer_started_at: string | null;
+    timer_running: boolean;
+    started_at: string;
+    last_guess_at: string | null;
+    completed_at: string | null;
+    solved_at: string | null;
+    answer: string | null;
+}
+
+/**
+ * Today's puzzle and this player's participation, as the game screen opens.
+ *
+ * `game_id` and `game_date` are null when nothing is playable yet; `participation` is
+ * null until the player presses REVEAL WORD, because reading the screen must not create a
+ * row. `max_attempts` lets the screen draw its attempts line without a second round trip.
+ */
+export interface AnagramCurrentGame {
+    game_id: string | null;
+    game_date: string | null;
+    participation: AnagramParticipation | null;
+    max_attempts: number;
+}
+
+/** A participation after one guess, plus whether it matched. */
+export interface AnagramGuessResponse extends AnagramParticipation {
+    guess: string;
+    correct: boolean;
+}
+
+/** Today's playable puzzle and this player's participation. Never creates a row. */
+export const getCurrentAnagram = async (): Promise<AnagramCurrentGame> => {
+    const response = await axios.get(`${API_URL}/games/anagram`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+/**
+ * Reveal the puzzle: deal this player's scramble and start -- or resume -- the clock.
+ * Idempotent: a later call on a paused game re-opens the clock, on a running game reads
+ * it back unchanged.
+ */
+export const startAnagram = async (gameId: string): Promise<AnagramParticipation> => {
+    const response = await axios.post(
+        `${API_URL}/games/anagram/start`,
+        { game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Bank the open timing segment and stop the clock. Idempotent. */
+export const pauseAnagram = async (gameId: string): Promise<AnagramParticipation> => {
+    const response = await axios.post(
+        `${API_URL}/games/anagram/pause`,
+        { game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Best-effort pause for page teardown (`pagehide`, abrupt unmount).
+ *
+ * A normal `pauseAnagram` call may never get its response once the page is going away, so
+ * this uses `fetch` with `keepalive` instead: the browser delivers the request even while
+ * unloading. Fire-and-forget by design -- the response is unreadable here, and a pause
+ * that never lands is bounded server-side by the stale-segment rule rather than by a
+ * retry this context cannot run.
+ */
+export const pauseAnagramBeacon = (gameId: string): void => {
+    try {
+        const token = localStorage.getItem('accessToken');
+        if (!token) return;
+        void fetch(`${API_URL}/games/anagram/pause`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ game_id: gameId }),
+            keepalive: true,
+        });
+    } catch {
+        // Unloading: nothing left to report the failure to.
+    }
+};
+
+/** Checkpoint a running clock without stopping it. A no-op read when paused. */
+export const heartbeatAnagram = async (gameId: string): Promise<AnagramParticipation> => {
+    const response = await axios.post(
+        `${API_URL}/games/anagram/heartbeat`,
+        { game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Score one tile arrangement against one puzzle and store it for the current player. */
+export const submitAnagramGuess = async (
+    gameId: string,
+    guess: string
+): Promise<AnagramGuessResponse> => {
+    const response = await axios.post(
+        `${API_URL}/games/anagram/guess`,
+        { game_id: gameId, guess },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+

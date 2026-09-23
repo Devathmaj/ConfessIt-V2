@@ -203,7 +203,7 @@ describe('AdminGamesDashboard: the front page', () => {
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByText('Games live')).toBeInTheDocument();
-    expect(screen.getByText('8/8')).toBeInTheDocument();
+    expect(screen.getByText('9/9')).toBeInTheDocument();
     expect(screen.getByText('Every title switched on')).toBeInTheDocument();
     expect(screen.getByText('Leaderboard snapshot')).toBeInTheDocument();
     expect(screen.getByText('Single vs Couple')).toBeInTheDocument();
