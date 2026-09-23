@@ -127,7 +127,12 @@ class PostgresClient:
             max_overflow=max_overflow if max_overflow is not None else settings.DATABASE_MAX_OVERFLOW,
             pool_timeout=pool_timeout if pool_timeout is not None else settings.DATABASE_POOL_TIMEOUT,
             pool_recycle=pool_recycle if pool_recycle is not None else settings.DATABASE_POOL_RECYCLE,
-            connect_args={"options": "-c timezone=UTC"},
+            # Bound the TCP/TLS handshake itself: without this a dead endpoint
+            # stalls each new connection on the OS retransmit schedule (~130 s on
+            # Windows) instead of failing fast like an exhausted pool does. Seen
+            # when several connections race to a host that resolves to both ::1
+            # and 127.0.0.1 while only IPv4 is listening.
+            connect_args={"options": "-c timezone=UTC", "connect_timeout": 10},
         )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 

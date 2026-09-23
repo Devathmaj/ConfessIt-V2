@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import settings, validate_cloudinary_settings
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, messages, wordle
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, messages, wordle
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -495,6 +495,7 @@ app.include_router(notifications.router)
 app.include_router(admin.router)
 app.include_router(admin_love_notes.router)
 app.include_router(admin_wordle.router)
+app.include_router(admin_anagram.router)
 app.include_router(wordle.router)
 
 # The hook drops the query string from the span's URL attributes before the span is

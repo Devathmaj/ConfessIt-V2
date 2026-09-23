@@ -19,12 +19,15 @@ conftest override is popped -- because the enforcement lives in the token a real
 and in the dependency a real request resolves through.
 """
 
+import contextlib
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import uuid
 
 import jwt
 import pytest
+from anyio.from_thread import start_blocking_portal
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
@@ -67,7 +70,43 @@ class _FromHost:
 
 def _browser(host="127.0.0.1"):
     """One browser: a fresh client, so no client id or header is shared between logins."""
-    return TestClient(_FromHost(host))
+    return _attach_portal(TestClient(_FromHost(host)))
+
+
+_browser_stack: contextlib.ExitStack | None = None
+_browser_lock = threading.Lock()
+
+
+@pytest.fixture(autouse=True)
+def _reuse_browser_portal():
+    """Serve every ``_browser()`` request from one portal per test.
+
+    A bare ``TestClient`` starts a fresh BlockingPortal (an OS thread plus an
+    event loop) for every request and tears it down afterwards. This file builds
+    dozens of clients -- and the concurrency test builds them on two threads at
+    once -- so that churn is what turned the suite from minutes into an hour.
+    Attaching one portal per test keeps requests on a single warm loop; the stack
+    stops it when the test ends. Lifespan is deliberately not run, as before.
+    """
+    global _browser_stack
+    with contextlib.ExitStack() as stack:
+        _browser_stack = stack
+        try:
+            yield
+        finally:
+            _browser_stack = None
+
+
+def _attach_portal(client):
+    """Attach the test-scoped portal to a fresh client, if a test is running."""
+    stack = _browser_stack
+    if stack is None:
+        return client
+    with _browser_lock:
+        client.portal = stack.enter_context(start_blocking_portal())
+        stack.callback(setattr, client, "portal", None)
+        stack.callback(client.close)
+    return client
 
 
 def _seed_user(db, regno, name=None):

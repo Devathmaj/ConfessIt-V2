@@ -208,3 +208,22 @@ WORDLE_ANSWER_LENGTH = 5
 # six is the Wordle norm, long enough that a player who is stuck still has a board to think
 # about and short enough that a loss is a board fully played rather than a wall of grey.
 WORDLE_MAX_ATTEMPTS = 6
+
+# Anagram. The shortest word a *random* draw may return, and only that: an answer the
+# administrator types is accepted at any length down to a single letter, because "cat" and
+# "encyclopedia" are both perfectly playable anagrams and the length rule exists to stop the
+# draw handing out a two-letter word nobody has to rearrange. Two numbers rather than one
+# is the point -- a single minimum would either reject legal custom answers or let the draw
+# produce trivia.
+#
+# The random draw filters ``backend/assets/anagram_words.txt`` by this before choosing, so
+# the file itself is left exactly as committed.
+ANAGRAM_RANDOM_MIN_LENGTH = 5
+
+# The longest answer an administrator may type. Not a rule about the game -- an anagram of
+# any length plays the same -- but the column has to end somewhere, and 100 is far past the
+# longest entry in the word list (23 characters) while still being a bound a payload can be
+# refused against rather than a value PostgreSQL truncates. It is enforced twice, like every
+# other length here: a 400 from the service for a request that asked for it, and a CHECK
+# constraint for a write that never went through the API.
+ANAGRAM_ANSWER_MAX = 100

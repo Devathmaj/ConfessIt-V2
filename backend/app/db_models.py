@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .limits import (
+    ANAGRAM_ANSWER_MAX,
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
     INTEREST_VALUES,
@@ -24,6 +25,7 @@ from .limits import (
     REPORT_REASON_MAX,
     USER_DEPARTMENT_MAX,
     USER_GENDER_VALUES,
+    USER_REGNO_MAX,
     USER_YEAR_MAX,
     USER_YEAR_MIN,
     WORDLE_ANSWER_LENGTH,
@@ -967,6 +969,59 @@ class MessageReportRecord(Base):
     # account being deleted or renamed, which is what ``ON DELETE SET NULL`` was doing.
     reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
+
+
+class AnagramGameRecord(Base):
+    """One day's Anagram puzzle, as an administrator configured it.
+
+    The row is the *word* and nothing else. There is no scramble here on purpose: the
+    answer stored below is the canonical, uppercase word, and every player will later
+    receive their own private permutation of it -- so a scrambled copy in this table would
+    be a second, conflicting spelling of the same puzzle. The per-player layer (their
+    scramble, their guesses, their result) is a separate table keyed back to ``id`` when it
+    exists; it is deliberately not imagined here, because a column for a feature that does
+    not exist is a promise the rest of the application does not keep.
+
+    ``game_date`` is unique for the same reason ``wordle_games.game_date`` is: one day, one
+    puzzle, and two rows for one day would leave the player-facing page with two answers and
+    no rule for choosing between them. The refusal lives in the schema rather than only in
+    the service so that two administrators saving at the same moment cannot both be told 201.
+
+    ``mode`` records how the answer came to be -- ``custom`` for a word the administrator
+    typed, ``random`` for one the server drew from ``backend/assets/anagram_words.txt`` --
+    and is provenance rather than behaviour: the row plays identically either way.
+
+    ``created_by`` holds the creator's ``regno``, with no foreign key, for the same reason
+    ``message_reports.reviewed_by_regno`` has none: staff live in ``admin`` and ``moderator``
+    and never in ``users``, so a key into the participant table would reject every creator
+    this route can admit, and plain text lets the audit trail survive the account being
+    renamed or deleted.
+    """
+
+    __tablename__ = "anagram_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    mode: Mapped[str] = mapped_column(String(10))
+    answer: Mapped[str] = mapped_column(String(ANAGRAM_ANSWER_MAX))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('custom', 'random')", name="ck_anagram_games_mode_known"),
+        # A length *range* rather than an equality, because unlike Wordle's five-letter
+        # answer this one is bounded at both ends only by the column: at least one letter
+        # (an empty answer is not a puzzle) and at most the ceiling the payload is refused
+        # against. The five-letter minimum for a random draw is a rule about the *draw*,
+        # not about the column, so it is not here -- a three-letter custom answer is legal.
+        CheckConstraint(
+            f"length(answer) BETWEEN 1 AND {ANAGRAM_ANSWER_MAX}",
+            name=f"ck_anagram_games_answer_length_{ANAGRAM_ANSWER_MAX}",
+        ),
+    )
 
 
 class WordleGameRecord(Base):

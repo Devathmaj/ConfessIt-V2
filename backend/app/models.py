@@ -817,6 +817,82 @@ class WordleDraw(BaseModel):
     token: str
 
 
+# --- Anagram configuration -----------------------------------------------------
+#
+# Admin-side only, and the same boundary the Wordle models above hold: these describe a
+# puzzle -- a day, a word, and where the word came from -- and nothing about playing one.
+# No scramble, no guess, no attempt, no result, because each of those belongs to a
+# *player's* relationship with the puzzle and there is no player-side table yet.
+#
+# ``AnagramMode`` is a ``Literal`` for the reason ``WordleMode`` is: the generated schema
+# hands the client the two legal modes instead of a free-text string, a value outside the
+# set is a 422 at validation, and all three of the payload, the service and the CHECK
+# constraint on ``anagram_games.mode`` agree on the same two words.
+
+AnagramMode = Literal["custom", "random"]
+
+
+class AnagramGameCreate(BaseModel):
+    """Configuring the answer for one day's Anagram.
+
+    ``word`` and ``token`` are both optional here and required by the *mode*, which is why
+    neither is validated above: whether a supplied word is non-empty, letters only and short
+    enough is a rule about the answer rather than about the shape of the request, so it is
+    answered in the service with a 400 that says which rule failed. The minimum length a
+    *random* draw obeys is likewise a rule about the word list, not about this payload.
+
+    ``mode="random"`` carries the word a preview drew together with that draw's token. The
+    server re-derives the signature, so a token minted for another day -- or one a client
+    made up -- is a 400 rather than a second chance to choose the answer.
+
+    ``extra="forbid"`` for the same reason ``WordleGameCreate`` sets it: a key the payload
+    does not carry is refused outright rather than accepted and dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: AnagramMode
+    word: Optional[str] = None
+    token: Optional[str] = None
+    game_date: Optional[date] = None
+
+
+class AnagramGame(BaseModel):
+    """A configured puzzle as it is stored: the day, the word, and who published it.
+
+    ``answer`` is returned deliberately, for the reason the Wordle model returns its own:
+    this is the administrator's configuration screen, and the endpoint it comes from is
+    closed to everyone who may not publish. It is always the canonical, uppercase word --
+    never a scramble, because each player's arrangement is generated per user and does not
+    exist yet.
+
+    ``created_by`` is the publishing account's ``regno``, so the list can show who set each
+    day's word without a second lookup.
+    """
+
+    id: str
+    game_date: date
+    mode: AnagramMode
+    answer: str
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AnagramDraw(BaseModel):
+    """A word the server drew, plus the signature that lets it be saved unchanged.
+
+    The two halves travel together and only the server can produce either: ``word`` is chosen
+    from the eligible pool here, and ``token`` is an HMAC over that word and the date it was
+    drawn for. The client shows the word, sends both back, and the service re-derives the
+    signature -- so what the admin saw is what gets stored, and nothing the client sends can
+    become an answer the server did not pick.
+    """
+
+    word: str
+    token: str
+
+
 # --- Wordle gameplay --------------------------------------------------------------
 #
 # The participant side of the game. Everything these models describe is derived from two

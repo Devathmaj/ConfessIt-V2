@@ -1,4 +1,8 @@
+import contextlib
+import threading
+
 import pytest
+from anyio.from_thread import start_blocking_portal
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -20,10 +24,16 @@ if settings.TEST_DATABASE_URL == _configured_database_url:
     )
 settings.DATABASE_URL = settings.TEST_DATABASE_URL
 
-# Keep the suite on a small pool so a leak inside the tests exhausts it quickly and
-# visibly, instead of quietly ratcheting up against the server's connection ceiling.
-settings.DATABASE_POOL_SIZE = 2
-settings.DATABASE_MAX_OVERFLOW = 2
+# Keep the suite on a bounded pool, with headroom for the concurrency tests: the
+# login files race up to four workers, each holding one connection for the whole
+# rate-limit transaction while they serialise on the same account row. A pool max
+# of exactly four turned that serialisation into pool exhaustion, so the pool
+# covers the workers plus overflow instead of matching them exactly.
+settings.DATABASE_POOL_SIZE = 4
+settings.DATABASE_MAX_OVERFLOW = 4
+# Never recycle a connection mid-suite: recycling closes and re-opens the socket on
+# the next checkout, which would reintroduce the simultaneous-connect burst below.
+settings.DATABASE_POOL_RECYCLE = 3600
 
 # ``app.main`` refuses to start unless the Cloudinary cloud name, API key and API secret are
 # all present, because those three are what sign the private love note delivery URLs and there
@@ -36,9 +46,57 @@ from app.main import app
 from app.accounts import AccountType
 from app.models import AccountDetails, UserDetails
 from app.services.auth_service import get_current_user
+from app.services.redis_service import redis_service
 
 test_db = get_postgres_client()
 test_db.initialize()
+
+# Open the persistent pool connections up front, sequentially. With a `localhost`
+# database URL, simultaneous *new* connections stall for ~130 s before succeeding
+# (`localhost` resolves to ::1 first while the forwarded port listens on IPv4 only,
+# and sequential connects are instant), and the concurrency tests check out up to
+# four connections at once -- without this, every concurrent test pays that stall
+# on its first burst of checkouts. Prefer 127.0.0.1 loopback URLs for host-run
+# suites regardless; the warm pool removes the burst either way.
+_warmed_connections = [test_db.engine.connect() for _ in range(settings.DATABASE_POOL_SIZE)]
+for _warmed_connection in _warmed_connections:
+    _warmed_connection.close()
+del _warmed_connections, _warmed_connection
+
+
+_client_portal_stack: contextlib.ExitStack | None = None
+_client_portal_lock = threading.Lock()
+
+
+@pytest.fixture(autouse=True)
+def _reuse_client_portals():
+    """Serve every bare fixture client from one portal per test.
+
+    A bare ``TestClient`` starts a fresh BlockingPortal (an OS thread plus an
+    event loop) for every request. The fixtures below deliberately skip lifespan,
+    so attaching a test-scoped portal keeps their requests on one warm loop
+    without paying a lifespan startup per client. The stack stops the portal and
+    closes the clients when the test ends.
+    """
+    global _client_portal_stack
+    with contextlib.ExitStack() as stack:
+        _client_portal_stack = stack
+        try:
+            yield
+        finally:
+            _client_portal_stack = None
+
+
+def _attach_client_portal(client):
+    """Attach the test-scoped portal to a fixture client, if a test is running."""
+    stack = _client_portal_stack
+    if stack is None:
+        return client
+    with _client_portal_lock:
+        client.portal = stack.enter_context(start_blocking_portal())
+        stack.callback(setattr, client, "portal", None)
+        stack.callback(client.close)
+    return client
 
 
 def override_get_current_user():
@@ -119,6 +177,19 @@ def authenticated_user():
     app.dependency_overrides[get_current_user] = override_get_current_user
 
 
+@pytest.fixture(autouse=True)
+def _stub_redis_publish(monkeypatch):
+    """Skip Redis pub/sub delivery in tests.
+
+    No test subscribes, and ``publish_message`` already swallows failures, so
+    skipping changes nothing observable. Without this, every ``send_message``
+    pays seconds for a best-effort notification nobody reads: on a host-run
+    suite the compose ``redis`` hostname costs ~4 s per DNS miss (retried), and
+    even a refused loopback connect costs ~2 s on some Windows hosts.
+    """
+    monkeypatch.setattr(redis_service, "publish_message", lambda *args, **kwargs: False)
+
+
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as c:
@@ -157,7 +228,7 @@ def _confession_author_client(db):
     )
     app.dependency_overrides[get_current_user] = lambda: author
     try:
-        yield TestClient(app, follow_redirects=False)
+        yield _attach_client_portal(TestClient(app, follow_redirects=False))
     finally:
         app.dependency_overrides[get_current_user] = override_get_current_user
 
@@ -171,7 +242,7 @@ def admin_client():
     """
     app.dependency_overrides[get_current_user] = override_get_admin_user
     try:
-        yield TestClient(app, follow_redirects=False)
+        yield _attach_client_portal(TestClient(app, follow_redirects=False))
     finally:
         app.dependency_overrides[get_current_user] = override_get_current_user
 
@@ -186,7 +257,7 @@ def moderator_client():
     """
     app.dependency_overrides[get_current_user] = override_get_moderator_user
     try:
-        yield TestClient(app, follow_redirects=False)
+        yield _attach_client_portal(TestClient(app, follow_redirects=False))
     finally:
         app.dependency_overrides[get_current_user] = override_get_current_user
 

@@ -759,6 +759,81 @@ export const getAdminWordleGame = async (gameId: string): Promise<WordleGame> =>
     return response.data;
 };
 
+// --- Anagram Configuration Endpoints ---
+
+/**
+ * One configured Anagram puzzle, as `GET /admin/anagram` returns it.
+ *
+ * `answer` is the canonical, uppercase word and never a scramble: each player's own
+ * arrangement of it is generated per user and does not exist yet, so there is nothing
+ * scrambled to show. `created_by` is the publishing account's regno, so the list can say who
+ * set each day's word.
+ */
+export interface AnagramGame {
+    id: string;
+    game_date: string;
+    mode: 'custom' | 'random';
+    answer: string;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/**
+ * The fields `POST /admin/anagram` accepts.
+ *
+ * `word` and `token` are both optional here and required by the *mode*: `custom` needs a
+ * word, `random` needs the word a preview drew together with that draw's token. The server
+ * re-derives the signature, so a token minted for another day -- or one a client made up --
+ * is a 400 rather than a second chance to choose the answer.
+ *
+ * `game_date` identifies the puzzle and defaults to today in UTC when omitted, so a future
+ * day can be scheduled and a past day corrected.
+ */
+export interface AnagramGamePayload {
+    mode: 'custom' | 'random';
+    word?: string;
+    token?: string;
+    game_date?: string;
+}
+
+/** A word the server drew, with the signature that binds it to one day. */
+export interface AnagramDraw {
+    word: string;
+    token: string;
+}
+
+/** Draw a word for `gameDate` (defaults to today in UTC). Read-only: nothing is stored. */
+export const drawAnagramAnswer = async (gameDate?: string): Promise<AnagramDraw> => {
+    const response = await axios.get(`${API_URL}/admin/anagram/preview`, {
+        headers: getAuthHeaders(),
+        params: { game_date: gameDate },
+    });
+    return response.data;
+};
+
+/** Configure one day's puzzle. A day that already has one answers 409. */
+export const createAnagramGame = async (payload: AnagramGamePayload): Promise<AnagramGame> => {
+    const response = await axios.post(`${API_URL}/admin/anagram`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every configured puzzle, newest day first. */
+export const getAdminAnagramGames = async (): Promise<AnagramGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/anagram`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+/** One configured puzzle by id. A malformed id answers 400, an unknown one 404. */
+export const getAdminAnagramGame = async (gameId: string): Promise<AnagramGame> => {
+    const response = await axios.get(`${API_URL}/admin/anagram/${gameId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 // --- Wordle Gameplay Endpoints ---
 
 /** The colour verdict a position in a guessed word earned. */

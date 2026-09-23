@@ -16,9 +16,13 @@ import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
 import { initialGamesConfig, resolveFeaturedGame } from '@/lib/gamesConfig';
 import {
+  createAnagramGame,
   createWordleGame,
+  drawAnagramAnswer,
   drawWordleAnswer,
+  getAdminAnagramGames,
   getAdminWordleGames,
+  type AnagramGame,
   type WordleGame,
 } from '@/services/api';
 
@@ -33,10 +37,13 @@ import {
  * tests drive the real components against each other rather than asserting each screen in
  * isolation.
  *
- * The Wordle answer is the one control on the manage screen that talks to a server, so its
- * calls are mocked here while everything around them is real: what is asserted is the flow --
- * a word is drawn, shown, and then sent back as the save -- and the reason a refused save
- * leaves on screen, which is the part a toast would take away.
+ * The Wordle and Anagram answers are the only controls on the manage screen that talk to a
+ * server, so their calls are mocked here while everything around them is real: what is
+ * asserted is the flow -- a word is drawn, shown, and then sent back as the save -- and the
+ * reason a refused save leaves on screen, which is the part a toast would take away. The two
+ * consoles have the same shape on purpose (a mode toggle, a "Save puzzle" button, an alert
+ * slot, an empty state), so every query below is scoped to the card it is about: unscoped,
+ * "save puzzle" and "Nothing configured yet" are simply two elements each.
  *
  * `fireEvent` rather than `user-event`, matching the other component tests here. Radix `Select`
  * is driven the way `profileReviewCohortFilters` drives it -- pointer down on the trigger,
@@ -54,6 +61,10 @@ vi.mock('@/services/api', () => ({
   drawWordleAnswer: vi.fn(),
   createWordleGame: vi.fn(),
   getAdminWordleGame: vi.fn(),
+  getAdminAnagramGames: vi.fn(),
+  drawAnagramAnswer: vi.fn(),
+  createAnagramGame: vi.fn(),
+  getAdminAnagramGame: vi.fn(),
 }));
 
 type AuthContextValue = ContextType<typeof AuthContext>;
@@ -149,12 +160,32 @@ const seededFeatured = () => resolveFeaturedGame(initialGamesConfig());
 beforeEach(() => {
   vi.clearAllMocks();
   // The manage screen fetches the configured puzzles as it mounts; an empty list is the state
-  // every test below starts from, so the tests that care about rows state their own.
+  // every test below starts from, so the tests that care about rows state their own. Both
+  // consoles fetch on mount, so both are given their empty list here.
   vi.mocked(getAdminWordleGames).mockResolvedValue([]);
+  vi.mocked(getAdminAnagramGames).mockResolvedValue([]);
 });
 
 /** The day the server would default to, which is what the date field starts on. */
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * One puzzle console on the manage screen, found by its heading and held by the card around
+ * it. The Anagram console sits directly below the Wordle one with the same controls, so a
+ * query made against the whole page finds two of everything and says nothing about which
+ * card answered.
+ */
+const puzzleCard = (title: 'Wordle' | 'Anagram') => {
+  const heading = screen.getByRole('heading', { name: title });
+  const card = heading.closest('.rounded-2xl');
+  if (!card) {
+    throw new Error(`The ${title} card could not be found from its heading.`);
+  }
+  return card as HTMLElement;
+};
+
+const wordleCard = () => puzzleCard('Wordle');
+const anagramCard = () => puzzleCard('Anagram');
 
 const aPuzzle = (overrides: Partial<WordleGame> = {}): WordleGame => ({
   id: '22222222-2222-2222-2222-222222222222',
@@ -318,21 +349,22 @@ describe('AdminGamesLeaderboard: the board and its destructive actions', () => {
 describe('AdminGamesManage: the Wordle answer', () => {
   it('draws a word, shows it, and saves exactly that word for the day', async () => {
     renderSection('/admin/games/manage');
-    expect(await screen.findByText(/Nothing configured yet/)).toBeInTheDocument();
+    const card = wordleCard();
+    expect(await within(card).findByText(/Nothing configured yet/)).toBeInTheDocument();
 
     vi.mocked(drawWordleAnswer).mockResolvedValue({ word: 'cigar', token: 'signed-for-the-day' });
     const saved = aPuzzle({ answer: 'cigar', mode: 'random' });
     vi.mocked(createWordleGame).mockResolvedValue(saved);
     vi.mocked(getAdminWordleGames).mockResolvedValue([saved]);
 
-    fireEvent.click(screen.getByRole('button', { name: /draw for me/i }));
-    fireEvent.click(screen.getByRole('button', { name: /draw an answer/i }));
+    fireEvent.click(within(card).getByRole('button', { name: /draw for me/i }));
+    fireEvent.click(within(card).getByRole('button', { name: /draw an answer/i }));
 
     // The answer is on screen before anything is written -- that is what the preview is for.
-    expect(await screen.findByText('cigar')).toBeInTheDocument();
+    expect(await within(card).findByText('cigar')).toBeInTheDocument();
     expect(drawWordleAnswer).toHaveBeenCalledWith(todayIso());
 
-    fireEvent.click(screen.getByRole('button', { name: /save puzzle/i }));
+    fireEvent.click(within(card).getByRole('button', { name: /save puzzle/i }));
 
     await waitFor(() =>
       expect(createWordleGame).toHaveBeenCalledWith({
@@ -345,7 +377,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
     expect(toast.success).toHaveBeenCalledWith(`Wordle configured for ${todayIso()}.`);
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: `Inspect the puzzle for ${todayIso()}` }),
+        within(card).getByRole('button', { name: `Inspect the puzzle for ${todayIso()}` }),
       ).toBeInTheDocument(),
     );
 
@@ -357,7 +389,8 @@ describe('AdminGamesManage: the Wordle answer', () => {
 
   it('keeps the server’s reason for an already-configured day on the screen', async () => {
     renderSection('/admin/games/manage');
-    await screen.findByText(/Nothing configured yet/);
+    const card = wordleCard();
+    await within(card).findByText(/Nothing configured yet/);
 
     vi.mocked(createWordleGame).mockRejectedValue({
       response: {
@@ -366,36 +399,37 @@ describe('AdminGamesManage: the Wordle answer', () => {
       },
     });
 
-    fireEvent.change(screen.getByLabelText('Answer'), { target: { value: 'cigar' } });
-    fireEvent.click(screen.getByRole('button', { name: /save puzzle/i }));
+    fireEvent.change(within(card).getByLabelText('Answer'), { target: { value: 'cigar' } });
+    fireEvent.click(within(card).getByRole('button', { name: /save puzzle/i }));
 
-    const alert = await screen.findByRole('alert');
+    const alert = await within(card).findByRole('alert');
     expect(alert).toHaveTextContent(`A Wordle game is already configured for ${todayIso()}.`);
     // Not a toast: the reason is still here afterwards, next to a form that would only be
     // refused again for the same day.
     expect(toast.success).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /save puzzle/i })).toBeEnabled();
+    expect(within(card).getByRole('button', { name: /save puzzle/i })).toBeEnabled();
   });
 
   it('waits for five letters, then shows what the server says about the word', async () => {
     renderSection('/admin/games/manage');
-    await screen.findByText(/Nothing configured yet/);
+    const card = wordleCard();
+    await within(card).findByText(/Nothing configured yet/);
 
-    const saveButton = screen.getByRole('button', { name: /save puzzle/i });
+    const saveButton = within(card).getByRole('button', { name: /save puzzle/i });
     expect(saveButton).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('Answer'), { target: { value: 'zzzz' } });
+    fireEvent.change(within(card).getByLabelText('Answer'), { target: { value: 'zzzz' } });
     expect(saveButton).toBeDisabled();
 
     vi.mocked(createWordleGame).mockRejectedValue({
       response: { status: 400, data: { detail: 'That word is not on the approved list.' } },
     });
-    fireEvent.change(screen.getByLabelText('Answer'), { target: { value: 'zzzzz' } });
+    fireEvent.change(within(card).getByLabelText('Answer'), { target: { value: 'zzzzz' } });
     expect(saveButton).toBeEnabled();
 
     fireEvent.click(saveButton);
 
-    const alert = await screen.findByRole('alert');
+    const alert = await within(card).findByRole('alert');
     expect(alert).toHaveTextContent('That word is not on the approved list.');
     expect(createWordleGame).toHaveBeenCalledWith({
       mode: 'custom',
@@ -414,8 +448,115 @@ describe('AdminGamesManage: the Wordle answer', () => {
     renderSection('/admin/games/manage', staffWithoutGames);
 
     expect(screen.queryByRole('heading', { name: 'Wordle' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Anagram' })).not.toBeInTheDocument();
     // The spotlight above is unaffected: pinning the day is local configuration, and the
     // section this gate hides is the one that publishes an answer.
     expect(screen.getByText("Today's featured")).toBeInTheDocument();
+  });
+});
+
+describe('AdminGamesManage: the Anagram word', () => {
+  /** The saved puzzle a test's `createAnagramGame` resolves to. */
+  const anPuzzle = (overrides: Partial<AnagramGame> = {}): AnagramGame => ({
+    id: '33333333-3333-3333-3333-333333333333',
+    game_date: todayIso(),
+    mode: 'custom',
+    answer: 'GARDEN',
+    created_by: 'TEST001',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  });
+
+  it('saves a typed word and shows the spelling the server stored', async () => {
+    renderSection('/admin/games/manage');
+    const card = anagramCard();
+    expect(await within(card).findByText(/Nothing configured yet/)).toBeInTheDocument();
+
+    vi.mocked(createAnagramGame).mockResolvedValue(anPuzzle());
+    vi.mocked(getAdminAnagramGames).mockResolvedValue([anPuzzle()]);
+
+    fireEvent.change(within(card).getByLabelText('Word'), { target: { value: '  garden  ' } });
+    fireEvent.click(within(card).getByRole('button', { name: /save puzzle/i }));
+
+    await waitFor(() =>
+      expect(createAnagramGame).toHaveBeenCalledWith({
+        mode: 'custom',
+        word: 'garden',
+        game_date: todayIso(),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(`Anagram configured for ${todayIso()}.`);
+
+    // What comes back is the stored spelling -- uppercase, trimmed -- and it is on screen as
+    // the confirmation and as the row, in that card and nowhere else.
+    expect((await within(card).findAllByText('GARDEN')).length).toBeGreaterThan(0);
+    expect(
+      within(card).getByRole('button', { name: `Inspect the puzzle for ${todayIso()}` }),
+    ).toBeInTheDocument();
+
+    await goTo('/admin/games');
+    expect(screen.getByText(`Anagram word for ${todayIso()} set`)).toBeInTheDocument();
+  });
+
+  it('draws a word, shows it, and saves exactly that word for the day', async () => {
+    renderSection('/admin/games/manage');
+    const card = anagramCard();
+    expect(await within(card).findByText(/Nothing configured yet/)).toBeInTheDocument();
+
+    vi.mocked(drawAnagramAnswer).mockResolvedValue({ word: 'GARDEN', token: 'signed-for-the-day' });
+    const saved = anPuzzle({ answer: 'GARDEN', mode: 'random' });
+    vi.mocked(createAnagramGame).mockResolvedValue(saved);
+    vi.mocked(getAdminAnagramGames).mockResolvedValue([saved]);
+
+    fireEvent.click(within(card).getByRole('button', { name: /draw for me/i }));
+    fireEvent.click(within(card).getByRole('button', { name: /draw a word/i }));
+
+    // The word is on screen before anything is written -- that is what the preview is for.
+    expect(await within(card).findByText('GARDEN')).toBeInTheDocument();
+    expect(drawAnagramAnswer).toHaveBeenCalledWith(todayIso());
+
+    fireEvent.click(within(card).getByRole('button', { name: /save puzzle/i }));
+
+    await waitFor(() =>
+      expect(createAnagramGame).toHaveBeenCalledWith({
+        mode: 'random',
+        word: 'GARDEN',
+        token: 'signed-for-the-day',
+        game_date: todayIso(),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(`Anagram configured for ${todayIso()}.`);
+    await waitFor(() =>
+      expect(
+        within(card).getByRole('button', { name: `Inspect the puzzle for ${todayIso()}` }),
+      ).toBeInTheDocument(),
+    );
+
+    // The save is also an action the overview's activity feed reports, like every other here.
+    await goTo('/admin/games');
+    expect(screen.getByText(`Anagram word for ${todayIso()} set`)).toBeInTheDocument();
+  });
+
+  it('keeps the server’s reason for an already-configured day on the screen', async () => {
+    renderSection('/admin/games/manage');
+    const card = anagramCard();
+    await within(card).findByText(/Nothing configured yet/);
+
+    vi.mocked(createAnagramGame).mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: `An Anagram game is already configured for ${todayIso()}.` },
+      },
+    });
+
+    fireEvent.change(within(card).getByLabelText('Word'), { target: { value: 'garden' } });
+    fireEvent.click(within(card).getByRole('button', { name: /save puzzle/i }));
+
+    const alert = await within(card).findByRole('alert');
+    expect(alert).toHaveTextContent(`An Anagram game is already configured for ${todayIso()}.`);
+    // The Wordle console beside it was never asked to save anything.
+    expect(createWordleGame).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

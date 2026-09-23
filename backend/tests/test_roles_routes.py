@@ -88,6 +88,13 @@ SAMPLE_ROUTES = [
     ("POST", "/admin/wordle"),
     ("GET", "/admin/wordle"),
     ("GET", "/admin/wordle/{game_id}"),
+    # Anagram configuration. Four routes like Wordle's four: the preview is declared ahead
+    # of ``/{game_id}`` in the router so the word "preview" is never read as an id, and all
+    # four are gated on ``games:manage`` for the same reason Wordle's are.
+    ("GET", "/admin/anagram/preview"),
+    ("POST", "/admin/anagram"),
+    ("GET", "/admin/anagram"),
+    ("GET", "/admin/anagram/{game_id}"),
 ]
 
 
