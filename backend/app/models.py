@@ -18,6 +18,8 @@ from .limits import (
     USER_REGNO_MAX,
     USER_YEAR_MAX,
     USER_YEAR_MIN,
+    WORDLE_ANSWER_LENGTH,
+    WORDLE_MAX_ATTEMPTS,
 )
 from .accounts import AccountType, capabilities_for, normalize_account_type
 
@@ -813,3 +815,107 @@ class WordleDraw(BaseModel):
 
     word: str
     token: str
+
+
+# --- Wordle gameplay --------------------------------------------------------------
+#
+# The participant side of the game. Everything these models describe is derived from two
+# tables -- ``wordle_games`` and ``wordle_user_games`` -- and the one rule that binds them:
+# a participant has at most one attempt at a puzzle, enforced by the unique pair. ``answer``
+# never travels on a row that is still being played: it is present only on a completed
+# participation, which is the single moment the feature exists to reveal it.
+
+
+# A tile's colour accounts for one letter of one guess, rated against the day's answer.
+# Closed like the genders above: the client renders exactly these three, and a value outside
+# the set is a 422 rather than a colour some screen has to guess at.
+WordleTile = Literal["absent", "present", "correct"]
+
+# Whether a participation is still being played or has been settled. The database's CHECK
+# constraint on ``wordle_user_games.status`` mirrors this set; all three must agree.
+WordleStatus = Literal["in_progress", "won", "lost"]
+
+
+class WordleParticipation(BaseModel):
+    """One player's place in one day's puzzle: how far they got, and what got them there.
+
+    ``guesses`` is the played history in order and ``results`` its per-letter verdicts in
+    the same order and at the same length, so the screen renders the board straight from
+    the pair. Results are re-derived on every read rather than stored, which is why there
+    is exactly one history and why a re-reading client cannot receive a verdict that
+    disagrees with the letters above it.
+
+    ``answer`` is the reveal. It is NULL on a participation still in progress and set only
+    once the game is over -- a completed puzzle has nothing left to hide, and the answer is
+    the one field a player who lost the game is owed. The service is the only place that
+    decides when it is no longer a secret, and that decision is what the GET and POST
+    handlers share rather than restating. ``success`` restates ``status = 'won'`` as a
+    boolean so a loss -- which also finishes the game -- is not mistaken for a win.
+    """
+
+    wordle_game_id: str
+    game_date: date
+    status: WordleStatus
+    success: bool
+    attempt_count: int
+    max_attempts: int = WORDLE_MAX_ATTEMPTS
+    guesses: list[str]
+    results: list[list[WordleTile]]
+    started_at: datetime
+    last_guess_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    solved_at: Optional[datetime] = None
+    answer: Optional[str] = None
+
+
+class WordleCurrentGame(BaseModel):
+    """Today's puzzle and this player's participation, as the game screen opens.
+
+    ``game_id`` and ``game_date`` are nullable because there may be *no* playable puzzle:
+    an administrator has not published anything, or published one ahead and the day has not
+    arrived. ``participation`` is NULL until the player commits a first guess -- reading the
+    board must not create a row, or opening the screen twice would count as two attempts.
+
+    ``max_attempts`` and ``word_length`` are carried so the screen can draw its empty board
+    without a second round trip and without hardcoding the shape of the game in the client.
+    """
+
+    game_id: Optional[str] = None
+    game_date: Optional[date] = None
+    participation: Optional[WordleParticipation] = None
+    max_attempts: int = WORDLE_MAX_ATTEMPTS
+    word_length: int = WORDLE_ANSWER_LENGTH
+
+
+class WordleGuessRequest(BaseModel):
+    """Guessing one word against one puzzle.
+
+    ``game_id`` names the puzzle the guess is for -- the one the player was shown -- and
+    ``guess`` is submitted raw. The five-letter lowercase normalisation happens in the
+    service rather than on the model, because the reason a guess is refused (length, case,
+    not a word at all) is meant to reach the client as a readable 400 rather than a generic
+    422 about the field's shape -- see the message on ``WordleGameCreate`` for the same
+    choice.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
+    accepted and dropped, matching ``WordleGameCreate``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    guess: str
+
+
+class WordleGuessResponse(WordleParticipation):
+    """A participation after one guess, plus the verdict the guess earned.
+
+    The extra pair is redundant with the tail of ``results`` -- the new guess is always its
+    own last row -- but both the toast and the keyboard need the *one* verdict that just
+    happened, and munging the last row back out of the history is the kind of off-by-one
+    the server should not make the client do. ``guess`` and ``result`` restate the last
+    entry of ``guesses`` and ``results`` explicitly.
+    """
+
+    guess: str
+    result: list[WordleTile]

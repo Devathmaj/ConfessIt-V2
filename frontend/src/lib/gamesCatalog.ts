@@ -74,6 +74,8 @@ export interface GameDefinition {
   /** Tailwind gradient class used for the game's icon tile. */
   accent: string;
   status: GameStatus;
+  /** The app route a Play action navigates to, when the game screen exists. Absent for titles whose screen is still a placeholder. */
+  route?: string;
 }
 
 export interface GameCategory {
@@ -102,6 +104,7 @@ export const AVAILABLE_GAMES: GameDefinition[] = [
     icon: Grid3x3,
     accent: 'bg-gradient-hero',
     status: 'available',
+    route: '/games/wordle',
   },
   {
     id: 'truth-dare',

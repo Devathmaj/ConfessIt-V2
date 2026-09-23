@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
   Dices,
@@ -36,13 +36,21 @@ import { MOCK_PLAYER_STATS, MOCK_RECENTLY_PLAYED, MOCK_WEEKLY_CHALLENGE } from '
  * leaves one function to replace when a real backend exists.
  */
 
-/** Placeholder until game screens exist: every Play action funnels here. */
-const notifyPlay = (game: GameDefinition) => {
-  toast(`${game.name} opens here once its game screen lands 🎮`);
+/** Plays a game: navigate to its screen when one exists, toast until it does. */
+const useLaunchPlay = () => {
+  const navigate = useNavigate();
+  return (game: GameDefinition) => {
+    if (game.route) {
+      navigate(game.route);
+    } else {
+      toast(`${game.name} opens here once its game screen lands 🎮`);
+    }
+  };
 };
 
 export const GamesDashboardPage = () => {
   const { user } = useAuth();
+  const notifyPlay = useLaunchPlay();
 
   const globalBoard = getLeaderboardEntries({ scope: 'global', gameId: ALL_GAMES_FILTER });
   const summary = summarizeCurrentUser(globalBoard);

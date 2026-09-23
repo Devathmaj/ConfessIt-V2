@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { Gamepad2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -50,17 +50,22 @@ const useResetCountdown = () => {
   return label;
 };
 
-const notifyPlay = (game: GameDefinition) => {
-  toast(`${game.name} opens here once its game screen lands 🎮`);
-};
-
 export const GamesFeaturedPage = () => {
+  const navigate = useNavigate();
   const countdown = useResetCountdown();
   // The shared configuration, not the catalogue's own rotation: the pick an administrator
   // pinned on the manage screen is the pick shown here. Falls back to a freshly seeded
   // configuration when the provider is absent, so the page also works standalone.
   const { featured } = useGamesConfig();
   const game = featured?.game;
+
+  const notifyPlay = (current: GameDefinition) => {
+    if (current.route) {
+      navigate(current.route);
+    } else {
+      toast(`${current.name} opens here once its game screen lands 🎮`);
+    }
+  };
 
   if (!game) {
     return (

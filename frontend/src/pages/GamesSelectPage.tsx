@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Gamepad2, SearchX, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -20,19 +21,25 @@ import { cn } from '@/lib/utils';
  * a data change, and the category chips derive their counts from the same list, so this page
  * never needs restructuring as the library grows. Availability comes from the shared
  * configuration, so a title an administrator switched off on the manage screen leaves this
- * grid -- and the chip counts -- without this page knowing where the switch lives. Play is a
- * placeholder toast because no game screens exist yet.
+ * grid -- and the chip counts -- without this page knowing where the switch lives. Play
+ * navigates to the game's screen when the catalogue carries a route, and falls back to a
+ * placeholder toast for titles whose screen does not exist yet.
  */
 
 type CategoryFilter = 'all' | GameCategoryId;
 
-const notifyPlay = (game: GameDefinition) => {
-  toast(`${game.name} opens here once its game screen lands 🎮`);
-};
-
 export const GamesSelectPage = () => {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<CategoryFilter>('all');
   const { isEnabled } = useGamesConfig();
+
+  const notifyPlay = (game: GameDefinition) => {
+    if (game.route) {
+      navigate(game.route);
+    } else {
+      toast(`${game.name} opens here once its game screen lands 🎮`);
+    }
+  };
 
   const liveGames = useMemo(
     () => AVAILABLE_GAMES.filter((game) => isEnabled(game.id)),

@@ -357,3 +357,18 @@
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* The current Wordle row when a guess is refused: a short shake so the player sees the row
+   they are stuck on, not a silent rejection. Keyed by a counter in the component so every
+   refusal restarts the animation. */
+.animate-wordle-shake {
+  animation: wordle-shake 0.4s ease-in-out;
+}
+
+@keyframes wordle-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}

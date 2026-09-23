@@ -198,3 +198,13 @@ INTEREST_MAX_SELECTED = len(INTEREST_VALUES)
 # list written for one length and a column written for another would only meet at the
 # insert, as a value the database accepts and no screen can render.
 WORDLE_ANSWER_LENGTH = 5
+
+# How many guesses one player may make against a single day's Wordle, and therefore the
+# size of the whole game: six rows on the board, and it is the number a loss means the
+# player reached. Written down once here because it appears three more places -- the CHECK
+# constraint on ``wordle_user_games.attempt_count`` (named after the number so the
+# constraint supersedes itself when the limit changes), the ``max_attempts`` field a
+# participation answer carries, and the grid the frontend renders. It is a product decision:
+# six is the Wordle norm, long enough that a player who is stuck still has a board to think
+# about and short enough that a loss is a board fully played rather than a wall of grey.
+WORDLE_MAX_ATTEMPTS = 6

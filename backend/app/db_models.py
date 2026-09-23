@@ -27,6 +27,7 @@ from .limits import (
     USER_YEAR_MAX,
     USER_YEAR_MIN,
     WORDLE_ANSWER_LENGTH,
+    WORDLE_MAX_ATTEMPTS,
 )
 from .accounts import (
     ACCOUNT_TYPE_VALUES,
@@ -1003,6 +1004,78 @@ class WordleGameRecord(Base):
         CheckConstraint("mode IN ('custom', 'random')", name="ck_wordle_games_mode_known"),
         CheckConstraint(
             f"length(answer) = {WORDLE_ANSWER_LENGTH}", name="ck_wordle_games_answer_length"
+        ),
+    )
+
+
+class WordleUserGameRecord(Base):
+    """One player's attempt at one day's Wordle: the participation half of the game.
+
+    The row pairs a *player* with a *puzzle*: everything below is an answer to "where is
+    this user in today's game?", and nothing else. ``wordle_games`` still owns the word
+    itself; this table never holds an answer, because the answer is the thing the game
+    exists to keep hidden and a second copy of it is a second place it can leak. A player
+    is bound to one puzzle by ``UniqueConstraint("wordle_game_id", "user_id")``, and the
+    constraint is the rule rather than a service check: two guesses at once each read "no
+    participation yet" and each try to insert, and the unique index is what lets exactly
+    one of them become the owner of the row.
+
+    ``guesses`` is the only history stored, in play order. Each guess's result is derived
+    again on every read by the same deterministic evaluation the guess was scored with, so
+    there is no ``results`` column to drift out of step with the letters above it.
+
+    ``status`` is written by the service at the moment a guess settles the game, and is
+    the column the read decides by. ``success`` restates ``status = 'won'`` as a boolean so
+    a leaderboard query can count wins without comparing strings; the service always writes
+    the two together.
+
+    ``solved_at`` is deliberately NULL on a loss: a time the player *failed* is a record of
+    how slowly they failed, which is not a stat. ``completed_at`` is set either way, so
+    that a "games finished today" count is a field rather than a list-handling exercise.
+    """
+
+    __tablename__ = "wordle_user_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    wordle_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("wordle_games.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    status: Mapped[str] = mapped_column(
+        String(20), default="in_progress", server_default=text("'in_progress'")
+    )
+    success: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    guesses: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'{}'::jsonb")
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    last_guess_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    solved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("wordle_game_id", "user_id"),
+        # The suffix carries the limit, so tightening it and restarting supersedes the old
+        # constraint (see ``_superseded_constraints``). ``attempt_count`` is NOT NULL, so a
+        # plain BETWEEN cannot be satisfied by NULL.
+        CheckConstraint(
+            f"attempt_count BETWEEN 0 AND {WORDLE_MAX_ATTEMPTS}",
+            name=f"ck_wordle_user_games_attempt_count_{WORDLE_MAX_ATTEMPTS}",
+        ),
+        CheckConstraint(
+            "status IN ('in_progress', 'won', 'lost')",
+            name="ck_wordle_user_games_status_known",
         ),
     )
 

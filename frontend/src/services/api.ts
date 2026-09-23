@@ -759,3 +759,76 @@ export const getAdminWordleGame = async (gameId: string): Promise<WordleGame> =>
     return response.data;
 };
 
+// --- Wordle Gameplay Endpoints ---
+
+/** The colour verdict a position in a guessed word earned. */
+export type WordleTile = 'absent' | 'present' | 'correct';
+
+/** How a participation stands: in progress, or finished as a win or a loss. */
+export type WordleStatus = 'in_progress' | 'won' | 'lost';
+
+/**
+ * One player's place in one day's puzzle, as the wordle screen renders it.
+ *
+ * ``guesses`` is the played history in order and ``results`` its per-letter verdicts in the
+ * same order and at the same length. ``answer`` is the reveal and is null while the game is
+ * still in progress -- a completed puzzle has nothing left to hide, and the answer is the one
+ * field a player who lost the game is owed.
+ */
+export interface WordleParticipation {
+    wordle_game_id: string;
+    game_date: string;
+    status: WordleStatus;
+    success: boolean;
+    attempt_count: number;
+    max_attempts: number;
+    guesses: string[];
+    results: WordleTile[][];
+    started_at: string;
+    last_guess_at: string | null;
+    completed_at: string | null;
+    solved_at: string | null;
+    answer: string | null;
+}
+
+/**
+ * Today's puzzle and this player's participation, as the game screen opens.
+ *
+ * ``game_id`` and ``game_date`` are null when nothing is playable yet; ``participation`` is
+ * null until the player commits a first guess, because reading the board must not create a
+ * row. ``max_attempts`` and ``word_length`` let the screen draw its empty board without a
+ * second round trip.
+ */
+export interface WordleCurrentGame {
+    game_id: string | null;
+    game_date: string | null;
+    participation: WordleParticipation | null;
+    max_attempts: number;
+    word_length: number;
+}
+
+/** A participation after one guess, plus the verdict that guess earned. */
+export interface WordleGuessResponse extends WordleParticipation {
+    guess: string;
+    result: WordleTile[];
+}
+
+/** Today's playable puzzle and this player's participation. Never creates a row. */
+export const getCurrentWordle = async (): Promise<WordleCurrentGame> => {
+    const response = await axios.get(`${API_URL}/games/wordle`, { headers: getAuthHeaders() });
+    return response.data;
+};
+
+/** Score one guess against one puzzle and store it for the current player. */
+export const submitWordleGuess = async (
+    gameId: string,
+    guess: string
+): Promise<WordleGuessResponse> => {
+    const response = await axios.post(
+        `${API_URL}/games/wordle/guess`,
+        { game_id: gameId, guess },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
