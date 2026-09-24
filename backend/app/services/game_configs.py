@@ -3,9 +3,12 @@
 One row per game in ``game_configs``. The games never share a setting:
 Wordle can reset daily while Anagram resets every five days and the Couple
 Questionnaire resets weekly, and each game is enabled/hidden independently.
-Reaction Time owns a row for the same availability switches; its sessions are
-featured dates created by an administrator rather than rolled by the
-scheduler, so its reset cadence is stored but never read.
+ Reaction Time owns a row for the same availability switches; its sessions are
+ featured dates created by an administrator rather than rolled by the
+ scheduler, so its reset cadence is stored but never read. Connections owns a
+ row for the availability switches and the reset cadence; its content mode is
+ always ``manual`` -- Connections has no random-content mode, and every
+ session needs an administrator to supply its own sixteen words.
 
 ``enabled`` and ``is_hidden`` are separate facts with separate consequences:
 
@@ -31,6 +34,7 @@ _GAME_LOCK_KEYS: dict[str, int] = {
     "anagram": 7_260_002,
     "couple-questionnaire": 7_260_003,
     "reaction-time": 7_260_004,
+    "connections": 7_260_005,
 }
 
 _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
@@ -38,6 +42,7 @@ _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
     "anagram": "random",
     "couple-questionnaire": None,
     "reaction-time": None,
+    "connections": "manual",
 }
 
 
@@ -138,6 +143,11 @@ def update_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reaction Time has no content mode.",
+        )
+    if game_id == "connections" and content_mode is not None and content_mode != "manual":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Connections has no random-content mode; every puzzle is configured manually.",
         )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)

@@ -1427,7 +1427,7 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections"]
 
 
 class GameConfig(BaseModel):
@@ -1648,3 +1648,137 @@ class ReactionTimeCompleteRequest(BaseModel):
     elapsed_ms: Optional[int] = None
     green_at: Optional[datetime] = None
     clicked_at: Optional[datetime] = None
+
+
+# --- Connections configuration --------------------------------------------------
+#
+# Admin-side only, and the same boundary the Wordle models hold: these describe a
+# puzzle -- sixteen words in four canonical answer groups -- and nothing about
+# playing one. No scores, no scrambles, no arrangements, because each of those
+# belongs to a *player's* relationship with the puzzle. There is no random mode:
+# every session needs an administrator to supply its own sixteen words, and a
+# session with no valid puzzle stays pending and unplayable rather than drawing
+# anything.
+
+class ConnectionsPuzzleCreate(BaseModel):
+    """Configuring one Connections puzzle: sixteen words in four groups of four.
+
+    ``groups`` holds the four canonical answer groups in order; each group is
+    exactly four words. Words are submitted raw -- the service trims them,
+    refuses empties and duplicates (case-insensitively), and stores both the
+    display spelling and the normalized spelling comparison runs on.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    groups: List[List[str]]
+
+
+class ConnectionsGame(BaseModel):
+    """A Connections session as it is stored: the day, its puzzle, its lifecycle.
+
+    ``groups`` is returned deliberately -- this is the administrator's own
+    configuration screen, and the endpoint it comes from is closed to everyone
+    who may not publish. There is no participant-facing read of this model.
+    ``groups`` is empty while the session is pending (manual content not yet
+    provided). ``status`` is the lifecycle state; ``period_*`` is the calendar
+    period the session covers.
+    """
+
+    id: str
+    game_date: date
+    groups: List[List[str]] = []
+    status: str = "active"
+    period_start_date: Optional[date] = None
+    period_end_date: Optional[date] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConnectionsScheduledPuzzle(BaseModel):
+    """A manually configured Connections puzzle waiting for its session period."""
+
+    id: str
+    target_date: date
+    groups: List[List[str]]
+    created_by: str
+
+
+class ConnectionsScheduledPuzzleCreate(BaseModel):
+    """Scheduling a Connections puzzle inside the finite horizon."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_date: date
+    groups: List[List[str]]
+
+
+# --- Connections gameplay -------------------------------------------------------
+#
+# The participant side of the game. The admin models above describe a puzzle --
+# sixteen words and where each belongs -- and these describe one player's
+# *place* in that puzzle: the shuffled tiles they were dealt and whether they
+# have submitted. The canonical groups never travel on any of these reads;
+# ``words`` is display spellings only, in this player's own stable shuffled
+# order. Scores are computed and persisted server-side but never returned to
+# the player -- the submit response is a confirmation and nothing more.
+
+class ConnectionsCurrentGame(BaseModel):
+    """Today's puzzle and this player's submission state, as the screen opens.
+
+    ``game_id`` and ``game_date`` are nullable because there may be *no*
+    playable puzzle: no session, or a pending session still waiting for its
+    puzzle. ``words`` is this player's stable shuffled tile order -- empty
+    when there is nothing playable or once they have submitted. ``submitted``
+    is whether this player already consumed their one submission for this
+    session; a submitted player reads a confirmation rather than a board.
+
+    ``session_status`` mirrors the session lifecycle: ``pending`` means the
+    puzzle has not been configured yet, in which case ``message`` carries the
+    sentence the screen shows.
+    """
+
+    game_id: Optional[str] = None
+    game_date: Optional[date] = None
+    words: List[str] = []
+    submitted: bool = False
+    session_status: Optional[str] = None
+    message: Optional[str] = None
+
+
+class ConnectionsSubmitRequest(BaseModel):
+    """Submitting one final arrangement against one puzzle.
+
+    ``game_id`` names the puzzle the arrangement is for -- the one the player
+    was shown -- and ``groups`` is the player's final assignment as four lists
+    of four words each. Words are submitted as displayed; the service
+    normalizes and validates them against the stored puzzle (all sixteen
+    distinct puzzle words exactly once, no unknown words).
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    groups: List[List[str]]
+
+
+class ConnectionsSubmitResponse(BaseModel):
+    """The confirmation a submitted player reads -- and all they read.
+
+    Deliberately carries no score, no correctness, and no answer key: not how
+    many groups or words were correct, not which groups matched, not the
+    canonical memberships. Those values are persisted server-side for a future
+    leaderboard, never returned here.
+    """
+
+    game_id: str
+    submitted: bool = True
+    submitted_at: datetime
+    message: str = "Your Connections puzzle has been submitted successfully."

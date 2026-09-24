@@ -35,6 +35,9 @@ from sqlalchemy.exc import IntegrityError
 
 from ..db_models import (
     AnagramGameRecord,
+    ConnectionsGameRecord,
+    ConnectionsScheduledPuzzleRecord,
+    ConnectionsWordRecord,
     CoupleGameQuestionRecord,
     CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
@@ -58,6 +61,7 @@ _GAME_MODELS: dict[str, Any] = {
     "anagram": AnagramGameRecord,
     "couple-questionnaire": CoupleGameRecord,
     "reaction-time": ReactionTimeGameRecord,
+    "connections": ConnectionsGameRecord,
 }
 
 
@@ -109,6 +113,56 @@ def _take_scheduled(session, game_id: str, target: date) -> Optional[str]:
     word = row.word
     session.delete(row)
     return word
+
+
+def _take_scheduled_puzzle(session, target: date) -> Optional[list]:
+    """Consume and return the scheduled Connections puzzle for ``target``, if one waits."""
+    row = session.scalar(
+        select(ConnectionsScheduledPuzzleRecord).where(
+            ConnectionsScheduledPuzzleRecord.target_date == target,
+        )
+    )
+    if row is None:
+        return None
+    groups = [list(group) for group in row.groups]
+    session.delete(row)
+    return groups
+
+
+def _open_connections_session(
+    session,
+    *,
+    groups: Optional[list],
+    period_start: date,
+    period_end: date,
+    now: datetime,
+    created_by: Optional[str] = None,
+):
+    """Insert one Connections session row plus its sixteen word rows (flush, no commit)."""
+    row = ConnectionsGameRecord(
+        game_date=period_start,
+        status="active" if groups else "pending",
+        period_start_date=period_start,
+        period_end_date=period_end,
+        started_at=now,
+        created_by=created_by or "scheduler",
+    )
+    session.add(row)
+    session.flush()
+    if groups:
+        for group_index, group in enumerate(groups):
+            for position, display in enumerate(group):
+                session.add(
+                    ConnectionsWordRecord(
+                        connections_game_id=str(row.id),
+                        word_display=display,
+                        word_normalized=display.strip().lower(),
+                        group_index=group_index,
+                        position_in_group=position,
+                    )
+                )
+        session.flush()
+    return row
 
 
 def _open_word_session(
@@ -287,8 +341,22 @@ def _maybe_activate_pending(
     the cadence boundary never moves: the rule is terminate-then-create even
     here, never a silent mutation of the pending row.
     """
-    if current.status != "pending" or game_id not in ("wordle", "anagram"):
+    if current.status != "pending" or game_id not in ("wordle", "anagram", "connections"):
         return None
+    if game_id == "connections":
+        groups = _take_scheduled_puzzle(session, current.period_start_date)
+        if not groups:
+            return None
+        _end_row(current, moment)
+        opened = _open_connections_session(
+            session,
+            groups=groups,
+            period_start=current.period_start_date,
+            period_end=current.period_end_date,
+            now=moment,
+            created_by="scheduler",
+        )
+        return {"game_id": game_id, "action": "activated", "session_id": str(opened.id)}
     content_mode = config.content_mode or "manual"
     session_mode = "random" if content_mode == "random" else "custom"
     word: Optional[str] = None
@@ -346,6 +414,28 @@ def _open_period(
             game_id=game_id,
             mode=session_mode,
             answer=answer,
+            period_start=start,
+            period_end=end,
+            now=moment,
+            created_by="scheduler",
+        )
+        return {
+            "game_id": game_id,
+            "action": "created",
+            "session_id": str(opened.id),
+            "status": opened.status,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        }
+    if game_id == "connections":
+        # Connections is manual-only: consume a scheduled puzzle when one
+        # waits for today, otherwise open a pending session that stays
+        # unplayable until an administrator supplies its sixteen words. Never
+        # draw, reuse or invent words.
+        groups = _take_scheduled_puzzle(session, today)
+        opened = _open_connections_session(
+            session,
+            groups=groups,
             period_start=start,
             period_end=end,
             now=moment,

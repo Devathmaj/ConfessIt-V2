@@ -585,6 +585,7 @@ class PostgresClient:
                 "anagram_games",
                 "couple_games",
                 "reaction_time_games",
+                "connections_games",
             ):
                 present = {
                     row[0]

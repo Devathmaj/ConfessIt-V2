@@ -22,6 +22,7 @@ const SERVER_MANAGED_IDS = new Set([
   'anagram',
   'couple-questionnaire',
   'reaction-time',
+  'connections',
 ]);
 
 /**

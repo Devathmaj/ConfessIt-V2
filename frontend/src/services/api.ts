@@ -1544,6 +1544,146 @@ export const getCurrentAdminReactionTimeSession = async (): Promise<{
     return response.data;
 };
 
+// --- Connections Gameplay Endpoints ---
+
+/**
+ * Today's Connections puzzle and this player's submission state.
+ *
+ * `words` is this player's stable shuffled tile order -- empty when nothing
+ * is playable or once they have submitted. `submitted` means the one
+ * submission is consumed and the screen shows a confirmation, never a board.
+ * The canonical groups never travel on this read.
+ */
+export interface ConnectionsCurrentGame {
+    game_id: string | null;
+    game_date: string | null;
+    words: string[];
+    submitted: boolean;
+    /** Mirrors the session lifecycle; `pending` means the puzzle is not set yet. */
+    session_status?: string | null;
+    /** Sentence the screen shows when the session is pending. */
+    message?: string | null;
+}
+
+/** The confirmation a submitted player reads -- and all they read. */
+export interface ConnectionsSubmitResponse {
+    game_id: string;
+    submitted: boolean;
+    submitted_at: string;
+    message: string;
+}
+
+/** Today's playable puzzle and this player's submission state. Never creates a row. */
+export const getCurrentConnections = async (): Promise<ConnectionsCurrentGame> => {
+    const response = await axios.get(`${API_URL}/games/connections`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Score one final arrangement against one puzzle and store it for the current
+ * player. Exactly one submission per player per session; a second submit --
+ * concurrent or direct -- is refused.
+ */
+export const submitConnections = async (
+    gameId: string,
+    groups: string[][]
+): Promise<ConnectionsSubmitResponse> => {
+    const response = await axios.post(
+        `${API_URL}/games/connections/submit`,
+        { game_id: gameId, groups },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+// --- Connections Configuration Endpoints ---
+
+/**
+ * One Connections session as the admin screen reads it: the day, its sixteen
+ * words in four canonical groups, and its lifecycle state. `groups` is empty
+ * while the session is pending.
+ */
+export interface ConnectionsGame {
+    id: string;
+    game_date: string;
+    groups: string[][];
+    status?: string;
+    period_start_date?: string | null;
+    period_end_date?: string | null;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** The fields `POST /admin/connections` accepts: sixteen words in four groups of four. */
+export interface ConnectionsPuzzlePayload {
+    groups: string[][];
+}
+
+/** A manually configured Connections puzzle waiting for its session period. */
+export interface ConnectionsScheduledPuzzle {
+    id: string;
+    target_date: string;
+    groups: string[][];
+    created_by: string;
+}
+
+/** Publish the current session: end it and open a brand-new one with this puzzle. */
+export const createConnectionsGame = async (
+    payload: ConnectionsPuzzlePayload
+): Promise<ConnectionsGame> => {
+    const response = await axios.post(`${API_URL}/admin/connections`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every Connections session, newest first. */
+export const getAdminConnectionsGames = async (): Promise<ConnectionsGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/connections`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** The current Connections session for the admin screen, or 404 when there is none. */
+export const getCurrentAdminConnectionsSession = async (): Promise<ConnectionsGame> => {
+    const response = await axios.get(`${API_URL}/admin/connections/current`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Schedule a manual Connections puzzle for a future period (bounded horizon). */
+export const scheduleConnectionsPuzzle = async (
+    targetDate: string,
+    groups: string[][]
+): Promise<ConnectionsScheduledPuzzle> => {
+    const response = await axios.post(
+        `${API_URL}/admin/connections/schedule`,
+        { target_date: targetDate, groups },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Every scheduled Connections puzzle, earliest date first. */
+export const getScheduledConnectionsPuzzles = async (): Promise<ConnectionsScheduledPuzzle[]> => {
+    const response = await axios.get(`${API_URL}/admin/connections/scheduled`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Withdraw the scheduled Connections puzzle for one date. */
+export const deleteScheduledConnectionsPuzzle = async (targetDate: string): Promise<void> => {
+    await axios.delete(`${API_URL}/admin/connections/scheduled/${targetDate}`, {
+        headers: getAuthHeaders(),
+    });
+};
+
 // --- Reaction Time Gameplay Endpoints ---
 
 /** Whether a submission is still waiting for its result or has been settled. */

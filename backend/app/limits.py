@@ -281,6 +281,7 @@ GAME_IDS: tuple[str, ...] = (
     "anagram",
     "couple-questionnaire",
     "reaction-time",
+    "connections",
 )
 
 # The only reset cadences a game may carry. Stored as the strings below; each game
@@ -342,6 +343,25 @@ REACTION_TIME_MAX_ELAPSED_MS = 60_000
 # ``valid`` is a click after green carrying a reaction time; ``too_early`` is a
 # click before green carrying only informational elapsed time.
 REACTION_TIME_STATUS_VALUES: tuple[str, ...] = ("pending", "valid", "too_early")
+
+# Connections. Sixteen words in four hidden groups of four, configured manually
+# by an administrator -- there is no random-content mode. One number for the
+# total, one for the group count and one for the group size, so the puzzle
+# validation, the submission validation, the scoring and the player surface
+# cannot drift apart: a puzzle holding any other shape is a state no screen
+# can render.
+CONNECTIONS_WORDS_TOTAL = 16
+CONNECTIONS_GROUPS_COUNT = 4
+CONNECTIONS_WORDS_PER_GROUP = 4
+
+# The longest word a Connections puzzle may hold. Not a rule about the game --
+# a grouping plays the same at any length -- but the columns have to end
+# somewhere, and 50 is far past any reasonable single word or short phrase
+# while still being a bound a payload can be refused against rather than a
+# value PostgreSQL truncates. Enforced twice, like every other length here: a
+# 400 from the service for a request that asks for more, and a CHECK guarding
+# a write that never went through the API.
+CONNECTIONS_WORD_MAX = 50
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #

@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from ..db_models import (
     AnagramGameRecord,
+    ConnectionsGameRecord,
     CoupleGameRecord,
     ReactionTimeGameRecord,
     WordleGameRecord,
@@ -31,6 +32,7 @@ _GAME_NAMES = {
     "anagram": "Anagram",
     "couple-questionnaire": "Couple Questionnaire",
     "reaction-time": "Reaction Time",
+    "connections": "Connections",
 }
 
 _SESSION_MODELS = {
@@ -38,6 +40,7 @@ _SESSION_MODELS = {
     "anagram": AnagramGameRecord,
     "couple-questionnaire": CoupleGameRecord,
     "reaction-time": ReactionTimeGameRecord,
+    "connections": ConnectionsGameRecord,
 }
 
 
@@ -108,6 +111,7 @@ async def game_selection(
                 "anagram",
                 "couple-questionnaire",
                 "reaction-time",
+                "connections",
             )
             if (entry := _entry(session, game_id, today, featured_id)) is not None
         ]

@@ -20,6 +20,10 @@ from .limits import (
     ANAGRAM_MAX_ATTEMPTS,
     COMMENT_BODY_MAX,
     CONFESSION_BODY_MAX,
+    CONNECTIONS_GROUPS_COUNT,
+    CONNECTIONS_WORD_MAX,
+    CONNECTIONS_WORDS_PER_GROUP,
+    CONNECTIONS_WORDS_TOTAL,
     COUPLE_OPTION_TEXT_MAX,
     COUPLE_OPTIONS_PER_QUESTION,
     COUPLE_QUESTION_TEXT_MAX,
@@ -1797,6 +1801,186 @@ class ReactionTimeSubmissionRecord(Base):
             f"elapsed_ms IS NULL OR elapsed_ms BETWEEN 0 AND {REACTION_TIME_MAX_ELAPSED_MS}",
             name=f"ck_reaction_time_submissions_elapsed_{REACTION_TIME_MAX_ELAPSED_MS}",
         ),
+    )
+
+
+class ConnectionsGameRecord(Base):
+    """One Connections session: the calendar period the puzzle runs on.
+
+    The row is a *session* in the same lifecycle the puzzle games share --
+    ``active`` while playable, ``pending`` while a manual puzzle is still
+    missing, ``ended`` as history -- and not a play of it. There is
+    deliberately no mode, no answer and no word column here: the 16 words and
+    their four canonical groups live in ``connections_words``, one row per
+    word, so a later administrative Update can never silently rewrite the
+    answer key an earlier submission was scored against -- the old rows stay
+    attached to the ended session.
+
+    ``game_date`` is indexed rather than unique: an Update ends the current
+    session and opens a new one, so history shares days and the single-active
+    rule lives in a partial unique index (see
+    ``PostgresClient.apply_game_session_convergence``), not in this column --
+    the same shape ``wordle_games`` converged to.
+
+    ``created_by`` holds the creator's ``regno``, with no foreign key, for the
+    same reason ``message_reports.reviewed_by_regno`` has none: staff live in
+    ``admin`` and ``moderator`` and never in ``users``. The scheduler writes
+    ``"scheduler"`` here, like every other game.
+    """
+
+    __tablename__ = "connections_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_connections_games_status_known",
+        ),
+    )
+
+
+class ConnectionsWordRecord(Base):
+    """One word of one Connections session's puzzle, and the group it belongs to.
+
+    Sixteen rows per configured session, four per ``group_index``. ``word_display``
+    is the spelling the tiles show (trimmed, with sensible capitalization kept);
+    ``word_normalized`` is the lowercased spelling duplicate detection and answer
+    comparison run on, so ``Apple`` and `` apple `` are one word rather than two.
+    ``group_index`` (0-3) is an organizational identifier only -- the groups are
+    never named, described or hinted at on the player surface.
+
+    The puzzle belongs to its session: a later Update attaches fresh rows to the
+    new session and leaves these untouched, so historical submissions keep the
+    answer key they were scored against.
+    """
+
+    __tablename__ = "connections_words"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    connections_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("connections_games.id", ondelete="CASCADE"), index=True
+    )
+    word_display: Mapped[str] = mapped_column(String(CONNECTIONS_WORD_MAX))
+    word_normalized: Mapped[str] = mapped_column(String(CONNECTIONS_WORD_MAX), index=True)
+    group_index: Mapped[int] = mapped_column(Integer, index=True)
+    # The word's slot inside its group (0-3), as the administrator typed it.
+    # The admin read echoes groups in this order, so what was saved is what
+    # the console shows back; scoring never depends on it.
+    position_in_group: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("connections_game_id", "word_normalized"),
+        UniqueConstraint("connections_game_id", "group_index", "position_in_group"),
+        CheckConstraint(
+            "group_index BETWEEN 0 AND 3",
+            name="ck_connections_words_group_index_0_3",
+        ),
+        CheckConstraint(
+            "position_in_group BETWEEN 0 AND 3",
+            name="ck_connections_words_position_0_3",
+        ),
+        CheckConstraint(
+            f"length(word_display) BETWEEN 1 AND {CONNECTIONS_WORD_MAX}",
+            name=f"ck_connections_words_display_length_{CONNECTIONS_WORD_MAX}",
+        ),
+        CheckConstraint(
+            f"length(word_normalized) BETWEEN 1 AND {CONNECTIONS_WORD_MAX}",
+            name=f"ck_connections_words_normalized_length_{CONNECTIONS_WORD_MAX}",
+        ),
+    )
+
+
+class ConnectionsSubmissionRecord(Base):
+    """One player's single final arrangement for one Connections session.
+
+    The row pairs a *player* with a *session*: everything below answers "what
+    did this user submit for this puzzle?", and nothing else. ``groups`` is the
+    submitted assignment as four lists of four display spellings each, in the
+    player's own group order; ``correct_groups`` (0-4) and ``correct_words``
+    (0-16) are computed server-side from the stored canonical groups at submit
+    time and never trusted from the client.
+
+    One row per player per session, enforced by the unique pair rather than a
+    service check: two concurrent submissions each read "no submission yet" and
+    each try to insert, and the unique index is what lets exactly one of them
+    own the row. Rows are insert-only -- a submitted arrangement is final, so
+    there is no resubmission that could fish for the answer key one group at a
+    time.
+    """
+
+    __tablename__ = "connections_submissions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    connections_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("connections_games.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    groups: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    correct_groups: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    correct_words: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("connections_game_id", "user_id"),
+        CheckConstraint(
+            "correct_groups BETWEEN 0 AND 4",
+            name="ck_connections_submissions_groups_0_4",
+        ),
+        CheckConstraint(
+            "correct_words BETWEEN 0 AND 16",
+            name="ck_connections_submissions_words_0_16",
+        ),
+    )
+
+
+class ConnectionsScheduledPuzzleRecord(Base):
+    """A manually configured Connections puzzle waiting for its session period.
+
+    One row per period-start date: when the scheduler opens the period
+    beginning ``target_date`` it attaches this row's groups to the new session
+    instead of leaving the session pending. ``groups`` holds the four canonical
+    answer groups as four lists of four display spellings each; the normalized
+    spellings are derived on consumption, so this row stores exactly what the
+    administrator typed.
+
+    Rows are bounded by ``limits.MAX_FUTURE_SCHEDULE_DAYS`` at write time, and
+    a scheduled puzzle never activates its session early -- the row waits until
+    its date arrives. Consumed rows are deleted by the scheduler, like the
+    scheduled words for Wordle and Anagram.
+    """
+
+    __tablename__ = "connections_scheduled_puzzles"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    target_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    groups: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 
 
