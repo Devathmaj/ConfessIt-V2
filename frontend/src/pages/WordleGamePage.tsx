@@ -186,6 +186,30 @@ export const WordleGamePage = () => {
     );
   }
 
+  if (wordle.session_status === 'pending' && gameId !== null) {
+    return (
+      <div>
+        <GamesPageHeader
+          eyebrow="Word play"
+          title="Wordle"
+          description="Five letters, six guesses, one word a day."
+        />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+            <p className="text-lg font-semibold">Today&apos;s word has not been set yet.</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              {wordle.message ??
+                'The session is waiting for its word. Check back soon -- or look at what else the Games section has to offer.'}
+            </p>
+            <NavLink to="/games">
+              <Button variant="outline">Back to Games</Button>
+            </NavLink>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (gameId === null) {
     return (
       <div>

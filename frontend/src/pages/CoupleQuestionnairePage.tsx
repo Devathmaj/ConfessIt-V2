@@ -168,6 +168,23 @@ export const CoupleQuestionnairePage = () => {
     await refresh();
   };
 
+  // While waiting on the partner, re-read the state on an interval so the next
+  // stage opens by itself: the server unlocks it the moment both sides have
+  // completed the section, and this is what surfaces it without any manual
+  // "check" action from the player.
+  useEffect(() => {
+    if (state?.stage !== 'waiting_partner') return;
+    let inFlight = false;
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      void refresh().finally(() => {
+        inFlight = false;
+      });
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [state?.stage, refresh]);
+
   if (loading) {
     return (
       <div>
@@ -333,10 +350,18 @@ export const CoupleQuestionnairePage = () => {
                 </Badge>
               </div>
               <ProgressDots done={state.my_answers_submitted} total={state.my_answers_total} />
-              {state.stage === 'waiting_partner' && state.waiting_for === 'answers' && (
+              {state.stage === 'answering' && (
                 <p className="text-sm text-muted-foreground">
-                  You answered all {state.my_answers_total}. Predictions open once{' '}
-                  {state.partner?.name ?? 'your partner'} finishes theirs.
+                  Predictions open once both of you have answered all{' '}
+                  {state.my_answers_total}.
+                </p>
+              )}
+              {state.stage === 'waiting_partner' && state.waiting_for === 'answers' && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  You answered all {state.my_answers_total}. Predictions open once both of
+                  you have finished this section —{' '}
+                  {state.partner?.name ?? 'your partner'} still has questions to answer.
+                  This page checks automatically, so just stay here.
                 </p>
               )}
             </CardContent>
@@ -375,17 +400,6 @@ export const CoupleQuestionnairePage = () => {
             </Card>
           ))}
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="self-start"
-            disabled={refreshing}
-            onClick={handleRefresh}
-          >
-            <RefreshCw />
-            {refreshing ? 'Refreshing…' : 'Check for your partner'}
-          </Button>
         </div>
       )}
 
@@ -400,12 +414,15 @@ export const CoupleQuestionnairePage = () => {
               <ProgressDots done={state.my_predictions_submitted} total={state.my_predictions_total} />
               <p className="text-sm text-muted-foreground">
                 Guess what {state.partner?.name ?? 'your partner'} answered. Each correct
-                prediction scores one point.
+                prediction scores one point. The result opens once both of you have
+                predicted all {state.my_predictions_total}.
               </p>
               {state.stage === 'waiting_partner' && (
-                <p className="text-sm text-muted-foreground">
-                  You predicted all {state.my_predictions_total}. The result opens once{' '}
-                  {state.partner?.name ?? 'your partner'} finishes theirs.
+                <p role="status" className="text-sm text-muted-foreground">
+                  You predicted all {state.my_predictions_total}. The result opens once
+                  both of you have finished this section —{' '}
+                  {state.partner?.name ?? 'your partner'} still has predictions to make.
+                  This page checks automatically, so just stay here.
                 </p>
               )}
             </CardContent>
@@ -443,18 +460,6 @@ export const CoupleQuestionnairePage = () => {
               </CardContent>
             </Card>
           ))}
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="self-start"
-            disabled={refreshing}
-            onClick={handleRefresh}
-          >
-            <RefreshCw />
-            {refreshing ? 'Refreshing…' : 'Check for your partner'}
-          </Button>
         </div>
       )}
 

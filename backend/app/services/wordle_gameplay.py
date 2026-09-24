@@ -107,14 +107,24 @@ def _participation_snapshot(
     )
 
 
-def _latest_playable_game(session) -> Optional[WordleGameRecord]:
-    """The newest puzzle whose day has arrived, or None when nothing is playable."""
+def _current_session(session) -> Optional[WordleGameRecord]:
+    """The one active-or-pending session, or None when the game has none."""
     return session.scalar(
         select(WordleGameRecord)
-        .where(WordleGameRecord.game_date <= _today())
-        .order_by(WordleGameRecord.game_date.desc())
+        .where(WordleGameRecord.status.in_(("active", "pending")))
         .limit(1)
     )
+
+
+def _latest_playable_game(session) -> Optional[WordleGameRecord]:
+    """The current session when it is active and its period has begun."""
+    game = _current_session(session)
+    if game is None or game.status != "active":
+        return None
+    start = game.period_start_date or game.game_date
+    if start is not None and start > _today():
+        return None
+    return game
 
 
 def _normalise_guess(raw: str) -> str:
@@ -147,6 +157,16 @@ def _normalise_guess(raw: str) -> str:
     return guess
 
 
+def _empty_game() -> WordleCurrentGame:
+    return WordleCurrentGame(
+        game_id=None,
+        game_date=None,
+        participation=None,
+        max_attempts=WORDLE_MAX_ATTEMPTS,
+        word_length=WORDLE_ANSWER_LENGTH,
+    )
+
+
 def current_wordle(db: Database, user_id: str) -> WordleCurrentGame:
     """The playable puzzle and this player's participation, without creating a row.
 
@@ -154,30 +174,61 @@ def current_wordle(db: Database, user_id: str) -> WordleCurrentGame:
     nothing, and a fresh player who only looks at today's puzzle has not started playing it.
     A player's participation exists exactly once they commit a guess, so a fresh player
     reads ``participation=None`` and a returning one reads the same board they left.
+
+    Availability is enforced before anything else: hidden and disabled games
+    refuse with a coded 403 rather than a board. A pending session (manual mode,
+    word not yet provided) answers 200 with ``session_status="pending"`` and a
+    sentence the screen shows instead of a playable board. A session past its
+    calendar boundary reads as absent until the reset loop opens the next
+    period -- reads never create sessions.
     """
+    from . import game_periods
+    from .game_configs import check_playable
+
+    # Availability first, in its own committed transaction: hidden and disabled
+    # games refuse here, and the config row is persisted exactly once.
+    with db.sessions.begin() as session:
+        check_playable(session, "wordle")
+
     with db.sessions() as session:
-        game = _latest_playable_game(session)
+        game = _current_session(session)
         if game is None:
+            return _empty_game()
+        if game.status == "pending":
             return WordleCurrentGame(
-                game_id=None,
-                game_date=None,
+                game_id=str(game.id),
+                game_date=game.game_date,
                 participation=None,
+                session_status="pending",
+                message="Today's word has not been set yet. Check back soon.",
                 max_attempts=WORDLE_MAX_ATTEMPTS,
                 word_length=WORDLE_ANSWER_LENGTH,
             )
-        row = session.scalar(
-            select(WordleUserGameRecord).where(
-                WordleUserGameRecord.wordle_game_id == game.id,
-                WordleUserGameRecord.user_id == user_id,
-            )
+        if game.status != "active":
+            return _empty_game()
+        start = game.period_start_date or game.game_date
+        if start is not None and start > _today():
+            return _empty_game()
+        if game_periods.is_reset_due(game.period_end_date, _today()):
+            return _empty_game()
+        return _read_board(session, game, user_id)
+
+
+def _read_board(session, game: WordleGameRecord, user_id: str) -> WordleCurrentGame:
+    row = session.scalar(
+        select(WordleUserGameRecord).where(
+            WordleUserGameRecord.wordle_game_id == game.id,
+            WordleUserGameRecord.user_id == user_id,
         )
-        return WordleCurrentGame(
-            game_id=str(game.id),
-            game_date=game.game_date,
-            participation=_participation_snapshot(game, row) if row is not None else None,
-            max_attempts=WORDLE_MAX_ATTEMPTS,
-            word_length=WORDLE_ANSWER_LENGTH,
-        )
+    )
+    return WordleCurrentGame(
+        game_id=str(game.id),
+        game_date=game.game_date,
+        participation=_participation_snapshot(game, row) if row is not None else None,
+        session_status="active",
+        max_attempts=WORDLE_MAX_ATTEMPTS,
+        word_length=WORDLE_ANSWER_LENGTH,
+    )
 
 
 def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> WordleGuessResponse:
@@ -201,15 +252,41 @@ def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> Wor
     guess = _normalise_guess(payload.guess)
 
     with db.sessions.begin() as session:
+        from . import game_periods
+        from .game_configs import check_playable
+
+        check_playable(session, "wordle")
         game = session.get(WordleGameRecord, payload.game_id)
         if game is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Wordle game not found"
             )
-        if game.game_date > _today():
+        start = game.period_start_date or game.game_date
+        if start is not None and start > _today():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="That puzzle has not started yet.",
+            )
+        if game.status == "pending" or not game.answer:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Today's word has not been set yet. Check back soon.",
+            )
+        if game.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That session has ended. Open the current puzzle to keep playing.",
+            )
+        if game_periods.is_reset_due(game.period_end_date, _today()):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That session has ended. Open the current puzzle to keep playing.",
+            )
+        current = _current_session(session)
+        if current is None or str(current.id) != str(game.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That session has ended. Open the current puzzle to keep playing.",
             )
 
         participation = session.scalar(

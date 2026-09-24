@@ -79,28 +79,51 @@ SAMPLE_ROUTES = [
 ("DELETE", "/admin/love-notes/{note_id}"),
 ("GET", "/admin/love-notes/reports"),
 ("PATCH", "/admin/love-notes/reports/{report_id}"),
-    # Wordle configuration. ``GET /admin/wordle/preview`` is declared ahead of
-    # ``GET /admin/wordle/{game_id}`` in the router so the word "preview" is never read as an
-    # id, and the four together are the whole feature: draw, save, list, read one. Each is
-    # gated on ``games:manage``, which is in ``ADMIN_ONLY_CAPABILITIES`` -- publishing a
-    # puzzle is not a moderation action, so a moderator is refused on all four.
+    # Wordle sessions. ``POST /admin/wordle`` is the Update action (end the current
+    # session, open a new one); ``/current`` reads the live session, and
+    # ``/schedule`` + ``/scheduled`` own the horizon-bounded future words. The
+    # static paths are declared ahead of ``/{game_id}`` so none is read as an
+    # id. All are gated on ``games:manage``, which is in
+    # ``ADMIN_ONLY_CAPABILITIES`` -- publishing a puzzle is not a moderation
+    # action, so a moderator is refused on every one.
     ("GET", "/admin/wordle/preview"),
     ("POST", "/admin/wordle"),
     ("GET", "/admin/wordle"),
+    ("GET", "/admin/wordle/current"),
+    ("POST", "/admin/wordle/schedule"),
+    ("GET", "/admin/wordle/scheduled"),
+    ("DELETE", "/admin/wordle/scheduled/{target_date}"),
     ("GET", "/admin/wordle/{game_id}"),
-    # Anagram configuration. Four routes like Wordle's four: the preview is declared ahead
-    # of ``/{game_id}`` in the router so the word "preview" is never read as an id, and all
-    # four are gated on ``games:manage`` for the same reason Wordle's are.
+    # Anagram sessions. The same surface as Wordle's: the preview is declared
+    # ahead of ``/{game_id}`` so no static path is read as an id, and all are
+    # gated on ``games:manage`` for the same reason Wordle's are.
     ("GET", "/admin/anagram/preview"),
     ("POST", "/admin/anagram"),
     ("GET", "/admin/anagram"),
+    ("GET", "/admin/anagram/current"),
+    ("POST", "/admin/anagram/schedule"),
+    ("GET", "/admin/anagram/scheduled"),
+    ("DELETE", "/admin/anagram/scheduled/{target_date}"),
     ("GET", "/admin/anagram/{game_id}"),
-    # Couple Prediction featuring. Three routes and no preview: there is no word to
-    # draw, only a day to feature, so the whole surface is save, list, read one. All
-    # three are gated on ``games:manage`` for the same reason the puzzles are.
+    # Couple Prediction. Featuring a day only pins the spotlight (the sessions
+    # roll on their own cadence with no Update action), and ``/session`` reads
+    # the live global session. All are gated on ``games:manage`` for the same
+    # reason the puzzles are.
     ("POST", "/admin/couple"),
     ("GET", "/admin/couple"),
+    ("GET", "/admin/couple/session"),
     ("GET", "/admin/couple/{game_id}"),
+    # Game configuration, the featured spotlight, and the manual reset trigger.
+    # Configuration owns per-game availability and cadence, the featured
+    # schedule pins at most one game per UTC date without touching sessions,
+    # and ``run-resets`` is what a 00:01 UTC cron calls. All gated on
+    # ``games:manage`` like the per-game routers.
+    ("GET", "/admin/games/config"),
+    ("PUT", "/admin/games/config/{game_id}"),
+    ("GET", "/admin/featured"),
+    ("POST", "/admin/featured"),
+    ("DELETE", "/admin/featured/{game_date}"),
+    ("POST", "/admin/games/run-resets"),
 ]
 
 

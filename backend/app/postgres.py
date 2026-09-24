@@ -151,6 +151,8 @@ class PostgresClient:
         self.apply_not_null_constraints()
         # After the columns exist, so it can name session_expires_at.
         self.backfill_session_deadlines()
+        # After every additive step, so the session lifecycle converges on old databases.
+        self.apply_game_session_convergence()
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.
@@ -557,6 +559,100 @@ class PostgresClient:
                     "Backfilled session deadlines for %s login token(s)",
                     result.rowcount,
                 )
+
+    def apply_game_session_convergence(self) -> None:
+        """Converge pre-refactor game tables to the session lifecycle.
+
+        Three jobs, all idempotent, all safe to re-run on every boot:
+
+        1. Drop the old one-row-per-day uniqueness on ``wordle_games``,
+           ``anagram_games`` and ``couple_games``. History now shares days, so the
+           unique index/constraint would refuse the second session of a day that
+           the lifecycle legitimately creates.
+        2. Backfill the new lifecycle columns on legacy rows: ``status`` defaults
+           to ``'ended'`` at the column level, and ``period_start_date`` mirrors
+           ``game_date`` where it is still NULL, so old rows read as history.
+        3. Install one partial unique index per game table so at most one
+           active-or-pending session exists per game. The index (not a CHECK, not
+           application code) is what serializes a scheduler run racing an admin
+           Update: the loser gets an integrity error instead of a second active.
+        """
+        with self.engine.begin() as connection:
+            for table in ("wordle_games", "anagram_games", "couple_games"):
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": table},
+                    )
+                }
+                if not present:
+                    continue
+                # 1. Drop legacy uniqueness on game_date: the auto index from
+                # ``unique=True`` plus the lingering key constraint name.
+                connection.execute(
+                    text(f'DROP INDEX IF EXISTS "ix_{table}_game_date"')
+                )
+                connection.execute(
+                    text(
+                        f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS '
+                        f'"{table}_game_date_key"'
+                    )
+                )
+                # 2. Backfill lifecycle columns for rows written before them.
+                if "period_start_date" in present:
+                    connection.execute(
+                        text(
+                            f'UPDATE "{table}" SET period_start_date = game_date '
+                            f'WHERE period_start_date IS NULL'
+                        )
+                    )
+                if "period_end_date" in present:
+                    connection.execute(
+                        text(
+                            f'UPDATE "{table}" SET period_end_date = game_date + 1 '
+                            f'WHERE period_end_date IS NULL'
+                        )
+                    )
+                if "started_at" in present:
+                    connection.execute(
+                        text(
+                            f'UPDATE "{table}" SET started_at = created_at '
+                            f'WHERE started_at IS NULL'
+                        )
+                    )
+                # 3. One active-or-pending session per game table.
+                connection.execute(
+                    text(
+                        f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{table}_single_active" '
+                        f'ON "{table}" ((1)) WHERE status IN (\'active\', \'pending\')'
+                    )
+                )
+            # 4. A pending (manual, not yet configured) session holds no word, so
+            # the answer columns must accept NULL. Adding a column is convergent
+            # but relaxing an existing NOT NULL is not -- without this, every
+            # pending insert fails and the scheduler mistakes the failure for a
+            # race. Idempotent: dropping a constraint that is already gone is a
+            # no-op.
+            for table in ("wordle_games", "anagram_games"):
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": table},
+                    )
+                }
+                if "answer" in present:
+                    connection.execute(
+                        text(f'ALTER TABLE "{table}" ALTER COLUMN "answer" DROP NOT NULL')
+                    )
+            logger.info("Game session lifecycle converged")
 
     def close(self) -> None:
         self.engine.dispose()

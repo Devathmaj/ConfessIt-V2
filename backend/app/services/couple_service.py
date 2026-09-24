@@ -27,7 +27,7 @@ Sam sees Alex's name in place of ``X`` while predicting, and vice versa.
 
 import re
 from datetime import date, datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -240,6 +240,17 @@ def _as_model(row: CoupleGameRecord) -> CoupleGame:
     )
 
 
+def _as_featured_model(row) -> CoupleGame:
+    """A featured-games row for the questionnaire, in the legacy response shape."""
+    return CoupleGame(
+        id=str(row.id),
+        game_date=row.game_date,
+        created_by=row.created_by,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
 def _as_question_model(row: CoupleGameQuestionRecord) -> CoupleGameQuestion:
     return CoupleGameQuestion(
         id=str(row.id),
@@ -253,48 +264,37 @@ def _as_question_model(row: CoupleGameQuestionRecord) -> CoupleGameQuestion:
 
 
 def create_couple_game(db: Database, payload: CoupleGameCreate, created_by: str) -> CoupleGame:
-    """Mark the game featured for one day, refusing a second row for the same day.
+    """Mark the questionnaire featured for one day (legacy shape, new table).
 
-    Uniqueness is checked here *and* enforced by the schema, and both matter: the
-    check gives a 409 with a message an operator can act on, while the constraint
-    is what holds when two saves race past that check. The ``IntegrityError`` path
-    is the same 409, so the race reads identically to the ordinary conflict rather
-    than as a 500.
+    Featured dates now live in ``featured_games`` -- one game per date across
+    all three games -- while questionnaire *sessions* live in ``couple_games``
+    and are opened by the reset loop, never by featuring. This endpoint keeps
+    its request/response shape and delegates to the featured store, so the
+    admin screen pins the spotlight without touching any session.
     """
+    from .featured_games import set_featured as _set_featured
+
     game_date = payload.game_date or _today()
-
+    created = _set_featured(db, game_date, "couple-questionnaire", created_by)
     with db.sessions() as session:
-        existing = session.scalar(
-            select(CoupleGameRecord.id)
-            .where(CoupleGameRecord.game_date == game_date)
-            .limit(1)
-        )
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"A Couple game is already configured for {game_date.isoformat()}.",
-            )
+        from ..db_models import FeaturedGameRecord
 
-    try:
-        with db.sessions.begin() as session:
-            row = CoupleGameRecord(game_date=game_date, created_by=created_by)
-            session.add(row)
-            session.flush()
-            return _as_model(row)
-    except IntegrityError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A Couple game is already configured for {game_date.isoformat()}.",
-        ) from exc
+        row = session.get(FeaturedGameRecord, created["id"])
+        assert row is not None
+        return _as_featured_model(row)
 
 
 def list_couple_games(db: Database) -> List[CoupleGame]:
-    """Every featured date, newest day first."""
+    """Every date the questionnaire is featured on, newest day first."""
+    from ..db_models import FeaturedGameRecord
+
     with db.sessions() as session:
         rows = session.scalars(
-            select(CoupleGameRecord).order_by(CoupleGameRecord.game_date.desc())
+            select(FeaturedGameRecord)
+            .where(FeaturedGameRecord.game_id == "couple-questionnaire")
+            .order_by(FeaturedGameRecord.game_date.desc())
         ).all()
-        return [_as_model(row) for row in rows]
+        return [_as_featured_model(row) for row in rows]
 
 
 def get_couple_game(db: Database, game_id: str) -> CoupleGame:
@@ -304,17 +304,42 @@ def get_couple_game(db: Database, game_id: str) -> CoupleGame:
     so a typo in a URL and a date that was never featured are told apart rather
     than both reported as "not found".
     """
+    from ..db_models import FeaturedGameRecord
+
     if not is_valid_id(game_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Couple game id"
         )
     with db.sessions() as session:
-        row = session.get(CoupleGameRecord, str(game_id))
-    if row is None:
+        row = session.get(FeaturedGameRecord, str(game_id))
+    if row is None or row.game_id != "couple-questionnaire":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Couple game not found"
         )
-    return _as_model(row)
+    return _as_featured_model(row)
+
+
+def get_current_couple_session(db: Database) -> Optional[dict]:
+    """The current global questionnaire session for the admin screen, if any."""
+    with db.sessions() as session:
+        row = session.scalar(
+            select(CoupleGameRecord)
+            .where(CoupleGameRecord.status.in_(("active", "pending")))
+            .limit(1)
+        )
+        if row is None:
+            return None
+        return {
+            "id": str(row.id),
+            "game_date": row.game_date.isoformat(),
+            "status": row.status,
+            "period_start_date": row.period_start_date.isoformat()
+            if row.period_start_date
+            else None,
+            "period_end_date": row.period_end_date.isoformat()
+            if row.period_end_date
+            else None,
+        }
 
 
 def list_couple_questions(db: Database) -> List[CoupleGameQuestion]:

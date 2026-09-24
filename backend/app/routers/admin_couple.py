@@ -27,17 +27,36 @@ async def create_couple_game(
 ) -> CoupleGame:
     """Mark the Couple Prediction game featured for one day.
 
-    The payload carries nothing but the date: there is no custom-vs-random choice,
-    no word to type, no answer to store and no puzzle to generate, because the
-    50-question bank is shared application content rather than per-day input. A
-    day that is already featured is a 409 rather than a second row, because
-    ``game_date`` is what identifies a featured instance and two rows for one day
-    is a state any future player surface would have no rule for resolving.
+    Featuring only pins the spotlight: questionnaire *sessions* are opened by the
+    reset loop under the game's own cadence, never by featuring, and there is no
+    Update action for this game. A day that already holds a featured game (any
+    game) is a 409, because the spotlight seats one game per date.
 
     The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
     an administrator cannot feature a day attributed to somebody else.
     """
     return couple_service.create_couple_game(db, payload, created_by=account.regno)
+
+
+@router.get("/session")
+async def current_couple_session(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> dict:
+    """The current global questionnaire session, if the reset loop opened one.
+
+    Declared before ``/{game_id}`` so ``session`` is never read as an id. The
+    questionnaire has no Update: at each boundary the loop ends this session
+    and opens the next with a fresh question set per couple.
+    """
+    from fastapi import HTTPException, status
+
+    current = couple_service.get_current_couple_session(db)
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No Couple session yet"
+        )
+    return current
 
 
 @router.get("", response_model=List[CoupleGame])

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Gamepad2, SearchX, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,6 +13,11 @@ import {
   type GameDefinition,
 } from '@/lib/gamesCatalog';
 import { cn } from '@/lib/utils';
+import { getGameSelection, type GameSelectEntry } from '@/services/api';
+
+/** Games the server owns a session lifecycle for. Their visibility comes from
+ * `GET /games/select`: hidden games are absent and never rendered. */
+const SERVER_MANAGED_IDS = new Set(['wordle', 'anagram', 'couple-questionnaire']);
 
 /**
  * Game selection.
@@ -32,8 +37,32 @@ export const GamesSelectPage = () => {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<CategoryFilter>('all');
   const { isEnabled } = useGamesConfig();
+  const [serverStatus, setServerStatus] = useState<Map<string, GameSelectEntry> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getGameSelection()
+      .then((response) => {
+        if (!cancelled) {
+          setServerStatus(new Map(response.games.map((entry) => [entry.game_id, entry])));
+        }
+      })
+      .catch(() => {
+        // The catalogue's local configuration is the fallback; a failed fetch
+        // must not empty the grid when the server cannot be reached.
+        if (!cancelled) setServerStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const notifyPlay = (game: GameDefinition) => {
+    const server = serverStatus?.get(game.id);
+    if (server && !server.playable) {
+      toast(server.message ?? `${game.name} is not available right now.`);
+      return;
+    }
     if (game.route) {
       navigate(game.route);
     } else {
@@ -42,8 +71,15 @@ export const GamesSelectPage = () => {
   };
 
   const liveGames = useMemo(
-    () => AVAILABLE_GAMES.filter((game) => isEnabled(game.id)),
-    [isEnabled],
+    () =>
+      AVAILABLE_GAMES.filter((game) => {
+        if (SERVER_MANAGED_IDS.has(game.id) && serverStatus !== null) {
+          // Absent from the server list means hidden: never rendered.
+          return serverStatus.has(game.id);
+        }
+        return isEnabled(game.id);
+      }),
+    [isEnabled, serverStatus],
   );
 
   const counts = useMemo(() => {

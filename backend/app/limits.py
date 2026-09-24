@@ -268,6 +268,54 @@ COUPLE_SESSION_EXCLUSIVE_PER_PLAYER = 10
 # exclusives. Written as the sum so the relationship stays visible.
 COUPLE_ANSWERS_PER_PARTICIPANT = COUPLE_SESSION_SHARED_QUESTIONS + COUPLE_SESSION_EXCLUSIVE_PER_PLAYER
 
+# --- Game sessions, featured games and availability ------------------------------
+#
+# The three games share one session lifecycle, but each game owns its own cadence:
+# there is deliberately no global reset setting. A game's ``reset_cadence`` says how
+# its sessions count calendar days -- daily, every 2/3/5 days, or weekly
+# (Monday-Sunday UTC) -- and the featured game is only a spotlight that never drives
+# session creation. All three values below are mirrored by CHECK constraints on
+# ``game_configs``; every list here, the payload Literal and the constraint agree.
+GAME_IDS: tuple[str, ...] = ("wordle", "anagram", "couple-questionnaire")
+
+# The only reset cadences a game may carry. Stored as the strings below; each game
+# has its own row in ``game_configs`` so Wordle can reset daily while Anagram runs
+# every five days and the Couple Questionnaire runs weekly.
+RESET_CADENCE_VALUES: tuple[str, ...] = (
+    "daily",
+    "every_2_days",
+    "every_3_days",
+    "every_5_days",
+    "weekly",
+)
+
+# Days in each cadence, for every cadence except weekly. Weekly is always
+# Monday-Sunday UTC regardless of when its session started, so it has no fixed
+# length here -- see ``game_periods.period_end``.
+RESET_CADENCE_DAYS: dict[str, int] = {
+    "daily": 1,
+    "every_2_days": 2,
+    "every_3_days": 3,
+    "every_5_days": 5,
+}
+
+# How an admin-supplied Wordle/Anagram word reaches a session: ``random`` draws from
+# the committed word list at the reset boundary with no approval step, ``manual``
+# waits for an administrator to provide (or schedule) the word and otherwise leaves
+# the session pending and unplayable. The Couple Questionnaire carries no mode.
+GAME_CONTENT_MODES: tuple[str, ...] = ("random", "manual")
+
+# Session lifecycle states. ``active`` is playable (when configured), ``pending`` is
+# a manual-mode session still waiting for its word, ``ended`` is history that keeps
+# its user progress attached. At most one active-or-pending row exists per game.
+SESSION_STATUS_VALUES: tuple[str, ...] = ("active", "pending", "ended")
+
+# The farthest ahead an administrator may schedule a manual word, in days from
+# today (UTC). Scheduling is deliberately bounded: without a horizon the schedule
+# table becomes an unbounded promise the reset loop must keep forever. Enforced
+# server-side on every schedule write; the admin UI names the same number.
+MAX_FUTURE_SCHEDULE_DAYS = 30
+
 # How old an open timing segment may be before it is treated as dead rather than played.
 #
 # The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``

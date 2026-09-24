@@ -7,10 +7,22 @@ from fastapi import APIRouter, Depends, Query, status
 
 from ..dependencies import get_db
 from ..accounts import Capability
-from ..models import AccountDetails, WordleDraw, WordleGame, WordleGameCreate
+from ..models import (
+    AccountDetails,
+    ScheduledWord,
+    ScheduledWordCreate,
+    WordleDraw,
+    WordleGame,
+    WordleGameCreate,
+)
 from ..postgres import Database
 from ..services import wordle_service
 from ..services.authorization import require_capability
+from ..services.scheduled_contents import (
+    delete_scheduled,
+    list_scheduled,
+    schedule_word,
+)
 
 router = APIRouter(prefix="/admin/wordle", tags=["Admin - Wordle"])
 
@@ -46,15 +58,74 @@ async def create_wordle_game(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> WordleGame:
-    """Configure the answer for one day.
+    """Update the current session: end it and open a brand-new one ("Update").
 
     ``mode="custom"`` stores the supplied word if it is on the approved list;
-    ``mode="random"`` stores the word the preview drew, verified against its signature. A day
-    that already has a puzzle is a 409 rather than a second row, because ``game_date`` is
-    what identifies a puzzle and two answers for one day is a state the player-facing page
-    would have no rule for resolving.
+    ``mode="random"`` stores the word the preview drew, verified against its signature.
+    The old session is stamped ended and kept as history with its user progress;
+    the new session starts from scratch for today's UTC date under the game's own
+    reset cadence. An explicit ``game_date`` other than today is refused --
+    future words belong on the schedule endpoint below.
     """
     return wordle_service.create_wordle_game(db, payload)
+
+
+@router.get("/current", response_model=WordleGame)
+async def current_wordle_session(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> WordleGame:
+    """The current active-or-pending session, or 404 when the game has none.
+
+    Declared before ``/{game_id}`` so ``current`` is never read as an id. This
+    is what the admin screen renders as "the session now": its word (or its
+    pending state), its period, and whether it is waiting for configuration.
+    """
+    from fastapi import HTTPException
+
+    current = wordle_service.get_current_wordle_session(db)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No Wordle session yet")
+    return current
+
+
+@router.post("/schedule", response_model=ScheduledWord, status_code=status.HTTP_201_CREATED)
+async def schedule_wordle_word(
+    payload: ScheduledWordCreate,
+    db: Database = Depends(get_db),
+    account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> ScheduledWord:
+    """Schedule a manual word for a future session period.
+
+    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced
+    server-side: farther dates are refused with the window named. The word waits
+    until its period opens and never activates a session early.
+    """
+    return ScheduledWord(
+        **schedule_word(
+            db, "wordle", payload.target_date, payload.word, created_by=account.regno
+        )
+    )
+
+
+@router.get("/scheduled", response_model=list[ScheduledWord])
+async def list_wordle_scheduled(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> list[ScheduledWord]:
+    """Every scheduled Wordle word, earliest date first."""
+    return [ScheduledWord(**entry) for entry in list_scheduled(db, "wordle")]
+
+
+@router.delete("/scheduled/{target_date}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_wordle_scheduled(
+    target_date: date,
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> None:
+    """Withdraw the scheduled Wordle word for one date; a date with none is a 404."""
+    delete_scheduled(db, "wordle", target_date)
+    return None
 
 
 @router.get("", response_model=List[WordleGame])

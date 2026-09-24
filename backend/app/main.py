@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import settings, validate_cloudinary_settings
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, messages, wordle, anagram, couple_questionnaire
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_games, messages, wordle, anagram, couple_questionnaire, games
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -294,6 +294,19 @@ async def on_startup():
     logger.info("Couple game questions seeded: %s inserted.", seeded)
     logger.info("PostgreSQL storage initialized.")
 
+    # Open today's game sessions idempotently, so a fresh boot is playable
+    # without waiting for the 00:01 UTC cron. The same function backs
+    # POST /admin/games/run-resets, which is what a daily 00:01 UTC cron calls
+    # to roll each game into its next calendar period. Best-effort at boot: a
+    # scheduler failure must not take the whole application down.
+    try:
+        from .services.game_scheduler import ensure_game_sessions
+
+        boot_resets = ensure_game_sessions(postgres)
+        logger.info("Game sessions ensured at boot: %s", boot_resets)
+    except Exception as exc:
+        logger.warning("Game session boot ensure skipped: %s", exc)
+
     # Initialize matchmaking slots: fetch all classes and create initial slot
     from .services.matchmaking_slot_service import init_matchmaking_slot_service
     init_result = await init_matchmaking_slot_service(postgres)
@@ -390,6 +403,19 @@ async def _matchmaking_refusal_response(request: Request, exc: MatchmakingRefusa
     )
 
 
+async def _game_unavailable_response(request: Request, exc) -> Response:
+    """Render a game availability refusal with its client-branchable code.
+
+    ``detail`` stays the plain sentence toasts already show; ``code`` is what
+    the screens branch on (``game_disabled`` vs ``game_hidden``). Registered for
+    the subclass so ordinary HTTPExceptions keep the default body.
+    """
+    return JSONResponse(
+        {"detail": exc.detail, "code": exc.code},
+        status_code=exc.status_code,
+    )
+
+
 class RequestBodyLimitMiddleware:
     """Reject a request whose body exceeds the configured ceiling, declared or not."""
 
@@ -467,6 +493,9 @@ app.add_exception_handler(RequestValidationError, _request_validation_response)
 # Registered for the subclass, so it does not shadow the ordinary HTTPException handler: FastAPI
 # walks the exception's bases, so a plain HTTPException still gets the default body.
 app.add_exception_handler(MatchmakingRefusal, _matchmaking_refusal_response)
+from .services.game_configs import GameUnavailable as _GameUnavailable
+
+app.add_exception_handler(_GameUnavailable, _game_unavailable_response)
 
 # ----------------------
 # CORS Middleware
@@ -505,9 +534,11 @@ app.include_router(admin_love_notes.router)
 app.include_router(admin_wordle.router)
 app.include_router(admin_anagram.router)
 app.include_router(admin_couple.router)
+app.include_router(admin_games.router)
 app.include_router(wordle.router)
 app.include_router(anagram.router)
 app.include_router(couple_questionnaire.router)
+app.include_router(games.router)
 
 # The hook drops the query string from the span's URL attributes before the span is
 # exported, because the middleware's http.url otherwise carries the raw query string

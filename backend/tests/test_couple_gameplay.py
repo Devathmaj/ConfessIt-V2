@@ -90,9 +90,22 @@ def players(db):
 
 
 def seed_game(db):
-    """Feature today straight into the table; the admin endpoint is pinned elsewhere."""
+    """Open today's global questionnaire session straight into the table.
+
+    Sessions are opened by the reset loop under the game's cadence, never by
+    featuring; the admin endpoints are pinned elsewhere. The period mirrors a
+    daily cadence from today.
+    """
+    from datetime import timedelta
+
+    day = datetime.now(timezone.utc).date()
     game = CoupleGameRecord(
-        game_date=datetime.now(timezone.utc).date(), created_by="adminuser"
+        game_date=day,
+        created_by="adminuser",
+        status="active",
+        period_start_date=day,
+        period_end_date=day + timedelta(days=1),
+        started_at=datetime.now(timezone.utc),
     )
     with db.sessions.begin() as session:
         session.add(game)

@@ -27,10 +27,15 @@ from .limits import (
     COUPLE_SESSION_EXCLUSIVE_PER_PLAYER,
     COUPLE_SESSION_QUESTIONS,
     COUPLE_SESSION_SHARED_QUESTIONS,
+    GAME_CONTENT_MODES,
+    GAME_IDS,
     INTEREST_VALUES,
     LOVE_NOTE_BODY_MAX,
+    MAX_FUTURE_SCHEDULE_DAYS,
     MESSAGE_BODY_MAX,
     REPORT_REASON_MAX,
+    RESET_CADENCE_VALUES,
+    SESSION_STATUS_VALUES,
     USER_DEPARTMENT_MAX,
     USER_GENDER_VALUES,
     USER_REGNO_MAX,
@@ -1009,9 +1014,18 @@ class AnagramGameRecord(Base):
     __tablename__ = "anagram_games"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    # See ``wordle_games.game_date``: history shares days, so this is indexed rather
+    # than unique and the single-active rule lives in a partial unique index.
+    game_date: Mapped[date] = mapped_column(Date, index=True)
     mode: Mapped[str] = mapped_column(String(10))
-    answer: Mapped[str] = mapped_column(String(ANAGRAM_ANSWER_MAX))
+    answer: Mapped[Optional[str]] = mapped_column(String(ANAGRAM_ANSWER_MAX), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -1028,6 +1042,10 @@ class AnagramGameRecord(Base):
         CheckConstraint(
             f"length(answer) BETWEEN 1 AND {ANAGRAM_ANSWER_MAX}",
             name=f"ck_anagram_games_answer_length_{ANAGRAM_ANSWER_MAX}",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_anagram_games_status_known",
         ),
     )
 
@@ -1141,9 +1159,25 @@ class WordleGameRecord(Base):
     __tablename__ = "wordle_games"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    # The session's calendar identity. No longer unique: an Update ends the current
+    # session and opens a new one, so one UTC day may hold several ended sessions.
+    # The single-active rule is a partial unique index (see postgres.py), not this
+    # column, because uniqueness here would forbid the history the lifecycle keeps.
+    game_date: Mapped[date] = mapped_column(Date, index=True)
     mode: Mapped[str] = mapped_column(String(10))
-    answer: Mapped[str] = mapped_column(String(WORDLE_ANSWER_LENGTH))
+    answer: Mapped[Optional[str]] = mapped_column(String(WORDLE_ANSWER_LENGTH), nullable=True)
+    # Session lifecycle. ``active`` is playable, ``pending`` waits for a manual word,
+    # ``ended`` is history. Only one active-or-pending row may exist at a time.
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    # The calendar period this session covers. ``period_end_date`` is exclusive: a
+    # daily session starting 2026-10-08 ends 2026-10-09. Derived from the start date
+    # and the game's reset cadence by ``game_periods`` -- never by elapsed hours.
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
@@ -1153,6 +1187,10 @@ class WordleGameRecord(Base):
         CheckConstraint("mode IN ('custom', 'random')", name="ck_wordle_games_mode_known"),
         CheckConstraint(
             f"length(answer) = {WORDLE_ANSWER_LENGTH}", name="ck_wordle_games_answer_length"
+        ),
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_wordle_games_status_known",
         ),
     )
 
@@ -1256,11 +1294,28 @@ class CoupleGameRecord(Base):
     __tablename__ = "couple_games"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    game_date: Mapped[date] = mapped_column(Date, unique=True)
+    # A global questionnaire session period, not a featured date. Featured dates live
+    # in ``featured_games`` now; this row is one lifecycle period shared by every
+    # couple, so several ended rows may name one day and only one may be current.
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_couple_games_status_known",
+        ),
     )
 
 
@@ -1599,6 +1654,105 @@ class CoupleGameSessionPredictionRecord(Base):
             f"predicted_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
             name=f"ck_couple_game_session_predictions_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Game configuration, featured games and scheduled content
+# ---------------------------------------------------------------------------
+# The three concepts the refactor separates. ``game_configs`` owns per-game
+# availability and cadence, ``featured_games`` owns the one-spotlight-per-day
+# schedule, and ``scheduled_game_contents`` owns future manual words inside the
+# finite horizon. Sessions themselves live on the per-game tables above
+# (``wordle_games``, ``anagram_games``, ``couple_games``), which now carry the
+# active/pending/ended lifecycle rather than a one-row-per-day puzzle.
+
+
+class GameConfigRecord(Base):
+    """One row per game: availability, content mode and reset cadence.
+
+    ``game_id`` is one of ``limits.GAME_IDS``. ``enabled`` and ``is_hidden`` are
+    independent: disabled-but-visible games keep their session lifecycle while
+    refusing play, hidden games vanish from selection, refuse direct play, and
+    stop the scheduler from creating sessions. ``content_mode`` applies only to
+    Wordle/Anagram (``random``/``manual``); the questionnaire stores NULL.
+    ``reset_cadence`` is one of ``limits.RESET_CADENCE_VALUES`` and is read by
+    the centralized ``game_periods`` calculation -- never by elapsed hours.
+    """
+
+    __tablename__ = "game_configs"
+
+    __table_args__ = (
+        CheckConstraint(
+            "content_mode IS NULL OR content_mode IN ('random', 'manual')",
+            name="ck_game_configs_content_mode_known",
+        ),
+        CheckConstraint(
+            "reset_cadence IN ('daily', 'every_2_days', 'every_3_days', 'every_5_days', 'weekly')",
+            name="ck_game_configs_reset_cadence_known",
+        ),
+    )
+
+    game_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    content_mode: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    reset_cadence: Mapped[str] = mapped_column(
+        String(16), default="daily", server_default=text("'daily'")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+
+class FeaturedGameRecord(Base):
+    """The spotlight: at most one featured game per UTC calendar date.
+
+    Independent of sessions by design -- featuring Wordle on a date never
+    creates, expires or otherwise touches any session. ``game_date`` is unique
+    in the schema (not only in the service) so two administrators pinning two
+    games on one day race the constraint and one of them is refused. The same
+    game may appear on many dates; many games may never share one date.
+    """
+
+    __tablename__ = "featured_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+
+class ScheduledGameContentRecord(Base):
+    """A manual word waiting for its session period to begin.
+
+    One row per game per period-start date: when the scheduler opens the period
+    beginning ``target_date`` it consumes this row's word (ending any pending
+    session and opening a configured one) instead of leaving the session
+    pending. Rows are bounded by ``limits.MAX_FUTURE_SCHEDULE_DAYS`` at write
+    time, and a scheduled word never activates its session early -- the row
+    waits until its date arrives.
+    """
+
+    __tablename__ = "scheduled_game_contents"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_date: Mapped[date] = mapped_column(Date, index=True)
+    word: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "target_date"),
     )
 
 

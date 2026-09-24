@@ -52,19 +52,30 @@ def other_day(days: int) -> str:
     return (datetime.now(timezone.utc).date() + timedelta(days=days)).isoformat()
 
 
-def seed_game(db, *, word: Optional[str] = None, game_date: Optional[date] = None) -> dict:
-    """Publish a puzzle straight into the table.
+def seed_game(
+    db,
+    *,
+    word: Optional[str] = None,
+    game_date: Optional[date] = None,
+    status: str = "active",
+) -> dict:
+    """Open a session straight into the table.
 
     Seeded directly rather than through ``POST /admin/wordle`` on purpose: the admin client
     fixture swaps the ``get_current_user`` override, which would clobber the participant
     client's override the instant the two fixtures share a test. The endpoint itself is
-    pinned by ``test_admin_wordle``; here the puzzle is a starting point, not the thing
-    under test.
+    pinned by ``test_admin_wordle``; here the session is a starting point, not the thing
+    under test. The period mirrors a daily cadence from the session date.
     """
+    day = game_date or datetime.now(timezone.utc).date()
     game = WordleGameRecord(
-        game_date=game_date or datetime.now(timezone.utc).date(),
+        game_date=day,
         mode="custom",
         answer=word or solution_words()[0],
+        status=status,
+        period_start_date=day,
+        period_end_date=day + timedelta(days=1),
+        started_at=datetime.now(timezone.utc),
     )
     with db.sessions.begin() as session:
         session.add(game)
@@ -213,21 +224,25 @@ def test_a_future_puzzle_is_not_yet_playable(player_client: TestClient, db):
     assert response.json()["game_id"] is None
 
 
-def test_an_earlier_puzzle_stays_playable_until_a_newer_day_arrives(player_client: TestClient, db):
+def test_a_session_past_its_boundary_reads_as_absent(player_client: TestClient, db):
+    """A daily session belongs to its UTC day: once the next reset boundary passes,
+    the board reads empty until the reset loop opens the new period."""
     seed_game(db, game_date=datetime.now(timezone.utc).date() - timedelta(days=1))
 
     response = player_client.get("/games/wordle")
 
     assert response.status_code == 200
-    assert response.json()["game_date"] == other_day(-1)
+    assert response.json()["game_id"] is None
 
 
-def test_the_newest_arrived_puzzle_wins(player_client: TestClient, db):
-    seed_game(db, game_date=datetime.now(timezone.utc).date() - timedelta(days=2))
-    newest = seed_game(db, game_date=datetime.now(timezone.utc).date() - timedelta(days=1))
+def test_only_one_session_is_current_at_a_time(player_client: TestClient, db):
+    """History shares days but only the active session is served; an ended row for
+    today never shadows it."""
+    seed_game(db, status="ended")
+    current = seed_game(db, word=solution_words()[1])
 
     body = player_client.get("/games/wordle").json()
-    assert body["game_id"] == newest["id"]
+    assert body["game_id"] == current["id"]
 
 
 # --- one participation per player, per puzzle ----------------------------------

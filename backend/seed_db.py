@@ -19,9 +19,11 @@ crash rather than a slightly wrong row:
   edit here and cannot drift out of step with it.
 * **Email is required and unique.** Every account table has a NOT NULL, uniquely indexed
   ``email``, so a seed that omits it is rejected by the column rather than defaulted.
-* **Staff rows have no participant columns.** ``year``, ``department``, ``bio``, ``emoji``,
+* **Staff rows have no participant columns.** ``year``, ``department``, ``bio``,
   ``interests`` and the matchmaking toggles exist only on ``users``. Passing one to
   ``ModeratorRecord`` is a ``TypeError``, so staff seeds carry only the shared columns.
+  (``emoji`` is not a participant column either -- the profile-emoji option was removed
+  entirely, so no account table has it anymore.)
 * **Year is a bounded number, like interests are a closed set.** ``users.year`` is an ``Integer`` and
   ``ck_users_year_known`` holds it between ``limits.USER_YEAR_MIN`` and ``limits.USER_YEAR_MAX``. A
   hand-written year outside that range is a ``CheckViolation`` on the first insert, which aborts the
@@ -191,7 +193,6 @@ def _participant(regno: str, gender: str, year: int, department: str, index: int
         "gender": gender,
         "year": year,
         "department": department,
-        "emoji": None,
         "bio": f"Seeded {department} {year} {gender} participant.",
         "interests": _interests_for(index),
         "profile_picture_public_id": None, "profile_picture_format": None,

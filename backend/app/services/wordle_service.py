@@ -177,55 +177,129 @@ def _as_model(row: WordleGameRecord) -> WordleGame:
         game_date=row.game_date,
         mode=row.mode,
         answer=row.answer,
+        status=row.status or "active",
+        period_start_date=row.period_start_date,
+        period_end_date=row.period_end_date,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
 
-def create_wordle_game(db: Database, payload: WordleGameCreate) -> WordleGame:
-    """Store one day's puzzle, refusing a second row for a day that already has one.
+def _current_session_row(session):
+    """The one active-or-pending Wordle session, or None."""
+    return session.scalar(
+        select(WordleGameRecord)
+        .where(WordleGameRecord.status.in_(("active", "pending")))
+        .limit(1)
+    )
 
-    Uniqueness is checked here *and* enforced by the schema, and both matter: the check gives
-    a 409 with a message an operator can act on, while the constraint is what holds when two
-    saves race past that check. The ``IntegrityError`` path is the same 409, so the race reads
-    identically to the ordinary conflict rather than as a 500.
+
+def update_wordle_session(
+    db: Database,
+    *,
+    mode: str,
+    word: Optional[str],
+    token: Optional[str],
+    updated_by: str = "admin",
+    now: Optional[datetime] = None,
+) -> WordleGame:
+    """End the current session and open a brand-new one starting now ("Update").
+
+    Never mutates the old row: it is stamped ended and kept as history with its
+    user progress attached, while the new session starts from scratch. The new
+    session's period runs from today's UTC date under the game's own reset
+    cadence -- an update at 23:58 does not buy a fresh 24 hours. The game's
+    content mode follows the update: a custom word means manual from now on, a
+    drawn word means random. Atomic under the game's advisory lock, so an Update
+    racing the 00:01 reset cannot leave two active sessions.
     """
-    game_date = payload.game_date or _today()
-    mode = payload.mode
-    answer = _resolve_answer(payload, game_date)
+    from sqlalchemy import text as _text
 
-    with db.sessions() as session:
-        existing = session.scalar(
-            select(WordleGameRecord.id)
-            .where(WordleGameRecord.game_date == game_date)
-            .limit(1)
-        )
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"A Wordle game is already configured for {game_date.isoformat()}.",
-            )
+    from . import game_periods
+    from .game_configs import game_lock_key, get_config
+
+    moment = now or datetime.now(timezone.utc)
+    today = moment.date()
+    # An Update always applies to the current session: the draw it confirms was
+    # previewed for today, so the signature is verified against today.
+    answer = _resolve_answer(
+        WordleGameCreate(mode=mode, word=word, token=token), today  # type: ignore[arg-type]
+    )
 
     try:
         with db.sessions.begin() as session:
-            row = WordleGameRecord(game_date=game_date, mode=mode, answer=answer)
+            session.execute(
+                _text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": game_lock_key("wordle")},
+            )
+            config = get_config(session, "wordle")
+            # Session modes (custom/random) are provenance; content modes
+            # (manual/random) are behaviour. A typed word means manual from now
+            # on, a drawn word means random.
+            config.content_mode = "manual" if mode == "custom" else "random"
+            cadence = config.reset_cadence
+            current = _current_session_row(session)
+            if current is not None:
+                current.status = "ended"
+                current.ended_at = moment
+            start, end = game_periods.period_for_start(today, cadence)
+            row = WordleGameRecord(
+                game_date=today,
+                mode=mode,
+                answer=answer,
+                status="active",
+                period_start_date=start,
+                period_end_date=end,
+                started_at=moment,
+            )
             session.add(row)
             session.flush()
             return _as_model(row)
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"A Wordle game is already configured for {game_date.isoformat()}.",
+            detail="A Wordle session update collided with a concurrent reset. Try again.",
         ) from exc
 
 
+def create_wordle_game(db: Database, payload: WordleGameCreate) -> WordleGame:
+    """Publish the current Wordle session ("Update").
+
+    ``POST /admin/wordle`` is the Update action: it ends the currently
+    active/pending session and opens a new one for today. An explicit
+    ``game_date`` other than today is refused -- future words belong on the
+    schedule endpoint (bounded by ``MAX_FUTURE_SCHEDULE_DAYS``), and history is
+    read-only. The preview draw an Update confirms was made for today, so the
+    signature is verified against today's date.
+    """
+    game_date = payload.game_date or _today()
+    if game_date != _today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Updates apply to the current session. "
+                "Schedule future words with POST /admin/wordle/schedule."
+            ),
+        )
+    return update_wordle_session(
+        db, mode=payload.mode, word=payload.word, token=payload.token
+    )
+
+
 def list_wordle_games(db: Database) -> List[WordleGame]:
-    """Every configured puzzle, newest day first."""
+    """Every session, newest first -- active, pending and ended history alike."""
     with db.sessions() as session:
         rows = session.scalars(
-            select(WordleGameRecord).order_by(WordleGameRecord.game_date.desc())
+            select(WordleGameRecord).order_by(WordleGameRecord.created_at.desc())
         ).all()
         return [_as_model(row) for row in rows]
+
+
+def get_current_wordle_session(db: Database) -> Optional[WordleGame]:
+    """The current active-or-pending session for the admin screen, if any."""
+    with db.sessions() as session:
+        row = _current_session_row(session)
+        return _as_model(row) if row is not None else None
 
 
 def get_wordle_game(db: Database, game_id: str) -> WordleGame:

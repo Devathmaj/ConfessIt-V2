@@ -7,10 +7,23 @@ from fastapi import APIRouter, Depends, Query, status
 
 from ..dependencies import get_db
 from ..accounts import Capability
-from ..models import AccountDetails, AnagramDraw, AnagramGame, AnagramGameCreate
+from ..models import (
+    AccountDetails,
+    AnagramDraw,
+    AnagramGame,
+    AnagramGameCreate,
+    ScheduledWord,
+    ScheduledWordCreate,
+)
 from ..postgres import Database
 from ..services import anagram_service
 from ..services.authorization import require_capability
+from ..services.scheduled_contents import (
+    delete_scheduled,
+    list_scheduled,
+    schedule_word,
+)
+from datetime import date as _date
 
 router = APIRouter(prefix="/admin/anagram", tags=["Admin - Anagram"])
 
@@ -48,18 +61,74 @@ async def create_anagram_game(
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> AnagramGame:
-    """Configure the answer for one day.
+    """Update the current session: end it and open a brand-new one ("Update").
 
     ``mode="custom"`` stores the supplied word, normalized to uppercase; ``mode="random"``
-    stores the word the preview drew, verified against its signature. A day that already has
-    a puzzle is a 409 rather than a second row, because ``game_date`` is what identifies a
-    puzzle and two answers for one day is a state the player-facing page would have no rule
-    for resolving.
+    stores the word the preview drew, verified against its signature. The old session is
+    stamped ended and kept as history; the new session starts from scratch for today's
+    UTC date under the game's own reset cadence. An explicit ``game_date`` other than
+    today is refused -- future words belong on the schedule endpoint below.
 
     The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
     an administrator cannot publish a puzzle attributed to somebody else.
     """
     return anagram_service.create_anagram_game(db, payload, created_by=account.regno)
+
+
+@router.get("/current", response_model=AnagramGame)
+async def current_anagram_session(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> AnagramGame:
+    """The current active-or-pending session, or 404 when the game has none.
+
+    Declared before ``/{game_id}`` so ``current`` is never read as an id.
+    """
+    from fastapi import HTTPException
+
+    current = anagram_service.get_current_anagram_session(db)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No Anagram session yet")
+    return current
+
+
+@router.post("/schedule", response_model=ScheduledWord, status_code=status.HTTP_201_CREATED)
+async def schedule_anagram_word(
+    payload: ScheduledWordCreate,
+    db: Database = Depends(get_db),
+    account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> ScheduledWord:
+    """Schedule a manual word for a future session period.
+
+    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced
+    server-side. The word waits until its period opens and never activates a
+    session early.
+    """
+    return ScheduledWord(
+        **schedule_word(
+            db, "anagram", payload.target_date, payload.word, created_by=account.regno
+        )
+    )
+
+
+@router.get("/scheduled", response_model=list[ScheduledWord])
+async def list_anagram_scheduled(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> list[ScheduledWord]:
+    """Every scheduled Anagram word, earliest date first."""
+    return [ScheduledWord(**entry) for entry in list_scheduled(db, "anagram")]
+
+
+@router.delete("/scheduled/{target_date}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_anagram_scheduled(
+    target_date: _date,
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> None:
+    """Withdraw the scheduled Anagram word for one date; a date with none is a 404."""
+    delete_scheduled(db, "anagram", target_date)
+    return None
 
 
 @router.get("", response_model=List[AnagramGame])

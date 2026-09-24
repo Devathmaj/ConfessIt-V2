@@ -148,8 +148,8 @@ def test_the_preview_serves_a_word_from_the_eligible_pool(admin_client: TestClie
 
 
 def test_the_preview_signs_for_the_day_it_was_asked_for(admin_client: TestClient):
-    """The signature covers the date, so changing the date field after drawing is refused
-    rather than silently publishing a word for a day it was never chosen for."""
+    """An Update applies to the current session: naming another day is refused and
+    the operator is pointed at the schedule endpoint instead."""
     preview = draw(admin_client, game_date=today())
 
     refused = save(
@@ -163,7 +163,7 @@ def test_the_preview_signs_for_the_day_it_was_asked_for(admin_client: TestClient
     )
 
     assert refused.status_code == 400
-    assert "does not match this date" in refused.json()["detail"]
+    assert "schedule" in refused.json()["detail"]
 
 
 def test_a_word_sent_with_a_foreign_signature_is_refused(admin_client: TestClient):
@@ -277,36 +277,33 @@ def test_a_drawn_word_can_be_saved_after_redrawing(admin_client: TestClient):
 
 def test_repeated_previews_draw_from_the_eligible_pool(admin_client: TestClient):
     """Several draws, several days, several words -- each one a legal member of the pool
-    rather than one hard-coded entry."""
+    rather than one hard-coded entry. Previews are read-only, so drawing ahead is
+    free; only the save applies to the current session."""
     answers = set()
     for offset in range(5):
         preview = draw(admin_client, game_date=day(offset))
-        response = save(
-            admin_client,
-            {
-                "mode": "random",
-                "word": preview["word"],
-                "token": preview["token"],
-                "game_date": day(offset),
-            },
-        )
-        assert response.status_code == 201, response.text
-        answers.add(response.json()["answer"])
+        answers.add(preview["word"])
 
     words = set(anagram_words())
     assert answers <= words
     assert all(len(answer) >= ANAGRAM_RANDOM_MIN_LENGTH for answer in answers)
     assert len(answers) > 1
 
+    # And today's draw still saves as the current session's word.
+    preview = draw(admin_client)
+    response = save(
+        admin_client,
+        {"mode": "random", "word": preview["word"], "token": preview["token"]},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["answer"] == preview["word"]
+
 
 # --- persistence ---------------------------------------------------------------
 
 
 def test_the_answer_and_mode_are_persisted(admin_client: TestClient, db):
-    created = save(
-        admin_client,
-        {"mode": "custom", "word": "garden", "game_date": day(1)},
-    )
+    created = save(admin_client, {"mode": "custom", "word": "garden"})
     assert created.status_code == 201, created.text
 
     with db.sessions() as session:
@@ -315,7 +312,8 @@ def test_the_answer_and_mode_are_persisted(admin_client: TestClient, db):
     assert row is not None
     assert row.answer == "GARDEN"
     assert row.mode == "custom"
-    assert row.game_date.isoformat() == day(1)
+    assert row.game_date.isoformat() == today()
+    assert row.status == "active"
     assert row.created_at is not None
     assert row.updated_at is not None
 
@@ -342,37 +340,65 @@ def test_a_payload_cannot_choose_its_own_creator(admin_client: TestClient):
 # --- one day, one answer -------------------------------------------------------
 
 
-def test_a_second_puzzle_for_the_same_day_is_refused(admin_client: TestClient):
+def test_an_update_ends_the_current_session_and_opens_a_new_one(admin_client: TestClient, db):
+    """"Update" is terminate-then-create: the old row survives as ended history."""
+    from sqlalchemy import select
+
     first = save(admin_client, {"mode": "custom", "word": "garden"})
     assert first.status_code == 201, first.text
 
     second = save(admin_client, {"mode": "custom", "word": "elephant"})
 
-    assert second.status_code == 409
-    listing = admin_client.get("/admin/anagram")
-    assert len(listing.json()) == 1
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] != first.json()["id"]
+    with db.sessions() as session:
+        rows = session.scalars(select(AnagramGameRecord)).all()
+        assert len(rows) == 2
+        by_id = {str(row.id): row for row in rows}
+        assert by_id[first.json()["id"]].status == "ended"
+        assert by_id[second.json()["id"]].status == "active"
 
 
-def test_a_drawn_puzzle_cannot_replace_a_custom_one_for_the_same_day(
+def test_a_drawn_update_replaces_a_custom_session(
     admin_client: TestClient,
 ):
+    """Random and custom are provenances of the new session, not locks on the old one."""
     first = save(admin_client, {"mode": "custom", "word": "garden"})
     assert first.status_code == 201, first.text
 
     preview = draw(admin_client)
-    refused = save(
+    replaced = save(
         admin_client,
         {"mode": "random", "word": preview["word"], "token": preview["token"]},
     )
 
-    assert refused.status_code == 409
+    assert replaced.status_code == 201, replaced.text
+    assert replaced.json()["answer"] == preview["word"]
+    assert replaced.json()["mode"] == "random"
 
 
-def test_the_schema_refuses_a_second_row_for_one_day(db):
-    """The service's 409 is a message; this is the rule. Written straight to the table to
-    prove the constraint holds for a caller that never went through the service -- which is
-    the race the uniqueness check exists to close."""
+def test_the_schema_refuses_two_simultaneously_active_sessions(db):
+    """The single-active rule lives in a partial unique index, not in game_date.
+
+    Two ended rows may share a day (that is the history an Update keeps); two
+    active rows may not, which is what serializes a scheduler run racing an
+    admin Update.
+    """
     day_value = datetime.now(timezone.utc).date()
+    with db.sessions.begin() as session:
+        session.add(
+            AnagramGameRecord(
+                game_date=day_value, mode="custom", answer="GARDEN",
+                created_by="adminuser", status="ended",
+            )
+        )
+        session.add(
+            AnagramGameRecord(
+                game_date=day_value, mode="custom", answer="ELEPHANT",
+                created_by="adminuser", status="ended",
+            )
+        )
+
     with db.sessions.begin() as session:
         session.add(
             AnagramGameRecord(
@@ -419,26 +445,25 @@ def test_the_schema_refuses_an_empty_answer(db):
 
 
 def test_puzzles_are_listed_newest_first_and_readable_by_id(admin_client: TestClient):
-    earlier = day(-2)
-    later = day(-1)
-
-    created = save(
-        admin_client, {"mode": "custom", "word": "garden", "game_date": earlier}
-    )
-    save(admin_client, {"mode": "custom", "word": "elephant", "game_date": later})
+    created = save(admin_client, {"mode": "custom", "word": "garden"})
+    assert created.status_code == 201, created.text
+    updated = save(admin_client, {"mode": "custom", "word": "elephant"})
+    assert updated.status_code == 201, updated.text
 
     listing = admin_client.get("/admin/anagram")
     assert listing.status_code == 200
     body = listing.json()
-    assert [entry["game_date"] for entry in body] == [later, earlier]
+    assert [entry["id"] for entry in body] == [updated.json()["id"], created.json()["id"]]
     # The answer and the creator come back with the row: seeing what will be published, and
     # by whom, is the screen's job.
     assert body[1]["answer"] == "GARDEN"
     assert body[1]["created_by"] == "adminuser"
+    assert body[1]["status"] == "ended"
+    assert body[0]["status"] == "active"
 
     detail = admin_client.get(f"/admin/anagram/{created.json()['id']}")
     assert detail.status_code == 200
-    assert detail.json() == created.json()
+    assert detail.json()["id"] == created.json()["id"]
 
 
 def test_an_unknown_id_is_404_and_a_malformed_one_is_400(admin_client: TestClient):
@@ -449,22 +474,16 @@ def test_an_unknown_id_is_404_and_a_malformed_one_is_400(admin_client: TestClien
     assert malformed.status_code == 400
 
 
-def test_a_day_can_be_named_in_advance(admin_client: TestClient):
-    """``game_date`` is optional because the usual save is today's puzzle, not because
-    scheduling is forbidden -- and the preview is asked for the same day it saves to."""
-    preview = draw(admin_client, game_date=day(3))
-    response = save(
-        admin_client,
-        {
-            "mode": "random",
-            "word": preview["word"],
-            "token": preview["token"],
-            "game_date": day(3),
-        },
+def test_a_word_can_be_scheduled_in_advance(admin_client: TestClient):
+    """Future manual words are scheduled, bounded by the finite horizon."""
+    response = admin_client.post(
+        "/admin/anagram/schedule",
+        json={"target_date": day(3), "word": "elephant"},
     )
 
     assert response.status_code == 201, response.text
-    assert response.json()["game_date"] == day(3)
+    assert response.json()["target_date"] == day(3)
+    assert response.json()["word"] == "ELEPHANT"
 
 
 # --- who may configure a puzzle ------------------------------------------------

@@ -17,39 +17,41 @@ import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { describeApiError } from '@/lib/apiError';
 import {
   createAnagramGame,
+  deleteScheduledAnagramWord,
   drawAnagramAnswer,
   getAdminAnagramGame,
   getAdminAnagramGames,
+  getCurrentAdminAnagramSession,
+  getGameConfigs,
+  getScheduledAnagramWords,
+  scheduleAnagramWord,
+  updateGameConfig,
   type AnagramDraw,
   type AnagramGame,
   type AnagramGamePayload,
+  type ScheduledWord,
 } from '@/services/api';
 
-/** Today as the server numbers it, in UTC, which is also what the date field starts on. */
+/** Today as UTC `YYYY-MM-DD`, the only calendar the schedule speaks. */
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 type Mode = AnagramGamePayload['mode'];
+type ContentMode = 'random' | 'manual';
+
+/** Session-mode provenance to content-mode behaviour: a typed word is manual. */
+const toContentMode = (form: Mode): ContentMode => (form === 'random' ? 'random' : 'manual');
+/** Content-mode behaviour to the form it renders. */
+const toFormMode = (content: ContentMode | null): Mode =>
+  content === 'random' ? 'random' : 'custom';
 
 /**
- * Publishing one day's Anagram word.
+ * Updating the current Anagram session.
  *
- * Two ways in, both ending in the same save: type a word, or let the server draw one. The
- * draw is a two-step on purpose -- `preview` picks the word and signs it to the day, the
- * screen shows that word, and only then does `POST` store it -- so the answer is visible
- * before anything is written, the admin can draw again as often as they like, and the thing
- * saved is the thing that was shown. What travels back is a token this screen cannot forge,
- * which is why `mode="random"` never offers a free text field: there would be no signature
- * behind it.
- *
- * The list below is the whole record, answers included. This is the screen that decides what
- * the player-facing puzzle becomes, so hiding the answer here would hide it from exactly the
- * person who set it. The server refuses every caller who may not publish, which is what keeps
- * the same answers off every other screen.
- *
- * One day holds one word, so a day that is already configured comes back from the server as
- * a 409 naming the date. That is shown inline rather than as a toast: a toast disappears and
- * the field is still full of a word that cannot be saved, whereas the reason to stop is worth
- * staying on screen until the operator changes the day or clears the form.
+ * Two ways in, both ending in the same Update: type a word, or let the server
+ * draw one. "Update" ends the current session and opens a brand-new one -- the
+ * old row stays as history with its player progress, the new session starts
+ * from scratch for today under the game's own reset cadence. Future words are
+ * scheduled below, inside the finite horizon, and wait until their period opens.
  */
 export const AdminAnagramConfig = () => {
   const { logActivity } = useGamesConfig();
@@ -58,17 +60,31 @@ export const AdminAnagramConfig = () => {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<Mode>('custom');
-  const [gameDate, setGameDate] = useState<string>(todayIso);
+  const [current, setCurrent] = useState<AnagramGame | null>(null);
+
+  // The content mode the server runs on, and a staged change to it. Clicking
+  // "Type a word" / "Draw for me" stages manual / random but saves nothing --
+  // the staged value needs an explicit Save, so clicking back and forth never
+  // flips production config by itself. The form below follows the staged value
+  // so the pending mode can be tried immediately.
+  const [serverMode, setServerMode] = useState<ContentMode | null>(null);
+  const [stagedMode, setStagedMode] = useState<ContentMode | null>(null);
+  const [savingMode, setSavingMode] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+  const formMode = toFormMode(stagedMode ?? serverMode);
+  const hasUnsavedMode = stagedMode !== null && stagedMode !== serverMode;
+
   const [word, setWord] = useState('');
   const [drawn, setDrawn] = useState<AnagramDraw | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // The puzzle the last save created, so the word the server stored -- the one a draw
-  // chose, or the typed word after normalisation -- is on screen the moment it exists.
-  const [lastCreated, setLastCreated] = useState<AnagramGame | null>(null);
+  const [scheduleDate, setScheduleDate] = useState<string>(todayIso);
+  const [scheduleWord, setScheduleWord] = useState('');
+  const [scheduled, setScheduled] = useState<ScheduledWord[]>([]);
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<AnagramGame | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -82,17 +98,75 @@ export const AdminAnagramConfig = () => {
     } finally {
       setLoading(false);
     }
+    try {
+      setCurrent(await getCurrentAdminAnagramSession());
+    } catch {
+      setCurrent(null);
+    }
+    try {
+      setScheduled(await getScheduledAnagramWords());
+      setScheduleError(null);
+    } catch (error) {
+      setScheduleError(describeApiError(error, 'Could not load the scheduled words.'));
+    }
+    try {
+      const configs = await getGameConfigs();
+      setServerMode(
+        configs.find((entry) => entry.game_id === 'anagram')?.content_mode ?? null,
+      );
+      setStagedMode(null);
+      setModeError(null);
+    } catch {
+      // Keep the last known mode; the form still works, only the staged save waits.
+    }
   }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  /** Stage a content mode without saving it; staging the saved value clears. */
+  const selectMode = (form: Mode) => {
+    const next = toContentMode(form);
+    setStagedMode(next === serverMode ? null : next);
+    setModeError(null);
+    setFormError(null);
+    if (form === 'custom') {
+      setDrawn(null);
+    } else {
+      setWord('');
+    }
+  };
+
+  const handleSaveMode = async () => {
+    if (stagedMode === null) return;
+    setSavingMode(true);
+    setModeError(null);
+    try {
+      await updateGameConfig('anagram', { content_mode: stagedMode });
+      toast.success(
+        stagedMode === 'random'
+          ? 'Anagram will run on random words from the next session onwards.'
+          : 'Anagram will wait for a manual word from the next session onwards.',
+      );
+      logActivity({
+        kind: 'settings',
+        gameId: 'anagram',
+        message: `Anagram content mode set to ${stagedMode} (next session onwards)`,
+      });
+      await refresh();
+    } catch (error) {
+      setModeError(describeApiError(error, 'Could not save the content mode.'));
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
   const handleDraw = async () => {
     setDrawing(true);
     setFormError(null);
     try {
-      setDrawn(await drawAnagramAnswer(gameDate));
+      setDrawn(await drawAnagramAnswer(todayIso()));
     } catch (error) {
       setFormError(describeApiError(error, 'Could not draw a word.'));
     } finally {
@@ -105,17 +179,16 @@ export const AdminAnagramConfig = () => {
     setFormError(null);
     try {
       const payload: AnagramGamePayload =
-        mode === 'custom'
-          ? { mode: 'custom', word: word.trim(), game_date: gameDate }
-          : { mode: 'random', word: drawn?.word, token: drawn?.token, game_date: gameDate };
+        formMode === 'custom'
+          ? { mode: 'custom', word: word.trim() }
+          : { mode: 'random', word: drawn?.word, token: drawn?.token };
       const created = await createAnagramGame(payload);
 
-      setLastCreated(created);
-      toast.success(`Anagram configured for ${created.game_date}.`);
+      toast.success(`Anagram session updated for ${created.game_date}.`);
       logActivity({
         kind: 'puzzle',
         gameId: 'anagram',
-        message: `Anagram word for ${created.game_date} set`,
+        message: `Anagram session updated for ${created.game_date}`,
       });
       setWord('');
       setDrawn(null);
@@ -123,9 +196,35 @@ export const AdminAnagramConfig = () => {
       setDetailError(null);
       await refresh();
     } catch (error) {
-      setFormError(describeApiError(error, 'Could not save the puzzle.'));
+      setFormError(describeApiError(error, 'Could not update the session.'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    if (!scheduleDate || !scheduleWord.trim()) return;
+    setScheduling(true);
+    setScheduleError(null);
+    try {
+      const created = await scheduleAnagramWord(scheduleDate, scheduleWord.trim());
+      toast.success(`Anagram word scheduled for ${created.target_date}.`);
+      setScheduleWord('');
+      await refresh();
+    } catch (error) {
+      setScheduleError(describeApiError(error, 'Could not schedule the word.'));
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  const handleDeleteScheduled = async (targetDate: string) => {
+    try {
+      await deleteScheduledAnagramWord(targetDate);
+      toast.info(`Scheduled word for ${targetDate} withdrawn.`);
+      await refresh();
+    } catch (error) {
+      setScheduleError(describeApiError(error, 'Could not withdraw the word.'));
     }
   };
 
@@ -139,12 +238,7 @@ export const AdminAnagramConfig = () => {
     }
   };
 
-  // A day, a word of any length, and -- for a draw -- a draw to save. There is no minimum
-  // length here because the server does not hold one either: any letters are a legal custom
-  // answer, and the five-letter floor belongs to the draw alone.
-  const hasDate = gameDate.trim().length > 0;
-  const readyToSave =
-    hasDate && (mode === 'custom' ? word.trim().length > 0 : drawn !== null);
+  const readyToSave = formMode === 'custom' ? word.trim().length > 0 : drawn !== null;
 
   return (
     <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
@@ -156,64 +250,98 @@ export const AdminAnagramConfig = () => {
               Anagram
             </CardTitle>
             <CardDescription>
-              One word a day. It stays here until the puzzle goes live, so what you see is
-              what the day will run on.
+              Update ends the current session and opens a new one. History and player
+              progress stay attached to the old session. Switching between typing and
+              drawing stages the content mode for the next session onwards -- save it
+              to apply.
             </CardDescription>
           </div>
+          {current && (
+            <Badge variant={current.status === 'pending' ? 'destructive' : 'default'}>
+              {current.status === 'pending' ? 'Pending — word not set' : 'Active'}
+            </Badge>
+          )}
         </div>
       </CardHeader>
 
       <CardContent className="space-y-6">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="anagram-date">Day</Label>
-              <Input
-                id="anagram-date"
-                type="date"
-                value={gameDate}
-                onChange={(event) => {
-                  setGameDate(event.target.value);
-                  // A draw is signed to one day. Changing the day invalidates it, so the
-                  // screen asks for a new one rather than saving a word for the old date.
-                  setDrawn(null);
-                  setFormError(null);
-                }}
-              />
-            </div>
+        {current && (
+          <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
+            Current session:{' '}
+            <span className="font-mono font-semibold uppercase">
+              {current.answer ?? 'no word yet'}
+            </span>{' '}
+            <span className="text-muted-foreground">
+              ({current.game_date}
+              {current.period_end_date ? ` → ${current.period_end_date}` : ''})
+            </span>
+          </p>
+        )}
 
-            <div className="flex gap-2" role="group" aria-label="Where the word comes from">
-              <Button
-                type="button"
-                variant={mode === 'custom' ? 'default' : 'outline'}
-                size="sm"
-                aria-pressed={mode === 'custom'}
-                onClick={() => {
-                  setMode('custom');
-                  setDrawn(null);
-                  setFormError(null);
-                }}
-              >
-                Type a word
-              </Button>
-              <Button
-                type="button"
-                variant={mode === 'random' ? 'default' : 'outline'}
-                size="sm"
-                aria-pressed={mode === 'random'}
-                onClick={() => {
-                  setMode('random');
-                  setWord('');
-                  setFormError(null);
-                }}
-              >
-                <Dices />
-                Draw for me
-              </Button>
-            </div>
+        <div className="flex flex-col gap-4">
+          <div className="flex gap-2" role="group" aria-label="Where the word comes from">
+            <Button
+              type="button"
+              variant={formMode === 'custom' ? 'default' : 'outline'}
+              size="sm"
+              aria-pressed={formMode === 'custom'}
+              onClick={() => selectMode('custom')}
+            >
+              Type a word
+            </Button>
+            <Button
+              type="button"
+              variant={formMode === 'random' ? 'default' : 'outline'}
+              size="sm"
+              aria-pressed={formMode === 'random'}
+              onClick={() => selectMode('random')}
+            >
+              <Dices />
+              Draw for me
+            </Button>
           </div>
 
-          {mode === 'custom' ? (
+          {hasUnsavedMode && stagedMode !== null && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-500/10 p-3"
+            >
+              <p className="text-sm">
+                <span className="font-semibold">Unsaved changes</span> — Anagram will run on{' '}
+                {stagedMode === 'random' ? 'random words' : 'a manual word'} from the next
+                session onwards. The current session is untouched.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleSaveMode}
+                  disabled={savingMode}
+                >
+                  {savingMode ? 'Saving...' : 'Save'}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setStagedMode(null);
+                    setModeError(null);
+                  }}
+                >
+                  Discard
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {modeError && (
+            <p role="alert" className="text-sm font-medium text-destructive">
+              {modeError}
+            </p>
+          )}
+
+          {formMode === 'custom' ? (
             <div className="flex flex-col gap-2">
               <Label htmlFor="anagram-answer">Word</Label>
               <Input
@@ -236,13 +364,13 @@ export const AdminAnagramConfig = () => {
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/40 p-4">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Word for {gameDate}
+                  Word for today
                 </p>
                 <p className="break-all font-mono text-2xl font-semibold uppercase tracking-widest">
                   {drawn.word}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Drawn by the server. Saving stores this word and no other.
+                  Drawn by the server. Updating stores this word and no other.
                 </p>
               </div>
               <Button type="button" size="sm" onClick={handleDraw} disabled={drawing}>
@@ -252,13 +380,7 @@ export const AdminAnagramConfig = () => {
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={handleDraw}
-                disabled={drawing || !hasDate}
-              >
+              <Button type="button" size="sm" variant="outline" onClick={handleDraw} disabled={drawing}>
                 <Dices />
                 {drawing ? 'Drawing...' : 'Draw a word'}
               </Button>
@@ -270,13 +392,13 @@ export const AdminAnagramConfig = () => {
 
           <div className="flex flex-wrap items-center gap-3">
             <Button type="button" onClick={handleSave} disabled={!readyToSave || saving}>
-              {saving ? 'Saving...' : 'Save puzzle'}
+              {saving ? 'Updating...' : 'Update session'}
             </Button>
             <p className="text-xs text-muted-foreground">
-              {mode === 'custom'
-                ? 'The word is checked for letters on save.'
+              {formMode === 'custom'
+                ? 'The word is checked for letters on update.'
                 : drawn
-                  ? `Saves ${drawn.word} for ${gameDate}.`
+                  ? `Replaces the current session with ${drawn.word}.`
                   : 'Draw a word first.'}
             </p>
           </div>
@@ -286,43 +408,92 @@ export const AdminAnagramConfig = () => {
               {formError}
             </p>
           )}
+        </div>
 
-          {lastCreated && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/40 p-4">
-              <div className="min-w-0">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                  {lastCreated.mode === 'random'
-                    ? 'The server drew'
-                    : 'Saved as'}{' '}
-                  for {lastCreated.game_date}
-                </p>
-                <p className="break-all font-mono text-2xl font-semibold uppercase tracking-widest">
-                  {lastCreated.answer}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Stored in uppercase, exactly as shown.
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setLastCreated(null)}
-                aria-label="Dismiss"
-              >
-                <X />
-              </Button>
+        <div className="flex flex-col gap-3 border-t border-border/40 pt-4">
+          <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Schedule a future word
+          </h4>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="anagram-schedule-date">Period start (UTC)</Label>
+              <Input
+                id="anagram-schedule-date"
+                type="date"
+                value={scheduleDate}
+                onChange={(event) => {
+                  setScheduleDate(event.target.value);
+                  setScheduleError(null);
+                }}
+              />
             </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="anagram-schedule-word">Future word</Label>
+              <Input
+                id="anagram-schedule-word"
+                value={scheduleWord}
+                maxLength={100}
+                placeholder="Letters only"
+                autoComplete="off"
+                onChange={(event) => {
+                  setScheduleWord(event.target.value);
+                  setScheduleError(null);
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              onClick={handleSchedule}
+              disabled={!scheduleDate || !scheduleWord.trim() || scheduling}
+            >
+              {scheduling ? 'Scheduling...' : 'Schedule word'}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Within 30 days ahead. The word waits until its period opens and never activates
+            early.
+          </p>
+          {scheduleError && (
+            <p role="alert" className="text-sm font-medium text-destructive">
+              {scheduleError}
+            </p>
+          )}
+          {scheduled.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {scheduled.map((entry) => (
+                <li
+                  key={entry.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3 text-sm"
+                >
+                  <span>
+                    <span className="font-mono font-semibold">{entry.target_date}</span>
+                    {' — '}
+                    <span className="break-all font-mono uppercase tracking-widest">
+                      {entry.word}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleDeleteScheduled(entry.target_date)}
+                    aria-label={`Withdraw the word for ${entry.target_date}`}
+                  >
+                    <X />
+                  </Button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border/40 pt-4">
           <div className="flex items-baseline justify-between gap-3">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Configured puzzles
+              Session history
             </h4>
             <span className="text-xs text-muted-foreground">
-              {loading ? 'Loading...' : `${games.length} configured`}
+              {loading ? 'Loading...' : `${games.length} sessions`}
             </span>
           </div>
 
@@ -334,7 +505,7 @@ export const AdminAnagramConfig = () => {
 
           {!loading && !listError && games.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              Nothing configured yet. Set the word above and it appears here.
+              No sessions yet. The reset loop opens the first one automatically.
             </p>
           )}
 
@@ -346,15 +517,18 @@ export const AdminAnagramConfig = () => {
                     <button
                       type="button"
                       onClick={() => void openDetail(game.id)}
-                      aria-label={`Inspect the puzzle for ${game.game_date}`}
+                      aria-label={`Inspect the session for ${game.game_date}`}
                       className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-left"
                     >
                       <span className="font-mono text-sm font-semibold">{game.game_date}</span>
                       <Badge variant={game.mode === 'custom' ? 'secondary' : 'default'}>
                         {game.mode === 'custom' ? 'Typed' : 'Drawn'}
                       </Badge>
+                      <Badge variant={game.status === 'active' ? 'default' : 'outline'}>
+                        {game.status ?? 'active'}
+                      </Badge>
                       <span className="break-all font-mono uppercase tracking-widest">
-                        {game.answer}
+                        {game.answer ?? 'pending'}
                       </span>
                     </button>
                   </div>
@@ -367,14 +541,14 @@ export const AdminAnagramConfig = () => {
             <div className="rounded-xl border border-border/60 bg-muted/40 p-4 text-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
-                  <p className="font-semibold">Puzzle for {detail.game_date}</p>
+                  <p className="font-semibold">Session for {detail.game_date}</p>
                   <p className="break-all font-mono text-xs text-muted-foreground">
                     {detail.id}
                   </p>
                   <p>
                     {detail.mode === 'custom' ? 'Typed' : 'Drawn'} word:{' '}
                     <span className="break-all font-mono uppercase tracking-widest">
-                      {detail.answer}
+                      {detail.answer ?? 'pending'}
                     </span>
                   </p>
                   <p className="text-xs text-muted-foreground">

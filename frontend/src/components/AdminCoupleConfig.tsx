@@ -18,6 +18,7 @@ import {
   createCoupleGame,
   getAdminCoupleGame,
   getAdminCoupleGames,
+  getCurrentAdminCoupleSession,
   type CoupleGame,
 } from '@/services/api';
 
@@ -52,6 +53,11 @@ export const AdminCoupleConfig = () => {
 
   const [detail, setDetail] = useState<CoupleGame | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [session, setSession] = useState<{
+    id: string;
+    period_start_date: string | null;
+    period_end_date: string | null;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,6 +67,11 @@ export const AdminCoupleConfig = () => {
       setListError(describeApiError(error, 'Could not load the featured days.'));
     } finally {
       setLoading(false);
+    }
+    try {
+      setSession(await getCurrentAdminCoupleSession());
+    } catch {
+      setSession(null);
     }
   }, []);
 
@@ -112,14 +123,28 @@ export const AdminCoupleConfig = () => {
               Couple Prediction
             </CardTitle>
             <CardDescription>
-              One featured day at a time. The 50 questions are shared for every day,
-              so there is nothing to type -- pick the day and save it.
+              One featured day at a time, and featuring never touches a session: the
+              questionnaire rolls on its own cadence with a fresh question set per
+              couple, and there is no Update action for this game.
             </CardDescription>
           </div>
         </div>
       </CardHeader>
 
       <CardContent className="space-y-6">
+        {session && (
+          <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
+            Current session period:{' '}
+            <span className="font-mono font-semibold">
+              {session.period_start_date ?? '—'}
+              {session.period_end_date ? ` → ${session.period_end_date}` : ''}
+            </span>{' '}
+            <span className="text-muted-foreground">
+              — every couple gets a fresh set of 25 questions each period.
+            </span>
+          </p>
+        )}
+
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-2">

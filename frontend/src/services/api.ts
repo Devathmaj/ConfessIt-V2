@@ -698,7 +698,12 @@ export interface WordleGame {
     id: string;
     game_date: string;
     mode: 'custom' | 'random';
-    answer: string;
+    /** Null while the session is pending (manual mode, word not yet provided). */
+    answer: string | null;
+    /** Lifecycle state: active, pending or ended. */
+    status?: string;
+    period_start_date?: string | null;
+    period_end_date?: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -773,7 +778,12 @@ export interface AnagramGame {
     id: string;
     game_date: string;
     mode: 'custom' | 'random';
-    answer: string;
+    /** Null while the session is pending (manual mode, word not yet provided). */
+    answer: string | null;
+    /** Lifecycle state: active, pending or ended. */
+    status?: string;
+    period_start_date?: string | null;
+    period_end_date?: string | null;
     created_by: string;
     created_at: string;
     updated_at: string;
@@ -928,6 +938,10 @@ export interface WordleCurrentGame {
     game_id: string | null;
     game_date: string | null;
     participation: WordleParticipation | null;
+    /** Mirrors the session lifecycle; `pending` means the word is not set yet. */
+    session_status?: string | null;
+    /** Sentence the screen shows when the session is pending. */
+    message?: string | null;
     max_attempts: number;
     word_length: number;
 }
@@ -1002,6 +1016,10 @@ export interface AnagramCurrentGame {
     game_id: string | null;
     game_date: string | null;
     participation: AnagramParticipation | null;
+    /** Mirrors the session lifecycle; `pending` means the word is not set yet. */
+    session_status?: string | null;
+    /** Sentence the screen shows when the session is pending. */
+    message?: string | null;
     max_attempts: number;
 }
 
@@ -1236,6 +1254,224 @@ export const submitCouplePrediction = async (
         { session_question_id: sessionQuestionId, predicted_option_index: predictedOptionIndex },
         { headers: getAuthHeaders() }
     );
+    return response.data;
+};
+
+// --- Game configuration, featured spotlight, scheduling and selection ---
+//
+// The separated model: per-game availability/cadence, the one-spotlight-per-day
+// schedule, horizon-bounded future words, and the server-derived selection list
+// (hidden games never appear; disabled/pending games arrive marked unplayable).
+
+/** One game's availability, content mode and reset cadence, as stored. */
+export interface GameConfig {
+    game_id: string;
+    enabled: boolean;
+    is_hidden: boolean;
+    content_mode: 'random' | 'manual' | null;
+    reset_cadence: 'daily' | 'every_2_days' | 'every_3_days' | 'every_5_days' | 'weekly';
+}
+
+/** Every game's configuration. */
+export const getGameConfigs = async (): Promise<GameConfig[]> => {
+    const response = await axios.get(`${API_URL}/admin/games/config`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Patch one game's availability, content mode or reset cadence. */
+export const updateGameConfig = async (
+    gameId: string,
+    payload: Partial<Pick<GameConfig, 'enabled' | 'is_hidden' | 'content_mode' | 'reset_cadence'>>
+): Promise<GameConfig> => {
+    const response = await axios.put(`${API_URL}/admin/games/config/${gameId}`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** One featured date: which game holds the spotlight on which UTC day. */
+export interface FeaturedGame {
+    id: string;
+    game_date: string;
+    game_id: string;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** Every featured date, newest day first. */
+export const getFeaturedGames = async (): Promise<FeaturedGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/featured`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Pin one game as featured for one UTC date. A date that already has one answers 409. */
+export const setFeaturedGame = async (
+    gameDate: string,
+    gameId: string
+): Promise<FeaturedGame> => {
+    const response = await axios.post(
+        `${API_URL}/admin/featured`,
+        { game_date: gameDate, game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Remove the featured pick for one UTC date. */
+export const clearFeaturedGame = async (gameDate: string): Promise<void> => {
+    await axios.delete(`${API_URL}/admin/featured/${gameDate}`, {
+        headers: getAuthHeaders(),
+    });
+};
+
+/** Evaluate every game's session boundary now (the manual 00:01 UTC trigger). */
+export const runScheduledResets = async (): Promise<{
+    resets: Record<string, { action: string; session_id?: string | null }>;
+    active: Record<string, number>;
+}> => {
+    const response = await axios.post(
+        `${API_URL}/admin/games/run-resets`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** A manual word waiting for its session period to begin. */
+export interface ScheduledWord {
+    id: string;
+    game_id: string;
+    target_date: string;
+    word: string;
+    created_by: string;
+}
+
+/** Schedule a manual Wordle word for a future period (bounded horizon). */
+export const scheduleWordleWord = async (
+    targetDate: string,
+    word: string
+): Promise<ScheduledWord> => {
+    const response = await axios.post(
+        `${API_URL}/admin/wordle/schedule`,
+        { target_date: targetDate, word },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Every scheduled Wordle word, earliest date first. */
+export const getScheduledWordleWords = async (): Promise<ScheduledWord[]> => {
+    const response = await axios.get(`${API_URL}/admin/wordle/scheduled`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Withdraw the scheduled Wordle word for one date. */
+export const deleteScheduledWordleWord = async (targetDate: string): Promise<void> => {
+    await axios.delete(`${API_URL}/admin/wordle/scheduled/${targetDate}`, {
+        headers: getAuthHeaders(),
+    });
+};
+
+/** Schedule a manual Anagram word for a future period (bounded horizon). */
+export const scheduleAnagramWord = async (
+    targetDate: string,
+    word: string
+): Promise<ScheduledWord> => {
+    const response = await axios.post(
+        `${API_URL}/admin/anagram/schedule`,
+        { target_date: targetDate, word },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Every scheduled Anagram word, earliest date first. */
+export const getScheduledAnagramWords = async (): Promise<ScheduledWord[]> => {
+    const response = await axios.get(`${API_URL}/admin/anagram/scheduled`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Withdraw the scheduled Anagram word for one date. */
+export const deleteScheduledAnagramWord = async (targetDate: string): Promise<void> => {
+    await axios.delete(`${API_URL}/admin/anagram/scheduled/${targetDate}`, {
+        headers: getAuthHeaders(),
+    });
+};
+
+/** The current Wordle session for the admin screen, or 404 when there is none. */
+export const getCurrentAdminWordleSession = async (): Promise<WordleGame> => {
+    const response = await axios.get(`${API_URL}/admin/wordle/current`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** The current Anagram session for the admin screen, or 404 when there is none. */
+export const getCurrentAdminAnagramSession = async (): Promise<AnagramGame> => {
+    const response = await axios.get(`${API_URL}/admin/anagram/current`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** The current global Couple Questionnaire session, or 404 when there is none. */
+export const getCurrentAdminCoupleSession = async (): Promise<{
+    id: string;
+    game_date: string;
+    status: string;
+    period_start_date: string | null;
+    period_end_date: string | null;
+}> => {
+    const response = await axios.get(`${API_URL}/admin/couple/session`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** One game as the selection screen sees it. Hidden games never appear. */
+export interface GameSelectEntry {
+    game_id: string;
+    name: string;
+    enabled: boolean;
+    playable: boolean;
+    session_status: string | null;
+    featured: boolean;
+    message: string | null;
+}
+
+/** The server-derived selection list plus today's featured pick. */
+export interface GameSelectResponse {
+    games: GameSelectEntry[];
+    featured_game_id: string | null;
+    server_date: string;
+}
+
+/** Every discoverable game with its playability. */
+export const getGameSelection = async (): Promise<GameSelectResponse> => {
+    const response = await axios.get(`${API_URL}/games/select`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Today's featured game (UTC), if the day has a pick. */
+export const getFeaturedToday = async (): Promise<{
+    game_id: string | null;
+    game_date: string | null;
+    server_date: string;
+}> => {
+    const response = await axios.get(`${API_URL}/games/featured`, {
+        headers: getAuthHeaders(),
+    });
     return response.data;
 };
 

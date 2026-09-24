@@ -109,13 +109,35 @@ def _now() -> datetime:
 
 
 def _latest_playable_game(session) -> Optional[CoupleGameRecord]:
-    """The newest featured day that has arrived, or None when nothing is playable."""
-    return session.scalar(
+    """The current questionnaire session, or None when the game has none.
+
+    Sessions are opened by the reset loop under the game's own cadence and are
+    independent of the featured spotlight: a session exists whether or not the
+    questionnaire is featured today. Availability is enforced by the callers
+    through ``check_playable`` before this is ever consulted.
+    """
+    from . import game_periods
+
+    game = session.scalar(
         select(CoupleGameRecord)
-        .where(CoupleGameRecord.game_date <= _today())
-        .order_by(CoupleGameRecord.game_date.desc())
+        .where(CoupleGameRecord.status.in_(("active", "pending")))
         .limit(1)
     )
+    if game is None or game.status != "active":
+        return None
+    start = game.period_start_date or game.game_date
+    if start is not None and start > _today():
+        return None
+    if game_periods.is_reset_due(game.period_end_date, _today()):
+        return None
+    return game
+
+
+def _require_playable(session) -> None:
+    """Refuse hidden and disabled questionnaire access with a coded 403."""
+    from .game_configs import check_playable
+
+    check_playable(session, "couple-questionnaire")
 
 
 def _owner_of(assignment: str, session_row: CoupleGameSessionRecord) -> Optional[str]:
@@ -147,6 +169,8 @@ def list_partners(db: Database, user: UserDetails) -> List[CouplePartnerCandidat
     same reason love-note recipients do -- visibility is not entitlement, and
     nothing about playing is decided by this list.
     """
+    with db.sessions.begin() as session:
+        _require_playable(session)
     with db.sessions() as session:
         rows = session.scalars(
             select(UserRecord)
@@ -174,6 +198,7 @@ def _assemble_state(session, user: UserDetails) -> CoupleCurrentState:
     inside the completed ``result`` -- that is the single moment the feature
     exists to reveal them.
     """
+    _require_playable(session)
     game = _latest_playable_game(session)
 
     selection = session.scalar(
@@ -417,7 +442,13 @@ def _prediction_order(session_id: str, predictor_user_id: str, partner_sq: list)
 
 
 def current_state(db: Database, user: UserDetails) -> CoupleCurrentState:
-    """This caller's place in the featured Couple Questionnaire, without creating a row."""
+    """This caller's place in the Couple Questionnaire, without creating a row.
+
+    Reads never create sessions: the reset loop owns the global period, and a
+    day with no session reads as ``no_game`` until the loop opens one.
+    """
+    with db.sessions.begin() as session:
+        _require_playable(session)
     with db.sessions() as session:
         return _assemble_state(session, user)
 
@@ -466,6 +497,9 @@ def select_partner(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot select yourself as a partner.",
         )
+
+    with db.sessions.begin() as session:
+        _require_playable(session)
 
     with db.sessions.begin() as session:
         target = session.get(UserRecord, str(selected_user_id))
@@ -588,31 +622,15 @@ def _maybe_create_session(session, game: CoupleGameRecord, first_id: str, second
     if already_dealt:
         return
 
-    bank_ids = session.scalars(select(CoupleGameQuestionRecord.id)).all()
-    if len(bank_ids) < COUPLE_SESSION_QUESTIONS:
+    from .game_scheduler import deal_pair_questions
+
+    try:
+        deal_pair_questions(session, str(created.id))
+    except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The question bank is not ready yet. Try again in a moment.",
-        )
-    chosen = random.sample([str(bank_id) for bank_id in bank_ids], COUPLE_SESSION_QUESTIONS)
-    shared = set(random.sample(chosen, COUPLE_SESSION_SHARED_QUESTIONS))
-    remaining = [question_id for question_id in chosen if question_id not in shared]
-    random.shuffle(remaining)
-    exclusive = COUPLE_SESSION_EXCLUSIVE_PER_PLAYER
-    assignment = (
-        [(question_id, "shared") for question_id in shared]
-        + [(question_id, "user_a") for question_id in remaining[:exclusive]]
-        + [(question_id, "user_b") for question_id in remaining[exclusive:]]
-    )
-    assert len(assignment) == COUPLE_SESSION_QUESTIONS
-    session.add_all(
-        CoupleGameSessionQuestionRecord(
-            session_id=str(created.id),
-            question_id=question_id,
-            assignment=kind,
-        )
-        for question_id, kind in assignment
-    )
+        ) from exc
 
 
 # --- original answers ------------------------------------------------------------
@@ -637,16 +655,17 @@ def submit_answer(
         )
 
     with db.sessions.begin() as session:
+        _require_playable(session)
         game = _latest_playable_game(session)
         if game is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="No featured game yet"
+                status_code=status.HTTP_404_NOT_FOUND, detail="No questionnaire session yet"
             )
         session_row = _get_my_session_for_update(session, str(game.id), user.id)
         if session_row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="You have no session in the featured game yet",
+                detail="You have no session in the current questionnaire yet",
             )
         if session_row.status == "completed":
             raise HTTPException(
@@ -730,16 +749,17 @@ def submit_prediction(
         )
 
     with db.sessions.begin() as session:
+        _require_playable(session)
         game = _latest_playable_game(session)
         if game is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="No featured game yet"
+                status_code=status.HTTP_404_NOT_FOUND, detail="No questionnaire session yet"
             )
         session_row = _get_my_session_for_update(session, str(game.id), user.id)
         if session_row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="You have no session in the featured game yet",
+                detail="You have no session in the current questionnaire yet",
             )
         if session_row.status == "completed":
             raise HTTPException(

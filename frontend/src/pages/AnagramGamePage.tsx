@@ -464,6 +464,30 @@ export const AnagramGamePage = () => {
     );
   }
 
+  if (game.session_status === 'pending' && gameId !== null) {
+    return (
+      <div>
+        <GamesPageHeader
+          eyebrow="Word play"
+          title="Anagram"
+          description="Unscramble the letters in five guesses or fewer."
+        />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+            <p className="text-lg font-semibold">Today&apos;s word has not been set yet.</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              {game.message ??
+                'The session is waiting for its word. Check back soon -- or look at what else the Games section has to offer.'}
+            </p>
+            <NavLink to="/games">
+              <Button variant="outline">Back to Games</Button>
+            </NavLink>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (gameId === null) {
     return (
       <div>

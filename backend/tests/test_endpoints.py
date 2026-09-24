@@ -53,9 +53,13 @@ ADMIN_READ_ROUTES = [
     "/admin/stats",
     "/admin/wordle",
     "/admin/wordle/preview",
+    "/admin/wordle/scheduled",
     "/admin/anagram",
     "/admin/anagram/preview",
+    "/admin/anagram/scheduled",
     "/admin/couple",
+    "/admin/games/config",
+    "/admin/featured",
 ]
 
 

@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
-import { categoryLabel, type GameDefinition } from '@/lib/gamesCatalog';
+import { categoryLabel, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
+import { getFeaturedToday } from '@/services/api';
 
 /**
  * Today's featured game.
@@ -26,16 +27,23 @@ const FEATURED_TODAY_STATS = {
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
-/** Counts down to local midnight, when the featured pick rotates. */
+/** Counts down to the next 00:01 UTC reset boundary, when the spotlight may rotate. */
 const useResetCountdown = () => {
   const [label, setLabel] = useState('00:00:00');
 
   useEffect(() => {
     const tick = () => {
-      const now = new Date();
-      const end = new Date(now);
-      end.setHours(24, 0, 0, 0);
-      const distance = Math.max(0, end.getTime() - now.getTime());
+      const now = Date.now();
+      const day = new Date(now);
+      const next = Date.UTC(
+        day.getUTCFullYear(),
+        day.getUTCMonth(),
+        day.getUTCDate() + 1,
+        0,
+        1,
+        0,
+      );
+      const distance = Math.max(0, next - now);
       const hours = Math.floor(distance / 3_600_000);
       const minutes = Math.floor((distance % 3_600_000) / 60_000);
       const seconds = Math.floor((distance % 60_000) / 1000);
@@ -53,11 +61,31 @@ const useResetCountdown = () => {
 export const GamesFeaturedPage = () => {
   const navigate = useNavigate();
   const countdown = useResetCountdown();
-  // The shared configuration, not the catalogue's own rotation: the pick an administrator
-  // pinned on the manage screen is the pick shown here. Falls back to a freshly seeded
-  // configuration when the provider is absent, so the page also works standalone.
+  // The server's spotlight for today (UTC). Falls back to the shared local
+  // configuration when the request fails, so the page also works standalone.
   const { featured } = useGamesConfig();
-  const game = featured?.game;
+  const [serverGameId, setServerGameId] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    getFeaturedToday()
+      .then((response) => {
+        if (!cancelled) setServerGameId(response.game_id);
+      })
+      .catch(() => {
+        if (!cancelled) setServerGameId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const game =
+    serverGameId === undefined
+      ? featured?.game
+      : serverGameId
+        ? (getGameById(serverGameId) ?? featured?.game)
+        : undefined;
 
   const notifyPlay = (current: GameDefinition) => {
     if (current.route) {
@@ -73,7 +101,7 @@ export const GamesFeaturedPage = () => {
         <GamesPageHeader
           eyebrow="Today's featured"
           title="Game of the Day"
-          description="One mini-game takes the spotlight every day. The pick rotates at midnight."
+          description="One mini-game takes the spotlight every day. The pick rotates at 00:01 UTC."
         />
         <div className="mx-auto max-w-2xl rounded-3xl border border-dashed border-border/70 px-6 py-14 text-center">
           <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />

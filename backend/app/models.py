@@ -788,18 +788,25 @@ class WordleGameCreate(BaseModel):
 
 
 class WordleGame(BaseModel):
-    """A configured puzzle as it is stored: the day, the word, and where the word came from.
+    """A Wordle session as it is stored: the day, the word, and where the word came from.
 
     ``answer`` is returned deliberately. This is the administrator's own configuration screen
     -- the whole point of which is that the admin can see what will be published -- and the
     endpoint is gated on the capability that may publish it. There is no participant-facing
     read of this model; when one exists it will not be this one.
+
+    ``answer`` is null while the session is pending (manual mode, word not yet
+    provided). ``status`` is the lifecycle state; ``period_*`` is the calendar
+    period the session covers, which an Update shortens rather than renews.
     """
 
     id: str
     game_date: date
     mode: WordleMode
-    answer: str
+    answer: Optional[str] = None
+    status: str = "active"
+    period_start_date: Optional[date] = None
+    period_end_date: Optional[date] = None
     created_at: datetime
     updated_at: datetime
 
@@ -874,7 +881,10 @@ class AnagramGame(BaseModel):
     id: str
     game_date: date
     mode: AnagramMode
-    answer: str
+    answer: Optional[str] = None
+    status: str = "active"
+    period_start_date: Optional[date] = None
+    period_end_date: Optional[date] = None
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -1243,6 +1253,8 @@ class AnagramCurrentGame(BaseModel):
     game_id: Optional[str] = None
     game_date: Optional[date] = None
     participation: Optional[AnagramParticipation] = None
+    session_status: Optional[str] = None
+    message: Optional[str] = None
     max_attempts: int = ANAGRAM_MAX_ATTEMPTS
 
 
@@ -1354,6 +1366,10 @@ class WordleCurrentGame(BaseModel):
     arrived. ``participation`` is NULL until the player commits a first guess -- reading the
     board must not create a row, or opening the screen twice would count as two attempts.
 
+    ``session_status`` mirrors the session lifecycle: ``pending`` means today's
+    word has not been configured yet and the board is not playable, in which
+    case ``message`` carries the sentence the screen shows.
+
     ``max_attempts`` and ``word_length`` are carried so the screen can draw its empty board
     without a second round trip and without hardcoding the shape of the game in the client.
     """
@@ -1361,6 +1377,8 @@ class WordleCurrentGame(BaseModel):
     game_id: Optional[str] = None
     game_date: Optional[date] = None
     participation: Optional[WordleParticipation] = None
+    session_status: Optional[str] = None
+    message: Optional[str] = None
     max_attempts: int = WORDLE_MAX_ATTEMPTS
     word_length: int = WORDLE_ANSWER_LENGTH
 
@@ -1397,3 +1415,102 @@ class WordleGuessResponse(WordleParticipation):
 
     guess: str
     result: list[WordleTile]
+
+
+# --- Game configuration, featured games, scheduling and selection ---------------
+#
+# The admin and player surfaces of the separated model. Configuration owns
+# per-game availability and cadence, featured owns the one-spotlight-per-day
+# schedule, scheduled content owns future manual words inside the finite
+# horizon, and the selection response is what ``GET /games/select`` serves so a
+# screen never has to re-derive availability client-side.
+
+GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
+GameContentMode = Literal["random", "manual"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire"]
+
+
+class GameConfig(BaseModel):
+    """One game's availability, content mode and reset cadence, as stored."""
+
+    game_id: str
+    enabled: bool = True
+    is_hidden: bool = False
+    content_mode: Optional[GameContentMode] = None
+    reset_cadence: GameResetCadence = "daily"
+
+
+class GameConfigUpdate(BaseModel):
+    """Patching one game's configuration; every field is optional."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = None
+    is_hidden: Optional[bool] = None
+    content_mode: Optional[GameContentMode] = None
+    reset_cadence: Optional[GameResetCadence] = None
+
+
+class FeaturedGame(BaseModel):
+    """One featured date: which game holds the spotlight on which UTC day."""
+
+    id: str
+    game_date: date
+    game_id: str
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FeaturedGameCreate(BaseModel):
+    """Pinning the spotlight; a date that already has one is a 409."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_date: date
+    game_id: GameId
+
+
+class ScheduledWord(BaseModel):
+    """A manual word waiting for its session period to begin."""
+
+    id: str
+    game_id: str
+    target_date: date
+    word: str
+    created_by: str
+
+
+class ScheduledWordCreate(BaseModel):
+    """Scheduling a manual word inside the finite horizon."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_date: date
+    word: Optional[str] = None
+
+
+class GameSelectEntry(BaseModel):
+    """One game as the selection screen sees it: visibility and playability.
+
+    Hidden games never appear here at all -- the list carries only what the
+    caller may discover. ``playable`` is false for disabled games and for
+    games with no configured session, and ``message`` is the sentence the
+    screen shows for either case.
+    """
+
+    game_id: str
+    name: str
+    enabled: bool
+    playable: bool
+    session_status: Optional[str] = None
+    featured: bool = False
+    message: Optional[str] = None
+
+
+class GameSelectResponse(BaseModel):
+    """The selection list plus today's featured game, if the day has a pick."""
+
+    games: List[GameSelectEntry]
+    featured_game_id: Optional[str] = None
+    server_date: date

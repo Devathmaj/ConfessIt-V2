@@ -97,16 +97,16 @@ def test_a_custom_word_is_normalized_to_lowercase(admin_client: TestClient):
 
 
 def test_a_day_can_be_named_in_advance(admin_client: TestClient):
-    """``game_date`` is optional because the usual save is today's puzzle, not because
-    scheduling is forbidden."""
+    """Future manual words are scheduled, bounded by the finite horizon."""
     upcoming = (datetime.now(timezone.utc).date() + timedelta(days=3)).isoformat()
 
-    response = save(
-        admin_client, {"mode": "custom", "word": solution_words()[2], "game_date": upcoming}
+    response = admin_client.post(
+        "/admin/wordle/schedule",
+        json={"target_date": upcoming, "word": solution_words()[2]},
     )
 
     assert response.status_code == 201, response.text
-    assert response.json()["game_date"] == upcoming
+    assert response.json()["target_date"] == upcoming
 
 
 # --- the draw ------------------------------------------------------------------
@@ -190,28 +190,60 @@ def test_an_unrecognised_mode_is_a_validation_error(admin_client: TestClient):
 # --- one day, one answer -------------------------------------------------------
 
 
-def test_a_second_puzzle_for_the_same_day_is_refused(admin_client: TestClient):
+def test_an_update_ends_the_current_session_and_opens_a_new_one(admin_client: TestClient, db):
+    """"Update" is terminate-then-create: the old row survives as ended history."""
+    from sqlalchemy import select
+
     first = save(admin_client, {"mode": "custom", "word": solution_words()[0]})
     assert first.status_code == 201, first.text
 
     second = save(admin_client, {"mode": "custom", "word": solution_words()[1]})
 
-    assert second.status_code == 409
-    listing = admin_client.get("/admin/wordle")
-    assert len(listing.json()) == 1
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] != first.json()["id"]
+    assert second.json()["answer"] == solution_words()[1]
+    with db.sessions() as session:
+        rows = session.scalars(select(WordleGameRecord)).all()
+        assert len(rows) == 2
+        by_id = {str(row.id): row for row in rows}
+        assert by_id[first.json()["id"]].status == "ended"
+        assert by_id[second.json()["id"]].status == "active"
 
 
-def test_the_schema_refuses_a_second_row_for_one_day(db):
-    """The service's 409 is a message; this is the rule. Written straight to the table to
-    prove the constraint holds for a caller that never went through the service -- which is
-    the race the uniqueness check exists to close."""
+def test_the_schema_refuses_two_simultaneously_active_sessions(db):
+    """The single-active rule lives in a partial unique index, not in game_date.
+
+    Two ended rows may share a day (that is the history an Update keeps); two
+    active rows may not, which is what serializes a scheduler run racing an
+    admin Update.
+    """
     day = datetime.now(timezone.utc).date()
     with db.sessions.begin() as session:
-        session.add(WordleGameRecord(game_date=day, mode="custom", answer="cigar"))
+        session.add(
+            WordleGameRecord(
+                game_date=day, mode="custom", answer="cigar", status="ended"
+            )
+        )
+        session.add(
+            WordleGameRecord(
+                game_date=day, mode="custom", answer="rebut", status="ended"
+            )
+        )
+
+    with db.sessions.begin() as session:
+        session.add(
+            WordleGameRecord(
+                game_date=day, mode="custom", answer="cigar", status="active"
+            )
+        )
 
     with pytest.raises(IntegrityError):
         with db.sessions.begin() as session:
-            session.add(WordleGameRecord(game_date=day, mode="custom", answer="rebut"))
+            session.add(
+                WordleGameRecord(
+                    game_date=day, mode="custom", answer="rebut", status="active"
+                )
+            )
 
 
 def test_the_schema_refuses_an_answer_that_is_not_five_letters(db):
@@ -228,25 +260,24 @@ def test_the_schema_refuses_an_answer_that_is_not_five_letters(db):
 
 
 def test_puzzles_are_listed_newest_first_and_readable_by_id(admin_client: TestClient):
-    base = datetime.now(timezone.utc).date()
-    earlier = (base - timedelta(days=2)).isoformat()
-    later = (base - timedelta(days=1)).isoformat()
-
-    created = save(
-        admin_client, {"mode": "custom", "word": solution_words()[0], "game_date": earlier}
-    )
-    save(admin_client, {"mode": "custom", "word": solution_words()[1], "game_date": later})
+    created = save(admin_client, {"mode": "custom", "word": solution_words()[0]})
+    assert created.status_code == 201, created.text
+    updated = save(admin_client, {"mode": "custom", "word": solution_words()[1]})
+    assert updated.status_code == 201, updated.text
 
     listing = admin_client.get("/admin/wordle")
     assert listing.status_code == 200
     body = listing.json()
-    assert [entry["game_date"] for entry in body] == [later, earlier]
+    assert [entry["id"] for entry in body] == [updated.json()["id"], created.json()["id"]]
     # The answer comes back with the row: seeing what will be published is the screen's job.
     assert body[1]["answer"] == solution_words()[0]
+    # History carries its lifecycle: the first session ended when it was replaced.
+    assert body[1]["status"] == "ended"
+    assert body[0]["status"] == "active"
 
     detail = admin_client.get(f"/admin/wordle/{created.json()['id']}")
     assert detail.status_code == 200
-    assert detail.json() == created.json()
+    assert detail.json()["id"] == created.json()["id"]
 
 
 def test_an_unknown_id_is_404_and_a_malformed_one_is_400(admin_client: TestClient):

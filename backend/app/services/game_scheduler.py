@@ -1,0 +1,399 @@
+"""The automatic session reset loop: calendar-driven, idempotent, UTC.
+
+Runs at (or just after) 00:01 UTC and may safely run as often as wanted: every
+game is evaluated against its own period boundary, and a run that finds the
+current session still inside its period changes nothing. Creating is never
+lazy -- user visits validate defensively, but this loop is what opens periods.
+
+Per game, per run, under one transaction-scoped advisory lock:
+
+* hidden game -> create nothing (existing rows are left alone; play is refused
+  by the availability check even if an old session lingers);
+* current session still inside its period -> keep it (a second run for the same
+  boundary is a no-op, never a duplicate);
+* current session is pending and its word has arrived (scheduled content for its
+  period start, or the game now runs ``random``) -> end it and open a configured
+  session for the *same* period;
+* boundary reached or no current session -> end the old one and open the next
+  period starting today: random draws a word immediately, manual consumes a
+  scheduled word when one waits for today and otherwise opens pending, and the
+  questionnaire opens a new global period and deals every existing couple a
+  fresh set of questions.
+
+The partial unique index on each game table (one active-or-pending row) is the
+backstop behind the lock: a run racing an admin Update past the lock still
+lands one winner and one integrity error, and the loser re-reads the winner.
+"""
+
+import random
+from datetime import date, datetime, timezone
+from typing import Any, Optional
+
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import IntegrityError
+
+from ..db_models import (
+    AnagramGameRecord,
+    CoupleGameQuestionRecord,
+    CoupleGameRecord,
+    CoupleGameSessionQuestionRecord,
+    CoupleGameSessionRecord,
+    ScheduledGameContentRecord,
+    WordleGameRecord,
+)
+from ..limits import (
+    COUPLE_SESSION_EXCLUSIVE_PER_PLAYER,
+    COUPLE_SESSION_QUESTIONS,
+    COUPLE_SESSION_SHARED_QUESTIONS,
+    GAME_IDS,
+)
+from ..postgres import Database
+from . import game_periods
+from .game_configs import game_lock_key, get_config
+
+_GAME_MODELS: dict[str, Any] = {
+    "wordle": WordleGameRecord,
+    "anagram": AnagramGameRecord,
+    "couple-questionnaire": CoupleGameRecord,
+}
+
+
+def _now_utc(now: Optional[datetime] = None) -> datetime:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _current_row(session, model):
+    """The one active-or-pending session row, or None."""
+    return session.scalar(
+        select(model).where(model.status.in_(("active", "pending"))).limit(1)
+    )
+
+
+def _end_row(row, now: datetime) -> None:
+    row.status = "ended"
+    row.ended_at = now
+
+
+def _random_wordle_answer() -> str:
+    from .wordle_service import solution_words
+
+    return random.choice(solution_words())
+
+
+def _random_anagram_answer() -> str:
+    from .anagram_service import anagram_words
+    from ..limits import ANAGRAM_RANDOM_MIN_LENGTH
+
+    eligible = [word for word in anagram_words() if len(word) >= ANAGRAM_RANDOM_MIN_LENGTH]
+    if not eligible:
+        raise RuntimeError("The Anagram word list has no eligible word to draw.")
+    return random.choice(eligible)
+
+
+def _take_scheduled(session, game_id: str, target: date) -> Optional[str]:
+    """Consume and return the scheduled word for ``target``, if one waits."""
+    row = session.scalar(
+        select(ScheduledGameContentRecord).where(
+            ScheduledGameContentRecord.game_id == game_id,
+            ScheduledGameContentRecord.target_date == target,
+        )
+    )
+    if row is None:
+        return None
+    word = row.word
+    session.delete(row)
+    return word
+
+
+def _open_word_session(
+    session,
+    model,
+    *,
+    game_id: str,
+    mode: str,
+    answer: Optional[str],
+    period_start: date,
+    period_end: date,
+    now: datetime,
+    created_by: Optional[str] = None,
+):
+    """Insert one word-session row and return it (flush, no commit)."""
+    status_value = "active" if answer else "pending"
+    values: dict[str, Any] = {
+        "game_date": period_start,
+        "mode": mode,
+        "answer": answer,
+        "status": status_value,
+        "period_start_date": period_start,
+        "period_end_date": period_end,
+        "started_at": now,
+    }
+    if created_by is not None and hasattr(model, "created_by"):
+        values["created_by"] = created_by
+    row = model(**values)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def deal_pair_questions(session, pair_session_id: str) -> list:
+    """Draw a fresh 25-question set for one couple pair session.
+
+    Five shared plus ten exclusive per player, drawn from the seeded bank.
+    Shared by the scheduler rollover and by mutual-selection creation so the
+    two paths can never deal different shapes.
+    """
+    bank_ids = [str(value) for value in session.scalars(select(CoupleGameQuestionRecord.id)).all()]
+    if len(bank_ids) < COUPLE_SESSION_QUESTIONS:
+        raise RuntimeError("The Couple question bank is not ready yet.")
+    chosen = random.sample(bank_ids, COUPLE_SESSION_QUESTIONS)
+    shared = set(random.sample(chosen, COUPLE_SESSION_SHARED_QUESTIONS))
+    remaining = [question_id for question_id in chosen if question_id not in shared]
+    random.shuffle(remaining)
+    exclusive = COUPLE_SESSION_EXCLUSIVE_PER_PLAYER
+    assignment = (
+        [(question_id, "shared") for question_id in shared]
+        + [(question_id, "user_a") for question_id in remaining[:exclusive]]
+        + [(question_id, "user_b") for question_id in remaining[exclusive:]]
+    )
+    rows = [
+        CoupleGameSessionQuestionRecord(
+            session_id=str(pair_session_id),
+            question_id=question_id,
+            assignment=kind,
+        )
+        for question_id, kind in assignment
+    ]
+    session.add_all(rows)
+    session.flush()
+    return rows
+
+
+def _roll_couple_pairs(session, previous_global_id: str, new_global_id: str) -> int:
+    """Open a fresh pair session with fresh questions for every existing couple.
+
+    Couples are the distinct pairs of the period that just ended. Progress never
+    carries over: each new pair session starts unanswered with its own 25
+    questions, and the old rows stay attached to the ended global session.
+    """
+    previous_pairs = session.scalars(
+        select(CoupleGameSessionRecord).where(
+            CoupleGameSessionRecord.couple_game_id == str(previous_global_id)
+        )
+    ).all()
+    created = 0
+    seen: set[tuple[str, str]] = set()
+    for pair in previous_pairs:
+        key = (str(pair.user_a_id), str(pair.user_b_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        new_pair = CoupleGameSessionRecord(
+            couple_game_id=str(new_global_id),
+            user_a_id=str(pair.user_a_id),
+            user_b_id=str(pair.user_b_id),
+            status="active",
+        )
+        session.add(new_pair)
+        session.flush()
+        deal_pair_questions(session, str(new_pair.id))
+        created += 1
+    return created
+
+
+def ensure_single_game(
+    db: Database, game_id: str, now: Optional[datetime] = None
+) -> dict:
+    """Evaluate one game's boundary and open the next period when due.
+
+    The defensive entry point the request paths use: cheap when the current
+    session is still inside its period (one locked read), decisive when the
+    boundary has passed. Never creates a session for a hidden game.
+    """
+    moment = _now_utc(now)
+    today = moment.date()
+    model = _GAME_MODELS[game_id]
+
+    try:
+        with db.sessions.begin() as session:
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": game_lock_key(game_id)},
+            )
+            config = get_config(session, game_id)
+            if config.is_hidden:
+                return {"game_id": game_id, "action": "skipped_hidden"}
+            cadence = config.reset_cadence
+            current = _current_row(session, model)
+
+            if current is not None and not game_periods.is_reset_due(
+                current.period_end_date, today
+            ):
+                resolved = _maybe_activate_pending(
+                    session, game_id, model, config, current, moment
+                )
+                if resolved is not None:
+                    return resolved
+                return {
+                    "game_id": game_id,
+                    "action": "current",
+                    "session_id": str(current.id),
+                }
+
+            previous_global_id = str(current.id) if current is not None else None
+            if current is not None:
+                _end_row(current, moment)
+            outcome = _open_period(
+                session, game_id, model, config, cadence, today, moment,
+                previous_global_id=previous_global_id,
+            )
+            return outcome
+    except IntegrityError as exc:
+        # Only a duplicate-active race is benign: a concurrent run or an admin
+        # Update won the insert past the lock, and the partial unique index
+        # refused the duplicate -- re-read the winner. Any other integrity
+        # failure (a NOT NULL, a CHECK, a foreign key) is a real bug and must
+        # surface loudly rather than masquerading as "nothing to do".
+        from psycopg.errors import UniqueViolation
+
+        if not isinstance(exc.orig, UniqueViolation):
+            raise
+        with db.sessions() as session:
+            winner = _current_row(session, model)
+            return {
+                "game_id": game_id,
+                "action": "current",
+                "session_id": str(winner.id) if winner is not None else None,
+            }
+
+
+def _maybe_activate_pending(
+    session, game_id: str, model, config, current, moment: datetime
+) -> Optional[dict]:
+    """Turn a pending session into a configured one when its word has arrived.
+
+    The pending row ends and a new active row opens for the *same* period, so
+    the cadence boundary never moves: the rule is terminate-then-create even
+    here, never a silent mutation of the pending row.
+    """
+    if current.status != "pending" or game_id not in ("wordle", "anagram"):
+        return None
+    content_mode = config.content_mode or "manual"
+    session_mode = "random" if content_mode == "random" else "custom"
+    word: Optional[str] = None
+    if content_mode == "random":
+        word = _random_wordle_answer() if game_id == "wordle" else _random_anagram_answer()
+    else:
+        word = _take_scheduled(session, game_id, current.period_start_date)
+    if not word:
+        return None
+    _end_row(current, moment)
+    opened = _open_word_session(
+        session,
+        model,
+        game_id=game_id,
+        mode=session_mode,
+        answer=word,
+        period_start=current.period_start_date,
+        period_end=current.period_end_date,
+        now=moment,
+        created_by="scheduler",
+    )
+    return {"game_id": game_id, "action": "activated", "session_id": str(opened.id)}
+
+
+def _open_period(
+    session,
+    game_id: str,
+    model,
+    config,
+    cadence: str,
+    today: date,
+    moment: datetime,
+    previous_global_id: Optional[str] = None,
+) -> dict:
+    """Open the period starting ``today`` for ``game_id`` and return its summary."""
+    start, end = game_periods.period_for_start(today, cadence)
+    if game_id in ("wordle", "anagram"):
+        content_mode = config.content_mode or "manual"
+        # Session ``mode`` is provenance (custom/random), not the content mode
+        # (manual/random): a drawn word is random either way, while a scheduled
+        # or later-typed word is custom.
+        session_mode = "random" if content_mode == "random" else "custom"
+        answer: Optional[str] = None
+        if content_mode == "random":
+            answer = (
+                _random_wordle_answer()
+                if game_id == "wordle"
+                else _random_anagram_answer()
+            )
+        else:
+            answer = _take_scheduled(session, game_id, today)
+        opened = _open_word_session(
+            session,
+            model,
+            game_id=game_id,
+            mode=session_mode,
+            answer=answer,
+            period_start=start,
+            period_end=end,
+            now=moment,
+            created_by="scheduler",
+        )
+        return {
+            "game_id": game_id,
+            "action": "created",
+            "session_id": str(opened.id),
+            "status": opened.status,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        }
+    # Couple Questionnaire: a new global period, then a fresh pair session per
+    # existing couple with a fresh question set each.
+    opened = CoupleGameRecord(
+        game_date=start,
+        status="active",
+        period_start_date=start,
+        period_end_date=end,
+        started_at=moment,
+        created_by="scheduler",
+    )
+    session.add(opened)
+    session.flush()
+    rolled = 0
+    if previous_global_id is not None:
+        rolled = _roll_couple_pairs(session, previous_global_id, str(opened.id))
+    return {
+        "game_id": game_id,
+        "action": "created",
+        "session_id": str(opened.id),
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "couples_rolled": rolled,
+    }
+
+
+def ensure_game_sessions(
+    db: Database, now: Optional[datetime] = None
+) -> dict[str, dict]:
+    """Evaluate every game's boundary; the 00:01 UTC reset entry point."""
+    return {game_id: ensure_single_game(db, game_id, now) for game_id in GAME_IDS}
+
+
+def active_session_counts(db: Database) -> dict[str, int]:
+    """How many active-or-pending rows each game table holds (observability)."""
+    with db.sessions() as session:
+        out: dict[str, int] = {}
+        for game_id, model in _GAME_MODELS.items():
+            out[game_id] = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.status.in_(("active", "pending")))
+                )
+                or 0
+            )
+        return out

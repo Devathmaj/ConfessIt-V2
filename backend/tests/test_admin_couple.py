@@ -140,14 +140,18 @@ def test_the_name_is_substituted_at_presentation_time_not_in_storage(db):
 
 
 def test_featuring_a_day_stores_the_day_and_the_creator(admin_client: TestClient, db):
+    """Featuring writes the spotlight table, never a session."""
+    from app.db_models import FeaturedGameRecord
+
     created = save(admin_client, {"game_date": day(1)})
     assert created.status_code == 201, created.text
 
     with db.sessions() as session:
-        row = session.get(CoupleGameRecord, created.json()["id"])
+        row = session.get(FeaturedGameRecord, created.json()["id"])
 
     assert row is not None
     assert row.game_date.isoformat() == day(1)
+    assert row.game_id == "couple-questionnaire"
     assert row.created_by == "adminuser"
     assert row.created_at is not None
     assert row.updated_at is not None
@@ -178,16 +182,27 @@ def test_a_second_feature_for_the_same_day_is_refused(admin_client: TestClient):
     assert len(listing.json()) == 1
 
 
-def test_the_schema_refuses_a_second_row_for_one_day(db):
-    """The service's 409 is a message; this is the rule. Written straight to the table to
-    prove the constraint holds for a caller that never went through the service."""
+def test_the_schema_refuses_a_second_featured_game_for_one_day(db):
+    """One spotlight per date is a UNIQUE constraint on the featured table, so two
+    games pinned on one day race the database and one of them is refused -- while
+    questionnaire *sessions* in ``couple_games`` freely share days as history."""
+    from app.db_models import FeaturedGameRecord
+
     day_value = datetime.now(timezone.utc).date()
     with db.sessions.begin() as session:
-        session.add(CoupleGameRecord(game_date=day_value, created_by="adminuser"))
+        session.add(
+            FeaturedGameRecord(
+                game_date=day_value, game_id="wordle", created_by="adminuser"
+            )
+        )
 
     with pytest.raises(IntegrityError):
         with db.sessions.begin() as session:
-            session.add(CoupleGameRecord(game_date=day_value, created_by="adminuser"))
+            session.add(
+                FeaturedGameRecord(
+                    game_date=day_value, game_id="anagram", created_by="adminuser"
+                )
+            )
 
 
 # --- reading back --------------------------------------------------------------

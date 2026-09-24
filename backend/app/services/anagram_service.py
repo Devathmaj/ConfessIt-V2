@@ -194,42 +194,76 @@ def _as_model(row: AnagramGameRecord) -> AnagramGame:
         game_date=row.game_date,
         mode=row.mode,
         answer=row.answer,
+        status=row.status or "active",
+        period_start_date=row.period_start_date,
+        period_end_date=row.period_end_date,
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
 
-def create_anagram_game(
-    db: Database, payload: AnagramGameCreate, created_by: str
+def _current_session_row(session):
+    """The one active-or-pending Anagram session, or None."""
+    return session.scalar(
+        select(AnagramGameRecord)
+        .where(AnagramGameRecord.status.in_(("active", "pending")))
+        .limit(1)
+    )
+
+
+def update_anagram_session(
+    db: Database,
+    *,
+    mode: str,
+    word: Optional[str],
+    token: Optional[str],
+    updated_by: str,
+    now: Optional[datetime] = None,
 ) -> AnagramGame:
-    """Store one day's puzzle, refusing a second row for a day that already has one.
+    """End the current session and open a brand-new one starting now ("Update").
 
-    Uniqueness is checked here *and* enforced by the schema, and both matter: the check
-    gives a 409 with a message an operator can act on, while the constraint is what holds
-    when two saves race past that check. The ``IntegrityError`` path is the same 409, so
-    the race reads identically to the ordinary conflict rather than as a 500.
+    Same contract as the Wordle Update: the old row is stamped ended and kept
+    as history, the new session starts from scratch for today's UTC date under
+    the game's own reset cadence, and the game's content mode follows the
+    update. Atomic under the game's advisory lock.
     """
-    game_date = payload.game_date or _today()
-    mode = payload.mode
-    answer = _resolve_answer(payload, game_date)
+    from sqlalchemy import text as _text
 
-    with db.sessions() as session:
-        existing = session.scalar(
-            select(AnagramGameRecord.id)
-            .where(AnagramGameRecord.game_date == game_date)
-            .limit(1)
-        )
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"An Anagram game is already configured for {game_date.isoformat()}.",
-            )
+    from . import game_periods
+    from .game_configs import game_lock_key, get_config
+
+    moment = now or datetime.now(timezone.utc)
+    today = moment.date()
+    answer = _resolve_answer(
+        AnagramGameCreate(mode=mode, word=word, token=token), today  # type: ignore[arg-type]
+    )
 
     try:
         with db.sessions.begin() as session:
+            session.execute(
+                _text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": game_lock_key("anagram")},
+            )
+            config = get_config(session, "anagram")
+            # See ``wordle_service.update_wordle_session``: provenance is not
+            # behaviour, so the content mode follows the update's meaning.
+            config.content_mode = "manual" if mode == "custom" else "random"
+            cadence = config.reset_cadence
+            current = _current_session_row(session)
+            if current is not None:
+                current.status = "ended"
+                current.ended_at = moment
+            start, end = game_periods.period_for_start(today, cadence)
             row = AnagramGameRecord(
-                game_date=game_date, mode=mode, answer=answer, created_by=created_by
+                game_date=today,
+                mode=mode,
+                answer=answer,
+                status="active",
+                period_start_date=start,
+                period_end_date=end,
+                started_at=moment,
+                created_by=updated_by,
             )
             session.add(row)
             session.flush()
@@ -237,17 +271,49 @@ def create_anagram_game(
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"An Anagram game is already configured for {game_date.isoformat()}.",
+            detail="An Anagram session update collided with a concurrent reset. Try again.",
         ) from exc
 
 
+def create_anagram_game(
+    db: Database, payload: AnagramGameCreate, created_by: str
+) -> AnagramGame:
+    """Publish the current Anagram session ("Update").
+
+    ``POST /admin/anagram`` is the Update action: it ends the currently
+    active/pending session and opens a new one for today. An explicit
+    ``game_date`` other than today is refused -- future words belong on the
+    schedule endpoint, and history is read-only.
+    """
+    game_date = payload.game_date or _today()
+    if game_date != _today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Updates apply to the current session. "
+                "Schedule future words with POST /admin/anagram/schedule."
+            ),
+        )
+    return update_anagram_session(
+        db, mode=payload.mode, word=payload.word, token=payload.token,
+        updated_by=created_by,
+    )
+
+
 def list_anagram_games(db: Database) -> List[AnagramGame]:
-    """Every configured puzzle, newest day first."""
+    """Every session, newest first -- active, pending and ended history alike."""
     with db.sessions() as session:
         rows = session.scalars(
-            select(AnagramGameRecord).order_by(AnagramGameRecord.game_date.desc())
+            select(AnagramGameRecord).order_by(AnagramGameRecord.created_at.desc())
         ).all()
         return [_as_model(row) for row in rows]
+
+
+def get_current_anagram_session(db: Database) -> Optional[AnagramGame]:
+    """The current active-or-pending session for the admin screen, if any."""
+    with db.sessions() as session:
+        row = _current_session_row(session)
+        return _as_model(row) if row is not None else None
 
 
 def get_anagram_game(db: Database, game_id: str) -> AnagramGame:

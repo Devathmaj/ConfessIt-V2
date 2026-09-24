@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ContextType } from 'react';
 import { toast } from 'sonner';
@@ -240,7 +240,7 @@ describe('answering', () => {
     );
   });
 
-  it('waits visibly once all fifteen are answered', async () => {
+  it('waits visibly once all fifteen are answered, and checks by itself', async () => {
     vi.mocked(getCoupleState).mockResolvedValue(
       baseState({
         stage: 'waiting_partner',
@@ -252,10 +252,31 @@ describe('answering', () => {
         questions: [],
       }),
     );
-    renderGame('male');
+    // Fake timers before mount so the waiting-state interval is observable.
+    vi.useFakeTimers();
+    try {
+      renderGame('male');
+      await act(async () => {
+        // Flush the mount fetch; the interval below is driven explicitly.
+      });
 
-    expect(await screen.findByText(/You answered all 15/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /check for your partner/i })).toBeInTheDocument();
+      // The waiting state names the rule instead of offering a manual check.
+      expect(screen.getByText(/You answered all 15/)).toBeInTheDocument();
+      expect(screen.getByText(/both of you have finished/)).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /check for your partner/i }),
+      ).not.toBeInTheDocument();
+
+      // And the page re-reads the state on its own while waiting, so the next
+      // stage opens without any action from the player.
+      const calls = vi.mocked(getCoupleState).mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(15000);
+      });
+      expect(vi.mocked(getCoupleState).mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
