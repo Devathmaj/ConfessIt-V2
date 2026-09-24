@@ -1091,3 +1091,151 @@ export const submitAnagramGuess = async (
     return response.data;
 };
 
+// --- Couple Questionnaire Gameplay Endpoints ---
+
+/** Where the caller stands in the featured Couple Questionnaire. */
+export type CoupleStage =
+    | 'no_game'
+    | 'selecting_partner'
+    | 'answering'
+    | 'waiting_partner'
+    | 'prediction'
+    | 'completed';
+
+/** One user the caller may choose as a partner. */
+export interface CouplePartnerCandidate {
+    id: string;
+    name: string;
+    gender: string;
+    year: number;
+    department: string;
+}
+
+/** One of the caller's own questions, with the bank's `X` rendered as "you". */
+export interface CoupleQuestionView {
+    session_question_id: string;
+    question_id: string;
+    question_text: string;
+    options: string[];
+    shared: boolean;
+    selected_option_index: number | null;
+}
+
+/** One of the partner's questions, with `X` rendered as the partner's name. */
+export interface CouplePredictionView {
+    session_question_id: string;
+    question_id: string;
+    question_text: string;
+    options: string[];
+    shared: boolean;
+    predicted_option_index: number | null;
+}
+
+/** One settled prediction, visible only in the completed result. */
+export interface CoupleReviewItem {
+    session_question_id: string;
+    question_id: string;
+    question_text: string;
+    options: string[];
+    shared: boolean;
+    original_option_index: number;
+    predicted_option_index: number;
+    correct: boolean;
+}
+
+/** The settled score, derived server-side from stored answers and predictions. */
+export interface CoupleResultView {
+    my_score: number;
+    partner_score: number;
+    max_score: number;
+    my_correct_count: number;
+    my_prediction_count: number;
+    partner_correct_count: number;
+    partner_prediction_count: number;
+    completed_at: string | null;
+    review: CoupleReviewItem[];
+}
+
+/**
+ * The caller's place in the featured game, as the page opens and after every
+ * write. `questions` holds the caller's own fifteen while answering,
+ * `predictions` the partner's fifteen while predicting, and `result` the
+ * settled score once both sides are done -- each present only in its phase.
+ */
+export interface CoupleCurrentState {
+    stage: CoupleStage;
+    game_id: string | null;
+    game_date: string | null;
+    my_selection: { selected_user_id: string; selected_user_name: string } | null;
+    session_id: string | null;
+    partner: { id: string; name: string } | null;
+    my_answers_submitted: number;
+    my_answers_total: number;
+    partner_answers_submitted: number;
+    partner_answers_total: number;
+    my_predictions_submitted: number;
+    my_predictions_total: number;
+    waiting_for: 'answers' | 'predictions' | null;
+    questions: CoupleQuestionView[];
+    predictions: CouplePredictionView[];
+    result: CoupleResultView | null;
+}
+
+/** The caller's current state. Never creates anything. */
+export const getCoupleState = async (): Promise<CoupleCurrentState> => {
+    const response = await axios.get(`${API_URL}/games/couple-questionnaire`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every participant the caller may choose, excluding only themselves. */
+export const getCouplePartners = async (): Promise<CouplePartnerCandidate[]> => {
+    const response = await axios.get(`${API_URL}/games/couple-questionnaire/partners`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Record the caller's partner choice. A changed mind replaces the previous
+ * pick; a mutual pick creates the one session for the pair. Answers the new
+ * state, so the screen advances in one round trip.
+ */
+export const selectCouplePartner = async (
+    selectedUserId: string
+): Promise<CoupleCurrentState> => {
+    const response = await axios.post(
+        `${API_URL}/games/couple-questionnaire/selection`,
+        { selected_user_id: selectedUserId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Store one of the caller's own answers. Insert-only: answering twice is refused. */
+export const submitCoupleAnswer = async (
+    sessionQuestionId: string,
+    selectedOptionIndex: number
+): Promise<CoupleCurrentState> => {
+    const response = await axios.post(
+        `${API_URL}/games/couple-questionnaire/answers`,
+        { session_question_id: sessionQuestionId, selected_option_index: selectedOptionIndex },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Store one prediction of the partner's answer, scored against the original. */
+export const submitCouplePrediction = async (
+    sessionQuestionId: string,
+    predictedOptionIndex: number
+): Promise<CoupleCurrentState> => {
+    const response = await axios.post(
+        `${API_URL}/games/couple-questionnaire/predictions`,
+        { session_question_id: sessionQuestionId, predicted_option_index: predictedOptionIndex },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+

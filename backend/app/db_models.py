@@ -24,6 +24,9 @@ from .limits import (
     COUPLE_OPTIONS_PER_QUESTION,
     COUPLE_QUESTION_TEXT_MAX,
     COUPLE_QUESTIONS_COUNT,
+    COUPLE_SESSION_EXCLUSIVE_PER_PLAYER,
+    COUPLE_SESSION_QUESTIONS,
+    COUPLE_SESSION_SHARED_QUESTIONS,
     INTEREST_VALUES,
     LOVE_NOTE_BODY_MAX,
     MESSAGE_BODY_MAX,
@@ -1373,6 +1376,228 @@ class CoupleGameAnswerRecord(Base):
         CheckConstraint(
             f"selected_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
             name=f"ck_couple_game_answers_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
+        ),
+    )
+
+
+class CoupleGameSelectionRecord(Base):
+    """One participant's current partner selection: who they want to play with.
+
+    The row is a *pending* selection and nothing more: choosing someone sends no
+    notification, creates no session, assigns no questions and reveals nothing to
+    the chosen user. It exists so that two independent choices can later be
+    recognised as mutual -- the only event that starts a game.
+
+    One row per participant, enforced by the unique ``user_id`` rather than a
+    service check: changing a selection (``A → B`` then ``A → C``) updates the
+    row, so the previous choice simply stops being the active one instead of
+    lingering as a second pending request. A participant cannot select themselves,
+    held by the schema rather than the screen that happens to hide the option.
+    """
+
+    __tablename__ = "couple_game_selections"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    selected_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "user_id != selected_user_id",
+            name="ck_couple_game_selections_not_self",
+        ),
+    )
+
+
+class CoupleGameSessionRecord(Base):
+    """One Couple Questionnaire game between two mutually selected participants.
+
+    The row exists only for an explicit mutual selection: ``A → B`` followed by
+    ``B → A`` creates exactly one session holding both users and the featured
+    game instance it belongs to. A one-sided choice never creates one, and two
+    users who each chose the same third person get nothing until that person
+    chooses one of them back.
+
+    ``user_a_id`` and ``user_b_id`` are stored in canonical (sorted) order so
+    that the pair ``(game, A, B)`` names one session regardless of who completed
+    the mutual selection. Uniqueness is enforced by the schema -- one pair, one
+    session per featured game -- and the service additionally refuses a session
+    for a participant who already has one for the same game, so ``A ↔ B`` plus
+    ``A → C`` plus ``C → A`` still leaves A with exactly one game.
+
+    ``status`` is written by the service at the moment a phase completes:
+    ``active`` while original answers are still being collected, ``prediction``
+    once both participants have answered all of their questions, ``completed``
+    once both have predicted all of their partner's. There is deliberately no
+    timer, no score column and no attempt budget here: the score is derived from
+    the stored answers and predictions whenever it is read, so there is no second
+    number to drift out of step with them.
+    """
+
+    __tablename__ = "couple_game_sessions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    couple_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_games.id", ondelete="CASCADE"), index=True
+    )
+    user_a_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    user_b_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default=text("'active'")
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("couple_game_id", "user_a_id", "user_b_id"),
+        CheckConstraint(
+            "user_a_id != user_b_id",
+            name="ck_couple_game_sessions_distinct_users",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'prediction', 'completed')",
+            name="ck_couple_game_sessions_status_known",
+        ),
+    )
+
+
+class CoupleGameSessionQuestionRecord(Base):
+    """One of the 25 bank questions drawn for one session, and who answers it.
+
+    The draw happens once, when the mutual selection creates the session, and
+    never again: these rows are the source of truth for the session's question
+    set, so a refresh or a return tomorrow reads the same 25. ``assignment``
+    splits them into the five shared questions both participants answer
+    independently plus ten exclusive to each player -- 5 + 10 + 10 is the whole
+    session, and 15 per participant is what each one is asked.
+
+    A shared question lives here exactly once even though two people answer it:
+    the two original answers are separate rows in ``couple_game_session_answers``
+    pointing at this same row, because sharing the *question* is not sharing the
+    *answer*.
+    """
+
+    __tablename__ = "couple_game_session_questions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_sessions.id", ondelete="CASCADE"), index=True
+    )
+    question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_questions.id", ondelete="CASCADE"), index=True
+    )
+    assignment: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "question_id"),
+        CheckConstraint(
+            "assignment IN ('shared', 'user_a', 'user_b')",
+            name="ck_couple_game_session_questions_assignment_known",
+        ),
+    )
+
+
+class CoupleGameSessionAnswerRecord(Base):
+    """What one participant actually selected for one of their session questions.
+
+    The canonical correct answer the partner will later have to predict: it is
+    written once, insert-only, and never overwritten by a prediction, so the
+    original and the guess about it cannot collapse into one row. A shared
+    question therefore holds two rows here -- one per participant -- each
+    pointing at the same session question.
+
+    Scoped to the session rather than to the bank: the same participant may play
+    again on another featured date, and an answer given then is a different fact
+    about a different game. (``couple_game_answers`` predates the session flow
+    and holds no session; session play reads and writes only this table.)
+    """
+
+    __tablename__ = "couple_game_session_answers"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_sessions.id", ondelete="CASCADE"), index=True
+    )
+    session_question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_session_questions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    selected_option_index: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_question_id", "user_id"),
+        CheckConstraint(
+            f"selected_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
+            name=f"ck_couple_game_session_answers_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
+        ),
+    )
+
+
+class CoupleGameSessionPredictionRecord(Base):
+    """What one participant thinks their partner selected for one session question.
+
+    Always a statement *about the partner's answer*, never a second answer of
+    the predictor's own: the row names the session question and the predictor,
+    and the verdict is computed against the partner's stored original at submit
+    time. ``is_correct`` restates ``predicted_option_index = original`` as a
+    boolean so scoring counts rows without comparing across tables; the service
+    always writes the two together, exactly like the win flag on the puzzle
+    participation rows.
+
+    One prediction per predictor per question, insert-only like the originals: a
+    submitted prediction is final, so there is no resubmission that could fish
+    for the right answer one option at a time.
+    """
+
+    __tablename__ = "couple_game_session_predictions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_sessions.id", ondelete="CASCADE"), index=True
+    )
+    session_question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_session_questions.id", ondelete="CASCADE"), index=True
+    )
+    predictor_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    predicted_option_index: Mapped[int] = mapped_column(Integer)
+    is_correct: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_question_id", "predictor_user_id"),
+        CheckConstraint(
+            f"predicted_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
+            name=f"ck_couple_game_session_predictions_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
         ),
     )
 

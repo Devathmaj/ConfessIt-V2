@@ -983,6 +983,201 @@ class CoupleGameAnswer(BaseModel):
     updated_at: datetime
 
 
+# --- Couple gameplay -----------------------------------------------------------
+#
+# The participant side of the Couple Questionnaire. The admin models above mark a
+# day as featured and the bank holds the fifty shared templates; everything here
+# describes one player's *place* in that day's game: who they chose, the session
+# a mutual choice created, their own questions, their predictions of their
+# partner, and the score derived from the two. The partner's original answers
+# never travel on a read that is not the completed result -- they are the thing
+# the prediction phase exists to keep hidden.
+
+# Where the caller stands in the day's game. The database's CHECK constraint on
+# ``couple_game_sessions.status`` mirrors the three in-session states; the other
+# three describe the absence of a session or of a playable day.
+CoupleStage = Literal[
+    "no_game",
+    "selecting_partner",
+    "answering",
+    "waiting_partner",
+    "prediction",
+    "completed",
+]
+
+
+class CouplePartnerCandidate(BaseModel):
+    """One user the caller may choose as a partner: identity and display facts only."""
+
+    id: str
+    name: str
+    gender: str
+    year: int
+    department: str
+
+
+class CoupleSelectionRequest(BaseModel):
+    """Choosing a partner: the one user this caller wants to play with.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped, matching ``WordleGuessRequest``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    selected_user_id: str
+
+
+class CoupleAnswerRequest(BaseModel):
+    """Answering one of this caller's own session questions.
+
+    ``session_question_id`` names the session question -- one of the fifteen this
+    caller was assigned -- and ``selected_option_index`` is positional into its
+    four options. Which session the question belongs to is derived from the
+    caller, never from the payload, so a caller cannot answer into someone
+    else's game by naming its ids.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_question_id: str
+    selected_option_index: int = Field(ge=0, le=3)
+
+
+class CouplePredictionRequest(BaseModel):
+    """Predicting the partner's answer to one of the partner's session questions.
+
+    ``session_question_id`` names one of the fifteen questions the *partner*
+    answered, and ``predicted_option_index`` is the caller's guess at which
+    option the partner picked. The verdict is computed server-side against the
+    stored original, so nothing the client sends can mark itself correct.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_question_id: str
+    predicted_option_index: int = Field(ge=0, le=3)
+
+
+class CoupleQuestionView(BaseModel):
+    """One of this caller's own questions, as the answering screen renders it.
+
+    ``question_text`` is already personalised: the bank's ``X`` reads as "you"
+    here, because the person answering is the one being asked about. The stored
+    template is untouched -- this rendering exists only on the read.
+    ``selected_option_index`` is this caller's submitted answer, or null when
+    unanswered.
+    """
+
+    session_question_id: str
+    question_id: str
+    question_text: str
+    options: List[str]
+    shared: bool
+    selected_option_index: Optional[int] = None
+
+
+class CouplePredictionView(BaseModel):
+    """One of the partner's questions, as this caller predicts it.
+
+    ``question_text`` names the partner, because the caller is guessing what the
+    partner chose. ``predicted_option_index`` is this caller's submitted
+    prediction, or null when unpredicted. The partner's original answer is never
+    carried here -- not while predicting -- it surfaces only in the completed
+    review.
+    """
+
+    session_question_id: str
+    question_id: str
+    question_text: str
+    options: List[str]
+    shared: bool
+    predicted_option_index: Optional[int] = None
+
+
+class CoupleReviewItem(BaseModel):
+    """One settled prediction, visible only once the session is completed.
+
+    The three halves of the verdict together: what the partner actually picked,
+    what this caller guessed, and whether the two matched. Emitted only in the
+    completed result, which is the single moment the feature exists to reveal the
+    partner's originals.
+    """
+
+    session_question_id: str
+    question_id: str
+    question_text: str
+    options: List[str]
+    shared: bool
+    original_option_index: int
+    predicted_option_index: int
+    correct: bool
+
+
+class CoupleResultView(BaseModel):
+    """The settled score, derived from persisted rows rather than trusted input.
+
+    Each side is scored out of the fifteen predictions they owed: one point per
+    prediction matching the partner's stored original. ``review`` replays this
+    caller's fifteen predictions against those originals.
+    """
+
+    my_score: int
+    partner_score: int
+    max_score: int
+    my_correct_count: int
+    my_prediction_count: int
+    partner_correct_count: int
+    partner_prediction_count: int
+    completed_at: Optional[datetime] = None
+    review: List[CoupleReviewItem] = []
+
+
+class CoupleSelectionView(BaseModel):
+    """This caller's pending partner selection, if they have made one."""
+
+    selected_user_id: str
+    selected_user_name: str
+
+
+class CouplePartnerView(BaseModel):
+    """The other half of this caller's session."""
+
+    id: str
+    name: str
+
+
+class CoupleCurrentState(BaseModel):
+    """Where this caller stands in the featured Couple Questionnaire, as the page opens.
+
+    Reading this never creates anything but answers nothing twice: a fresh caller
+    reads ``selecting_partner`` with no selection, a choosing caller reads their
+    pending pick, and a paired caller reads their questions, their predictions or
+    their score depending on how far both sides have played. ``questions`` holds
+    this caller's own fifteen while answering, ``predictions`` the partner's
+    fifteen in stable random order while predicting, and ``result`` the settled
+    score once both sides are done -- each present only in its phase, so a screen
+    renders what it is given rather than deciding what the caller may see.
+    """
+
+    stage: CoupleStage
+    game_id: Optional[str] = None
+    game_date: Optional[date] = None
+    my_selection: Optional[CoupleSelectionView] = None
+    session_id: Optional[str] = None
+    partner: Optional[CouplePartnerView] = None
+    my_answers_submitted: int = 0
+    my_answers_total: int = 0
+    partner_answers_submitted: int = 0
+    partner_answers_total: int = 0
+    my_predictions_submitted: int = 0
+    my_predictions_total: int = 0
+    waiting_for: Optional[Literal["answers", "predictions"]] = None
+    questions: List[CoupleQuestionView] = []
+    predictions: List[CouplePredictionView] = []
+    result: Optional[CoupleResultView] = None
+
+
 # --- Anagram gameplay ----------------------------------------------------------
 #
 # The player-facing half of Anagram. The admin models above describe a puzzle -- a day, a

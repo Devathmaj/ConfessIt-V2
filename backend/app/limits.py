@@ -256,6 +256,18 @@ COUPLE_OPTIONS_PER_QUESTION = 4
 COUPLE_QUESTION_TEXT_MAX = 300
 COUPLE_OPTION_TEXT_MAX = 200
 
+# A mutual session draws this many of the fifty bank questions, and splits them
+# into this many shared plus this many exclusive per player: 5 shared + 10 each
+# is 25 unique per session and 15 answered per participant. One number each, so
+# the draw, the assignment CHECKs and the player surface cannot drift apart -- a
+# session holding any other shape is a state no screen can render.
+COUPLE_SESSION_QUESTIONS = 25
+COUPLE_SESSION_SHARED_QUESTIONS = 5
+COUPLE_SESSION_EXCLUSIVE_PER_PLAYER = 10
+# Each participant's share, derived rather than restated: shared plus their own
+# exclusives. Written as the sum so the relationship stays visible.
+COUPLE_ANSWERS_PER_PARTICIPANT = COUPLE_SESSION_SHARED_QUESTIONS + COUPLE_SESSION_EXCLUSIVE_PER_PLAYER
+
 # How old an open timing segment may be before it is treated as dead rather than played.
 #
 # The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``
