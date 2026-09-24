@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { AdminGameStatusControls } from '@/components/AdminGameStatusControls';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { describeApiError } from '@/lib/apiError';
 import {
@@ -135,6 +136,8 @@ export const AdminReactionTimeConfig = () => {
       </CardHeader>
 
       <CardContent className="space-y-6">
+        <AdminGameStatusControls gameId="reaction-time" gameName="Reaction Time" />
+
         {session && (
           <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
             Current session period:{' '}

@@ -543,6 +543,11 @@ describe('AdminGamesManage: the Wordle answer', () => {
       }),
     );
     expect(toast.success).toHaveBeenCalledWith(`Wordle session updated for ${todayIso()}.`);
+    // Session history is collapsed by default: the row appears only after expanding.
+    expect(
+      within(card).queryByRole('button', { name: `Inspect the session for ${todayIso()}` }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: /show session history/i }));
     await waitFor(() =>
       expect(
         within(card).getByRole('button', { name: `Inspect the session for ${todayIso()}` }),
@@ -699,8 +704,10 @@ describe('AdminGamesManage: the Anagram word', () => {
     );
     expect(toast.success).toHaveBeenCalledWith(`Anagram session updated for ${todayIso()}.`);
 
-    // What comes back is the stored spelling -- uppercase, trimmed -- and it is on screen as
-    // the row, in that card and nowhere else.
+    // Session history is collapsed by default, so the stored spelling -- uppercase,
+    // trimmed -- appears only after expanding, as the row in that card and nowhere else.
+    expect(within(card).queryAllByText('GARDEN')).toHaveLength(0);
+    fireEvent.click(within(card).getByRole('button', { name: /show session history/i }));
     expect((await within(card).findAllByText('GARDEN')).length).toBeGreaterThan(0);
     expect(
       within(card).getByRole('button', { name: `Inspect the session for ${todayIso()}` }),
@@ -737,6 +744,7 @@ describe('AdminGamesManage: the Anagram word', () => {
       }),
     );
     expect(toast.success).toHaveBeenCalledWith(`Anagram session updated for ${todayIso()}.`);
+    fireEvent.click(within(card).getByRole('button', { name: /show session history/i }));
     await waitFor(() =>
       expect(
         within(card).getByRole('button', { name: `Inspect the session for ${todayIso()}` }),
@@ -793,5 +801,82 @@ describe('AdminGamesManage: the Anagram word', () => {
     // The Wordle console beside it was never asked to save anything.
     expect(createWordleGame).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminGamesManage: per-game status and collapsed history', () => {
+  /** The status block inside one game card, found by its accessible group name. */
+  const statusGroup = (card: HTMLElement, name: string) =>
+    within(card).getByRole('group', { name: `${name} status and reset` });
+
+  it('keeps session history collapsed until the admin expands it', async () => {
+    const saved = aPuzzle({ answer: 'cigar', mode: 'random' });
+    vi.mocked(getAdminWordleGames).mockResolvedValue([saved]);
+    renderSection('/admin/games/manage');
+    const card = wordleCard();
+
+    // The count shows, but no row renders until expanded.
+    expect(await within(card).findByText('1 sessions')).toBeInTheDocument();
+    expect(
+      within(card).queryByRole('button', { name: `Inspect the session for ${todayIso()}` }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole('button', { name: /show session history/i }));
+    expect(
+      await within(card).findByText('cigar'),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByRole('button', { name: `Inspect the session for ${todayIso()}` }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole('button', { name: /hide session history/i }));
+    await waitFor(() =>
+      expect(
+        within(card).queryByRole('button', { name: `Inspect the session for ${todayIso()}` }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it('toggles availability from inside the game card', async () => {
+    vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('wordle', 'manual')]);
+    vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('wordle', 'manual'));
+    renderSection('/admin/games/manage');
+    const card = wordleCard();
+    const group = statusGroup(card, 'Wordle');
+    const enabledSwitch = await within(group).findByRole('switch', {
+      name: 'Wordle enabled',
+    });
+
+    fireEvent.click(enabledSwitch);
+    await waitFor(() =>
+      expect(updateGameConfig).toHaveBeenCalledWith('wordle', { enabled: false }),
+    );
+
+    fireEvent.click(within(group).getByRole('switch', { name: 'Wordle hidden' }));
+    await waitFor(() =>
+      expect(updateGameConfig).toHaveBeenCalledWith('wordle', { is_hidden: true }),
+    );
+  });
+
+  it('changes the reset cadence from inside the game card', async () => {
+    vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('anagram', 'manual')]);
+    vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('anagram', 'manual'));
+    renderSection('/admin/games/manage');
+    const card = anagramCard();
+    const group = statusGroup(card, 'Anagram');
+    await within(group).findByRole('switch', { name: 'Anagram enabled' });
+
+    fireEvent.pointerDown(within(group).getByRole('combobox'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'Weekly (Mon–Sun UTC)' }));
+
+    await waitFor(() =>
+      expect(updateGameConfig).toHaveBeenCalledWith('anagram', {
+        reset_cadence: 'weekly',
+      }),
+    );
   });
 });

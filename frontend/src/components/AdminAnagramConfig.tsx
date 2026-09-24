@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Dices, Shuffle, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Dices, Shuffle, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { AdminGameStatusControls } from '@/components/AdminGameStatusControls';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { describeApiError } from '@/lib/apiError';
 import {
@@ -88,6 +89,10 @@ export const AdminAnagramConfig = () => {
 
   const [detail, setDetail] = useState<AnagramGame | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  // Session history stays collapsed so a long season of past sessions does not
+  // push the working controls off the screen.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -265,6 +270,8 @@ export const AdminAnagramConfig = () => {
       </CardHeader>
 
       <CardContent className="space-y-6">
+        <AdminGameStatusControls gameId="anagram" gameName="Anagram" />
+
         {current && (
           <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
             Current session:{' '}
@@ -488,13 +495,28 @@ export const AdminAnagramConfig = () => {
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border/40 pt-4">
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Session history
             </h4>
-            <span className="text-xs text-muted-foreground">
-              {loading ? 'Loading...' : `${games.length} sessions`}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {loading ? 'Loading...' : `${games.length} sessions`}
+              </span>
+              {games.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setHistoryOpen((open) => !open)}
+                  aria-expanded={historyOpen}
+                  aria-label={historyOpen ? 'Hide session history' : 'Show session history'}
+                >
+                  {historyOpen ? <ChevronUp /> : <ChevronDown />}
+                  {historyOpen ? 'Hide' : 'Show'}
+                </Button>
+              )}
+            </div>
           </div>
 
           {listError && (
@@ -509,7 +531,7 @@ export const AdminAnagramConfig = () => {
             </p>
           )}
 
-          {games.length > 0 && (
+          {historyOpen && games.length > 0 && (
             <ul className="flex flex-col gap-2">
               {games.map((game) => (
                 <li key={game.id}>
@@ -537,7 +559,7 @@ export const AdminAnagramConfig = () => {
             </ul>
           )}
 
-          {detail && (
+          {historyOpen && detail && (
             <div className="rounded-xl border border-border/60 bg-muted/40 p-4 text-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
@@ -570,7 +592,7 @@ export const AdminAnagramConfig = () => {
             </div>
           )}
 
-          {detailError && (
+          {historyOpen && detailError && (
             <p role="alert" className="text-sm font-medium text-destructive">
               {detailError}
             </p>
