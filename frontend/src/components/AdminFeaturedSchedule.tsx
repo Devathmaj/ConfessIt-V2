@@ -26,12 +26,18 @@ import {
   type FeaturedGame,
 } from '@/services/api';
 
-const FEATURED_IDS = ['wordle', 'anagram', 'couple-questionnaire'] as const;
+const FEATURED_IDS = [
+  'wordle',
+  'anagram',
+  'couple-questionnaire',
+  'reaction-time',
+] as const;
 
 const GAME_LABELS: Record<string, string> = {
   wordle: 'Wordle',
   anagram: 'Anagram',
   'couple-questionnaire': 'Couple Questionnaire',
+  'reaction-time': 'Reaction Time',
 };
 
 /** Today as UTC `YYYY-MM-DD`, the only calendar the schedule speaks. */

@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
-from ..db_models import AnagramGameRecord, CoupleGameRecord, WordleGameRecord
+from ..db_models import (
+    AnagramGameRecord,
+    CoupleGameRecord,
+    ReactionTimeGameRecord,
+    WordleGameRecord,
+)
 from ..dependencies import get_db
 from ..models import GameSelectEntry, GameSelectResponse, UserDetails
 from ..postgres import Database
@@ -25,12 +30,14 @@ _GAME_NAMES = {
     "wordle": "Wordle",
     "anagram": "Anagram",
     "couple-questionnaire": "Couple Questionnaire",
+    "reaction-time": "Reaction Time",
 }
 
 _SESSION_MODELS = {
     "wordle": WordleGameRecord,
     "anagram": AnagramGameRecord,
     "couple-questionnaire": CoupleGameRecord,
+    "reaction-time": ReactionTimeGameRecord,
 }
 
 
@@ -96,7 +103,12 @@ async def game_selection(
         featured_id = featured.game_id if featured is not None else None
         games = [
             entry
-            for game_id in ("wordle", "anagram", "couple-questionnaire")
+            for game_id in (
+                "wordle",
+                "anagram",
+                "couple-questionnaire",
+                "reaction-time",
+            )
             if (entry := _entry(session, game_id, today, featured_id)) is not None
         ]
     return GameSelectResponse(games=games, featured_game_id=featured_id, server_date=today)

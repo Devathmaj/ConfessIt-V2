@@ -2,18 +2,22 @@ import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
 import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
 import { AdminFeaturedSchedule } from '@/components/AdminFeaturedSchedule';
 import { AdminGameLifecycleConfig } from '@/components/AdminGameLifecycleConfig';
+import { AdminReactionTimeConfig } from '@/components/AdminReactionTimeConfig';
 import { AdminWordleConfig } from '@/components/AdminWordleConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { CAPABILITIES } from '@/lib/capabilities';
 
 /**
  * The games console: the spotlight schedule, per-game status and reset
- * cadences, and the Wordle, Anagram and Couple Questionnaire sessions.
+ * cadences, and the Wordle, Anagram, Couple Questionnaire and Reaction Time
+ * sessions.
  *
  * Everything here goes to the server. The featured schedule pins at most one
  * game per UTC date without touching any session; the lifecycle panel owns
  * availability and each game's own reset cadence; the per-game cards below
- * Update sessions (terminate-then-create) and schedule future manual words.
+ * Update sessions (terminate-then-create) and schedule future manual words --
+ * except Reaction Time, whose card holds a single featured-day picker because
+ * its mechanics are fixed by the app.
  * Screens render only for an account holding `games:manage`, and the server
  * refuses the same writes again regardless of what this gate believes.
  */
@@ -27,8 +31,8 @@ export const AdminGamesManage = () => {
         <h1 className="text-3xl font-semibold">Manage games</h1>
         <p className="text-sm text-muted-foreground">
           The featured spotlight, per-game status and session resets, and the current
-          Wordle, Anagram and Couple Questionnaire sessions. Changes here show up on the
-          player-facing section straight away.
+          Wordle, Anagram, Couple Questionnaire and Reaction Time sessions. Changes here
+          show up on the player-facing section straight away.
         </p>
       </header>
 
@@ -42,6 +46,7 @@ export const AdminGamesManage = () => {
       {mayManage && <AdminWordleConfig />}
       {mayManage && <AdminAnagramConfig />}
       {mayManage && <AdminCoupleConfig />}
+      {mayManage && <AdminReactionTimeConfig />}
     </div>
   );
 };

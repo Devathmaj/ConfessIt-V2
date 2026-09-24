@@ -113,6 +113,14 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/couple"),
     ("GET", "/admin/couple/session"),
     ("GET", "/admin/couple/{game_id}"),
+    # Reaction Time. Featuring a day stores the day and nothing else -- the
+    # mechanics are fixed by the application, so there is no preview,
+    # schedule or session read. All are gated on ``games:manage`` for the
+    # same reason the other games are.
+    ("POST", "/admin/reaction-time"),
+    ("GET", "/admin/reaction-time"),
+    ("GET", "/admin/reaction-time/session"),
+    ("GET", "/admin/reaction-time/{game_id}"),
     # Game configuration, the featured spotlight, and the manual reset trigger.
     # Configuration owns per-game availability and cadence, the featured
     # schedule pins at most one game per UTC date without touching sessions,

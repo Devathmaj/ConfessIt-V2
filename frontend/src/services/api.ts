@@ -1475,3 +1475,163 @@ export const getFeaturedToday = async (): Promise<{
     return response.data;
 };
 
+// --- Reaction Time Configuration Endpoints ---
+
+/**
+ * One featured Reaction Time game, as `GET /admin/reaction-time` returns it.
+ *
+ * There is deliberately no mode, word, answer or timing field here: featuring
+ * a day stores the day and who featured it, and nothing else. The mechanics
+ * are fixed by the application.
+ */
+export interface ReactionTimeGame {
+    id: string;
+    game_date: string;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/**
+ * The fields `POST /admin/reaction-time` accepts.
+ *
+ * Only the day. It identifies the featured instance and defaults to today in
+ * UTC when omitted.
+ */
+export interface ReactionTimeGamePayload {
+    game_date?: string;
+}
+
+/** Feature the Reaction Time game for one day. A day that is already featured answers 409. */
+export const createReactionTimeGame = async (
+    payload: ReactionTimeGamePayload
+): Promise<ReactionTimeGame> => {
+    const response = await axios.post(`${API_URL}/admin/reaction-time`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every featured Reaction Time date, newest day first. */
+export const getAdminReactionTimeGames = async (): Promise<ReactionTimeGame[]> => {
+    const response = await axios.get(`${API_URL}/admin/reaction-time`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** One featured Reaction Time date by id. A malformed id answers 400, an unknown one 404. */
+export const getAdminReactionTimeGame = async (
+    gameId: string
+): Promise<ReactionTimeGame> => {
+    const response = await axios.get(`${API_URL}/admin/reaction-time/${gameId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** The current Reaction Time session for the admin screen, or 404 when there is none. */
+export const getCurrentAdminReactionTimeSession = async (): Promise<{
+    id: string;
+    game_date: string;
+    status: string;
+    period_start_date: string | null;
+    period_end_date: string | null;
+}> => {
+    const response = await axios.get(`${API_URL}/admin/reaction-time/session`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+// --- Reaction Time Gameplay Endpoints ---
+
+/** Whether a submission is still waiting for its result or has been settled. */
+export type ReactionTimeStatus = 'pending' | 'valid' | 'too_early';
+
+/**
+ * One submission, as the game screen renders it.
+ *
+ * `reaction_time_ms` is set only on `valid` rows; `elapsed_ms` only on
+ * `too_early` rows, where it says how quickly the user clicked after the red
+ * state began rather than any kind of score.
+ */
+export interface ReactionTimeAttempt {
+    submission_id: string;
+    attempt_number: number;
+    status: ReactionTimeStatus;
+    reaction_time_ms: number | null;
+    elapsed_ms: number | null;
+    started_at: string;
+    green_at: string | null;
+    clicked_at: string | null;
+    created_at: string;
+}
+
+/**
+ * The caller's place in the featured game, as the page opens and after every
+ * write. `best_ms` is the minimum valid reaction time and `average_ms` the
+ * mean of valid reaction times only; both are null until the caller has a
+ * valid attempt. `pending_submission` is the interrupted attempt, if any --
+ * it already counts as consumed.
+ */
+export interface ReactionTimeState {
+    game_id: string | null;
+    game_date: string | null;
+    max_submissions: number;
+    submissions_used: number;
+    submissions_remaining: number;
+    is_finished: boolean;
+    attempts: ReactionTimeAttempt[];
+    valid_count: number;
+    false_start_count: number;
+    best_ms: number | null;
+    average_ms: number | null;
+    pending_submission: ReactionTimeAttempt | null;
+}
+
+/** The caller's current state. Never creates anything. */
+export const getReactionTimeState = async (): Promise<ReactionTimeState> => {
+    const response = await axios.get(`${API_URL}/games/reaction-time`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Consume one submission: the blue-screen click that starts an attempt. The
+ * pending submission is created here, before the red wait begins, so a false
+ * start still spends its submission and a refresh cannot grant another one.
+ */
+export const startReactionTimeAttempt = async (
+    gameId: string
+): Promise<ReactionTimeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/reaction-time/start`,
+        { game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Settle a pending attempt with its measured result. `valid` carries the
+ * client-measured reaction time (green until click); `too_early` carries only
+ * informational elapsed time that is excluded from every statistic.
+ */
+export const completeReactionTimeAttempt = async (payload: {
+    submission_id: string;
+    status: 'valid' | 'too_early';
+    reaction_time_ms?: number;
+    elapsed_ms?: number;
+    green_at?: string;
+    clicked_at?: string;
+}): Promise<ReactionTimeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/reaction-time/complete`,
+        payload,
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+

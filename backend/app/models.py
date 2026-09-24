@@ -1427,7 +1427,7 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-GameId = Literal["wordle", "anagram", "couple-questionnaire"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time"]
 
 
 class GameConfig(BaseModel):
@@ -1514,3 +1514,137 @@ class GameSelectResponse(BaseModel):
     games: List[GameSelectEntry]
     featured_game_id: Optional[str] = None
     server_date: date
+
+
+# --- Reaction Time configuration ------------------------------------------------
+#
+# Admin-side only, and the smallest surface of any game: these describe a
+# *featured date* -- which day holds the spotlight -- and nothing else. There
+# is no mode, no word, no answer, no timing range, no difficulty and no
+# attempt budget, because the mechanics are fixed by the application and the
+# sessions roll on the game's own cadence with a fresh five-submission budget
+# per player per session. Featuring never touches a session.
+
+class ReactionTimeGameCreate(BaseModel):
+    """Featuring the Reaction Time game for one day.
+
+    ``game_date`` is optional and defaults to the current day in UTC, because
+    the usual request *is* "feature it today". One game holds the spotlight
+    per date across all games, so a day that already features anything is
+    refused.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_date: Optional[date] = None
+
+
+class ReactionTimeGame(BaseModel):
+    """A featured Reaction Time date as it is stored: the day, and who marked it so."""
+
+    id: str
+    game_date: date
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Reaction Time gameplay -----------------------------------------------------
+#
+# The participant side of the game. Sessions roll on the game's own cadence
+# whether or not the day is featured; everything here describes one player's
+# *place* in the current session: their five-or-fewer submissions, each born
+# pending on the blue-screen click and settled later as valid (a click after
+# green, carrying the client-measured reaction time) or too early (a click
+# before green, carrying only informational elapsed time that is never a
+# score).
+
+# Whether a submission is still waiting for its result or has been settled.
+# Mirrors the CHECK constraint on ``reaction_time_submissions.status``.
+ReactionTimeStatus = Literal["pending", "valid", "too_early"]
+
+
+class ReactionTimeAttempt(BaseModel):
+    """One submission, as the player screen renders it.
+
+    ``reaction_time_ms`` is set only on ``valid`` rows; ``elapsed_ms`` only on
+    ``too_early`` rows, where it says how quickly the user clicked after the
+    red/waiting state began rather than any kind of score.
+    """
+
+    submission_id: str
+    attempt_number: int
+    status: ReactionTimeStatus
+    reaction_time_ms: Optional[int] = None
+    elapsed_ms: Optional[int] = None
+    started_at: datetime
+    green_at: Optional[datetime] = None
+    clicked_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class ReactionTimeState(BaseModel):
+    """Where this caller stands in the current Reaction Time session, as the page opens.
+
+    Reading this never creates anything: a fresh caller reads zero submissions
+    and a blue start screen, a returning caller reads the submissions they
+    left -- including a ``pending`` one when they navigated away mid-attempt,
+    which still counts as consumed. A new session means a fresh budget of
+    five. ``best_ms`` is the minimum valid reaction time and ``average_ms``
+    the mean of valid reaction times only; both are null when the caller has
+    no valid attempt yet. Every number here is derived server-side from the
+    stored submissions, never trusted from the client.
+    """
+
+    game_id: Optional[str] = None
+    game_date: Optional[date] = None
+    max_submissions: int = 5
+    submissions_used: int = 0
+    submissions_remaining: int = 5
+    is_finished: bool = False
+    attempts: List[ReactionTimeAttempt] = []
+    valid_count: int = 0
+    false_start_count: int = 0
+    best_ms: Optional[float] = None
+    average_ms: Optional[float] = None
+    pending_submission: Optional[ReactionTimeAttempt] = None
+
+
+class ReactionTimeStartRequest(BaseModel):
+    """Starting one attempt: the blue-screen click that consumes a submission.
+
+    ``game_id`` names the session -- the one the player was shown -- so a
+    stale screen cannot start an attempt on an ended session. The attempt
+    number is assigned server-side from the stored count, never from the
+    payload, because there is no payload field that could honestly know it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+
+
+class ReactionTimeCompleteRequest(BaseModel):
+    """Settling a pending attempt with its measured result.
+
+    ``submission_id`` names the pending submission this caller owns; settled
+    rows are immutable, so a second submit for the same id is refused rather
+    than overwritten. ``status="valid"`` carries the client-measured
+    ``reaction_time_ms`` (green transition until click); ``status="too_early"``
+    carries only the informational ``elapsed_ms`` (red start until the early
+    click), which is never a score. Bounds are enforced in the service with a
+    readable 400; the column CHECKs guard writes that never went through the
+    API.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    submission_id: str
+    status: Literal["valid", "too_early"]
+    reaction_time_ms: Optional[int] = None
+    elapsed_ms: Optional[int] = None
+    green_at: Optional[datetime] = None
+    clicked_at: Optional[datetime] = None

@@ -63,6 +63,12 @@ NEXT_TUE = date(2026, 10, 13)
 
 COUPLE_TOTAL = 25
 
+# The games the reset loop opens sessions for. Reaction Time shares the
+# session lifecycle -- its sessions carry no content, so a new period simply
+# opens a playable session -- and its summary entries carry the same session
+# actions as the other three.
+SESSION_GAMES = ("wordle", "anagram", "couple-questionnaire", "reaction-time")
+
 
 def at(day: date, hour: int = 0, minute: int = 1) -> datetime:
     """An aware UTC instant on ``day`` -- the scheduler's 00:01 by default."""
@@ -180,7 +186,11 @@ def test_sessions_do_not_follow_the_featured_game(db):
     )
 
     summary = game_scheduler.ensure_game_sessions(db, at(THU))
-    assert all(info["action"] == "created" for info in summary.values())
+    assert all(
+        info["action"] == "created"
+        for game_id, info in summary.items()
+        if game_id in SESSION_GAMES
+    )
 
     moved = admin.post(
         "/admin/featured", json={"game_date": FRI.isoformat(), "game_id": "anagram"}
@@ -195,7 +205,11 @@ def test_sessions_do_not_follow_the_featured_game(db):
     # The next calendar boundary rolls every daily session purely by date --
     # featuring Anagram changed nothing about that either.
     summary = game_scheduler.ensure_game_sessions(db, at(FRI))
-    assert all(info["action"] == "created" for info in summary.values())
+    assert all(
+        info["action"] == "created"
+        for game_id, info in summary.items()
+        if game_id in SESSION_GAMES
+    )
     for model in (WordleGameRecord, AnagramGameRecord, CoupleGameRecord):
         assert len(active_rows(db, model)) == 1
         with db.sessions() as session:
@@ -656,11 +670,17 @@ def test_a_repeated_scheduler_run_creates_nothing(db):
     seed_couple_questions(db)
     first = game_scheduler.ensure_game_sessions(db, at(THU))
     second = game_scheduler.ensure_game_sessions(db, at(THU))
-    assert all(info["action"] == "current" for info in second.values())
+    assert all(
+        info["action"] == "current"
+        for game_id, info in second.items()
+        if game_id in SESSION_GAMES
+    )
     for model in (WordleGameRecord, AnagramGameRecord, CoupleGameRecord):
         assert len(active_rows(db, model)) == 1
-    assert {info["session_id"] for info in first.values()} == {
-        info["session_id"] for info in second.values()
+    assert {
+        info["session_id"] for game_id, info in first.items() if game_id in SESSION_GAMES
+    } == {
+        info["session_id"] for game_id, info in second.items() if game_id in SESSION_GAMES
     }
 
 

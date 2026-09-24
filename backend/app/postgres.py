@@ -566,9 +566,11 @@ class PostgresClient:
         Three jobs, all idempotent, all safe to re-run on every boot:
 
         1. Drop the old one-row-per-day uniqueness on ``wordle_games``,
-           ``anagram_games`` and ``couple_games``. History now shares days, so the
-           unique index/constraint would refuse the second session of a day that
-           the lifecycle legitimately creates.
+           ``anagram_games``, ``couple_games`` and ``reaction_time_games``.
+           History now shares days, so the unique index/constraint would refuse
+           the second session of a day that the lifecycle legitimately creates.
+           (Reaction Time shipped that uniqueness briefly before joining the
+           shared lifecycle; a database from those days converges here.)
         2. Backfill the new lifecycle columns on legacy rows: ``status`` defaults
            to ``'ended'`` at the column level, and ``period_start_date`` mirrors
            ``game_date`` where it is still NULL, so old rows read as history.
@@ -578,7 +580,12 @@ class PostgresClient:
            Update: the loser gets an integrity error instead of a second active.
         """
         with self.engine.begin() as connection:
-            for table in ("wordle_games", "anagram_games", "couple_games"):
+            for table in (
+                "wordle_games",
+                "anagram_games",
+                "couple_games",
+                "reaction_time_games",
+            ):
                 present = {
                     row[0]
                     for row in connection.execute(

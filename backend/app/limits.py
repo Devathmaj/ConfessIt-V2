@@ -276,7 +276,12 @@ COUPLE_ANSWERS_PER_PARTICIPANT = COUPLE_SESSION_SHARED_QUESTIONS + COUPLE_SESSIO
 # (Monday-Sunday UTC) -- and the featured game is only a spotlight that never drives
 # session creation. All three values below are mirrored by CHECK constraints on
 # ``game_configs``; every list here, the payload Literal and the constraint agree.
-GAME_IDS: tuple[str, ...] = ("wordle", "anagram", "couple-questionnaire")
+GAME_IDS: tuple[str, ...] = (
+    "wordle",
+    "anagram",
+    "couple-questionnaire",
+    "reaction-time",
+)
 
 # The only reset cadences a game may carry. Stored as the strings below; each game
 # has its own row in ``game_configs`` so Wordle can reset daily while Anagram runs
@@ -315,6 +320,28 @@ SESSION_STATUS_VALUES: tuple[str, ...] = ("active", "pending", "ended")
 # table becomes an unbounded promise the reset loop must keep forever. Enforced
 # server-side on every schedule write; the admin UI names the same number.
 MAX_FUTURE_SCHEDULE_DAYS = 30
+
+# Reaction Time. One featured game per date, five submissions per user per date.
+# The budget is fixed at the application level: there is no per-day knob for
+# it, so it lives here next to WORDLE_MAX_ATTEMPTS rather than in a settings
+# table an administrator could edit. A valid reaction is a click *after* green,
+# measured client-side with a high-resolution clock; the bounds below keep a
+# fabricated payload honest without judging skill -- a reaction under a
+# millisecond is not a reaction, and anything past ten seconds is a click on a
+# screen that was left open rather than a measurement. A false start's elapsed
+# time (start click until the early click) is informational only and never a
+# score, so its ceiling is generous.
+REACTION_TIME_MAX_SUBMISSIONS = 5
+REACTION_TIME_MIN_VALID_MS = 1
+REACTION_TIME_MAX_VALID_MS = 10_000
+REACTION_TIME_MAX_ELAPSED_MS = 60_000
+
+# The lifecycle states of one Reaction Time submission. ``pending`` is an
+# attempt whose start click already consumed one of the five submissions but
+# whose result has not been recorded yet (the red wait or the green screen);
+# ``valid`` is a click after green carrying a reaction time; ``too_early`` is a
+# click before green carrying only informational elapsed time.
+REACTION_TIME_STATUS_VALUES: tuple[str, ...] = ("pending", "valid", "too_early")
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #

@@ -19,6 +19,7 @@ import {
   clearFeaturedGame,
   createAnagramGame,
   createCoupleGame,
+  createReactionTimeGame,
   createWordleGame,
   deleteScheduledAnagramWord,
   deleteScheduledWordleWord,
@@ -26,9 +27,11 @@ import {
   drawWordleAnswer,
   getAdminAnagramGames,
   getAdminCoupleGames,
+  getAdminReactionTimeGames,
   getAdminWordleGames,
   getCurrentAdminAnagramSession,
   getCurrentAdminCoupleSession,
+  getCurrentAdminReactionTimeSession,
   getCurrentAdminWordleSession,
   getFeaturedGames,
   getFeaturedToday,
@@ -101,6 +104,10 @@ vi.mock('@/services/api', () => ({
   createCoupleGame: vi.fn(),
   getAdminCoupleGame: vi.fn(),
   getCurrentAdminCoupleSession: vi.fn(),
+  getAdminReactionTimeGames: vi.fn(),
+  createReactionTimeGame: vi.fn(),
+  getAdminReactionTimeGame: vi.fn(),
+  getCurrentAdminReactionTimeSession: vi.fn(),
   getGameConfigs: vi.fn(),
   updateGameConfig: vi.fn(),
   getFeaturedGames: vi.fn(),
@@ -209,9 +216,11 @@ beforeEach(() => {
   vi.mocked(getAdminWordleGames).mockResolvedValue([]);
   vi.mocked(getAdminAnagramGames).mockResolvedValue([]);
   vi.mocked(getAdminCoupleGames).mockResolvedValue([]);
+  vi.mocked(getAdminReactionTimeGames).mockResolvedValue([]);
   vi.mocked(getCurrentAdminWordleSession).mockRejectedValue({ response: { status: 404 } });
   vi.mocked(getCurrentAdminAnagramSession).mockRejectedValue({ response: { status: 404 } });
   vi.mocked(getCurrentAdminCoupleSession).mockRejectedValue({ response: { status: 404 } });
+  vi.mocked(getCurrentAdminReactionTimeSession).mockRejectedValue({ response: { status: 404 } });
   vi.mocked(getScheduledWordleWords).mockResolvedValue([]);
   vi.mocked(getScheduledAnagramWords).mockResolvedValue([]);
   vi.mocked(getGameConfigs).mockResolvedValue([]);
@@ -278,7 +287,9 @@ describe('AdminGamesDashboard: the front page', () => {
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByText('Games live')).toBeInTheDocument();
-    expect(screen.getByText('10/10')).toBeInTheDocument();
+    expect(
+      screen.getByText(`${AVAILABLE_GAMES.length}/${AVAILABLE_GAMES.length}`),
+    ).toBeInTheDocument();
     expect(screen.getByText('Every title switched on')).toBeInTheDocument();
     expect(screen.getByText('Leaderboard snapshot')).toBeInTheDocument();
     expect(screen.getByText('Single vs Couple')).toBeInTheDocument();
@@ -336,6 +347,70 @@ describe('AdminGamesManage: the spotlight', () => {
     });
 
     fireEvent.click(within(card).getByRole('button', { name: /set featured/i }));
+
+    const alert = await within(card).findByRole('alert');
+    expect(alert).toHaveTextContent('A featured game is already set');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminGamesManage: the Reaction Time card', () => {
+  const reactionCard = () => {
+    const heading = screen.getByRole('heading', { name: 'Reaction Time' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) {
+      throw new Error('The Reaction Time card could not be found from its heading.');
+    }
+    return card as HTMLElement;
+  };
+
+  it('features a day through the server and reports the session period', async () => {
+    vi.mocked(getCurrentAdminReactionTimeSession).mockResolvedValue({
+      id: 'session-1',
+      game_date: todayIso(),
+      status: 'active',
+      period_start_date: todayIso(),
+      period_end_date: todayIso(),
+    });
+    renderSection('/admin/games/manage');
+    const card = reactionCard();
+    expect(await within(card).findByText(/Nothing featured yet/)).toBeInTheDocument();
+    expect(await within(card).findByText(/Current session period/)).toBeInTheDocument();
+
+    const created = {
+      id: 'reaction-1',
+      game_date: todayIso(),
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    vi.mocked(createReactionTimeGame).mockResolvedValue(created);
+    vi.mocked(getAdminReactionTimeGames).mockResolvedValue([created]);
+
+    fireEvent.click(within(card).getByRole('button', { name: /save featured day/i }));
+
+    await waitFor(() =>
+      expect(createReactionTimeGame).toHaveBeenCalledWith({ game_date: todayIso() }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(`Reaction Time featured for ${todayIso()}.`);
+    await waitFor(() =>
+      expect(within(card).getAllByText(new RegExp(todayIso())).length).toBeGreaterThan(0),
+    );
+  });
+
+  it('keeps the one-game-per-date refusal on the screen', async () => {
+    renderSection('/admin/games/manage');
+    const card = reactionCard();
+    await within(card).findByText(/Nothing featured yet/);
+
+    vi.mocked(createReactionTimeGame).mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: `A featured game is already set for ${todayIso()}.` },
+      },
+    });
+
+    fireEvent.click(within(card).getByRole('button', { name: /save featured day/i }));
 
     const alert = await within(card).findByRole('alert');
     expect(alert).toHaveTextContent('A featured game is already set');

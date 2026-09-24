@@ -16,9 +16,10 @@ Per game, per run, under one transaction-scoped advisory lock:
   session for the *same* period;
 * boundary reached or no current session -> end the old one and open the next
   period starting today: random draws a word immediately, manual consumes a
-  scheduled word when one waits for today and otherwise opens pending, and the
+  scheduled word when one waits for today and otherwise opens pending, the
   questionnaire opens a new global period and deals every existing couple a
-  fresh set of questions.
+  fresh set of questions, and Reaction Time opens a new bare period (no
+  content to configure, so it is playable the moment it opens).
 
 The partial unique index on each game table (one active-or-pending row) is the
 backstop behind the lock: a run racing an admin Update past the lock still
@@ -38,6 +39,7 @@ from ..db_models import (
     CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
+    ReactionTimeGameRecord,
     ScheduledGameContentRecord,
     WordleGameRecord,
 )
@@ -55,6 +57,7 @@ _GAME_MODELS: dict[str, Any] = {
     "wordle": WordleGameRecord,
     "anagram": AnagramGameRecord,
     "couple-questionnaire": CoupleGameRecord,
+    "reaction-time": ReactionTimeGameRecord,
 }
 
 
@@ -212,6 +215,11 @@ def ensure_single_game(
     The defensive entry point the request paths use: cheap when the current
     session is still inside its period (one locked read), decisive when the
     boundary has passed. Never creates a session for a hidden game.
+
+    Reaction Time shares the session lifecycle: its sessions carry no
+    content (no word to draw or schedule), so a new period simply opens an
+    empty active session -- the questionnaire's global period without the
+    per-couple dealing.
     """
     moment = _now_utc(now)
     today = moment.date()
@@ -343,6 +351,29 @@ def _open_period(
             now=moment,
             created_by="scheduler",
         )
+        return {
+            "game_id": game_id,
+            "action": "created",
+            "session_id": str(opened.id),
+            "status": opened.status,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        }
+    if game_id == "reaction-time":
+        # Reaction Time: a new bare period. There is no word to draw, no
+        # schedule to consume and no manual mode to wait for -- the session
+        # is always playable the moment it opens, and each session carries
+        # its own five-submission budget per player.
+        opened = ReactionTimeGameRecord(
+            game_date=start,
+            status="active",
+            period_start_date=start,
+            period_end_date=end,
+            started_at=moment,
+            created_by="scheduler",
+        )
+        session.add(opened)
+        session.flush()
         return {
             "game_id": game_id,
             "action": "created",

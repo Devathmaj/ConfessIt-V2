@@ -58,6 +58,7 @@ ADMIN_READ_ROUTES = [
     "/admin/anagram/preview",
     "/admin/anagram/scheduled",
     "/admin/couple",
+    "/admin/reaction-time",
     "/admin/games/config",
     "/admin/featured",
 ]

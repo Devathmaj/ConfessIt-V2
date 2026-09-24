@@ -39,6 +39,7 @@ const GAME_LABELS: Record<string, string> = {
   wordle: 'Wordle',
   anagram: 'Anagram',
   'couple-questionnaire': 'Couple Questionnaire',
+  'reaction-time': 'Reaction Time',
 };
 
 /**

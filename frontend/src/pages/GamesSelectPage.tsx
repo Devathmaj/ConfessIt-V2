@@ -17,7 +17,12 @@ import { getGameSelection, type GameSelectEntry } from '@/services/api';
 
 /** Games the server owns a session lifecycle for. Their visibility comes from
  * `GET /games/select`: hidden games are absent and never rendered. */
-const SERVER_MANAGED_IDS = new Set(['wordle', 'anagram', 'couple-questionnaire']);
+const SERVER_MANAGED_IDS = new Set([
+  'wordle',
+  'anagram',
+  'couple-questionnaire',
+  'reaction-time',
+]);
 
 /**
  * Game selection.

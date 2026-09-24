@@ -1,8 +1,11 @@
 """Per-game configuration: availability, content mode and reset cadence.
 
-One row per game in ``game_configs``. The three games never share a setting:
+One row per game in ``game_configs``. The games never share a setting:
 Wordle can reset daily while Anagram resets every five days and the Couple
 Questionnaire resets weekly, and each game is enabled/hidden independently.
+Reaction Time owns a row for the same availability switches; its sessions are
+featured dates created by an administrator rather than rolled by the
+scheduler, so its reset cadence is stored but never read.
 
 ``enabled`` and ``is_hidden`` are separate facts with separate consequences:
 
@@ -27,12 +30,14 @@ _GAME_LOCK_KEYS: dict[str, int] = {
     "wordle": 7_260_001,
     "anagram": 7_260_002,
     "couple-questionnaire": 7_260_003,
+    "reaction-time": 7_260_004,
 }
 
 _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
     "wordle": "random",
     "anagram": "random",
     "couple-questionnaire": None,
+    "reaction-time": None,
 }
 
 
@@ -128,6 +133,11 @@ def update_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The Couple Questionnaire has no content mode.",
+        )
+    if game_id == "reaction-time" and content_mode is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reaction Time has no content mode.",
         )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)

@@ -29,6 +29,10 @@ from .limits import (
     COUPLE_SESSION_SHARED_QUESTIONS,
     GAME_CONTENT_MODES,
     GAME_IDS,
+    REACTION_TIME_MAX_ELAPSED_MS,
+    REACTION_TIME_MAX_SUBMISSIONS,
+    REACTION_TIME_MAX_VALID_MS,
+    REACTION_TIME_MIN_VALID_MS,
     INTEREST_VALUES,
     LOVE_NOTE_BODY_MAX,
     MAX_FUTURE_SCHEDULE_DAYS,
@@ -1653,6 +1657,145 @@ class CoupleGameSessionPredictionRecord(Base):
         CheckConstraint(
             f"predicted_option_index BETWEEN 0 AND {COUPLE_OPTIONS_PER_QUESTION - 1}",
             name=f"ck_couple_game_session_predictions_selected_{COUPLE_OPTIONS_PER_QUESTION - 1}",
+        ),
+    )
+
+
+class ReactionTimeGameRecord(Base):
+    """One Reaction Time session: the calendar period the game runs on.
+
+    The row is a *session* in the same lifecycle the puzzle games share --
+    ``active`` while playable, ``ended`` as history -- and not a play of it.
+    Sessions are opened by the reset loop under the game's own cadence and
+    are independent of the featured spotlight: a session exists whether or
+    not Reaction Time is featured today, exactly like the Couple
+    Questionnaire. There is deliberately no mode, no word, no answer, no
+    timing range, no difficulty and no attempt budget here: the mechanics are
+    fixed by the application (five submissions per user per session, a random
+    red wait, a client-measured reaction after green).
+
+    ``game_date`` is indexed rather than unique: an Update ends the current
+    session and opens a new one, so history shares days and the single-active
+    rule lives in a partial unique index (see
+    ``PostgresClient.apply_game_session_convergence``), not in this column --
+    the same shape ``wordle_games`` converged to.
+
+    ``created_by`` holds the creator's ``regno``, with no foreign key, for the
+    same reason ``message_reports.reviewed_by_regno`` has none: staff live in
+    ``admin`` and ``moderator`` and never in ``users``, so a key into the
+    participant table would reject every creator this route can admit, and
+    plain text lets the audit trail survive the account being renamed or
+    deleted. The scheduler writes ``"scheduler"`` here, like every other
+    game.
+    """
+
+    __tablename__ = "reaction_time_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    # The session's calendar identity. No longer unique: history shares days,
+    # so one UTC day may hold several ended sessions and only one may be
+    # current.
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    # Session lifecycle. ``active`` is playable, ``pending`` is reserved for
+    # symmetry with the other session tables (the loop never opens a pending
+    # Reaction Time session -- there is no manual word to wait for),
+    # ``ended`` is history. Only one active-or-pending row may exist.
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    # The calendar period this session covers. ``period_end_date`` is
+    # exclusive: a daily session starting 2026-10-08 ends 2026-10-09. Derived
+    # from the start date and the game's reset cadence by ``game_periods`` --
+    # never by elapsed hours.
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_reaction_time_games_status_known",
+        ),
+    )
+
+
+class ReactionTimeSubmissionRecord(Base):
+    """One user's individual attempt within one Reaction Time session.
+
+    The row pairs a *player* with a *session*: everything below answers "what
+    happened on this attempt?", and nothing else. The start click that creates
+    the row already consumes one of the five submissions -- the row is born
+    ``pending`` the moment the blue screen is clicked -- and the result later
+    settles it to ``valid`` (a click after green, carrying the client-measured
+    reaction time) or ``too_early`` (a click before green, carrying only
+    informational elapsed time that is never a score). A new session means a
+    fresh budget of five: submissions are scoped to the session, never to the
+    date alone.
+
+    A user holds attempts numbered 1..5 per session, enforced by
+    ``UniqueConstraint(game, user, attempt_number)`` plus the
+    ``attempt_number BETWEEN 1 AND 5`` check: the number is assigned
+    server-side from the stored count, never trusted from the client, and two
+    concurrent starts race the unique pair so exactly one of them owns the next
+    number. Completed rows are immutable -- the service never updates a
+    ``valid`` or ``too_early`` row -- so a score cannot be rewritten after the
+    fact.
+    """
+
+    __tablename__ = "reaction_time_submissions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    reaction_time_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("reaction_time_games.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(
+        String(10), default="pending", server_default=text("'pending'")
+    )
+    # A valid reaction time in milliseconds, measured client-side between the
+    # green transition and the click. Set only on ``valid`` rows; never a
+    # score on ``too_early`` rows.
+    reaction_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # How quickly the user clicked after the red/waiting state began, on a
+    # ``too_early`` row. Informational only -- never a reaction-time score.
+    elapsed_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # When the attempt started (the blue-screen click that consumed it).
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    # When the screen turned green, and when the user clicked, where known.
+    green_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    clicked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("reaction_time_game_id", "user_id", "attempt_number"),
+        CheckConstraint(
+            "status IN ('pending', 'valid', 'too_early')",
+            name="ck_reaction_time_submissions_status_known",
+        ),
+        CheckConstraint(
+            f"attempt_number BETWEEN 1 AND {REACTION_TIME_MAX_SUBMISSIONS}",
+            name=f"ck_reaction_time_submissions_attempt_{REACTION_TIME_MAX_SUBMISSIONS}",
+        ),
+        CheckConstraint(
+            f"reaction_time_ms IS NULL OR reaction_time_ms BETWEEN "
+            f"{REACTION_TIME_MIN_VALID_MS} AND {REACTION_TIME_MAX_VALID_MS}",
+            name=f"ck_reaction_time_submissions_reaction_{REACTION_TIME_MAX_VALID_MS}",
+        ),
+        CheckConstraint(
+            f"elapsed_ms IS NULL OR elapsed_ms BETWEEN 0 AND {REACTION_TIME_MAX_ELAPSED_MS}",
+            name=f"ck_reaction_time_submissions_elapsed_{REACTION_TIME_MAX_ELAPSED_MS}",
         ),
     )
 
