@@ -2080,12 +2080,16 @@ class TwoKeyEscapeKeyRequest(BaseModel):
 
 
 class TwoKeyEscapeKeyView(BaseModel):
-    """One key charge as the Key Operator sees it: its target and whether spent."""
+    """One key as the Key Operator sees it: the lock it is spent on.
+
+    Keys are reusable -- every use costs the cooldown and a Navigator move
+    -- so there is no spent state. Which lock each key *opens* stays hidden:
+    only trial reveals the mapping.
+    """
 
     key_index: int
     target_row: int
     target_col: int
-    used: bool
 
 
 class TwoKeyEscapeResultView(BaseModel):
@@ -2093,14 +2097,14 @@ class TwoKeyEscapeResultView(BaseModel):
 
     ``elapsed_seconds`` is the whole ranking: seconds from the first valid
     move to the exit, including any time away. ``total_moves`` and
-    ``total_keys`` are progress facts, never tiebreaks.
+    ``total_keys`` are progress facts, never tiebreaks. There is no score:
+    no other game carries one.
     """
 
     completed: bool
     total_moves: int = 0
     total_keys: int = 0
     elapsed_seconds: Optional[float] = None
-    score: int = 0
     completed_at: Optional[datetime] = None
 
 
@@ -2141,10 +2145,7 @@ class TwoKeyEscapeState(BaseModel):
     locked_cells: List[List[int]] = []
     blocked_cells: List[List[int]] = []
     keys: List[TwoKeyEscapeKeyView] = []
-    keys_remaining: int = 0
     cooldown_seconds_remaining: float = 0
-    movement_required: bool = False
-    moves_since_last_key: int = 0
     total_moves: int = 0
     total_keys: int = 0
     state_version: int = 0
@@ -2155,8 +2156,8 @@ class TwoKeyEscapeLeaderboardEntry(BaseModel):
     """One couple`s standing in the current period, in rank order.
 
     Completed couples rank above incomplete ones; among completed, the
-    shorter start-to-finish time wins. ``score`` is the deterministic
-    display number settled at completion (higher is better).
+    shorter start-to-finish time wins. There is no score: no other game
+    carries one.
     """
 
     rank: int
@@ -2165,4 +2166,3 @@ class TwoKeyEscapeLeaderboardEntry(BaseModel):
     total_moves: int
     total_keys: int
     elapsed_seconds: Optional[float] = None
-    score: int

@@ -379,15 +379,17 @@ TRIVIA_QUESTION_TEXT_MAX = 500
 TRIVIA_OPTION_TEXT_MAX = 200
 
 # Two-Key Escape. A square grid maze played by one couple with complementary
-# roles: the Navigator moves one cell at a time, the Key Operator spends key
-# charges that each unlock one locked cell and block one traversable cell.
+# roles: the Navigator moves one cell at a time, the Key Operator uses keys
+# that each unlock one locked cell and block one traversable cell.
 #
-# The grid size is the only gameplay knob an administrator may set (7-10); the
-# number of key charges is derived from it by the single mapping below, kept
-# here rather than restated on the frontend so the two cannot drift apart.
-# The cooldown between successful key activations is fixed at ten seconds and
-# enforced server-side, and the Navigator must make at least one valid move
-# between key uses -- both are gameplay rules, not session timers.
+# The grid size is the only gameplay knob an administrator may set; the
+# number of locks on the board is derived from it by the single mapping
+# below, kept here rather than restated on the frontend so the two cannot
+# drift apart. Keys are reusable -- every use costs the ten-second cooldown,
+# never a consumable charge -- because single-use keys plus relocking can
+# permanently strand a lock the couple still needs, an unwinnable state no
+# warning can fix. The cooldown is enforced server-side; no movement is ever
+# required between key uses.
 TWO_KEY_ESCAPE_GRID_SIZES: tuple[int, ...] = (12, 13, 14, 15)
 TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE = 12
 TWO_KEY_ESCAPE_KEY_CHARGES: dict[int, int] = {12: 12, 13: 13, 14: 14, 15: 15}

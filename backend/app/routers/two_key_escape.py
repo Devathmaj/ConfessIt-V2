@@ -117,7 +117,7 @@ async def move(
     """Advance the character one cell for the assigned Navigator.
 
     Validated server-side against the stored board; refusals change nothing
-    but the failed-move metric and never satisfy the movement gate.
+    at all.
     """
     return two_key_escape_gameplay.move(db, user, payload.direction)
 
@@ -128,14 +128,15 @@ async def use_key(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> TwoKeyEscapeState:
-    """Spend one key charge for the assigned Key Operator.
+    """Use one key for the assigned Key Operator.
 
+    Keys are reusable: every use costs the cooldown, never a charge.
     Opens the *different* lock the maze's hidden mapping assigns to the
     clicked lock -- never the clicked lock itself -- and sends any
     previously opened lock back, then blocks a different eligible cell
     chosen by the game logic after verifying the maze stays solvable.
-    Refusals consume nothing: only a successful activation spends the
-    charge, stamps the server-side cooldown and re-arms the movement gate.
+    Refusals change nothing: only a successful activation stamps the
+    server-side cooldown.
     """
     return two_key_escape_gameplay.use_key(db, user, payload.key_index)
 

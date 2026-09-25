@@ -13,13 +13,18 @@ conflict, and finalized roles are immutable against repeats and races.
 
 **The board is server-side.** Moves and keys are validated against stored
 rows under lock: illegal moves change nothing at all, the operator cannot
-move, the navigator cannot spend keys, cooldowns and the movement gate are
-enforced from server timestamps, and blocking never traps the player.
+move, the navigator cannot spend keys, the cooldown is enforced from server
+timestamps, and blocking never traps the player. No movement is ever
+required between key uses.
+
+**Keys are mandatory.** Chamber walls allow no keyless route, each lock
+opens a different lock, only one stays open at a time, and re-locking under
+the Navigator's feet is refused.
 
 **Scoring measures start-to-finish time, nothing else.** The first valid
 move stamps the start and the exit stamps the end; time away counts by
-decision. Completed couples outrank the rest by elapsed time, the score is
-derived from it, and completion finalizes exactly once.
+decision. Completed couples outrank the rest by elapsed time -- there is
+no score, like every other game -- and completion finalizes exactly once.
 """
 
 from collections import deque
@@ -183,6 +188,182 @@ def client_for(http: TestClient, user: UserDetails):
 def escape_row(db, **filters):
     with db.sessions() as session:
         return session.scalar(select(TwoKeyEscapeSessionRecord).filter_by(**filters))
+
+
+def probe_step(http, navigator, rotation=0, avoid=frozenset(), strict=True):
+    """One valid Navigator step, skipping any ``avoid`` cells.
+
+    Chamber walls mean "walk toward the exit" is not always defined, so
+    tests that just need *a* legal move probe the four directions instead.
+    ``avoid`` names cells to step around -- the open lock cell, so a later
+    key is not refused for occupancy. A valid step always exists: the middle
+    stays open and the player can always step back, so total refusal means
+    the board is genuinely wrong (raised when strict, else None).
+    """
+    state = client_for(http, navigator).get("/games/two-key-escape").json()
+    pr, pc = state["player_row"], state["player_col"]
+    deltas = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+    directions = ["up", "down", "left", "right"]
+    for index in range(4):
+        direction = directions[(rotation + index) % 4]
+        dr, dc = deltas[direction]
+        if (pr + dr, pc + dc) in avoid:
+            continue
+        response = client_for(http, navigator).post(
+            "/games/two-key-escape/move", json={"direction": direction}
+        )
+        if response.status_code == 200:
+            return response
+    if strict:
+        raise AssertionError("navigator boxed with no valid move")
+    return None
+
+
+def preimage_key(db, target_cell):
+    """The key index whose hidden mapping opens ``target_cell``.
+
+    Read straight from the period row -- the very thing players must
+    discover by trial, which is exactly what the toast test covers.
+    """
+    wanted = [int(target_cell[0]), int(target_cell[1])]
+    for index, cell in enumerate(_mapping(db)):
+        if cell == wanted:
+            return index
+    raise AssertionError(f"no key opens {wanted}")
+
+
+def _age_cooldown(db):
+    """Move the key cooldown into the past, so the next key is its own test."""
+    with db.sessions.begin() as session:
+        row = session.scalar(
+            select(TwoKeyEscapeSessionRecord).where(
+                TwoKeyEscapeSessionRecord.user_a_id == A_ID,
+                TwoKeyEscapeSessionRecord.user_b_id == B_ID,
+            )
+        )
+        row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+
+def _template_locks(state):
+    """Every lock the maze was dealt, open or shut."""
+    return {(key["target_row"], key["target_col"]) for key in state["keys"]}
+
+
+def _open_cells(state):
+    """Template locks currently unlocked (at most one)."""
+    return _template_locks(state) - {(r, c) for r, c in state["locked_cells"]}
+
+
+def wall_columns(state):
+    """Wall columns: every cell walled or locked, strictly interior."""
+    n = state["grid_size"]
+    walls = {tuple(cell) for cell in state["walls"]}
+    locked = _template_locks(state)
+    return [
+        col
+        for col in range(1, n - 1)
+        if all((row, col) in walls or (row, col) in locked for row in range(n))
+    ]
+
+
+_STEP_DELTAS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+
+
+def lockread_route(state):
+    """Cells from the player to the exit, reading through every lock.
+
+    The same proof the server runs when placing a block: walls and blocked
+    cells are real, locks are future key uses. None means the board is
+    genuinely unplayable -- a real signal, never a test artifact.
+    """
+    size = state["grid_size"]
+    walls = {tuple(cell) for cell in state["walls"]}
+    blocked = {tuple(cell) for cell in state["blocked_cells"]}
+    start = (state["player_row"], state["player_col"])
+    exit_cell = (state["exit_row"], state["exit_col"])
+    if start == exit_cell:
+        return [start]
+    seen = {start: None}
+    queue = deque([start])
+    while queue:
+        cell = queue.popleft()
+        if cell == exit_cell:
+            break
+        for dr, dc in _STEP_DELTAS.values():
+            nxt = (cell[0] + dr, cell[1] + dc)
+            if not (0 <= nxt[0] < size and 0 <= nxt[1] < size):
+                continue
+            if nxt in walls or nxt in blocked or nxt in seen:
+                continue
+            seen[nxt] = cell
+            queue.append(nxt)
+    if exit_cell not in seen:
+        return None
+    route = [exit_cell]
+    while route[-1] != start:
+        route.append(seen[route[-1]])
+    return list(reversed(route))
+
+
+def _step_toward(from_cell, to_cell):
+    dr, dc = to_cell[0] - from_cell[0], to_cell[1] - from_cell[1]
+    for name, (vr, vc) in _STEP_DELTAS.items():
+        if (dr, dc) == (vr, vc):
+            return name
+    raise AssertionError(f"non-adjacent step {from_cell} -> {to_cell}")
+
+
+def play_through(http, db, alice, bob):
+    """Complete a maze the way smart play does: follow the lock-readable
+    route, opening locks as they come up.
+
+    Ordinary steps are walked; locked steps are opened first (preimage key,
+    cooldown aged, gate satisfied by the walking itself, stepping off any
+    open cell first). Keys are reusable, so no lock is ever lost -- if this
+    loop ever finds no route, that is a genuinely unplayable board.
+    Returns the completed state, tracking every gate stepped through.
+    """
+    stepped_gates: set[tuple[int, int]] = set()
+    first = client_for(http, alice).get("/games/two-key-escape").json()
+    size = first["grid_size"]
+    columns = wall_columns(first)
+    gate_cells = {
+        (key["target_row"], key["target_col"])
+        for key in first["keys"]
+        if key["target_col"] in columns
+    }
+    for _ in range(size * size * 6):
+        state = client_for(http, alice).get("/games/two-key-escape").json()
+        if state["stage"] == "completed":
+            return state, stepped_gates
+        locked = {(r, c) for r, c in state["locked_cells"]}
+        route = lockread_route(state)
+        assert route is not None and len(route) > 1, "a lock-readable route must exist"
+        player = (state["player_row"], state["player_col"])
+        nxt = route[1]
+        if nxt not in locked:
+            moved = client_for(http, alice).post(
+                "/games/two-key-escape/move",
+                json={"direction": _step_toward(player, nxt)},
+            )
+            assert moved.status_code == 200, moved.text
+            if nxt in gate_cells:
+                stepped_gates.add(nxt)
+            continue
+        # Locked step: step off any open cell first (occupancy), then open.
+        # No movement is ever required between keys -- only the cooldown.
+        open_now = _open_cells(state)
+        if player in open_now:
+            stepped = probe_step(http, alice, avoid=open_now, strict=False)
+            assert stepped is not None and stepped.status_code == 200, stepped
+            continue
+        _age_cooldown(db)
+        used = client_for(http, bob).post(
+            "/games/two-key-escape/key",
+            json={"key_index": preimage_key(db, [nxt[0], nxt[1]])},
+        )
+        assert used.status_code == 200, used.text
+    raise AssertionError("the exit was never reached")
 
 
 # --- fixtures ------------------------------------------------------------
@@ -492,30 +673,52 @@ def test_couples_have_isolated_state(db, http):
     finalize_roles(http, dora, erin)
 
     before = client_for(http, dora).get("/games/two-key-escape").json()
-    path = bfs_path(client_for(http, alice).get("/games/two-key-escape").json())
-    assert path, "the generated maze must be solvable"
-    moved = client_for(http, alice).post("/games/two-key-escape/move", json={"direction": path[0]})
+    moved = probe_step(http, alice)
     assert moved.status_code == 200, moved.text
     after = client_for(http, dora).get("/games/two-key-escape").json()
     assert (after["player_row"], after["player_col"]) == (before["player_row"], before["player_col"])
     assert after["total_moves"] == 0
 
 
-def test_all_grid_sizes_generate_solvable_mazes():
+def test_all_grid_sizes_chamber_every_wall_but_stay_playable():
     for size in (12, 13, 14, 15):
         template = two_key_escape_gameplay.generate_maze(size, f"test-seed-{size}")
         assert len(template["walls"]) >= 0
         assert len(template["locked_cells"]) == two_key_escape_key_charges(size)
         assert template["start"] == [0, 0]
         assert template["exit"] == [size - 1, size - 1]
-        # Solvable with the locked cells treated as blocked: the route
-        # exists before any key is spent.
+        walls = {tuple(cell) for cell in template["walls"]}
+        locked = {tuple(cell) for cell in template["locked_cells"]}
+        gates = [tuple(template["locked_cells"][index]) for index in template["gate_indexes"]]
+        # Full-height wall columns, pierced only by locked gates: no way
+        # around, and every crossing needs a key.
+        columns = [col for col in range(1, size - 1) if all(
+            (row, col) in walls or (row, col) in locked for row in range(size)
+        )]
+        assert len(columns) >= 1
+        assert all(cell[1] in columns for cell in gates)
+        assert len(gates) == 2 * len(columns)
+        # Every lock has guaranteed staging: an ordinary neighbor that
+        # blocks can never take, so stepping off an open lock always works.
+        staging: set[tuple[int, int]] = set()
+        for row, col in locked:
+            steps = {
+                (row + drow, col + dcol)
+                for drow, dcol in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                if 0 <= row + drow < size
+                and 0 <= col + dcol < size
+                and (row + drow, col + dcol) not in walls
+                and (row + drow, col + dcol) not in locked
+            }
+            assert steps, f"lock {(row, col)} has no staging cell"
+            staging |= steps
+        # No keyless route exists through the chamber walls...
+        assert not two_key_escape_gameplay._bfs_reaches(
+            size, walls, locked, (0, 0), (size - 1, size - 1)
+        )
+        # ...while the same maze with every lock open is solvable.
         assert two_key_escape_gameplay._bfs_reaches(
-            size,
-            {tuple(cell) for cell in template["walls"]},
-            {tuple(cell) for cell in template["locked_cells"]},
-            (0, 0),
-            (size - 1, size - 1),
+            size, walls, set(), (0, 0), (size - 1, size - 1)
         )
 
 
@@ -549,24 +752,21 @@ def test_movement_valid_and_invalid(db, http):
     after = client_for(http, alice).get("/games/two-key-escape").json()
     assert (after["player_row"], after["player_col"]) == (before["player_row"], before["player_col"])
     assert after["total_moves"] == before["total_moves"]
-    assert after["moves_since_last_key"] == 0
     # A refused move changes nothing at all -- not even the clock.
     row = escape_row(db, user_a_id=A_ID, user_b_id=B_ID)
     assert row.first_move_at is None
 
-    # A legal step advances exactly one cell, banks the movement gate, and
-    # stamps the start clock.
-    path = bfs_path(after)
-    assert path, "the generated maze must be solvable"
-    moved = client_for(http, alice).post("/games/two-key-escape/move", json={"direction": path[0]})
+    # A legal step advances exactly one cell and stamps the start clock.
+    # (From the start chamber a step is always available: walls divide
+    # chambers, never the start.)
+    moved = probe_step(http, alice)
     assert moved.status_code == 200, moved.text
     body = moved.json()
     assert body["total_moves"] == 1
-    assert body["moves_since_last_key"] == 1
     assert escape_row(db, user_a_id=A_ID, user_b_id=B_ID).first_move_at is not None
 
     # The Key Operator cannot move the character.
-    forbidden = client_for(http, bob).post("/games/two-key-escape/move", json={"direction": path[0]})
+    forbidden = client_for(http, bob).post("/games/two-key-escape/move", json={"direction": "down"})
     assert forbidden.status_code == 403, forbidden.text
 
 
@@ -628,8 +828,6 @@ def test_key_opens_a_different_lock(db, http):
     used = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
     assert used.status_code == 200, used.text
     body = used.json()
-    assert body["keys"][0]["used"] is True
-    assert body["keys_remaining"] == body["key_charges"] - 1
     # The clicked lock stays shut; the mapped one opened.
     assert clicked in body["locked_cells"]
     assert opened not in body["locked_cells"]
@@ -640,30 +838,53 @@ def test_key_opens_a_different_lock(db, http):
     assert blocked != (body["exit_row"], body["exit_col"])
     assert blocked != (0, 0)
     assert blocked != (body["player_row"], body["player_col"])
-    # The maze stays solvable from the player's cell, treating locked
-    # cells as the walls they are -- a route through a lock is no route.
-    assert two_key_escape_gameplay._bfs_reaches(
-        body["grid_size"],
-        {tuple(cell) for cell in body["walls"]},
-        {tuple(cell) for cell in body["blocked_cells"]}
-        | {tuple(cell) for cell in body["locked_cells"]},
-        (body["player_row"], body["player_col"]),
-        (body["exit_row"], body["exit_col"]),
-    )
+    # The maze stays solvable from the player's cell, reading through the
+    # gates like the server proof does.
+    _assert_truly_solvable(body)
     assert body["cooldown_seconds_remaining"] > 0
-    assert body["moves_since_last_key"] == 0
     assert body["total_keys"] == 1
 
-    # A used key cannot be reused, and nothing is consumed by the refusal.
-    again = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
-    assert again.status_code == 409, again.text
-    row = escape_row(db, user_a_id=A_ID, user_b_id=B_ID)
-    assert row.total_keys == 1
-
-    # Unknown keys are refused without consuming anything.
+    # Unknown keys are refused without changing anything.
     missing = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 999})
     assert missing.status_code == 404, missing.text
     assert escape_row(db, user_a_id=A_ID, user_b_id=B_ID).total_keys == 1
+
+
+def test_keys_are_reusable_once_relocked(db, http):
+    """No lock is ever permanently lost: the same key opens again later.
+
+    Open one lock, open another (sending the first back), satisfy the
+    cooldown, then spend the first key again: it lands, because keys are
+    throttled by the cooldown alone, never consumed and never gated on
+    movement.
+    """
+    seed_couple_questions(db)
+    seed_questionnaire(db)
+    seed_escape(db)
+    alice = make_user(db, A_ID, "escape_a", "Alice")
+    bob = make_user(db, B_ID, "escape_b", "Bob")
+    open_pair(http, alice, bob)
+    finalize_roles(http, alice, bob)
+    opened = _mapping(db)
+
+    first = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
+    assert first.status_code == 200, first.text
+    assert opened[0] not in first.json()["locked_cells"]
+
+    _age_cooldown(db)
+    probe_step(http, alice, avoid={tuple(opened[0])}, strict=False)
+    second = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
+    assert second.status_code == 200, second.text
+    assert second.json()["locked_cells"].count(opened[0]) == 1
+
+    _age_cooldown(db)
+    probe_step(http, alice, avoid={tuple(opened[1])}, strict=False)
+    third = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
+    assert third.status_code == 200, third.text
+    body = third.json()
+    assert opened[0] not in body["locked_cells"]
+    assert opened[1] in body["locked_cells"]
+    assert body["total_keys"] == 3
 
 
 def test_second_key_sends_first_lock_back(db, http):
@@ -681,9 +902,9 @@ def test_second_key_sends_first_lock_back(db, http):
     first = client_for(http, alice).get("/games/two-key-escape").json()
     assert opened[0] not in first["locked_cells"]
 
-    # Satisfy the cooldown and the movement gate, then open another. The
-    # setup moves stop anywhere but on the open cell itself -- standing on
-    # it would refuse the next key for occupancy, which is the next test.
+    # Satisfy the cooldown, then open another. The setup moves stop
+    # anywhere but on the open cell itself -- standing on it would refuse
+    # the next key for occupancy, which is the next test.
     with db.sessions.begin() as session:
         row = session.scalar(
             select(TwoKeyEscapeSessionRecord).where(
@@ -692,18 +913,11 @@ def test_second_key_sends_first_lock_back(db, http):
             )
         )
         row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
-    for _ in range(4):
-        state = client_for(http, alice).get("/games/two-key-escape").json()
-        assert state["stage"] == "playing"
-        path = bfs_path(state)
-        assert path, "the maze must stay solvable after a key"
-        moved = client_for(http, alice).post(
-            "/games/two-key-escape/move", json={"direction": path[0]}
-        )
-        assert moved.status_code == 200, moved.text
-        state = client_for(http, alice).get("/games/two-key-escape").json()
-        if (state["player_row"], state["player_col"]) != tuple(opened[0]):
-            break
+    # Roam one step without stepping onto the open lock: standing on it
+    # would refuse the next key for occupancy, which is the next test.
+    moved = probe_step(http, alice, avoid={tuple(opened[0])}, strict=False)
+    assert moved is not None and moved.status_code == 200, moved
+    state = client_for(http, alice).get("/games/two-key-escape").json()
     assert (state["player_row"], state["player_col"]) != tuple(opened[0])
     second = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
     assert second.status_code == 200, second.text
@@ -712,15 +926,8 @@ def test_second_key_sends_first_lock_back(db, http):
     assert opened[1] not in body["locked_cells"]
     assert opened[0] in body["locked_cells"]
     assert body["total_keys"] == 2
-    # ...and the resulting board is still solvable, locks included.
-    assert two_key_escape_gameplay._bfs_reaches(
-        body["grid_size"],
-        {tuple(cell) for cell in body["walls"]},
-        {tuple(cell) for cell in body["blocked_cells"]}
-        | {tuple(cell) for cell in body["locked_cells"]},
-        (body["player_row"], body["player_col"]),
-        (body["exit_row"], body["exit_col"]),
-    )
+    # ...and the resulting board is still solvable, reading through the gates.
+    _assert_truly_solvable(body)
 
 
 def test_key_refused_while_navigator_on_open_cell(db, http):
@@ -743,7 +950,6 @@ def test_key_refused_while_navigator_on_open_cell(db, http):
             )
         )
         row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
-        row.moves_since_last_key = 1
         row.player_row, row.player_col = opened[0]
 
     refused = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
@@ -757,23 +963,28 @@ def test_key_refused_while_navigator_on_open_cell(db, http):
 
 
 def _assert_truly_solvable(state):
-    """BFS solvability with locked cells treated as the walls they are."""
+    """The server proof, mirrored: exit reachable reading through all locks.
+
+    Sound for the same reason the server's is -- keys are reusable, so no
+    lock is ever permanently lost and a route through locks is a route the
+    operator can always reopen. A board failing this has no route at all,
+    locks or otherwise, and no key may land on it.
+    """
     assert two_key_escape_gameplay._bfs_reaches(
         state["grid_size"],
         {tuple(cell) for cell in state["walls"]},
-        {tuple(cell) for cell in state["blocked_cells"]}
-        | {tuple(cell) for cell in state["locked_cells"]},
+        {tuple(cell) for cell in state["blocked_cells"]},
         (state["player_row"], state["player_col"]),
         (state["exit_row"], state["exit_col"]),
     )
 
 
 def test_every_key_keeps_maze_truly_solvable(db, http):
-    """Regression: the block proof must read locked cells as impassable.
+    """Regression: every accepted block must keep a route through locks.
 
-    A route that passes through a lock is no route. Several fresh mazes,
-    several keys each, moving and unlocking between them: the board must
-    stay genuinely solvable after every single activation.
+    Locks are reopenable, walls are not: the proof must tell them apart.
+    Several fresh mazes, several keys each, moving and unlocking between
+    them: a lock-readable route must survive every single activation.
     """
     from app.db_models import Base
 
@@ -789,6 +1000,7 @@ def test_every_key_keeps_maze_truly_solvable(db, http):
         open_pair(http, alice, bob)
         finalize_roles(http, alice, bob)
 
+        opened: set[tuple[int, int]] = set()
         for key_index in range(3):
             with db.sessions.begin() as session:
                 row = session.scalar(
@@ -801,28 +1013,116 @@ def test_every_key_keeps_maze_truly_solvable(db, http):
             state = client_for(http, alice).get("/games/two-key-escape").json()
             if state["stage"] == "completed":
                 break
-            path = bfs_path(state)
-            assert path, "setup requires a solvable board"
-            moved = client_for(http, alice).post(
-                "/games/two-key-escape/move", json={"direction": path[0]}
-            )
-            assert moved.status_code == 200, moved.text
+            # Roam without stepping onto the open lock: standing on it
+            # would refuse the next key for occupancy, by design.
+            moved = probe_step(http, alice, rotation=key_index, avoid=opened, strict=False)
+            assert moved is not None and moved.status_code == 200, moved
             used = client_for(http, bob).post(
                 "/games/two-key-escape/key", json={"key_index": key_index}
             )
             assert used.status_code == 200, used.text
+            opened = {tuple(_mapping(db)[key_index])}
             state = client_for(http, alice).get("/games/two-key-escape").json()
             if state["stage"] == "completed":
                 break
             _assert_truly_solvable(state)
 
 
-def test_block_proof_reads_locks_as_walls():
-    """The reachability proof must fail when only locks lead to the exit.
+def test_every_open_lock_has_a_step_off(db, http):
+    """Leapfrog footing: standing on any open lock always has a move.
 
-    A corridor whose only crossing is locked: ignoring locks (the old bug)
-    offers a cell to block, reading them correctly refuses. The open-board
-    control proves the setup itself is blockable.
+    For every lock on the board: open it, stand on it, seal every other
+    neighbor, and prove a step still lands. This is the composition piece
+    the other proofs assume -- without guaranteed staging, crossing two
+    adjacent locks in sequence could strand the Navigator on relocking
+    ground with nowhere to step.
+    """
+    seed_couple_questions(db)
+    seed_questionnaire(db)
+    seed_escape(db)
+    alice = make_user(db, A_ID, "escape_a", "Alice")
+    bob = make_user(db, B_ID, "escape_b", "Bob")
+    open_pair(http, alice, bob)
+    finalize_roles(http, alice, bob)
+
+    state = client_for(http, alice).get("/games/two-key-escape").json()
+    size = state["grid_size"]
+    walls = {tuple(cell) for cell in state["walls"]}
+    template = {(key["target_row"], key["target_col"]) for key in state["keys"]}
+    assert len(template) == state["key_charges"]
+    for lock in sorted(template):
+        neighbours = [
+            (lock[0] + dr, lock[1] + dc)
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1))
+            if 0 <= lock[0] + dr < size and 0 <= lock[1] + dc < size
+        ]
+        staging = [
+            cell for cell in neighbours
+            if cell not in walls and cell not in template
+        ]
+        assert staging, f"lock {lock} has no staging cell"
+        with db.sessions.begin() as session:
+            row = session.scalar(
+                select(TwoKeyEscapeSessionRecord).where(
+                    TwoKeyEscapeSessionRecord.user_a_id == A_ID,
+                    TwoKeyEscapeSessionRecord.user_b_id == B_ID,
+                )
+            )
+            row.unlocked_cells = [[lock[0], lock[1]]]
+            row.player_row, row.player_col = lock
+            row.blocked_cells = [
+                [cell[0], cell[1]]
+                for cell in neighbours
+                if cell not in staging
+                and cell not in walls
+                and cell not in template
+            ]
+        stepped = probe_step(http, alice, strict=False)
+        assert stepped is not None and stepped.status_code == 200, stepped
+        landed = (stepped.json()["player_row"], stepped.json()["player_col"])
+        assert landed in staging, f"stepped from {lock} to {landed}, outside staging"
+
+
+def test_staging_cells_are_never_blocked(db, http):
+    """Blocks land everywhere but staging: several keys, zero overlap.
+
+    No movement between keys either -- none is required -- so the player
+    never leaves the start corner while four blocks land elsewhere.
+    """
+    seed_couple_questions(db)
+    seed_questionnaire(db)
+    seed_escape(db)
+    alice = make_user(db, A_ID, "escape_a", "Alice")
+    bob = make_user(db, B_ID, "escape_b", "Bob")
+    open_pair(http, alice, bob)
+    finalize_roles(http, alice, bob)
+
+    for key_index in range(4):
+        _age_cooldown(db)
+        used = client_for(http, bob).post(
+            "/games/two-key-escape/key", json={"key_index": key_index}
+        )
+        assert used.status_code == 200, used.text
+    with db.sessions() as session:
+        game = session.scalar(
+            select(TwoKeyEscapeGameRecord)
+            .where(TwoKeyEscapeGameRecord.status == "active")
+            .limit(1)
+        )
+        staging = two_key_escape_gameplay._staging_cells(game)
+        row = escape_row(db, user_a_id=A_ID, user_b_id=B_ID)
+        blocked = {(cell[0], cell[1]) for cell in row.blocked_cells}
+    assert len(blocked) == 4
+    assert blocked & staging == set()
+
+
+def test_block_proof_reads_through_locks_but_not_walls():
+    """The proof treats locks as reopenable and walls as forever.
+
+    A corridor whose only crossing is locked still accepts a block -- the
+    operator can always reopen that lock, keys being reusable. A player
+    walled into a lock-free pocket refuses one instead: no key could ever
+    open the way out, so none may land.
     """
     walls = {(1, 0), (1, 2)}
     assert (
@@ -836,13 +1136,14 @@ def test_block_proof_reads_locks_as_walls():
             (2, 0),
             "proof-seed",
         )
-        is None
+        is not None
     )
+    sealed_walls = {(1, 0), (1, 2), (0, 1), (2, 1)}
     assert (
         two_key_escape_gameplay._pick_blocked_cell(
-            3, walls, set(), set(), (0, 0), (0, 2), (2, 0), "proof-seed"
+            3, sealed_walls, set(), set(), (0, 0), (0, 2), (0, 0), "proof-seed"
         )
-        is not None
+        is None
     )
 
 
@@ -857,7 +1158,13 @@ def test_legacy_null_mapping_falls_back_to_rotation():
     assert two_key_escape_gameplay._key_mapping(game) == [1, 2, 0]
 
 
-def test_key_cooldown_and_movement_gate(db, http):
+def test_key_cooldown_enforced_without_any_movement(db, http):
+    """The cooldown alone throttles keys: no movement is ever required.
+
+    Use one key, watch the next refused mid-cooldown, age the stamp, and
+    spend again with the Navigator never having moved -- the throttle is
+    time, not steps. A reconnect still cannot reset it.
+    """
     seed_couple_questions(db)
     seed_questionnaire(db)
     seed_escape(db)
@@ -878,7 +1185,8 @@ def test_key_cooldown_and_movement_gate(db, http):
     reread = client_for(http, bob).get("/games/two-key-escape").json()
     assert reread["cooldown_seconds_remaining"] > 0
 
-    # Age the stamp past the cooldown: the movement gate still holds.
+    # Age the stamp past the cooldown: the next key lands with zero moves
+    # made by anyone since the first.
     with db.sessions.begin() as session:
         row = session.scalar(
             select(TwoKeyEscapeSessionRecord).where(
@@ -887,21 +1195,19 @@ def test_key_cooldown_and_movement_gate(db, http):
             )
         )
         row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
-    gated = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
-    assert gated.status_code == 409, gated.text
-    assert "move" in gated.json()["detail"].lower()
-
-    # One valid Navigator step satisfies the gate; the next key lands.
-    path = bfs_path(client_for(http, alice).get("/games/two-key-escape").json())
-    assert path, "the maze must stay solvable after a key"
-    moved = client_for(http, alice).post("/games/two-key-escape/move", json={"direction": path[0]})
-    assert moved.status_code == 200, moved.text
     second = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
     assert second.status_code == 200, second.text
     assert second.json()["total_keys"] == 2
+    assert escape_row(db, user_a_id=A_ID, user_b_id=B_ID).total_moves == 0
 
 
-def test_completion_finalizes_once_and_freezes(db, http):
+def test_completion_crosses_every_wall_and_freezes(db, http):
+    """No keyless route exists; each wall is crossed through a gate; then done.
+
+    The full playthrough opens at least one gate per wall (keys are reusable,
+    so rediscovery never strands the couple), walks each chamber, and proves
+    the maze completes exactly the way the generator promised it would.
+    """
     seed_couple_questions(db)
     seed_questionnaire(db)
     seed_escape(db)
@@ -910,23 +1216,22 @@ def test_completion_finalizes_once_and_freezes(db, http):
     open_pair(http, alice, bob)
     finalize_roles(http, alice, bob)
 
-    # Walk the solvable route to the exit, one validated step at a time.
     state = client_for(http, alice).get("/games/two-key-escape").json()
-    for _ in range(state["grid_size"] * state["grid_size"] * 2):
-        state = client_for(http, alice).get("/games/two-key-escape").json()
-        if state["stage"] == "completed":
-            break
-        path = bfs_path(state)
-        assert path, "the maze must stay solvable"
-        response = client_for(http, alice).post(
-            "/games/two-key-escape/move", json={"direction": path[0]}
-        )
-        assert response.status_code == 200, response.text
-    done = client_for(http, alice).get("/games/two-key-escape").json()
+    assert bfs_path(state) is None, "chamber walls must allow no keyless route"
+    columns = wall_columns(state)
+    assert len(columns) >= 1
+
+    done, stepped = play_through(http, db, alice, bob)
     assert done["stage"] == "completed"
+    # At least one gate per wall was stepped through: keys were mandatory,
+    # and more than one of them.
+    stepped_columns = {cell[1] for cell in stepped}
+    assert set(columns) <= stepped_columns, f"walls {columns} vs stepped {stepped}"
     assert done["result"]["completed"] is True
     assert done["result"]["total_moves"] > 0
-    assert done["result"]["score"] > 0
+    assert done["result"]["total_keys"] >= len(wall_columns(done))
+    assert done["result"]["elapsed_seconds"] >= 0
+    assert "score" not in done["result"]
     completed_at = done["result"]["completed_at"]
 
     # Nothing modifies a finalized result: not moves, not keys.
@@ -950,8 +1255,7 @@ def test_state_survives_refresh_and_reconnect(db, http):
     open_pair(http, alice, bob)
     finalize_roles(http, alice, bob)
 
-    path = bfs_path(client_for(http, alice).get("/games/two-key-escape").json())
-    client_for(http, alice).post("/games/two-key-escape/move", json={"direction": path[0]})
+    probe_step(http, alice)
     first = client_for(http, alice).get("/games/two-key-escape").json()
     second = client_for(http, bob).get("/games/two-key-escape").json()
     assert first["state_version"] == second["state_version"] == 1
@@ -991,9 +1295,6 @@ def _direct_pair_row(db, escape_game_id, questionnaire_game_id, user_a_id, user_
                 total_moves=total_moves,
                 total_keys=total_keys,
                 elapsed_seconds=elapsed_seconds,
-                score=two_key_escape_gameplay._score_for(elapsed_seconds)
-                if completed and elapsed_seconds is not None
-                else 0,
             )
         )
 
@@ -1027,8 +1328,8 @@ def test_leaderboard_ranks_completed_then_fastest(db, http):
     assert entries[1]["elapsed_seconds"] == 600.0
     assert entries[2]["elapsed_seconds"] is None
     assert entries[0]["rank"] == 1
-    # Less time always produces the better score.
-    assert entries[0]["score"] > entries[1]["score"] > entries[2]["score"]
+    # No score anywhere: time alone ranks, and nothing else is carried.
+    assert all("score" not in entry for entry in entries)
 
 
 def test_elapsed_time_includes_time_away(db, http):
@@ -1046,8 +1347,7 @@ def test_elapsed_time_includes_time_away(db, http):
     open_pair(http, alice, bob)
     finalize_roles(http, alice, bob)
 
-    path = bfs_path(client_for(http, alice).get("/games/two-key-escape").json())
-    client_for(http, alice).post("/games/two-key-escape/move", json={"direction": path[0]})
+    probe_step(http, alice)
     with db.sessions.begin() as session:
         row = session.scalar(
             select(TwoKeyEscapeSessionRecord).where(
@@ -1057,20 +1357,10 @@ def test_elapsed_time_includes_time_away(db, http):
         )
         row.first_move_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
-    for _ in range(15 * 15 * 2):
-        state = client_for(http, alice).get("/games/two-key-escape").json()
-        if state["stage"] == "completed":
-            break
-        path = bfs_path(state)
-        assert path, "the maze must stay solvable"
-        response = client_for(http, alice).post(
-            "/games/two-key-escape/move", json={"direction": path[0]}
-        )
-        assert response.status_code == 200, response.text
-    done = client_for(http, alice).get("/games/two-key-escape").json()
+    done, _stepped = play_through(http, db, alice, bob)
     assert done["stage"] == "completed"
     assert done["result"]["elapsed_seconds"] >= 2 * 3600
-    assert done["result"]["score"] > 0
+    assert "score" not in done["result"]
 
 
 def test_grid_size_config_persists_across_periods(db, http, admin_client):

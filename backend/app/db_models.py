@@ -1718,6 +1718,10 @@ class TwoKeyEscapeGameRecord(Base):
     # the one they need. A derangement dealt with the maze, never
     # client-supplied and never exposed on reads.
     key_mapping: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Which entries of ``locked_cells`` are chamber gates (as opposed to
+    # flavor locks): the doors progress must pass through. Read by the
+    # block proof, which treats gates as the operator's future job.
+    gate_indexes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
@@ -1797,21 +1801,24 @@ class TwoKeyEscapeSessionRecord(Base):
     # (formerly traversable) cells, as ``[row, col]`` pairs.
     unlocked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     blocked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
-    # Consumed key charges, as indexes into the template's locked-cell list.
-    used_key_indexes: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # No consumed-charges column: keys are reusable, so there is nothing to
+    # record per key. (An earlier revision kept ``used_key_indexes`` here;
+    # it is retired in ``postgres.RETIRED_COLUMNS``.)
     last_key_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    moves_since_last_key: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    has_used_key: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # No movement-gate columns: keys never required a Navigator move between
+    # uses. (An earlier revision kept ``moves_since_last_key`` and
+    # ``has_used_key`` here; both are retired in
+    # ``postgres.RETIRED_COLUMNS``.)
     total_moves: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     total_keys: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # Seconds from the first valid move to completion, settled once at the
     # exit. NULL until then. The single number couples are ranked by.
+    # There is no score column: no other game carries a score. (An earlier
+    # revision kept one here; it is retired in
+    # ``postgres.RETIRED_COLUMNS``.)
     elapsed_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # Deterministic display score settled at completion (higher is better),
-    # derived from the persisted metrics rather than trusted input.
-    score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     state_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

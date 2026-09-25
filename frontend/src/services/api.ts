@@ -2050,12 +2050,11 @@ export type TwoKeyEscapeDirection = 'up' | 'down' | 'left' | 'right';
 /** Where the caller stands in the couple's maze. */
 export type TwoKeyEscapeStage = 'no_couple' | 'selecting_roles' | 'playing' | 'completed';
 
-/** One key charge: its locked-cell target and whether it is spent. */
+/** One key: the lock it is spent on. Keys are reusable; the mapping stays hidden. */
 export interface TwoKeyEscapeKeyView {
     key_index: number;
     target_row: number;
     target_col: number;
-    used: boolean;
 }
 
 /** The settled couple result, finalized exactly once at the exit. */
@@ -2065,7 +2064,6 @@ export interface TwoKeyEscapeResultView {
     total_keys: number;
     /** Seconds from the first valid move to the exit, including time away. */
     elapsed_seconds: number | null;
-    score: number;
     completed_at: string | null;
 }
 
@@ -2073,8 +2071,8 @@ export interface TwoKeyEscapeResultView {
  * The caller's place in the maze, as the page opens and after every write.
  * `my_submitted_role` / `partner_submitted_role` carry both confirmed
  * choices so a conflict names itself; `conflict` is the sentence both sides
- * resolve. The board (walls, locked, blocked, player, exit, keys, cooldown,
- * movement gate) is the same authoritative overlay for both participants.
+ * resolve. The board (walls, locked, blocked, player, exit, keys, cooldown)
+ * is the same authoritative overlay for both participants.
  */
 export interface TwoKeyEscapeState {
     stage: TwoKeyEscapeStage;
@@ -2098,10 +2096,7 @@ export interface TwoKeyEscapeState {
     locked_cells: number[][];
     blocked_cells: number[][];
     keys: TwoKeyEscapeKeyView[];
-    keys_remaining: number;
     cooldown_seconds_remaining: number;
-    movement_required: boolean;
-    moves_since_last_key: number;
     total_moves: number;
     total_keys: number;
     state_version: number;
@@ -2116,7 +2111,6 @@ export interface TwoKeyEscapeLeaderboardEntry {
     total_moves: number;
     total_keys: number;
     elapsed_seconds: number | null;
-    score: number;
 }
 
 /** The caller's current state. Never creates anything. */

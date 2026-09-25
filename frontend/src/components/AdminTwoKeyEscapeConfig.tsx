@@ -28,22 +28,22 @@ import {
 
 const GRID_SIZES = [12, 13, 14, 15] as const;
 
-// The charge count is never stored here: the backend owns the single
-// grid-size -> charges mapping and the game state carries the derived
+// The lock count is never stored here: the backend owns the single
+// grid-size -> locks mapping and the game state carries the derived
 // number. This label only restates the identity the mapping currently is
-// (a 12x12 maze grants 12 charges); if the backend ever changes it, this text
+// (a 12x12 maze carries 12 locks); if the backend ever changes it, this text
 // goes stale while every number the game plays on stays correct.
-const chargesLabel = (size: number) => `${size} keys`;
+const locksLabel = (size: number) => `${size} locks`;
 
 /**
  * Two-Key Escape administration: the session/reset controls every game owns,
  * plus the one gameplay knob this game has -- the maze edge length.
  *
- * The key count is never configured: it derives from the grid size (a 12x12
- * maze grants 7 charges, 8x8 grants 8, and so on), shown here so the operator
- * sees the consequence of the pick. The size persists across session resets
- * on the server; a new period deals a fresh maze at the stored size while the
- * configured value stays put.
+ * The lock count is never configured: it derives from the grid size, shown
+ * here so the operator sees the consequence of the pick. Keys never run out
+ * -- every use costs the cooldown and a Navigator move. The size persists
+ * across session resets on the server; a new period deals a fresh maze at
+ * the stored size while the configured value stays put.
  */
 export const AdminTwoKeyEscapeConfig = () => {
   const { logActivity } = useGamesConfig();
@@ -72,7 +72,7 @@ export const AdminTwoKeyEscapeConfig = () => {
     try {
       const updated = await updateGameConfig('two-key-escape', { grid_size: next });
       setGridSize(updated.grid_size ?? next);
-      toast.success(`Maze size set to ${next}x${next} (${chargesLabel(next)}).`);
+      toast.success(`Maze size set to ${next}x${next} (${locksLabel(next)}).`);
       logActivity({
         kind: 'settings',
         gameId: 'two-key-escape',
@@ -119,14 +119,14 @@ export const AdminTwoKeyEscapeConfig = () => {
             <SelectContent>
               {GRID_SIZES.map((size) => (
                 <SelectItem key={size} value={String(size)}>
-                  {size} × {size} · {chargesLabel(size)}
+                  {size} × {size} · {locksLabel(size)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The only gameplay setting. Key charges follow the size automatically; cooldown
-            (10s), movement rules and scoring are fixed by the game. Applies to new
+            The only gameplay setting. Lock count follows the size automatically; cooldown
+            (10s) and scoring are fixed by the game. Applies to new
             sessions — the live maze is never rewritten.
           </p>
         </div>

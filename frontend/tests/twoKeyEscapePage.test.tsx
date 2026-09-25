@@ -91,11 +91,9 @@ const selectingState = (overrides: Partial<TwoKeyEscapeState> = {}): TwoKeyEscap
   walls: [],
   locked_cells: [[1, 1]],
   blocked_cells: [],
-  keys: [{ key_index: 0, target_row: 1, target_col: 1, used: false }],
-  keys_remaining: 7,
+  keys: [{ key_index: 0, target_row: 1, target_col: 1 }],
   cooldown_seconds_remaining: 0,
-  movement_required: false,
-  moves_since_last_key: 0,
+
   total_moves: 0,
   total_keys: 0,
   state_version: 0,

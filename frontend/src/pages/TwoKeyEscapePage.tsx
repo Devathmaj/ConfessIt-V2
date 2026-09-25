@@ -516,8 +516,7 @@ export const TwoKeyEscapePage = () => {
                 Partner: {state.partner?.name ?? 'Partner'}
               </Badge>
               <Badge variant="secondary">
-                {state.grid_size}×{state.grid_size} · {state.keys_remaining} of{' '}
-                {state.key_charges} keys left
+                {state.grid_size}×{state.grid_size} · {state.key_charges} locks
               </Badge>
               {state.stage === 'completed' ? (
                 <Badge variant="default">Escaped</Badge>
@@ -532,15 +531,9 @@ export const TwoKeyEscapePage = () => {
           <MazeGrid
             state={state}
             locksInteractive={state.stage === 'playing' && isOperator}
-            locksDisabled={acting || cooldown > 0 || state.movement_required}
+            locksDisabled={acting || cooldown > 0}
             locksDisabledReason={
-              cooldown > 0
-                ? `Cooling down (${cooldown}s left)`
-                : state.movement_required
-                  ? 'The Navigator must move first'
-                  : acting
-                    ? 'Working…'
-                    : ''
+              cooldown > 0 ? `Cooling down (${cooldown}s left)` : acting ? 'Working…' : ''
             }
             onUnlockKey={handleKey}
           />
@@ -609,22 +602,17 @@ export const TwoKeyEscapePage = () => {
             >
               <p className="flex items-center gap-2 font-medium">
                 <KeyRound className="h-4 w-4" />
-                Tap a 🔒 on the maze to spend that key — {state.keys_remaining} of{' '}
-                {state.key_charges} left.
+                Tap a 🔒 to use its key — keys never run out.
               </p>
               <p className="mt-1 text-muted-foreground">
                 Each lock opens a <span className="font-semibold">different</span> lock
                 — never the one you tapped — so find the lock that opens the cell you need.
                 Only one lock stays open at a time; opening another sends the first one back.
-                Ten seconds between keys, and the Navigator must move before the next one.
+                Walls divide the maze into chambers with no way around: every wall must be
+                crossed through one of its locked gates. Ten seconds between keys.
               </p>
               {cooldown > 0 && (
                 <p className="mt-1 font-medium">Cooling down: {cooldown}s before the next key.</p>
-              )}
-              {state.movement_required && (
-                <p className="mt-1 font-medium text-amber-600 dark:text-amber-400">
-                  The Navigator must move at least once before the next key.
-                </p>
               )}
             </div>
           )}
@@ -653,7 +641,6 @@ export const TwoKeyEscapePage = () => {
                 </div>
                 <ResultStat label="Valid moves" value={state.result.total_moves} />
                 <ResultStat label="Keys used" value={state.result.total_keys} />
-                <ResultStat label="Score" value={state.result.score} />
               </CardContent>
             </Card>
           )}
@@ -679,7 +666,7 @@ export const TwoKeyEscapePage = () => {
                   </span>
                   <span className="text-muted-foreground">
                     {entry.completed
-                      ? `${formatElapsed(entry.elapsed_seconds)} · ${entry.score} pts`
+                      ? `${formatElapsed(entry.elapsed_seconds)} · ${entry.total_moves} moves · ${entry.total_keys} keys`
                       : 'still finding the exit'}
                   </span>
                 </div>
@@ -834,9 +821,10 @@ const MazeGrid = ({
   const wallSet = new Set(state.walls.map(([r, c]) => `${r}:${c}`));
   const lockedSet = new Set(state.locked_cells.map(([r, c]) => `${r}:${c}`));
   const blockedSet = new Set(state.blocked_cells.map(([r, c]) => `${r}:${c}`));
-  // Each rendered lock is its key: the unused key whose target sits on it.
+  // Each rendered lock is its key: the key whose target sits on it. Keys are
+  // reusable, so every lock on the board stays clickable.
   const keyIndexByCell = new Map(
-    state.keys.filter((key) => !key.used).map((key) => [`${key.target_row}:${key.target_col}`, key.key_index]),
+    state.keys.map((key) => [`${key.target_row}:${key.target_col}`, key.key_index]),
   );
   const cells = [];
   for (let row = 0; row < size; row += 1) {

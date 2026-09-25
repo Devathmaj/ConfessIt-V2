@@ -12,11 +12,24 @@ Five rules hold at the bottom of everything here.
 
 **One global maze template per period, one live overlay per couple.** The
 reset loop opens each period with a single generated maze (edge length from
-the stored grid-size configuration, deterministic seed, persisted walls and
-locked cells). Every couple in the period plays that same template, and each
-couple's position, unlocked cells, blocked cells, consumed keys, cooldown
-and counters live on its own ``two_key_escape_sessions`` row -- so one
-couple's actions never touch another's, and a refresh reads the same walls.
+the stored grid-size configuration, deterministic seed, persisted walls,
+locked cells and key mapping). Every couple in the period plays that same
+template, and each couple's position, unlocked cells, blocked cells,
+cooldown and counters live on its own ``two_key_escape_sessions`` row --
+so one couple's actions never touch another's, and a refresh reads the same
+walls.
+
+**Chambers make keys mandatory, provably.** Full-height wall columns divide
+the board with no way around: every wall must be crossed through one of its
+locked gates, so no straight keyless path exists and each playthrough needs
+at least one unlock per wall. Generation simulates that exact playthrough
+-- open a gate, cross, let it relock behind, move on -- and rejects any
+layout that fails it, so completability is proven per maze, not hoped for.
+
+**Keys are reusable, and that is what keeps mandatory locks safe.** Every
+use costs the cooldown, never a consumable charge, so no amount of trial
+can permanently strand a lock the couple still needs: any gate reopens any
+time. Trial-and-error costs time, and time is the ranking.
 
 **Roles are submitted, then finalized exactly once.** Clicking a role option
 is local-only on the page; confirming sends one submission for the caller.
@@ -26,18 +39,20 @@ and surface a conflict both sides can see. Finalized roles are immutable.
 
 **Clients submit actions, never state.** Movement and key use arrive as
 ``{direction}`` / ``{key_index}`` and are validated against the stored row
-under ``FOR UPDATE``: bounds, walls, locks, blocks, role, cooldown and the
-movement gate are all re-checked server-side, and ``state_version`` bumps on
-every accepted action.
+under ``FOR UPDATE``: bounds, walls, locks, blocks, role and cooldown are
+all re-checked server-side, and ``state_version`` bumps on every accepted
+action. No movement is ever required between key uses.
 
 **A key trades one cell for another, never a solution.** Each lock opens a
 *different* lock, per the maze's hidden mapping -- the clicked lock itself
 never opens, so players must discover which lock opens the cell they need.
 Only one lock stays open at a time: opening another sends the previous one
 back (refused while the Navigator stands on it). Blocking picks a different
-traversable cell by game logic and is accepted only if breadth-first search
-still reaches the exit from the player's position on the resulting board.
-Start, exit and the player's cell are never blocked.
+traversable cell by game logic: never the start, the exit, the player's
+cell, a gate shoulder or an exit approach -- and never a cell whose blocking
+leaves the exit unreachable from the player (reading through every lock,
+which is sound precisely because keys are reusable) or strands the player
+without an ordinary step.
 
 **Scoring measures start-to-finish time, nothing else.** The Navigator's
 first valid move stamps the start; reaching the exit stamps the end. What
@@ -121,6 +136,28 @@ def _bfs_reaches(
         return True
     if start in walls or start in blocked or exit in walls or exit in blocked:
         return False
+    return exit in _reachable_set(grid_size, walls, blocked, start)
+
+
+def _wall_columns(grid_size: int) -> list[int]:
+    """The full-height wall columns dividing the maze into chambers.
+
+    Evenly spaced and always interior, so the start and exit chambers hold
+    real room and no straight keyless path can slip around a column's end.
+    """
+    columns = sorted({grid_size // 4, grid_size // 2, (3 * grid_size) // 4})
+    return [col for col in columns if 0 < col < grid_size - 1]
+
+
+def _reachable_set(
+    grid_size: int,
+    walls: set[tuple[int, int]],
+    blocked: set[tuple[int, int]],
+    start: tuple[int, int],
+) -> set[tuple[int, int]]:
+    """Every cell reachable from ``start`` avoiding walls and blocks."""
+    if start in walls or start in blocked:
+        return set()
     seen = {start}
     queue = deque([start])
     while queue:
@@ -131,77 +168,137 @@ def _bfs_reaches(
                 continue
             if nxt in walls or nxt in blocked or nxt in seen:
                 continue
-            if nxt == exit:
-                return True
             seen.add(nxt)
             queue.append(nxt)
-    return False
+    return seen
+
+
+def _verify_walkthrough(
+    grid_size: int,
+    walls: set[tuple[int, int]],
+    locked: set[tuple[int, int]],
+    gates_by_wall: list[list[tuple[int, int]]],
+    start: tuple[int, int],
+    exit_cell: tuple[int, int],
+) -> bool:
+    """Whether the maze plays through under single-open, relocking keys.
+
+    Simulates the real pattern wall by wall: open one gate (remotely, its
+    preimage always exists), walk to and through it, let it relock behind,
+    move on. The previously opened gate is never needed again because
+    chambers are crossed monotonically. False means regenerate, never ship.
+    """
+    if _bfs_reaches(grid_size, walls, locked, start, exit_cell):
+        return False
+    open_set: set[tuple[int, int]] = set()
+    pos = start
+    for wall_gates in gates_by_wall:
+        crossed = False
+        for gate in wall_gates:
+            if gate in _reachable_set(grid_size, walls, (locked - open_set - {gate}), pos):
+                open_set = {gate}
+                beyond = (gate[0], gate[1] + 1)
+                if beyond in walls or beyond in (locked - {gate}):
+                    return False
+                pos = beyond
+                crossed = True
+                break
+        if not crossed:
+            return False
+    return exit_cell in _reachable_set(grid_size, walls, locked - open_set, pos)
 
 
 def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
-    """Generate a solvable square maze template, deterministically from ``seed``.
+    """Generate a chambered maze that *requires* keys, deterministically.
 
-    The start is the top-left corner and the exit the bottom-right. A random
-    depth-first path is kept clear first, so a solution always exists; then
-    walls and the key charges for this size are placed on cells off that
-    path. The route is verified with the locked cells treated as blocked, so
-    every emitted template has a valid route before any key is spent --
-    unlocking opens shortcuts and alternatives, never the only way through.
-    Retried with a derived stream until the layout validates, so every
-    emitted template is valid by construction.
+    Full-height wall columns divide the board into chambers with no way
+    around: every wall must be crossed through one of its locked gates, so no
+    straight keyless path from start to finish exists on any maze, and each
+    playthrough needs at least one unlock per wall. The remaining locks are
+    flavor off the walkable space. Gate shoulders (approach and beyond
+    cells) are forced clear so crossings always land on open ground.
+
+    Only walls gate progress, never the start: the chambers stay walkable,
+    so the Navigator can always roam and no game can deadlock for want of
+    a move. Every lock is dealt at least one staging cell -- an ordinary
+    neighbor blocks can never take -- so stepping off an open lock is
+    always possible and multi-lock leapfrogging always has footing.
+
+    Retried with a derived stream until the walkthrough simulation passes --
+    gates crossed in order under single-open relocking, exit reached -- so
+    every emitted template proves the operator's mandatory multi-lock role
+    by construction rather than by luck.
     """
     if grid_size not in TWO_KEY_ESCAPE_GRID_SIZES:
         raise ValueError(f"Unknown grid size {grid_size!r}.")
     charges = two_key_escape_key_charges(grid_size)
     start = (0, 0)
     exit_cell = (grid_size - 1, grid_size - 1)
+    wall_xs = _wall_columns(grid_size)
+    gates_per_wall = 2
 
-    for attempt in range(100):
+    for attempt in range(300):
         rng = random.Random(f"two-key-escape:{seed}:{grid_size}:{attempt}")
-        # A random DFS route from start to exit on the open grid: always
-        # exists, and every cell on it stays clear below.
-        path: list[tuple[int, int]] = []
-        visited: set[tuple[int, int]] = set()
-
-        def _dfs(cell: tuple[int, int]) -> bool:
-            path.append(cell)
-            visited.add(cell)
-            if cell == exit_cell:
-                return True
-            neighbours = [
-                (cell[0] + drow, cell[1] + dcol)
-                for drow, dcol in _DIRECTIONS.values()
-            ]
-            rng.shuffle(neighbours)
-            for nxt in neighbours:
-                if not (0 <= nxt[0] < grid_size and 0 <= nxt[1] < grid_size):
-                    continue
-                if nxt in visited:
-                    continue
-                if _dfs(nxt):
-                    return True
-            path.pop()
-            return False
-
-        _dfs(start)
-        path_set = set(path)
-        # Walls and locked cells live off the kept route only, so the route
-        # always survives them.
-        candidates = [
+        gates_by_wall: list[list[tuple[int, int]]] = []
+        for wall_x in wall_xs:
+            rows = rng.sample(range(grid_size), gates_per_wall)
+            gates_by_wall.append([(row, wall_x) for row in rows])
+        gates = [gate for wall in gates_by_wall for gate in wall]
+        gate_set = set(gates)
+        # Gate shoulders stay clear: crossings always land on open ground.
+        forced = {
+            (gate_row, gate_col + step)
+            for gate_row, gate_col in gates
+            for step in (-1, 1)
+        }
+        forced = {
+            (row, col)
+            for row, col in forced
+            if 0 <= row < grid_size
+            and 0 <= col < grid_size
+            and (row, col) != start
+            and (row, col) != exit_cell
+        }
+        walls = {
+            (row, wall_x)
+            for wall_x in wall_xs
+            for row in range(grid_size)
+            if (row, wall_x) not in gate_set
+        }
+        eligible = [
             (row, col)
             for row in range(grid_size)
             for col in range(grid_size)
-            if (row, col) not in path_set
+            if (row, col) not in walls
+            and (row, col) not in gate_set
+            and (row, col) not in forced
             and (row, col) != start
             and (row, col) != exit_cell
         ]
-        rng.shuffle(candidates)
-        wall_count = min(len(candidates), int(len(candidates) * 0.35))
-        walls = set(candidates[:wall_count])
-        rest = [cell for cell in candidates[wall_count:] if cell not in walls]
-        if len(rest) < charges:
+        rng.shuffle(eligible)
+        wall_count = min(len(eligible), int(len(eligible) * 0.18))
+        walls |= set(eligible[:wall_count])
+        pool = [cell for cell in eligible[wall_count:] if cell not in walls]
+        middle_needed = charges - len(gates)
+        if len(pool) < middle_needed:
             continue
-        locked = rest[:charges]
+        locked = gates + pool[:middle_needed]
+        # Every lock needs guaranteed staging: at least one ordinary
+        # neighbor that blocks can never take. Without it, leapfrogging
+        # adjacent locks could strand the Navigator on relocking ground
+        # with no step off -- the one composition the other proofs assume.
+        walls_and_locks = walls | set(locked)
+        if any(
+            not any(
+                0 <= row + drow < grid_size
+                and 0 <= col + dcol < grid_size
+                and (row + drow, col + dcol) not in walls_and_locks
+                for drow, dcol in _DIRECTIONS.values()
+            )
+            for row, col in locked
+        ):
+            continue
+        gate_indexes = list(range(len(gates)))
         # Sattolo's shuffle: a single random cycle, which for two or more
         # keys is a derangement -- key ``i`` always opens a *different*
         # lock, so clicking a lock never opens itself.
@@ -209,7 +306,9 @@ def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
         for i in range(charges - 1, 0, -1):
             j = rng.randrange(i)
             mapping[i], mapping[j] = mapping[j], mapping[i]
-        if _bfs_reaches(grid_size, walls, set(locked), start, exit_cell):
+        if _verify_walkthrough(
+            grid_size, walls, set(locked), gates_by_wall, start, exit_cell
+        ):
             return {
                 "grid_size": grid_size,
                 "seed": seed,
@@ -217,6 +316,7 @@ def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
                 "exit": [exit_cell[0], exit_cell[1]],
                 "walls": [[row, col] for row, col in sorted(walls)],
                 "locked_cells": [[row, col] for row, col in locked],
+                "gate_indexes": gate_indexes,
                 "key_mapping": mapping,
             }
     raise RuntimeError("Could not generate a solvable maze.")
@@ -338,6 +438,7 @@ def create_global_session(
         exit_col=template["exit"][1],
         walls=template["walls"],
         locked_cells=template["locked_cells"],
+        gate_indexes=template["gate_indexes"],
         key_mapping=template["key_mapping"],
     )
     session.add(row)
@@ -403,14 +504,11 @@ def _assemble_state(
             blocked_cells=[],
             keys=[
                 TwoKeyEscapeKeyView(
-                    key_index=index, target_row=cell[0], target_col=cell[1], used=False
+                    key_index=index, target_row=cell[0], target_col=cell[1]
                 )
                 for index, cell in enumerate(locked)
             ],
-            keys_remaining=charges,
             cooldown_seconds_remaining=0,
-            movement_required=False,
-            moves_since_last_key=0,
             total_moves=0,
             total_keys=0,
             state_version=0,
@@ -450,16 +548,13 @@ def _assemble_state(
     unlocked = _as_set(row.unlocked_cells)
     effective_locked = [cell for cell in locked if tuple(cell) not in unlocked]
     blocked = _pairs(row.blocked_cells)
-    used = set(row.used_key_indexes or [])
     now = _now()
-    movement_required = bool(row.has_used_key) and int(row.moves_since_last_key) < 1
     completed = bool(row.completed)
     result = TwoKeyEscapeResultView(
         completed=completed,
         total_moves=int(row.total_moves),
         total_keys=int(row.total_keys),
         elapsed_seconds=row.elapsed_seconds,
-        score=int(row.score),
         completed_at=row.completed_at,
     )
     return TwoKeyEscapeState(
@@ -476,14 +571,11 @@ def _assemble_state(
         blocked_cells=blocked,
         keys=[
             TwoKeyEscapeKeyView(
-                key_index=index, target_row=cell[0], target_col=cell[1], used=index in used
+                key_index=index, target_row=cell[0], target_col=cell[1]
             )
             for index, cell in enumerate(locked)
         ],
-        keys_remaining=max(0, charges - len(used)),
         cooldown_seconds_remaining=_cooldown_remaining(row, now),
-        movement_required=movement_required and not completed,
-        moves_since_last_key=int(row.moves_since_last_key),
         total_moves=int(row.total_moves),
         total_keys=int(row.total_keys),
         state_version=int(row.state_version),
@@ -770,16 +862,6 @@ def _locked_and_blocked(game, row) -> tuple[set[tuple[int, int]], set[tuple[int,
     return locked, _as_set(row.blocked_cells)
 
 
-def _score_for(elapsed_seconds: float) -> int:
-    """The deterministic display score settled at completion (higher wins).
-
-    Completed couples always outrank incomplete ones (which score 0); among
-    completed, less time means more score, monotonically. Ranking itself
-    compares the elapsed time, so the score can never disagree with it.
-    """
-    return max(1, 1_000_000 - int(elapsed_seconds))
-
-
 def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
     """Advance the couple's character one cell for the assigned Navigator.
 
@@ -787,9 +869,9 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
     Diagonal, out-of-grid, wall, locked and blocked targets are refused;
     requests from the Key Operator, strangers, or after completion or
     session expiry are refused without touching the board. A refused move
-    changes nothing at all, while a valid one steps, banks the movement the
-    next key needs, stamps the start clock on the first step, and completes
-    the game at the exit exactly once.
+    changes nothing at all, while a valid one steps, stamps the start
+    clock on the first step, and completes the game at the exit exactly
+    once.
     """
     if direction not in _DIRECTIONS:
         raise HTTPException(
@@ -836,9 +918,8 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
         walls = _as_set(game.walls)
         locked, blocked = _locked_and_blocked(game, row)
 
-        # A refused board move changes nothing at all: no position, no
-        # movement gate, no metric. Raising inside the transaction is safe
-        # precisely because there is nothing to roll back.
+        # A refused board move changes nothing at all. Raising inside the
+        # transaction is safe precisely because there is nothing to roll back.
         if not (0 <= target[0] < grid_size and 0 <= target[1] < grid_size):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That move leaves the maze.")
         if target in walls:
@@ -856,7 +937,6 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
         row.player_row = target[0]
         row.player_col = target[1]
         row.total_moves = int(row.total_moves) + 1
-        row.moves_since_last_key = int(row.moves_since_last_key) + 1
         row.state_version = int(row.state_version) + 1
         if target == (int(game.exit_row), int(game.exit_col)) and not row.completed:
             row.completed = True
@@ -866,7 +946,6 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
                 start = start.replace(tzinfo=timezone.utc)
             elapsed = max(0.0, (now - start).total_seconds()) if start is not None else 0.0
             row.elapsed_seconds = elapsed
-            row.score = _score_for(elapsed)
         session.flush()
         game_id, couple_id = str(game.id), str(couple.id)
     with db.sessions() as fresh:
@@ -885,6 +964,78 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
 # --- keys ----------------------------------------------------------------
 
 
+def _has_legal_move(
+    grid_size: int,
+    walls: set[tuple[int, int]],
+    locked: set[tuple[int, int]],
+    blocked: set[tuple[int, int]],
+    player: tuple[int, int],
+) -> bool:
+    """Whether the Navigator has any valid step from ``player`` right now."""
+    for drow, dcol in _DIRECTIONS.values():
+        nxt = (player[0] + drow, player[1] + dcol)
+        if not (0 <= nxt[0] < grid_size and 0 <= nxt[1] < grid_size):
+            continue
+        if nxt in walls or nxt in locked or nxt in blocked:
+            continue
+        return True
+    return False
+
+
+def _seal_cells(game: TwoKeyEscapeGameRecord) -> set[tuple[int, int]]:
+    """The exit's entry cells, for rows that predate chamber gates."""
+    exit_row, exit_col = int(game.exit_row), int(game.exit_col)
+    grid_size = int(game.grid_size)
+    return {
+        (row, col)
+        for row, col in ((exit_row - 1, exit_col), (exit_row, exit_col - 1))
+        if 0 <= row < grid_size and 0 <= col < grid_size
+    }
+
+
+def _staging_cells(game: TwoKeyEscapeGameRecord) -> set[tuple[int, int]]:
+    """Every lock's guaranteed step-off cells, derived from the template.
+
+    Walls and the lock set never change -- only open/shut status does -- so
+    each lock's ordinary (non-wall, non-lock) neighbors are reproducible for
+    any period, past or future, with no extra column. Generation guarantees
+    every lock has at least one; key placement excludes all of them from
+    blocking forever. Standing on an open lock therefore always has a legal
+    step off, which is what makes multi-lock leapfrogging composable: no
+    sequence of legal play can strand the Navigator on relocking ground.
+    """
+    grid_size = int(game.grid_size)
+    walls = _as_set(game.walls)
+    locked = _as_set(game.locked_cells)
+    staging: set[tuple[int, int]] = set()
+    for row, col in locked:
+        for drow, dcol in _DIRECTIONS.values():
+            nxt = (row + drow, col + dcol)
+            if not (0 <= nxt[0] < grid_size and 0 <= nxt[1] < grid_size):
+                continue
+            if nxt in walls or nxt in locked:
+                continue
+            staging.add(nxt)
+    return staging
+
+
+def _gate_cells(game: TwoKeyEscapeGameRecord) -> set[tuple[int, int]]:
+    """The chamber gates: progress must pass through them.
+
+    Read from the template's gate indexes; rows predating the column fall
+    back to the exit seal those mazes were built around. Either way the
+    block proof reads through exactly the locks the operator is
+    responsible for opening.
+    """
+    locked = _pairs(game.locked_cells)
+    stored = game.gate_indexes or []
+    if len(stored) == len(set(int(value) for value in stored)) and all(
+        0 <= int(value) < len(locked) for value in stored
+    ):
+        return {tuple(locked[int(value)]) for value in stored}
+    return _seal_cells(game)
+
+
 def _pick_blocked_cell(
     grid_size: int,
     walls: set[tuple[int, int]],
@@ -901,10 +1052,12 @@ def _pick_blocked_cell(
     Never the start, the exit, the player's cell, a wall, a locked cell or
     an already blocked cell -- and never a cell whose blocking would leave
     the exit unreachable from the player, verified by breadth-first search
-    over the resulting board with locked cells treated as impassable.
-    ``extra_excluded`` removes further cells from candidacy (e.g. cells that
-    must stay open for game reasons) without changing the reachability
-    proof, which reads ``locked`` exactly as the board will hold it. None
+    that reads through every lock. Reading through locks is sound precisely
+    because keys are reusable: no lock is ever permanently lost, so a route
+    through locks is a route the operator can always reopen -- at the cost
+    of cooldowns, which is exactly what the elapsed-time ranking charges
+    for. ``extra_excluded`` removes further cells from candidacy
+    (gate shoulders, exit approaches) without changing that proof. None
     when no valid candidate exists.
     """
     candidates = [
@@ -921,24 +1074,30 @@ def _pick_blocked_cell(
     ]
     random.Random(rng_seed).shuffle(candidates)
     for candidate in candidates:
-        if _bfs_reaches(
-            grid_size, walls, blocked | {candidate} | locked, player, exit_cell
-        ):
-            return candidate
+        if not _bfs_reaches(grid_size, walls, blocked | {candidate}, player, exit_cell):
+            continue
+        # ...and the player keeps an ordinary step: a block may never
+        # strand them on their own cell with only locks around, a state no
+        # later key could move them out of without stepping through the
+        # very cell that just shut.
+        if not _has_legal_move(grid_size, walls, locked, blocked | {candidate}, player):
+            continue
+        return candidate
     return None
 
 
 def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeState:
-    """Spend one key charge for the assigned Key Operator.
+    """Use one key for the assigned Key Operator.
 
-    Each lock opens a *different* lock, per the maze's hidden mapping -- the
-    clicked lock itself never opens, so players must discover which lock
-    opens the cell they need. Only one lock stays open at a time: opening
-    another sends the previous one back. A different eligible traversable
-    cell is blocked by the game logic, after verifying the maze -- with the
-    revert applied -- stays solvable. Refusals consume nothing and reset
-    nothing: only a successful activation spends the charge, stamps the
-    server-side cooldown and re-arms the movement gate.
+    Keys are reusable: every use costs the cooldown, never a consumable
+    charge, so no lock is ever permanently lost and no amount of trial can
+    strand the couple. Each lock opens a *different* lock, per the maze's
+    hidden mapping -- the clicked lock itself never opens, so players must
+    discover which lock opens the cell they need. Only one lock stays open
+    at a time: opening another sends the previous one back. A different
+    eligible traversable cell is blocked by the game logic, after verifying
+    the maze -- with the revert applied -- stays solvable. Refusals change
+    nothing: only a successful activation stamps the server-side cooldown.
     """
     with db.sessions.begin() as session:
         _require_playable(session)
@@ -980,26 +1139,18 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Unknown key."
             )
-        used = set(row.used_key_indexes or [])
-        if key_index in used:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="That key is already used.",
-            )
         now = _now()
         if _cooldown_remaining(row, now) > 0:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The keys are cooling down. Wait a moment before the next one.",
             )
-        if bool(row.has_used_key) and int(row.moves_since_last_key) < 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The Navigator must move at least once before the next key.",
-            )
         grid_size = int(game.grid_size)
         walls = _as_set(game.walls)
         locked, blocked = _locked_and_blocked(game, row)
+        start = (int(game.start_row), int(game.start_col))
+        exit_cell = (int(game.exit_row), int(game.exit_col))
+        player = (int(row.player_row), int(row.player_col))
         mapping = _key_mapping(game)
         # The clicked lock is the key; the mapping decides what opens.
         target = tuple(locked_template[mapping[key_index]])
@@ -1011,9 +1162,6 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
         # One open lock at a time: everything currently open goes back,
         # except the cell this action is about to open.
         relock = _as_set(row.unlocked_cells) - {target}
-        start = (int(game.start_row), int(game.start_col))
-        exit_cell = (int(game.exit_row), int(game.exit_col))
-        player = (int(row.player_row), int(row.player_col))
         if player in relock:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1025,10 +1173,32 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
         locked_result = (locked - {target}) | relock
         # Every ever-locked cell is ineligible for blocking -- including the
         # one this action opens -- so a key's progress is never undone by a
-        # later block. The reachability proof reads ``locked_result`` exactly
-        # as the board will hold it: the opened cell traversable, the
-        # re-locked ones shut again.
+        # later block. Gate shoulders and the exit's approaches are excluded
+        # too: crossings must always land on open ground and the exit must
+        # keep an ordinary approach, or later keys could seal what earlier
+        # keys proved walkable. The reachability proof reads
+        # ``locked_result`` exactly as the board will hold it: the opened
+        # cell traversable, the re-locked ones shut again.
         never_block = _as_set(game.locked_cells)
+        gates = _gate_cells(game)
+        staging = _staging_cells(game)
+        shoulders = {
+            (row, col)
+            for gate_row, gate_col in gates
+            for row, col in (
+                (gate_row, gate_col - 1),
+                (gate_row, gate_col + 1),
+            )
+            if 0 <= row < grid_size and 0 <= col < grid_size
+        }
+        approaches = {
+            (row, col)
+            for row, col in (
+                (exit_cell[0] - 1, exit_cell[1]),
+                (exit_cell[0], exit_cell[1] - 1),
+            )
+            if 0 <= row < grid_size and 0 <= col < grid_size
+        }
         candidate = _pick_blocked_cell(
             grid_size,
             walls,
@@ -1038,7 +1208,7 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
             exit_cell,
             player,
             f"{game.maze_seed}:{row.id}:{row.state_version}",
-            extra_excluded=never_block,
+            extra_excluded=never_block | shoulders | approaches | staging,
         )
         if candidate is None:
             raise HTTPException(
@@ -1047,10 +1217,7 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
             )
         row.unlocked_cells = [[target[0], target[1]]]
         row.blocked_cells = [*_pairs(row.blocked_cells), [candidate[0], candidate[1]]]
-        row.used_key_indexes = sorted([*used, key_index])
         row.last_key_at = now
-        row.moves_since_last_key = 0
-        row.has_used_key = True
         row.total_keys = int(row.total_keys) + 1
         row.state_version = int(row.state_version) + 1
         session.flush()
@@ -1107,7 +1274,6 @@ def leaderboard(db: Database, user: UserDetails) -> list[TwoKeyEscapeLeaderboard
                     total_moves=int(row.total_moves),
                     total_keys=int(row.total_keys),
                     elapsed_seconds=row.elapsed_seconds,
-                    score=int(row.score),
                 )
             )
         return entries

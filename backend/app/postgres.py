@@ -93,7 +93,18 @@ RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "users": ("emoji",),
     # The failed-move counter Two-Key Escape kept briefly: scoring counts
     # start-to-finish elapsed time only, so the column has no reader left.
-    "two_key_escape_sessions": ("failed_moves",),
+    # The consumed-charges list it kept even more briefly: keys are
+    # reusable, so per-key consumption was retired with it. The movement
+    # gate went the same way: keys never required a Navigator move between
+    # uses, so its two counters have no reader left either. The display
+    # score went last of all: no other game carries a score.
+    "two_key_escape_sessions": (
+        "failed_moves",
+        "used_key_indexes",
+        "moves_since_last_key",
+        "has_used_key",
+        "score",
+    ),
 }
 
 
