@@ -153,6 +153,9 @@ class PostgresClient:
         self.backfill_session_deadlines()
         # After every additive step, so the session lifecycle converges on old databases.
         self.apply_game_session_convergence()
+        # Trivia Drop's single-active-question rule, for the same reason: the
+        # table is new, but the index is the backstop behind the advisory lock.
+        self.apply_trivia_drop_convergence()
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.
@@ -661,6 +664,37 @@ class PostgresClient:
                         text(f'ALTER TABLE "{table}" ALTER COLUMN "answer" DROP NOT NULL')
                     )
             logger.info("Game session lifecycle converged")
+
+    def apply_trivia_drop_convergence(self) -> None:
+        """Install Trivia Drop's at-most-one-active-question rule.
+
+        One partial unique index on ``trivia_drop_questions``: at most one row
+        may hold ``status = 'active'``. The index (not application code) is
+        what serializes an admin Deploy racing a scheduled release past the
+        advisory lock: the loser gets an integrity error instead of a second
+        live question. Idempotent, like every other convergence step.
+        """
+        with self.engine.begin() as connection:
+            present = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :name"
+                    ),
+                    {"name": "trivia_drop_questions"},
+                )
+            }
+            if not present:
+                return
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    '"uq_trivia_drop_questions_single_active" '
+                    'ON "trivia_drop_questions" ((1)) WHERE status = \'active\''
+                )
+            )
+            logger.info("Trivia Drop session lifecycle converged")
 
     def close(self) -> None:
         self.engine.dispose()

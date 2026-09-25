@@ -34,13 +34,19 @@ const CADENCE_LABELS: Record<GameConfig['reset_cadence'], string> = {
  * keep rolling; a hidden game leaves the list, refuses direct play, and stops
  * the scheduler from opening new sessions. The reset cadence belongs to the
  * game, never to the spotlight -- featuring a game changes none of this.
+ *
+ * `hideResetCadence` is for games that release individually rather than on
+ * any cadence (Trivia Drop): the stored cadence is never read for them, so
+ * the picker is not offered and cannot suggest otherwise.
  */
 export const AdminGameStatusControls = ({
   gameId,
   gameName,
+  hideResetCadence = false,
 }: {
   gameId: string;
   gameName: string;
+  hideResetCadence?: boolean;
 }) => {
   const [config, setConfig] = useState<GameConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,27 +128,29 @@ export const AdminGameStatusControls = ({
               Hidden
             </label>
           </div>
-          <div className="flex flex-col gap-2">
-            <Label>Session reset</Label>
-            <Select
-              value={config.reset_cadence}
-              disabled={saving}
-              onValueChange={(next) =>
-                void patch({ reset_cadence: next as GameConfig['reset_cadence'] })
-              }
-            >
-              <SelectTrigger className="w-52">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(CADENCE_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!hideResetCadence && (
+            <div className="flex flex-col gap-2">
+              <Label>Session reset</Label>
+              <Select
+                value={config.reset_cadence}
+                disabled={saving}
+                onValueChange={(next) =>
+                  void patch({ reset_cadence: next as GameConfig['reset_cadence'] })
+                }
+              >
+                <SelectTrigger className="w-52">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(CADENCE_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
             {config.is_hidden
               ? 'Hidden: absent from selection, direct play refused, no new sessions.'

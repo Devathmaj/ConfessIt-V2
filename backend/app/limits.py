@@ -282,6 +282,7 @@ GAME_IDS: tuple[str, ...] = (
     "couple-questionnaire",
     "reaction-time",
     "connections",
+    "trivia-drop",
 )
 
 # The only reset cadences a game may carry. Stored as the strings below; each game
@@ -362,6 +363,19 @@ CONNECTIONS_WORDS_PER_GROUP = 4
 # 400 from the service for a request that asks for more, and a CHECK guarding
 # a write that never went through the API.
 CONNECTIONS_WORD_MAX = 50
+
+# Trivia Drop. Each question carries exactly four options with one or more of
+# them correct; the single-answer vs multiple-answer distinction is derived
+# from the correct count, never configured. One number for the option count so
+# the question validation, the submission validation, the admin surface and
+# the player surface cannot drift apart. The text ceilings are bounds a
+# payload can be refused against rather than values PostgreSQL truncates:
+# enforced twice, like every other length here -- a 400 from the service for
+# a request that asks for more, and a CHECK guarding a write that never went
+# through the API.
+TRIVIA_OPTIONS_COUNT = 4
+TRIVIA_QUESTION_TEXT_MAX = 500
+TRIVIA_OPTION_TEXT_MAX = 200
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #

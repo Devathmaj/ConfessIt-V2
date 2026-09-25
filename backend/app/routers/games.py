@@ -10,6 +10,7 @@ from ..db_models import (
     ConnectionsGameRecord,
     CoupleGameRecord,
     ReactionTimeGameRecord,
+    TriviaDropQuestionRecord,
     WordleGameRecord,
 )
 from ..dependencies import get_db
@@ -33,6 +34,7 @@ _GAME_NAMES = {
     "couple-questionnaire": "Couple Questionnaire",
     "reaction-time": "Reaction Time",
     "connections": "Connections",
+    "trivia-drop": "Trivia Drop",
 }
 
 _SESSION_MODELS = {
@@ -44,12 +46,55 @@ _SESSION_MODELS = {
 }
 
 
+def _trivia_entry(session, config, featured_id: str | None) -> GameSelectEntry | None:
+    """Trivia Drop as the selection screen sees it: live question or waiting.
+
+    Trivia Drop has no periods and no pending state: a live question is
+    playable, anything else is a wait for the next release. Drafts and
+    scheduled questions are never named here.
+    """
+    live = session.scalar(
+        select(TriviaDropQuestionRecord)
+        .where(TriviaDropQuestionRecord.status == "active")
+        .limit(1)
+    )
+    if not config.enabled:
+        return GameSelectEntry(
+            game_id="trivia-drop",
+            name=_GAME_NAMES["trivia-drop"],
+            enabled=False,
+            playable=False,
+            session_status=live.status if live is not None else None,
+            featured=featured_id == "trivia-drop",
+            message="This game is temporarily unavailable. Please try again later.",
+        )
+    if live is None:
+        return GameSelectEntry(
+            game_id="trivia-drop",
+            name=_GAME_NAMES["trivia-drop"],
+            enabled=True,
+            playable=False,
+            featured=featured_id == "trivia-drop",
+            message="No question is live right now. Check back soon.",
+        )
+    return GameSelectEntry(
+        game_id="trivia-drop",
+        name=_GAME_NAMES["trivia-drop"],
+        enabled=True,
+        playable=True,
+        session_status="active",
+        featured=featured_id == "trivia-drop",
+    )
+
+
 def _entry(
     session, game_id: str, today, featured_id: str | None
 ) -> GameSelectEntry | None:
     config = get_config(session, game_id)
     if config.is_hidden:
         return None
+    if game_id == "trivia-drop":
+        return _trivia_entry(session, config, featured_id)
     model = _SESSION_MODELS[game_id]
     current = session.scalar(
         select(model).where(model.status.in_(("active", "pending"))).limit(1)
@@ -112,6 +157,7 @@ async def game_selection(
                 "couple-questionnaire",
                 "reaction-time",
                 "connections",
+                "trivia-drop",
             )
             if (entry := _entry(session, game_id, today, featured_id)) is not None
         ]

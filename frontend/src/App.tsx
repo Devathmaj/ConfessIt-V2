@@ -27,10 +27,12 @@ import { GamesSelectPage } from "./pages/GamesSelectPage";
 import { WordleGamePage } from "./pages/WordleGamePage";
 import { AnagramGamePage } from "./pages/AnagramGamePage";
 import { ConnectionsGamePage } from "./pages/ConnectionsGamePage";
+import { TriviaDropGamePage } from "./pages/TriviaDropGamePage";
 import { CoupleQuestionnairePage } from "./pages/CoupleQuestionnairePage";
 import { ReactionTimeGamePage } from "./pages/ReactionTimeGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
+import { AdminTriviaDropManage } from "./pages/AdminTriviaDropManage";
 import { AdminConnectionsManage } from "./pages/AdminConnectionsManage";
 import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
 import { About } from "./pages/About";
@@ -334,6 +336,7 @@ const AppRoutes = () => {
         <Route index element={<AdminGamesDashboard />} />
         <Route path="manage" element={<AdminGamesManage />} />
         <Route path="manage/connections" element={<AdminConnectionsManage />} />
+        <Route path="manage/trivia-drop" element={<AdminTriviaDropManage />} />
         <Route path="leaderboard" element={<AdminGamesLeaderboard />} />
         <Route path="*" element={<Navigate to="/admin/games" replace />} />
       </Route>
@@ -405,6 +408,7 @@ const AppRoutes = () => {
         <Route path="wordle" element={<WordleGamePage />} />
         <Route path="anagram" element={<AnagramGamePage />} />
         <Route path="connections" element={<ConnectionsGamePage />} />
+        <Route path="trivia-drop" element={<TriviaDropGamePage />} />
         <Route path="couple-questionnaire" element={<CoupleQuestionnairePage />} />
         <Route path="reaction-time" element={<ReactionTimeGamePage />} />
       </Route>

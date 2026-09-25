@@ -23,6 +23,7 @@ const SERVER_MANAGED_IDS = new Set([
   'couple-questionnaire',
   'reaction-time',
   'connections',
+  'trivia-drop',
 ]);
 
 /**

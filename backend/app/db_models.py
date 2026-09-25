@@ -44,6 +44,9 @@ from .limits import (
     REPORT_REASON_MAX,
     RESET_CADENCE_VALUES,
     SESSION_STATUS_VALUES,
+    TRIVIA_OPTIONS_COUNT,
+    TRIVIA_OPTION_TEXT_MAX,
+    TRIVIA_QUESTION_TEXT_MAX,
     USER_DEPARTMENT_MAX,
     USER_GENDER_VALUES,
     USER_REGNO_MAX,
@@ -1981,6 +1984,143 @@ class ConnectionsScheduledPuzzleRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+
+class TriviaDropQuestionRecord(Base):
+    """One Trivia Drop question, which is also its own session when released.
+
+    Unlike the period games, Trivia Drop has no reset cadence: each question
+    carries its own release schedule and becomes an individual live session.
+    ``status`` is the lifecycle -- ``draft`` (being authored, invisible),
+    ``scheduled`` (waiting for its release time), ``active`` (the one live
+    question), ``ended`` (history with its submissions attached), ``cancelled``
+    (withdrawn before release). At most one row may be ``active``; the partial
+    unique index installed by
+    ``PostgresClient.apply_trivia_drop_convergence`` is the schema's rule, not
+    a service check, so an admin Deploy racing a scheduled release lands one
+    winner and one integrity error.
+
+    The answer key lives on ``trivia_drop_options`` (one row per option, with
+    ``is_correct``), never here: the single-answer vs multiple-answer
+    distinction is derived from the correct count, so there is no mode column
+    that could disagree with the key. ``scheduled_for`` is the intended
+    release; ``released_at`` is the authoritative activation instant response
+    times are measured from, and it is written once and never rewritten.
+    """
+
+    __tablename__ = "trivia_drop_questions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    question_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(16), default="draft", server_default=text("'draft'"), index=True
+    )
+    scheduled_for: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"length(question_text) BETWEEN 1 AND {TRIVIA_QUESTION_TEXT_MAX}",
+            name=f"ck_trivia_drop_questions_text_length_{TRIVIA_QUESTION_TEXT_MAX}",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'scheduled', 'active', 'ended', 'cancelled')",
+            name="ck_trivia_drop_questions_status_known",
+        ),
+    )
+
+
+class TriviaDropOptionRecord(Base):
+    """One of the four answer options of one Trivia Drop question.
+
+    ``option_index`` (0-3) is the stable identifier the answer key and the
+    submissions name: options are positional into the question's four, so a
+    wording correction cannot leave an answer pointing at words that moved.
+    ``is_correct`` marks the option as part of the answer key -- exactly the
+    collection the single/multiple distinction is derived from, so there is no
+    redundant mode to drift.
+
+    Options belong to their question: a later question is new rows, never an
+    edit of these, so historical submissions keep the key they were scored
+    against.
+    """
+
+    __tablename__ = "trivia_drop_options"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("trivia_drop_questions.id", ondelete="CASCADE"), index=True
+    )
+    option_index: Mapped[int] = mapped_column(Integer)
+    option_text: Mapped[str] = mapped_column(String(TRIVIA_OPTION_TEXT_MAX))
+    is_correct: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "option_index"),
+        CheckConstraint(
+            f"option_index BETWEEN 0 AND {TRIVIA_OPTIONS_COUNT - 1}",
+            name=f"ck_trivia_drop_options_index_{TRIVIA_OPTIONS_COUNT - 1}",
+        ),
+        CheckConstraint(
+            f"length(option_text) BETWEEN 1 AND {TRIVIA_OPTION_TEXT_MAX}",
+            name=f"ck_trivia_drop_options_text_length_{TRIVIA_OPTION_TEXT_MAX}",
+        ),
+    )
+
+
+class TriviaDropSubmissionRecord(Base):
+    """One player's single accepted answer for one Trivia Drop question.
+
+    The row pairs a *player* with a *question*: everything below answers "what
+    did this user submit for this question?", and nothing else.
+    ``selected_options`` is the complete submitted set as option indexes, in
+    ascending order -- the whole selection, never reduced to one option, so a
+    historical result stays reconstructable. ``is_correct`` is exact set
+    equality against the stored key, computed server-side at submit time;
+    ``response_time_ms`` is ``submitted_at - released_at`` in milliseconds,
+    from server timestamps only.
+
+    One row per player per question, enforced by the unique pair rather than a
+    service check: two concurrent submissions each read "no submission yet"
+    and each try to insert, and the unique index is what lets exactly one of
+    them own the row. Rows are insert-only -- an accepted answer, right or
+    wrong, is final.
+    """
+
+    __tablename__ = "trivia_drop_submissions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    question_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("trivia_drop_questions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    selected_options: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    is_correct: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    response_time_ms: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "user_id"),
+        CheckConstraint(
+            "response_time_ms >= 0",
+            name="ck_trivia_drop_submissions_response_nonnegative",
+        ),
     )
 
 

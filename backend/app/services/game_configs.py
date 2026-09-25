@@ -8,7 +8,10 @@ Questionnaire resets weekly, and each game is enabled/hidden independently.
  scheduler, so its reset cadence is stored but never read. Connections owns a
  row for the availability switches and the reset cadence; its content mode is
  always ``manual`` -- Connections has no random-content mode, and every
- session needs an administrator to supply its own sixteen words.
+ session needs an administrator to supply its own sixteen words. Trivia Drop
+ owns a row for the availability switches only: questions release
+ individually rather than on any cadence, so both the content mode and the
+ reset cadence are refused and the stored cadence is never read.
 
 ``enabled`` and ``is_hidden`` are separate facts with separate consequences:
 
@@ -35,6 +38,7 @@ _GAME_LOCK_KEYS: dict[str, int] = {
     "couple-questionnaire": 7_260_003,
     "reaction-time": 7_260_004,
     "connections": 7_260_005,
+    "trivia-drop": 7_260_006,
 }
 
 _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
@@ -43,6 +47,7 @@ _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
     "couple-questionnaire": None,
     "reaction-time": None,
     "connections": "manual",
+    "trivia-drop": None,
 }
 
 
@@ -148,6 +153,16 @@ def update_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Connections has no random-content mode; every puzzle is configured manually.",
+        )
+    if game_id == "trivia-drop" and content_mode is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trivia Drop has no content mode.",
+        )
+    if game_id == "trivia-drop" and reset_cadence is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trivia Drop has no reset cadence; questions release individually.",
         )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)

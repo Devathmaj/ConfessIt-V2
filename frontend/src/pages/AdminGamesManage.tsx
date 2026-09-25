@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Network, RefreshCw } from 'lucide-react';
+import { CircleHelp, Network, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
 import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
@@ -14,8 +14,9 @@ import { describeApiError } from '@/lib/apiError';
 import { runScheduledResets } from '@/services/api';
 
 /**
- * The games console: the spotlight schedule, the Connections editor link, and
- * the Wordle, Anagram, Couple Questionnaire and Reaction Time cards.
+ * The games console: the spotlight schedule, the Connections and Trivia Drop
+ * editor links, and the Wordle, Anagram, Couple Questionnaire and Reaction
+ * Time cards.
  *
  * Everything here goes to the server. The featured schedule pins at most one
  * game per UTC date without touching any session; each game card owns its own
@@ -51,8 +52,9 @@ export const AdminGamesManage = () => {
           <h1 className="text-3xl font-semibold">Manage games</h1>
           <p className="text-sm text-muted-foreground">
             The featured spotlight and the current Wordle, Anagram,
-            Connections, Couple Questionnaire and Reaction Time sessions.
-            Changes here show up on the player-facing section straight away.
+            Connections, Couple Questionnaire, Reaction Time and Trivia Drop
+            sessions. Changes here show up on the player-facing section
+            straight away.
           </p>
         </div>
         {mayManage && (
@@ -83,6 +85,25 @@ export const AdminGamesManage = () => {
               <span className="block text-sm text-muted-foreground">
                 Sixteen words in four hidden groups -- its own editor, same
                 session lifecycle as the other games.
+              </span>
+            </span>
+          </span>
+          <span className="shrink-0 text-sm font-semibold text-romantic">Open editor</span>
+        </NavLink>
+      )}
+
+      {mayManage && (
+        <NavLink
+          to="/admin/games/manage/trivia-drop"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/70 px-5 py-4 backdrop-blur transition-colors hover:border-romantic/50"
+        >
+          <span className="flex items-center gap-3">
+            <CircleHelp className="h-5 w-5" />
+            <span className="min-w-0">
+              <span className="block text-base font-semibold">Trivia Drop questions</span>
+              <span className="block text-sm text-muted-foreground">
+                One live question at a time — its own editor, individual
+                releases, no reset cadence.
               </span>
             </span>
           </span>

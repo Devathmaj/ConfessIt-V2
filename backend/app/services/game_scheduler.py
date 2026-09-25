@@ -14,17 +14,21 @@ Per game, per run, under one transaction-scoped advisory lock:
 * current session is pending and its word has arrived (scheduled content for its
   period start, or the game now runs ``random``) -> end it and open a configured
   session for the *same* period;
-* boundary reached or no current session -> end the old one and open the next
-  period starting today: random draws a word immediately, manual consumes a
-  scheduled word when one waits for today and otherwise opens pending, the
-  questionnaire opens a new global period and deals every existing couple a
-  fresh set of questions, and Reaction Time opens a new bare period (no
-  content to configure, so it is playable the moment it opens).
+ * boundary reached or no current session -> end the old one and open the next
+   period starting today: random draws a word immediately, manual consumes a
+   scheduled word when one waits for today and otherwise opens pending, the
+   questionnaire opens a new global period and deals every existing couple a
+   fresh set of questions, and Reaction Time opens a new bare period (no
+   content to configure, so it is playable the moment it opens).
+ * Trivia Drop has no period at all: the same run releases due scheduled
+   questions through ``trivia_service.release_due_questions`` -- at most one
+   activation per run, ending the live question in the same transaction --
+   so one background path serves every game and no second scheduler exists.
 
-The partial unique index on each game table (one active-or-pending row) is the
-backstop behind the lock: a run racing an admin Update past the lock still
-lands one winner and one integrity error, and the loser re-reads the winner.
-"""
+ The partial unique index on each game table (one active-or-pending row) is the
+ backstop behind the lock: a run racing an admin Update past the lock still
+ lands one winner and one integrity error, and the loser re-reads the winner.
+ """
 
 import random
 from datetime import date, datetime, timezone
@@ -274,7 +278,16 @@ def ensure_single_game(
     content (no word to draw or schedule), so a new period simply opens an
     empty active session -- the questionnaire's global period without the
     per-couple dealing.
+
+    Trivia Drop releases individually rather than on any cadence, so it
+    delegates to its own release entry point instead of the period logic
+    below. The delegation keeps one background path -- this function, called
+    by boot and by the run-resets trigger -- serving every game.
     """
+    if game_id == "trivia-drop":
+        from . import trivia_service
+
+        return trivia_service.release_due_questions(db, _now_utc(now))
     moment = _now_utc(now)
     today = moment.date()
     model = _GAME_MODELS[game_id]
@@ -505,7 +518,13 @@ def ensure_game_sessions(
 
 
 def active_session_counts(db: Database) -> dict[str, int]:
-    """How many active-or-pending rows each game table holds (observability)."""
+    """How many live sessions each game table holds (observability).
+
+    Period games count active-or-pending rows; Trivia Drop counts the one live
+    question, since drafts and scheduled questions are not sessions yet.
+    """
+    from ..db_models import TriviaDropQuestionRecord
+
     with db.sessions() as session:
         out: dict[str, int] = {}
         for game_id, model in _GAME_MODELS.items():
@@ -517,4 +536,12 @@ def active_session_counts(db: Database) -> dict[str, int]:
                 )
                 or 0
             )
+        out["trivia-drop"] = int(
+            session.scalar(
+                select(func.count())
+                .select_from(TriviaDropQuestionRecord)
+                .where(TriviaDropQuestionRecord.status == "active")
+            )
+            or 0
+        )
         return out

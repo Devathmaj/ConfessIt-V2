@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  CircleHelp,
   Gift,
   Grid3x3,
   Heart,
@@ -163,6 +164,20 @@ export const AVAILABLE_GAMES: GameDefinition[] = [
     accent: 'bg-gradient-passion',
     status: 'available',
     route: '/games/connections',
+  },
+  {
+    id: 'trivia-drop',
+    name: 'Trivia Drop',
+    tagline: 'One live question at a time — answer fast, answer once.',
+    category: 'trivia',
+    type: 'single',
+    difficulty: 'medium',
+    players: 'Solo',
+    duration: '~1 min',
+    icon: CircleHelp,
+    accent: 'bg-gradient-love',
+    status: 'available',
+    route: '/games/trivia-drop',
   },
   {
     id: 'truth-dare',

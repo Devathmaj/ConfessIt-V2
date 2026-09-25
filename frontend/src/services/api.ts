@@ -1684,6 +1684,232 @@ export const deleteScheduledConnectionsPuzzle = async (targetDate: string): Prom
     });
 };
 
+// --- Trivia Drop Gameplay Endpoints ---
+
+/** Whether the live question takes one answer or all applicable answers. */
+export type TriviaAnswerMode = 'single' | 'multiple';
+
+/** One answer option as a player sees it: its stable index and its text. */
+export interface TriviaPublicOption {
+    option_index: number;
+    option_text: string;
+}
+
+/**
+ * The live question and this player's submission state.
+ *
+ * `options` are display only and `answer_mode` tells the screen which
+ * instruction and controls to render. The correct-option set never travels
+ * here -- not the indexes, not even how many of them there are.
+ */
+export interface TriviaCurrentQuestion {
+    question_id: string | null;
+    question_text: string | null;
+    options: TriviaPublicOption[];
+    answer_mode: TriviaAnswerMode | null;
+    released_at: string | null;
+    submitted: boolean;
+    /** `submitted` once answered, `active` while playable. */
+    session_status?: string | null;
+    /** Sentence the screen shows when no question is live. */
+    message?: string | null;
+}
+
+/** The confirmation an answered player reads -- and all they read. */
+export interface TriviaSubmitResponse {
+    question_id: string;
+    submitted: boolean;
+    submitted_at: string;
+    message: string;
+}
+
+/** One ranked submission on an ended question's results. */
+export interface TriviaLeaderboardEntry {
+    rank: number;
+    user_id: string;
+    display_name: string;
+    is_correct: boolean;
+    response_time_ms: number;
+    submitted_at: string;
+    selected_indexes: number[];
+}
+
+/**
+ * An ended question with its key revealed and its leaderboard settled.
+ * Served only once the session has ended; a live question is refused.
+ */
+export interface TriviaResults {
+    question_id: string;
+    question_text: string;
+    options: TriviaPublicOption[];
+    correct_indexes: number[];
+    answer_mode: TriviaAnswerMode;
+    released_at: string | null;
+    ended_at: string | null;
+    my_submission: TriviaLeaderboardEntry | null;
+    leaderboard: TriviaLeaderboardEntry[];
+}
+
+/** The live question and this player's submission state. Never creates a row. */
+export const getCurrentTrivia = async (): Promise<TriviaCurrentQuestion> => {
+    const response = await axios.get(`${API_URL}/games/trivia-drop`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Settle one complete selection against the live question. Exactly one
+ * accepted submission per player per question; a multiple-answer selection
+ * travels as one complete set in this one request.
+ */
+export const submitTriviaAnswer = async (
+    questionId: string,
+    selectedIndexes: number[]
+): Promise<TriviaSubmitResponse> => {
+    const response = await axios.post(
+        `${API_URL}/games/trivia-drop/submit`,
+        { question_id: questionId, selected_indexes: selectedIndexes },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** One ended question's results and leaderboard. Refused while it is live. */
+export const getTriviaResults = async (questionId: string): Promise<TriviaResults> => {
+    const response = await axios.get(`${API_URL}/games/trivia-drop/results/${questionId}`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+// --- Trivia Drop Configuration Endpoints ---
+
+/** One answer option as stored: its stable index, text, and key membership. */
+export interface TriviaOption {
+    option_index: number;
+    option_text: string;
+    is_correct: boolean;
+}
+
+/**
+ * One Trivia Drop question as the admin screen reads it: text, options, key,
+ * derived mode, and lifecycle. `correct_indexes` is present deliberately --
+ * the endpoint it comes from is closed to everyone who may not publish.
+ */
+export interface TriviaQuestion {
+    id: string;
+    question_text: string;
+    options: TriviaOption[];
+    correct_indexes: number[];
+    answer_mode: TriviaAnswerMode;
+    status: string;
+    scheduled_for: string | null;
+    released_at: string | null;
+    ended_at: string | null;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/**
+ * The fields `POST /admin/trivia-drop` accepts.
+ *
+ * `correct_indexes` names the correct options by position; the answer mode is
+ * derived from how many are named. `release_mode="scheduled"` needs
+ * `scheduled_for` (UTC); `"now"` deploys immediately; `"draft"` stores it.
+ */
+export interface TriviaQuestionPayload {
+    question_text: string;
+    options: string[];
+    correct_indexes: number[];
+    release_mode?: 'now' | 'scheduled' | 'draft';
+    scheduled_for?: string;
+}
+
+/** Author one question: draft it, schedule it, or deploy it right now. */
+export const createTriviaQuestion = async (
+    payload: TriviaQuestionPayload
+): Promise<TriviaQuestion> => {
+    const response = await axios.post(`${API_URL}/admin/trivia-drop`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Every Trivia Drop question, newest first. */
+export const getAdminTriviaQuestions = async (): Promise<TriviaQuestion[]> => {
+    const response = await axios.get(`${API_URL}/admin/trivia-drop`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** The live Trivia Drop question for the admin screen, or 404 when none is live. */
+export const getCurrentAdminTriviaQuestion = async (): Promise<TriviaQuestion> => {
+    const response = await axios.get(`${API_URL}/admin/trivia-drop/current`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Revise a draft with no answers. Live and answered questions are immutable. */
+export const updateTriviaDraft = async (
+    questionId: string,
+    payload: { question_text?: string; options?: string[]; correct_indexes?: number[] }
+): Promise<TriviaQuestion> => {
+    const response = await axios.put(`${API_URL}/admin/trivia-drop/${questionId}`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Deploy one draft or scheduled question right now, ending any live one. */
+export const deployTriviaQuestion = async (questionId: string): Promise<TriviaQuestion> => {
+    const response = await axios.post(
+        `${API_URL}/admin/trivia-drop/${questionId}/deploy`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Hold one draft for a future release (UTC). The live question is untouched. */
+export const scheduleTriviaQuestion = async (
+    questionId: string,
+    scheduledFor: string
+): Promise<TriviaQuestion> => {
+    const response = await axios.post(
+        `${API_URL}/admin/trivia-drop/${questionId}/schedule`,
+        { scheduled_for: scheduledFor },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Move one scheduled question's release to a new future time (UTC). */
+export const rescheduleTriviaQuestion = async (
+    questionId: string,
+    scheduledFor: string
+): Promise<TriviaQuestion> => {
+    const response = await axios.post(
+        `${API_URL}/admin/trivia-drop/${questionId}/reschedule`,
+        { scheduled_for: scheduledFor },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Withdraw a draft or scheduled question. History is never rewritten. */
+export const cancelTriviaQuestion = async (questionId: string): Promise<TriviaQuestion> => {
+    const response = await axios.post(
+        `${API_URL}/admin/trivia-drop/${questionId}/cancel`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 // --- Reaction Time Gameplay Endpoints ---
 
 /** Whether a submission is still waiting for its result or has been settled. */

@@ -1427,7 +1427,7 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop"]
 
 
 class GameConfig(BaseModel):
@@ -1782,3 +1782,223 @@ class ConnectionsSubmitResponse(BaseModel):
     submitted: bool = True
     submitted_at: datetime
     message: str = "Your Connections puzzle has been submitted successfully."
+
+
+# --- Trivia Drop configuration --------------------------------------------------
+#
+# Admin-side only, and the same boundary the other puzzle models hold: these
+# describe a question -- its text, its four options, its correct-option set --
+# and nothing about answering one. There is no reset cadence and no
+# random-content mode: each question carries its own release schedule and
+# becomes an individual live session.
+#
+# The answer mode is derived, never configured: exactly one correct option is
+# a single-answer question, more than one is multiple-answer. No payload here
+# carries a mode, so no mode can disagree with the key.
+
+TriviaDropAnswerMode = Literal["single", "multiple"]
+TriviaDropReleaseMode = Literal["now", "scheduled", "draft"]
+TriviaDropStatus = Literal["draft", "scheduled", "active", "ended", "cancelled"]
+
+
+class TriviaDropOption(BaseModel):
+    """One answer option as stored: its stable index, its text, its key membership."""
+
+    option_index: int
+    option_text: str
+    is_correct: bool
+
+
+class TriviaDropQuestionCreate(BaseModel):
+    """Authoring one Trivia Drop question: text, four options, the correct set.
+
+    ``correct_indexes`` names the correct options by their 0-3 positions into
+    ``options`` -- one or more, with at least one required. Whether the
+    question plays single- or multiple-answer is derived from how many are
+    named, so no mode is configured. ``release_mode="now"`` deploys
+    immediately (ending any live question); ``"scheduled"`` needs
+    ``scheduled_for`` and waits for the scheduler; ``"draft"`` stores it for
+    later. Options are submitted raw; trimming, emptiness, duplicates and
+    key-membership are all answered in the service with a 400.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_text: str
+    options: List[str]
+    correct_indexes: List[int]
+    release_mode: TriviaDropReleaseMode = "draft"
+    scheduled_for: Optional[datetime] = None
+
+
+class TriviaDropQuestion(BaseModel):
+    """A Trivia Drop question as it is stored: text, options, key, lifecycle.
+
+    ``correct_indexes`` is returned deliberately -- this is the
+    administrator's own configuration screen, and the endpoint it comes from
+    is closed to everyone who may not publish. ``answer_mode`` restates
+    "one correct" vs "several correct" so the console can label the question
+    without counting. ``scheduled_for`` is the intended release;
+    ``released_at`` the authoritative activation instant, written once.
+    """
+
+    id: str
+    question_text: str
+    options: List[TriviaDropOption]
+    correct_indexes: List[int]
+    answer_mode: TriviaDropAnswerMode
+    status: str
+    scheduled_for: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TriviaDropQuestionUpdate(BaseModel):
+    """Editing a draft: text, options and the correct set, all replaceable.
+
+    Only drafts with no submissions may be edited -- anything live or answered
+    is immutable for its session, and corrections arrive as a new question.
+    Every field supplied replaces its stored counterpart wholesale, so the
+    four-option invariant and the key-membership rule are re-validated as one.
+
+    ``extra="forbid"`` for the same reason the create payload sets it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_text: Optional[str] = None
+    options: Optional[List[str]] = None
+    correct_indexes: Optional[List[int]] = None
+
+
+class TriviaDropScheduleRequest(BaseModel):
+    """Scheduling (or rescheduling) one question's release.
+
+    The instant is stored as UTC; the admin screen labels the control as UTC
+    so an entered time converts consistently rather than by the operator's
+    local clock.
+
+    ``extra="forbid"`` for the same reason the create payload sets it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduled_for: datetime
+
+
+# --- Trivia Drop gameplay -------------------------------------------------------
+#
+# The participant side of the game. The admin models above describe questions;
+# these describe one player's *place* in the live one. The correct-option set
+# never travels on any of these reads: the live question carries display
+# options plus the derived mode (single vs multiple) the screen needs to
+# render its instruction and its controls, and nothing that names the key --
+# not the correct indexes, not even how many of them there are.
+
+class TriviaDropPublicOption(BaseModel):
+    """One answer option as a player sees it: its stable index and its text."""
+
+    option_index: int
+    option_text: str
+
+
+class TriviaDropCurrentQuestion(BaseModel):
+    """The live question and this player's submission state, as the screen opens.
+
+    ``question_id`` is null when no question is live -- the waiting state, not
+    a puzzle to invent. ``options`` are display only; ``answer_mode`` tells the
+    screen whether to render "Select one answer" with single-selection or
+    "Select all that apply" with multi-selection. ``submitted`` is whether
+    this player already consumed their one submission for this question; a
+    submitted player reads a confirmation rather than a board.
+    """
+
+    question_id: Optional[str] = None
+    question_text: Optional[str] = None
+    options: List[TriviaDropPublicOption] = []
+    answer_mode: Optional[TriviaDropAnswerMode] = None
+    released_at: Optional[datetime] = None
+    submitted: bool = False
+    session_status: Optional[str] = None
+    message: Optional[str] = None
+
+
+class TriviaDropSubmitRequest(BaseModel):
+    """Answering the live question: one complete selection in one request.
+
+    ``question_id`` names the question -- the one the player was shown -- and
+    ``selected_indexes`` is the whole selection: one index for a
+    single-answer question, the complete set for a multiple-answer one.
+    Several checked boxes never become several requests; the one request is
+    the one submission. Normalization and key comparison happen in the
+    service, so the reason a selection is refused reaches the client as a
+    readable 400 rather than a generic 422.
+
+    ``extra="forbid"`` so a key the payload does not carry is refused outright
+    rather than accepted and dropped -- in particular no client-supplied
+    correctness, score, timestamp or user id is accepted here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str
+    selected_indexes: List[int]
+
+
+class TriviaDropSubmitResponse(BaseModel):
+    """The confirmation an answered player reads -- and all they read.
+
+    Deliberately carries no correctness and no response time while the
+    question is live: those would expose the key to other users. They are
+    persisted server-side and surface on the ended question's results.
+    """
+
+    question_id: str
+    submitted: bool = True
+    submitted_at: datetime
+    message: str = "Your answer has been recorded."
+
+
+class TriviaDropLeaderboardEntry(BaseModel):
+    """One ranked submission on an ended question's results.
+
+    Correct answers rank above incorrect ones, faster correct responses above
+    slower ones, with the authoritative submission instant breaking ties.
+    ``selected_indexes`` is the player's own complete selection, echoed so a
+    historical result stays reconstructable without a second lookup.
+    """
+
+    rank: int
+    user_id: str
+    display_name: str
+    is_correct: bool
+    response_time_ms: int
+    submitted_at: datetime
+    selected_indexes: List[int]
+
+
+class TriviaDropResults(BaseModel):
+    """An ended question with its key revealed and its leaderboard settled.
+
+    Served only once the session has ended: the correct indexes and the
+    per-submission correctness would expose the live key, so a live question
+    is never answered here. ``my_submission`` is this caller's own entry, or
+    null when they never answered; ``leaderboard`` is every accepted
+    submission in rank order.
+    """
+
+    question_id: str
+    question_text: str
+    options: List[TriviaDropPublicOption]
+    correct_indexes: List[int]
+    answer_mode: TriviaDropAnswerMode
+    released_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    my_submission: Optional[TriviaDropLeaderboardEntry] = None
+    leaderboard: List[TriviaDropLeaderboardEntry] = []
