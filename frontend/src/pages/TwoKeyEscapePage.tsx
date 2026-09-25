@@ -195,9 +195,11 @@ export const TwoKeyEscapePage = () => {
     }
   };
 
-  // While the game is open, re-read on the same 15s interval the Couple
-  // Questionnaire polls on: the server unlocks the next phase the moment both
-  // sides have acted, and this surfaces it without a manual check.
+  // While the game is open, re-read on an interval: fast while playing so
+  // each side sees the other's actions within seconds -- a key activation
+  // re-renders the Navigator's board, a step re-arms the Operator's gate --
+  // and the Questionnaire's own 15s cadence while still waiting. Polling is
+  // the realtime games use here; no game owns a WebSocket.
   useEffect(() => {
     if (
       state?.stage !== 'no_couple' &&
@@ -205,6 +207,7 @@ export const TwoKeyEscapePage = () => {
       state?.stage !== 'playing'
     )
       return;
+    const intervalMs = state?.stage === 'playing' ? 3000 : 15000;
     let inFlight = false;
     const timer = setInterval(() => {
       if (inFlight) return;
@@ -212,7 +215,7 @@ export const TwoKeyEscapePage = () => {
       void refresh().finally(() => {
         inFlight = false;
       });
-    }, 15000);
+    }, intervalMs);
     return () => clearInterval(timer);
   }, [state?.stage, refresh]);
 
@@ -232,16 +235,21 @@ export const TwoKeyEscapePage = () => {
   }, [cooldown, refresh]);
 
   const runAction = useCallback(
-    async (action: () => Promise<TwoKeyEscapeState>, failureHint: string) => {
+    async (
+      action: () => Promise<TwoKeyEscapeState>,
+      failureHint: string,
+    ): Promise<TwoKeyEscapeState | null> => {
       setActing(true);
       try {
         const next = await action();
         setState(next);
         setCooldown(Math.ceil(next.cooldown_seconds_remaining ?? 0));
         if (next.roles_finalized || !next.conflict) setChangingRole(false);
+        return next;
       } catch (error) {
         toast.error(describeApiError(error, failureHint));
         await refresh();
+        return null;
       } finally {
         setActing(false);
       }
@@ -263,8 +271,27 @@ export const TwoKeyEscapePage = () => {
     void runAction(() => moveTwoKeyEscape(direction), 'Could not move.');
   };
 
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const handleKey = (keyIndex: number) => {
-    void runAction(() => spendTwoKeyEscapeKey(keyIndex), 'Could not use that key.');
+    const before = stateRef.current;
+    void (async () => {
+      const next = await runAction(() => spendTwoKeyEscapeKey(keyIndex), 'Could not use that key.');
+      if (!next || !before) return;
+      // The clicked lock never opens itself: name what actually opened and
+      // what locked itself again, so the hidden mapping is discoverable.
+      const was = new Set(before.locked_cells.map(([r, c]) => `${r}:${c}`));
+      const opened = before.locked_cells.find(
+        ([r, c]) => !next.locked_cells.some(([nr, nc]) => nr === r && nc === c),
+      );
+      const shutAgain = next.locked_cells.find(([r, c]) => !was.has(`${r}:${c}`));
+      if (!opened) return;
+      const shutText = shutAgain
+        ? ` Row ${shutAgain[0] + 1}, column ${shutAgain[1] + 1} locked itself again.`
+        : '';
+      toast.success(`Opened row ${opened[0] + 1}, column ${opened[1] + 1}.${shutText}`);
+    })();
   };
 
   const handleRefresh = async () => {
@@ -274,8 +301,7 @@ export const TwoKeyEscapePage = () => {
 
   // Arrow keys are a convenience for the Navigator only: ignored while typing
   // in an input or textarea, and never bypassing backend validation.
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  // (stateRef also feeds handleKey's before/after diff; both read it after render.)
   const actingRef = useRef(acting);
   actingRef.current = acting;
   useEffect(() => {
@@ -587,8 +613,10 @@ export const TwoKeyEscapePage = () => {
                 {state.key_charges} left.
               </p>
               <p className="mt-1 text-muted-foreground">
-                Each key unlocks its cell and blocks another elsewhere. Ten seconds
-                between keys, and the Navigator must move before the next one.
+                Each lock opens a <span className="font-semibold">different</span> lock
+                — never the one you tapped — so find the lock that opens the cell you need.
+                Only one lock stays open at a time; opening another sends the first one back.
+                Ten seconds between keys, and the Navigator must move before the next one.
               </p>
               {cooldown > 0 && (
                 <p className="mt-1 font-medium">Cooling down: {cooldown}s before the next key.</p>

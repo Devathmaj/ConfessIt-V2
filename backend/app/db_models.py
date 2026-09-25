@@ -1712,6 +1712,12 @@ class TwoKeyEscapeGameRecord(Base):
     exit_col: Mapped[int] = mapped_column(Integer, default=11, server_default=text("11"))
     walls: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     locked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Which locked cell each key actually opens, as indexes into
+    # ``locked_cells``: key ``i`` opens ``locked_cells[key_mapping[i]]``,
+    # always a *different* cell, so players must discover which lock opens
+    # the one they need. A derangement dealt with the maze, never
+    # client-supplied and never exposed on reads.
+    key_mapping: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()

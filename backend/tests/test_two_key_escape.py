@@ -586,7 +586,32 @@ def test_navigator_cannot_use_keys(db, http):
     assert row.last_key_at is None
 
 
-def test_key_unlocks_blocks_and_starts_cooldown(db, http):
+def _mapping(db):
+    """The hidden key mapping of the current escape period, by key index."""
+    with db.sessions() as session:
+        game = session.scalar(
+            select(TwoKeyEscapeGameRecord)
+            .where(TwoKeyEscapeGameRecord.status == "active")
+            .limit(1)
+        )
+        assert game is not None and game.key_mapping is not None
+        locked = [[int(row), int(col)] for row, col in game.locked_cells]
+        return [locked[index] for index in game.key_mapping]
+
+
+def test_key_mapping_is_a_derangement():
+    """Every generated mapping is a permutation with no lock opening itself."""
+    for size in (12, 13, 14, 15):
+        for seed in ("alpha", "beta", "gamma"):
+            template = two_key_escape_gameplay.generate_maze(size, f"mapping-{seed}-{size}")
+            charges = two_key_escape_key_charges(size)
+            mapping = template["key_mapping"]
+            assert sorted(mapping) == list(range(charges))
+            assert all(target != index for index, target in enumerate(mapping))
+
+
+def test_key_opens_a_different_lock(db, http):
+    """Clicking a lock never opens itself: the mapped lock opens instead."""
     seed_couple_questions(db)
     seed_questionnaire(db)
     seed_escape(db)
@@ -596,28 +621,32 @@ def test_key_unlocks_blocks_and_starts_cooldown(db, http):
     finalize_roles(http, alice, bob)
 
     before = client_for(http, bob).get("/games/two-key-escape").json()
-    target = before["keys"][0]
-    assert target["used"] is False
+    clicked = [before["keys"][0]["target_row"], before["keys"][0]["target_col"]]
+    opened = _mapping(db)[0]
+    assert opened != clicked
 
     used = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
     assert used.status_code == 200, used.text
     body = used.json()
     assert body["keys"][0]["used"] is True
     assert body["keys_remaining"] == body["key_charges"] - 1
-    # The designated cell unlocked...
-    assert [target["target_row"], target["target_col"]] not in body["locked_cells"]
+    # The clicked lock stays shut; the mapped one opened.
+    assert clicked in body["locked_cells"]
+    assert opened not in body["locked_cells"]
     # ...and a different eligible cell became blocked.
     assert len(body["blocked_cells"]) == 1
     blocked = tuple(body["blocked_cells"][0])
-    assert blocked != (target["target_row"], target["target_col"])
+    assert blocked != tuple(opened)
     assert blocked != (body["exit_row"], body["exit_col"])
     assert blocked != (0, 0)
     assert blocked != (body["player_row"], body["player_col"])
-    # The maze stays solvable from the player's cell.
+    # The maze stays solvable from the player's cell, treating locked
+    # cells as the walls they are -- a route through a lock is no route.
     assert two_key_escape_gameplay._bfs_reaches(
         body["grid_size"],
         {tuple(cell) for cell in body["walls"]},
-        {tuple(cell) for cell in body["blocked_cells"]},
+        {tuple(cell) for cell in body["blocked_cells"]}
+        | {tuple(cell) for cell in body["locked_cells"]},
         (body["player_row"], body["player_col"]),
         (body["exit_row"], body["exit_col"]),
     )
@@ -635,6 +664,197 @@ def test_key_unlocks_blocks_and_starts_cooldown(db, http):
     missing = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 999})
     assert missing.status_code == 404, missing.text
     assert escape_row(db, user_a_id=A_ID, user_b_id=B_ID).total_keys == 1
+
+
+def test_second_key_sends_first_lock_back(db, http):
+    """Only one lock stays open: the next key shuts the previous one again."""
+    seed_couple_questions(db)
+    seed_questionnaire(db)
+    seed_escape(db)
+    alice = make_user(db, A_ID, "escape_a", "Alice")
+    bob = make_user(db, B_ID, "escape_b", "Bob")
+    open_pair(http, alice, bob)
+    finalize_roles(http, alice, bob)
+    opened = _mapping(db)
+
+    client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
+    first = client_for(http, alice).get("/games/two-key-escape").json()
+    assert opened[0] not in first["locked_cells"]
+
+    # Satisfy the cooldown and the movement gate, then open another. The
+    # setup moves stop anywhere but on the open cell itself -- standing on
+    # it would refuse the next key for occupancy, which is the next test.
+    with db.sessions.begin() as session:
+        row = session.scalar(
+            select(TwoKeyEscapeSessionRecord).where(
+                TwoKeyEscapeSessionRecord.user_a_id == A_ID,
+                TwoKeyEscapeSessionRecord.user_b_id == B_ID,
+            )
+        )
+        row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    for _ in range(4):
+        state = client_for(http, alice).get("/games/two-key-escape").json()
+        assert state["stage"] == "playing"
+        path = bfs_path(state)
+        assert path, "the maze must stay solvable after a key"
+        moved = client_for(http, alice).post(
+            "/games/two-key-escape/move", json={"direction": path[0]}
+        )
+        assert moved.status_code == 200, moved.text
+        state = client_for(http, alice).get("/games/two-key-escape").json()
+        if (state["player_row"], state["player_col"]) != tuple(opened[0]):
+            break
+    assert (state["player_row"], state["player_col"]) != tuple(opened[0])
+    second = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
+    assert second.status_code == 200, second.text
+    body = second.json()
+    # Exactly the newest lock is open; the first went back into its place.
+    assert opened[1] not in body["locked_cells"]
+    assert opened[0] in body["locked_cells"]
+    assert body["total_keys"] == 2
+    # ...and the resulting board is still solvable, locks included.
+    assert two_key_escape_gameplay._bfs_reaches(
+        body["grid_size"],
+        {tuple(cell) for cell in body["walls"]},
+        {tuple(cell) for cell in body["blocked_cells"]}
+        | {tuple(cell) for cell in body["locked_cells"]},
+        (body["player_row"], body["player_col"]),
+        (body["exit_row"], body["exit_col"]),
+    )
+
+
+def test_key_refused_while_navigator_on_open_cell(db, http):
+    """Re-locking under the Navigator's feet is refused without consuming."""
+    seed_couple_questions(db)
+    seed_questionnaire(db)
+    seed_escape(db)
+    alice = make_user(db, A_ID, "escape_a", "Alice")
+    bob = make_user(db, B_ID, "escape_b", "Bob")
+    open_pair(http, alice, bob)
+    finalize_roles(http, alice, bob)
+    opened = _mapping(db)
+
+    client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 0})
+    with db.sessions.begin() as session:
+        row = session.scalar(
+            select(TwoKeyEscapeSessionRecord).where(
+                TwoKeyEscapeSessionRecord.user_a_id == A_ID,
+                TwoKeyEscapeSessionRecord.user_b_id == B_ID,
+            )
+        )
+        row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        row.moves_since_last_key = 1
+        row.player_row, row.player_col = opened[0]
+
+    refused = client_for(http, bob).post("/games/two-key-escape/key", json={"key_index": 1})
+    assert refused.status_code == 409, refused.text
+    assert "step off" in refused.json()["detail"].lower()
+    row = escape_row(db, user_a_id=A_ID, user_b_id=B_ID)
+    assert row.total_keys == 1
+    # Nothing moved: the open cell stayed open, nothing newly blocked.
+    assert [list(cell) for cell in row.unlocked_cells] == [opened[0]]
+    assert len(row.blocked_cells) == 1
+
+
+def _assert_truly_solvable(state):
+    """BFS solvability with locked cells treated as the walls they are."""
+    assert two_key_escape_gameplay._bfs_reaches(
+        state["grid_size"],
+        {tuple(cell) for cell in state["walls"]},
+        {tuple(cell) for cell in state["blocked_cells"]}
+        | {tuple(cell) for cell in state["locked_cells"]},
+        (state["player_row"], state["player_col"]),
+        (state["exit_row"], state["exit_col"]),
+    )
+
+
+def test_every_key_keeps_maze_truly_solvable(db, http):
+    """Regression: the block proof must read locked cells as impassable.
+
+    A route that passes through a lock is no route. Several fresh mazes,
+    several keys each, moving and unlocking between them: the board must
+    stay genuinely solvable after every single activation.
+    """
+    from app.db_models import Base
+
+    for _ in range(5):
+        with db.engine.begin() as connection:
+            tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+            connection.exec_driver_sql(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
+        seed_couple_questions(db)
+        seed_questionnaire(db)
+        seed_escape(db)
+        alice = make_user(db, A_ID, "escape_a", "Alice")
+        bob = make_user(db, B_ID, "escape_b", "Bob")
+        open_pair(http, alice, bob)
+        finalize_roles(http, alice, bob)
+
+        for key_index in range(3):
+            with db.sessions.begin() as session:
+                row = session.scalar(
+                    select(TwoKeyEscapeSessionRecord).where(
+                        TwoKeyEscapeSessionRecord.user_a_id == A_ID,
+                        TwoKeyEscapeSessionRecord.user_b_id == B_ID,
+                    )
+                )
+                row.last_key_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+            state = client_for(http, alice).get("/games/two-key-escape").json()
+            if state["stage"] == "completed":
+                break
+            path = bfs_path(state)
+            assert path, "setup requires a solvable board"
+            moved = client_for(http, alice).post(
+                "/games/two-key-escape/move", json={"direction": path[0]}
+            )
+            assert moved.status_code == 200, moved.text
+            used = client_for(http, bob).post(
+                "/games/two-key-escape/key", json={"key_index": key_index}
+            )
+            assert used.status_code == 200, used.text
+            state = client_for(http, alice).get("/games/two-key-escape").json()
+            if state["stage"] == "completed":
+                break
+            _assert_truly_solvable(state)
+
+
+def test_block_proof_reads_locks_as_walls():
+    """The reachability proof must fail when only locks lead to the exit.
+
+    A corridor whose only crossing is locked: ignoring locks (the old bug)
+    offers a cell to block, reading them correctly refuses. The open-board
+    control proves the setup itself is blockable.
+    """
+    walls = {(1, 0), (1, 2)}
+    assert (
+        two_key_escape_gameplay._pick_blocked_cell(
+            3,
+            walls,
+            {(1, 1)},
+            set(),
+            (0, 0),
+            (0, 2),
+            (2, 0),
+            "proof-seed",
+        )
+        is None
+    )
+    assert (
+        two_key_escape_gameplay._pick_blocked_cell(
+            3, walls, set(), set(), (0, 0), (0, 2), (2, 0), "proof-seed"
+        )
+        is not None
+    )
+
+
+def test_legacy_null_mapping_falls_back_to_rotation():
+    """Rows predating the mapping column still open a different lock."""
+    from types import SimpleNamespace
+
+    game = SimpleNamespace(
+        locked_cells=[[0, 1], [1, 2], [2, 3]],
+        key_mapping=None,
+    )
+    assert two_key_escape_gameplay._key_mapping(game) == [1, 2, 0]
 
 
 def test_key_cooldown_and_movement_gate(db, http):

@@ -130,10 +130,12 @@ async def use_key(
 ) -> TwoKeyEscapeState:
     """Spend one key charge for the assigned Key Operator.
 
-    Unlocks the key's designated locked cell and blocks a different eligible
-    cell chosen by the game logic, after verifying the maze stays solvable.
-    Refusals consume nothing: only a successful activation spends the charge,
-    stamps the server-side cooldown and re-arms the movement gate.
+    Opens the *different* lock the maze's hidden mapping assigns to the
+    clicked lock -- never the clicked lock itself -- and sends any
+    previously opened lock back, then blocks a different eligible cell
+    chosen by the game logic after verifying the maze stays solvable.
+    Refusals consume nothing: only a successful activation spends the
+    charge, stamps the server-side cooldown and re-arms the movement gate.
     """
     return two_key_escape_gameplay.use_key(db, user, payload.key_index)
 

@@ -30,10 +30,13 @@ under ``FOR UPDATE``: bounds, walls, locks, blocks, role, cooldown and the
 movement gate are all re-checked server-side, and ``state_version`` bumps on
 every accepted action.
 
-**A key trades one cell for another, never a solution.** Unlocking spends
-the charge and opens the key's designated locked cell; blocking picks a
-different traversable cell by game logic and is accepted only if
-breadth-first search still reaches the exit from the player's position.
+**A key trades one cell for another, never a solution.** Each lock opens a
+*different* lock, per the maze's hidden mapping -- the clicked lock itself
+never opens, so players must discover which lock opens the cell they need.
+Only one lock stays open at a time: opening another sends the previous one
+back (refused while the Navigator stands on it). Blocking picks a different
+traversable cell by game logic and is accepted only if breadth-first search
+still reaches the exit from the player's position on the resulting board.
 Start, exit and the player's cell are never blocked.
 
 **Scoring measures start-to-finish time, nothing else.** The Navigator's
@@ -199,6 +202,13 @@ def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
         if len(rest) < charges:
             continue
         locked = rest[:charges]
+        # Sattolo's shuffle: a single random cycle, which for two or more
+        # keys is a derangement -- key ``i`` always opens a *different*
+        # lock, so clicking a lock never opens itself.
+        mapping = list(range(charges))
+        for i in range(charges - 1, 0, -1):
+            j = rng.randrange(i)
+            mapping[i], mapping[j] = mapping[j], mapping[i]
         if _bfs_reaches(grid_size, walls, set(locked), start, exit_cell):
             return {
                 "grid_size": grid_size,
@@ -207,12 +217,32 @@ def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
                 "exit": [exit_cell[0], exit_cell[1]],
                 "walls": [[row, col] for row, col in sorted(walls)],
                 "locked_cells": [[row, col] for row, col in locked],
+                "key_mapping": mapping,
             }
     raise RuntimeError("Could not generate a solvable maze.")
 
 
 def _pairs(values: Any) -> list[list[int]]:
     return [[int(row), int(col)] for row, col in (values or [])]
+
+
+def _key_mapping(game: TwoKeyEscapeGameRecord) -> list[int]:
+    """Which locked cell each key actually opens, by template index.
+
+    The stored derangement, validated before use: a row whose mapping is
+    missing (predating the column) or fails validation falls back to a
+    deterministic rotation, which for two or more keys is likewise never
+    the clicked lock itself.
+    """
+    locked = _pairs(game.locked_cells)
+    stored = game.key_mapping or []
+    if (
+        len(stored) == len(locked)
+        and sorted(int(value) for value in stored) == list(range(len(locked)))
+        and all(int(value) != index for index, value in enumerate(stored))
+    ):
+        return [int(value) for value in stored]
+    return [(index + 1) % len(locked) for index in range(len(locked))]
 
 
 def _as_set(values: Any) -> set[tuple[int, int]]:
@@ -308,6 +338,7 @@ def create_global_session(
         exit_col=template["exit"][1],
         walls=template["walls"],
         locked_cells=template["locked_cells"],
+        key_mapping=template["key_mapping"],
     )
     session.add(row)
     session.flush()
@@ -863,13 +894,18 @@ def _pick_blocked_cell(
     exit_cell: tuple[int, int],
     player: tuple[int, int],
     rng_seed: str,
+    extra_excluded: set[tuple[int, int]] = frozenset(),  # type: ignore[assignment]
 ) -> Optional[tuple[int, int]]:
     """The game logic's choice of which traversable cell to block.
 
     Never the start, the exit, the player's cell, a wall, a locked cell or
     an already blocked cell -- and never a cell whose blocking would leave
-    the exit unreachable from the player, verified by breadth-first search.
-    None when no valid candidate exists.
+    the exit unreachable from the player, verified by breadth-first search
+    over the resulting board with locked cells treated as impassable.
+    ``extra_excluded`` removes further cells from candidacy (e.g. cells that
+    must stay open for game reasons) without changing the reachability
+    proof, which reads ``locked`` exactly as the board will hold it. None
+    when no valid candidate exists.
     """
     candidates = [
         (r, c)
@@ -877,6 +913,7 @@ def _pick_blocked_cell(
         for c in range(grid_size)
         if (r, c) not in walls
         and (r, c) not in locked
+        and (r, c) not in extra_excluded
         and (r, c) not in blocked
         and (r, c) != start
         and (r, c) != exit_cell
@@ -884,7 +921,9 @@ def _pick_blocked_cell(
     ]
     random.Random(rng_seed).shuffle(candidates)
     for candidate in candidates:
-        if _bfs_reaches(grid_size, walls, blocked | {candidate}, player, exit_cell):
+        if _bfs_reaches(
+            grid_size, walls, blocked | {candidate} | locked, player, exit_cell
+        ):
             return candidate
     return None
 
@@ -892,10 +931,12 @@ def _pick_blocked_cell(
 def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeState:
     """Spend one key charge for the assigned Key Operator.
 
-    Unlocks the key's designated locked cell and blocks a different eligible
-    traversable cell chosen by the game logic, after verifying the maze stays
-    solvable. Refusals -- wrong role, unknown or spent key, active cooldown,
-    missing movement, no valid cell to block -- consume nothing and reset
+    Each lock opens a *different* lock, per the maze's hidden mapping -- the
+    clicked lock itself never opens, so players must discover which lock
+    opens the cell they need. Only one lock stays open at a time: opening
+    another sends the previous one back. A different eligible traversable
+    cell is blocked by the game logic, after verifying the maze -- with the
+    revert applied -- stays solvable. Refusals consume nothing and reset
     nothing: only a successful activation spends the charge, stamps the
     server-side cooldown and re-arms the movement gate.
     """
@@ -959,35 +1000,52 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
         grid_size = int(game.grid_size)
         walls = _as_set(game.walls)
         locked, blocked = _locked_and_blocked(game, row)
-        target = tuple(locked_template[key_index])
+        mapping = _key_mapping(game)
+        # The clicked lock is the key; the mapping decides what opens.
+        target = tuple(locked_template[mapping[key_index]])
         if target not in locked:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="That cell is already unlocked.",
             )
+        # One open lock at a time: everything currently open goes back,
+        # except the cell this action is about to open.
+        relock = _as_set(row.unlocked_cells) - {target}
         start = (int(game.start_row), int(game.start_col))
         exit_cell = (int(game.exit_row), int(game.exit_col))
         player = (int(row.player_row), int(row.player_col))
+        if player in relock:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The Navigator is standing on the open cell. Step off it before the next key.",
+            )
+        # The board this action would leave behind: the new cell open, the
+        # old ones shut again. Blocking is chosen against it, so the
+        # solvability proof covers the revert as well.
+        locked_result = (locked - {target}) | relock
         # Every ever-locked cell is ineligible for blocking -- including the
-        # one this action just unlocked and any unlocked before it -- so a
-        # key's progress is never undone by a later block.
+        # one this action opens -- so a key's progress is never undone by a
+        # later block. The reachability proof reads ``locked_result`` exactly
+        # as the board will hold it: the opened cell traversable, the
+        # re-locked ones shut again.
         never_block = _as_set(game.locked_cells)
         candidate = _pick_blocked_cell(
             grid_size,
             walls,
-            never_block,
+            locked_result,
             blocked,
             start,
             exit_cell,
             player,
             f"{game.maze_seed}:{row.id}:{row.state_version}",
+            extra_excluded=never_block,
         )
         if candidate is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="No cell can be blocked without trapping the player. Move first and try again.",
+                detail="That key cannot be used safely right now. Move first and try again.",
             )
-        row.unlocked_cells = [*_pairs(row.unlocked_cells), [target[0], target[1]]]
+        row.unlocked_cells = [[target[0], target[1]]]
         row.blocked_cells = [*_pairs(row.blocked_cells), [candidate[0], candidate[1]]]
         row.used_key_indexes = sorted([*used, key_index])
         row.last_key_at = now

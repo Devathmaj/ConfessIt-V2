@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import type { ContextType } from 'react';
 
 import { TwoKeyEscapePage } from '@/pages/TwoKeyEscapePage';
+import { toast } from 'sonner';
 import { AuthContext } from '@/contexts/AuthContext';
 import type { Capability } from '@/lib/capabilities';
 import type { TwoKeyEscapeState } from '@/services/api';
@@ -234,6 +235,23 @@ describe('locks on the maze are the keys', () => {
     expect(spendTwoKeyEscapeKey).toHaveBeenCalledWith(0);
   });
 
+  it('names the lock that actually opened, not the one tapped', async () => {
+    vi.mocked(getTwoKeyEscapeState).mockResolvedValue(playingAs('key_operator'));
+    vi.mocked(spendTwoKeyEscapeKey).mockResolvedValue(
+      playingAs('key_operator', { locked_cells: [[4, 4]] }),
+    );
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Unlock locked cell at row 2 column 2' }),
+    );
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      expect.stringMatching(/Opened row 2, column 2\./),
+    );
+  });
+
   it('locks stay disabled while cooling down', async () => {
     vi.mocked(getTwoKeyEscapeState).mockResolvedValue(
       playingAs('key_operator', { cooldown_seconds_remaining: 8 }),
@@ -254,6 +272,32 @@ describe('locks on the maze are the keys', () => {
       screen.queryByRole('button', { name: /Unlock locked cell/ }),
     ).not.toBeInTheDocument();
   });
+});
+
+describe('live board refresh', () => {
+  const playingAs = (role: 'navigator' | 'key_operator') =>
+    selectingState({
+      stage: 'playing',
+      session_id: 'session-1',
+      my_role: role,
+      my_submitted_role: role,
+      partner_submitted_role: role === 'navigator' ? 'key_operator' : 'navigator',
+      roles_finalized: true,
+    });
+
+  it("re-reads the Navigator's board within seconds while playing", async () => {
+    vi.mocked(getTwoKeyEscapeState).mockResolvedValue(playingAs('navigator'));
+
+    renderPage();
+    await screen.findByRole('group', { name: 'Move' });
+    expect(getTwoKeyEscapeState).toHaveBeenCalledTimes(1);
+
+    // The playing-stage poll fires every ~3s, so a key activation lands on
+    // the Navigator's board without any manual refresh.
+    await waitFor(() => expect(getTwoKeyEscapeState).toHaveBeenCalledTimes(2), {
+      timeout: 8000,
+    });
+  }, 15000);
 });
 
 describe('partner choice', () => {
