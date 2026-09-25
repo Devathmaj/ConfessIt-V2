@@ -503,7 +503,21 @@ export const TwoKeyEscapePage = () => {
             </CardContent>
           </Card>
 
-          <MazeGrid state={state} />
+          <MazeGrid
+            state={state}
+            locksInteractive={state.stage === 'playing' && isOperator}
+            locksDisabled={acting || cooldown > 0 || state.movement_required}
+            locksDisabledReason={
+              cooldown > 0
+                ? `Cooling down (${cooldown}s left)`
+                : state.movement_required
+                  ? 'The Navigator must move first'
+                  : acting
+                    ? 'Working…'
+                    : ''
+            }
+            onUnlockKey={handleKey}
+          />
 
           {state.stage === 'playing' && isNavigator && (
             <Card className="rounded-2xl border-border/60 bg-card/70">
@@ -563,52 +577,28 @@ export const TwoKeyEscapePage = () => {
           )}
 
           {state.stage === 'playing' && isOperator && (
-            <Card className="rounded-2xl border-border/60 bg-card/70">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <KeyRound className="h-5 w-5" />
-                  Keys
-                </CardTitle>
-                <CardDescription>
-                  Each key unlocks its locked cell and blocks another cell elsewhere. Ten
-                  seconds between keys, and the Navigator must move before the next one.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                {cooldown > 0 && (
-                  <p role="status" className="text-sm font-medium">
-                    Cooling down: {cooldown}s before the next key.
-                  </p>
-                )}
-                {state.movement_required && (
-                  <p role="status" className="text-sm font-medium text-amber-600 dark:text-amber-400">
-                    The Navigator must move at least once before the next key.
-                  </p>
-                )}
-                <div className="grid gap-2" role="group" aria-label="Keys">
-                  {state.keys.map((key) => {
-                    const disabled =
-                      acting || key.used || cooldown > 0 || state.movement_required;
-                    return (
-                      <Button
-                        key={key.key_index}
-                        type="button"
-                        variant={key.used ? 'ghost' : 'outline'}
-                        disabled={disabled}
-                        className="justify-start"
-                        onClick={() => handleKey(key.key_index)}
-                        aria-label={`Use key ${key.key_index + 1} on row ${key.target_row + 1}, column ${key.target_col + 1}`}
-                      >
-                        <KeyRound className="h-4 w-4" />
-                        Key {key.key_index + 1} → row {key.target_row + 1}, column{' '}
-                        {key.target_col + 1}
-                        {key.used && ' · used'}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
+            <div
+              role="status"
+              className="rounded-xl border border-border/60 bg-card/70 p-3 text-sm backdrop-blur"
+            >
+              <p className="flex items-center gap-2 font-medium">
+                <KeyRound className="h-4 w-4" />
+                Tap a 🔒 on the maze to spend that key — {state.keys_remaining} of{' '}
+                {state.key_charges} left.
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Each key unlocks its cell and blocks another elsewhere. Ten seconds
+                between keys, and the Navigator must move before the next one.
+              </p>
+              {cooldown > 0 && (
+                <p className="mt-1 font-medium">Cooling down: {cooldown}s before the next key.</p>
+              )}
+              {state.movement_required && (
+                <p className="mt-1 font-medium text-amber-600 dark:text-amber-400">
+                  The Navigator must move at least once before the next key.
+                </p>
+              )}
+            </div>
           )}
 
           {state.stage === 'playing' && !isNavigator && !isOperator && (
@@ -798,12 +788,28 @@ const RoleSelectionCard = ({
   );
 };
 
-const MazeGrid = ({ state }: { state: TwoKeyEscapeState }) => {
+const MazeGrid = ({
+  state,
+  locksInteractive,
+  locksDisabled,
+  locksDisabledReason,
+  onUnlockKey,
+}: {
+  state: TwoKeyEscapeState;
+  locksInteractive: boolean;
+  locksDisabled: boolean;
+  locksDisabledReason: string;
+  onUnlockKey: (keyIndex: number) => void;
+}) => {
   const size = state.grid_size ?? 0;
   if (!size || state.player_row === null || state.player_col === null) return null;
   const wallSet = new Set(state.walls.map(([r, c]) => `${r}:${c}`));
   const lockedSet = new Set(state.locked_cells.map(([r, c]) => `${r}:${c}`));
   const blockedSet = new Set(state.blocked_cells.map(([r, c]) => `${r}:${c}`));
+  // Each rendered lock is its key: the unused key whose target sits on it.
+  const keyIndexByCell = new Map(
+    state.keys.filter((key) => !key.used).map((key) => [`${key.target_row}:${key.target_col}`, key.key_index]),
+  );
   const cells = [];
   for (let row = 0; row < size; row += 1) {
     for (let col = 0; col < size; col += 1) {
@@ -813,36 +819,57 @@ const MazeGrid = ({ state }: { state: TwoKeyEscapeState }) => {
       const isWall = wallSet.has(key);
       const isLocked = lockedSet.has(key);
       const isBlocked = blockedSet.has(key);
-      cells.push(
-        <div
-          key={key}
-          role="img"
-          aria-label={
-            isPlayer
-              ? `player at row ${row + 1} column ${col + 1}`
-              : isExit
-                ? 'exit'
-                : isWall
-                  ? 'wall'
-                  : isLocked
-                    ? 'locked cell'
-                    : isBlocked
-                      ? 'blocked cell'
-                      : `open cell row ${row + 1} column ${col + 1}`
-          }
-          className={cn(
-            'flex aspect-square items-center justify-center rounded-md border text-xs font-bold',
-            isPlayer && 'border-transparent bg-gradient-romantic text-white',
-            !isPlayer && isExit && 'border-emerald-500 bg-emerald-500/20 text-emerald-600',
-            !isPlayer && !isExit && isWall && 'border-border bg-muted-foreground/30',
-            !isPlayer && !isExit && !isWall && isLocked && 'border-amber-500 bg-amber-500/20 text-amber-600',
-            !isPlayer && !isExit && !isWall && !isLocked && isBlocked && 'border-red-500 bg-red-500/20 text-red-500',
-            !isPlayer && !isExit && !isWall && !isLocked && !isBlocked && 'border-border/60 bg-background/40',
-          )}
-        >
-          {isPlayer ? '●' : isExit ? '⚑' : isLocked ? '🔒' : ''}
-        </div>,
+      const unlockIndex = isLocked ? keyIndexByCell.get(key) : undefined;
+      const clickable = locksInteractive && isLocked && unlockIndex !== undefined;
+      const cellClass = cn(
+        'flex aspect-square items-center justify-center rounded-md border text-xs font-bold',
+        isPlayer && 'border-transparent bg-gradient-romantic text-white',
+        !isPlayer && isExit && 'border-emerald-500 bg-emerald-500/20 text-emerald-600',
+        !isPlayer && !isExit && isWall && 'border-border bg-muted-foreground/30',
+        !isPlayer && !isExit && !isWall && isLocked && 'border-amber-500 bg-amber-500/20 text-amber-600',
+        !isPlayer && !isExit && !isWall && !isLocked && isBlocked && 'border-red-500 bg-red-500/20 text-red-500',
+        !isPlayer && !isExit && !isWall && !isLocked && !isBlocked && 'border-border/60 bg-background/40',
+        clickable && !locksDisabled && 'cursor-pointer hover:ring-2 hover:ring-amber-400',
       );
+      const content = isPlayer ? '●' : isExit ? '⚑' : isLocked ? '🔒' : '';
+      if (clickable) {
+        cells.push(
+          <button
+            key={key}
+            type="button"
+            disabled={locksDisabled}
+            title={locksDisabled && locksDisabledReason ? locksDisabledReason : undefined}
+            aria-label={`Unlock locked cell at row ${row + 1} column ${col + 1}`}
+            className={cellClass}
+            onClick={() => onUnlockKey(unlockIndex as number)}
+          >
+            {content}
+          </button>,
+        );
+      } else {
+        cells.push(
+          <div
+            key={key}
+            role="img"
+            aria-label={
+              isPlayer
+                ? `player at row ${row + 1} column ${col + 1}`
+                : isExit
+                  ? 'exit'
+                  : isWall
+                    ? 'wall'
+                    : isLocked
+                      ? 'locked cell'
+                      : isBlocked
+                        ? 'blocked cell'
+                        : `open cell row ${row + 1} column ${col + 1}`
+            }
+            className={cellClass}
+          >
+            {content}
+          </div>,
+        );
+      }
     }
   }
   return (

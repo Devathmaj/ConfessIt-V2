@@ -17,11 +17,14 @@
 --     so the same two users can immediately re-submit roles and replay.
 --   * users and everything else ..... no other game or feature is touched.
 --
--- After wiping, open a fresh period with ONE of:
+-- WARNING: wiping alone leaves NO active period, and reads never create
+-- one -- the page will only show "no game" until a fresh period is opened.
+-- Prefer the wrapper that does both steps (PowerShell, from repo root):
+--   .\scripts\replay-two-key-escape.ps1
+-- which wipes, restarts the backend to deal a fresh maze, and verifies it.
+-- Manual alternative after running this file, pick ONE:
 --   a) docker restart confessit_v2-backend-1   (boot deals a new maze), or
 --   b) Admin -> Manage games -> "Run resets now".
--- Reads never create periods, so the page alone will only show "no game"
--- until one of the above runs.
 
 BEGIN;
 

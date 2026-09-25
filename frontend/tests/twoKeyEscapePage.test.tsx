@@ -43,6 +43,7 @@ const {
   getTwoKeyEscapeState,
   getTwoKeyEscapePartners,
   selectTwoKeyEscapePartner,
+  spendTwoKeyEscapeKey,
   submitTwoKeyEscapeRole,
   changeTwoKeyEscapeRole,
   getTwoKeyEscapeLeaderboard,
@@ -204,6 +205,54 @@ describe('role display', () => {
     await screen.findByText('Choose your role');
     // Both the picked option and the pending-submission line name the role.
     expect(screen.getAllByText(/Key Operator/).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('locks on the maze are the keys', () => {
+  const playingAs = (role: 'navigator' | 'key_operator', extra: Partial<TwoKeyEscapeState> = {}) =>
+    selectingState({
+      stage: 'playing',
+      session_id: 'session-1',
+      my_role: role,
+      my_submitted_role: role,
+      partner_submitted_role: role === 'navigator' ? 'key_operator' : 'navigator',
+      roles_finalized: true,
+      player_row: 0,
+      player_col: 0,
+      ...extra,
+    });
+
+  it('the operator unlocks by clicking the lock itself', async () => {
+    vi.mocked(getTwoKeyEscapeState).mockResolvedValue(playingAs('key_operator'));
+    vi.mocked(spendTwoKeyEscapeKey).mockResolvedValue(playingAs('key_operator'));
+
+    renderPage();
+    const lock = await screen.findByRole('button', { name: 'Unlock locked cell at row 2 column 2' });
+    fireEvent.click(lock);
+
+    await waitFor(() => expect(spendTwoKeyEscapeKey).toHaveBeenCalledTimes(1));
+    expect(spendTwoKeyEscapeKey).toHaveBeenCalledWith(0);
+  });
+
+  it('locks stay disabled while cooling down', async () => {
+    vi.mocked(getTwoKeyEscapeState).mockResolvedValue(
+      playingAs('key_operator', { cooldown_seconds_remaining: 8 }),
+    );
+
+    renderPage();
+    const lock = await screen.findByRole('button', { name: 'Unlock locked cell at row 2 column 2' });
+    expect(lock).toBeDisabled();
+    expect(screen.getByText(/Cooling down: 8s/)).toBeInTheDocument();
+  });
+
+  it('the navigator sees locks but no unlock buttons', async () => {
+    vi.mocked(getTwoKeyEscapeState).mockResolvedValue(playingAs('navigator'));
+
+    renderPage();
+    await screen.findByRole('group', { name: 'Move' });
+    expect(
+      screen.queryByRole('button', { name: /Unlock locked cell/ }),
+    ).not.toBeInTheDocument();
   });
 });
 
