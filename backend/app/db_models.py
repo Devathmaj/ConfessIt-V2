@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, SmallInteger,
+    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, SmallInteger,
     ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
@@ -33,6 +33,7 @@ from .limits import (
     COUPLE_SESSION_SHARED_QUESTIONS,
     GAME_CONTENT_MODES,
     GAME_IDS,
+    TWO_KEY_ESCAPE_GRID_SIZES,
     REACTION_TIME_MAX_ELAPSED_MS,
     REACTION_TIME_MAX_SUBMISSIONS,
     REACTION_TIME_MAX_VALID_MS,
@@ -1668,6 +1669,159 @@ class CoupleGameSessionPredictionRecord(Base):
     )
 
 
+class TwoKeyEscapeGameRecord(Base):
+    """One Two-Key Escape session: the calendar period the maze runs on.
+
+    The row is a *session* in the same lifecycle the puzzle games share --
+    ``active`` while playable, ``ended`` as history -- and it owns the one
+    maze template every couple plays on this period: the edge length, the
+    deterministic seed it was generated from, and the full layout (start,
+    exit, permanent walls, initially locked cells). The template is dealt
+    once, when the reset loop opens the period, and never again: a refresh
+    or a reconnect reads the same walls, so progress stays comparable and
+    the per-couple live state in ``two_key_escape_sessions`` can never
+    rewrite what fairness depends on.
+
+    ``created_by`` holds the creator's ``regno``, with no foreign key, for
+    the same reason every other game table does: staff live in ``admin``
+    and ``moderator`` and never in ``users``. The scheduler writes
+    ``"scheduler"`` here, like every other game.
+    """
+
+    __tablename__ = "two_key_escape_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    # The configured edge length this period's maze was built at, and the
+    # seed its layout was generated from, so the template is reproducible.
+    grid_size: Mapped[int] = mapped_column(Integer, default=12, server_default=text("12"))
+    maze_seed: Mapped[str] = mapped_column(Text)
+    # The template itself, as ``[row, col]`` pairs: the start and exit cells,
+    # the permanent walls, and the cells that begin locked (one key each).
+    start_row: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    start_col: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    exit_row: Mapped[int] = mapped_column(Integer, default=11, server_default=text("11"))
+    exit_col: Mapped[int] = mapped_column(Integer, default=11, server_default=text("11"))
+    walls: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    locked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_two_key_escape_games_status_known",
+        ),
+        CheckConstraint(
+            "grid_size IN (12, 13, 14, 15)",
+            # Numeric suffix, so this supersedes the 7-10 membership on the
+            # next boot -- see ``PostgresClient._superseded_constraints``.
+            name="ck_two_key_escape_games_grid_size_known_15",
+        ),
+    )
+
+
+class TwoKeyEscapeSessionRecord(Base):
+    """One couple's live game inside a Two-Key Escape session period.
+
+    The row pairs a *couple* with a *period*: ``couple_session_id`` names
+    the mutual-selection session in ``couple_game_sessions`` that resolved
+    the two participants, so the pairing logic lives in exactly one place
+    and this table never re-decides who forms a couple. One escape game per
+    couple session, enforced by the unique pair rather than a service check.
+
+    Roles are submitted then finalized: each side's confirmed choice is
+    stored in ``user_a_submitted_role`` / ``user_b_submitted_role``, and
+    the assignment becomes real only when both are stored and distinct, at
+    which point ``navigator_user_id`` / ``key_operator_user_id`` are set
+    together and never rewritten. The maze itself is never copied here --
+    position, unlocked cells, blocked cells, consumed keys, cooldown and
+    movement counters are the live overlay on the period's shared template.
+
+    Clients submit actions, never state: movement and key use are validated
+    against this row under ``FOR UPDATE`` and committed atomically, with
+    ``state_version`` bumped on every accepted action so concurrent requests
+    cannot silently overwrite one another.
+    """
+
+    __tablename__ = "two_key_escape_sessions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    two_key_escape_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("two_key_escape_games.id", ondelete="CASCADE"), index=True
+    )
+    couple_session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("couple_game_sessions.id", ondelete="CASCADE"), index=True
+    )
+    user_a_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    user_b_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # Each side's confirmed role choice (``navigator`` / ``key_operator``),
+    # NULL until that side confirms. Finalization reads both, never a default.
+    user_a_submitted_role: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    user_b_submitted_role: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # The finalized assignment: set together exactly once, then immutable.
+    navigator_user_id: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    key_operator_user_id: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    player_row: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    player_col: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # When the Navigator made the first valid move. The start of the only
+    # clock this game keeps: completion is stamped against it, and logouts,
+    # tab switches or hours away change nothing -- the elapsed time simply
+    # includes them.
+    first_move_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Live overlay on the template: unlocked (formerly locked) and blocked
+    # (formerly traversable) cells, as ``[row, col]`` pairs.
+    unlocked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    blocked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    # Consumed key charges, as indexes into the template's locked-cell list.
+    used_key_indexes: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    last_key_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    moves_since_last_key: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    has_used_key: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    total_moves: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    total_keys: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Seconds from the first valid move to completion, settled once at the
+    # exit. NULL until then. The single number couples are ranked by.
+    elapsed_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Deterministic display score settled at completion (higher is better),
+    # derived from the persisted metrics rather than trusted input.
+    score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    state_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("two_key_escape_game_id", "couple_session_id"),
+        UniqueConstraint("two_key_escape_game_id", "user_a_id", "user_b_id"),
+        CheckConstraint(
+            "user_a_id != user_b_id",
+            name="ck_two_key_escape_sessions_distinct_users",
+        ),
+    )
+
+
 class ReactionTimeGameRecord(Base):
     """One Reaction Time session: the calendar period the game runs on.
 
@@ -2158,6 +2312,13 @@ class GameConfigRecord(Base):
             "reset_cadence IN ('daily', 'every_2_days', 'every_3_days', 'every_5_days', 'weekly')",
             name="ck_game_configs_reset_cadence_known",
         ),
+        CheckConstraint(
+            "grid_size IS NULL OR grid_size IN (12, 13, 14, 15)",
+            # Numeric suffix, so this supersedes ``ck_game_configs_grid_size_known``
+            # (the 7-10 membership) on the next boot -- see
+            # ``PostgresClient._superseded_constraints``.
+            name="ck_game_configs_grid_size_known_15",
+        ),
     )
 
     game_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -2167,6 +2328,12 @@ class GameConfigRecord(Base):
     reset_cadence: Mapped[str] = mapped_column(
         String(16), default="daily", server_default=text("'daily'")
     )
+    # The Two-Key Escape maze edge length, owned by that game alone. NULL for
+    # every other game: it is not a second content mode and must not be read
+    # as one. Written only through the game-config update path, which refuses
+    # it for any other game id, and defaulted to 12 on first read of the
+    # two-key-escape row so the game is playable before any admin opens it.
+    grid_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()

@@ -1263,13 +1263,15 @@ export const submitCouplePrediction = async (
 // schedule, horizon-bounded future words, and the server-derived selection list
 // (hidden games never appear; disabled/pending games arrive marked unplayable).
 
-/** One game's availability, content mode and reset cadence, as stored. */
+/** One game's availability, content mode, reset cadence and grid size, as stored. */
 export interface GameConfig {
     game_id: string;
     enabled: boolean;
     is_hidden: boolean;
     content_mode: 'random' | 'manual' | null;
     reset_cadence: 'daily' | 'every_2_days' | 'every_3_days' | 'every_5_days' | 'weekly';
+    /** The Two-Key Escape maze edge length. Null for every other game. */
+    grid_size: number | null;
 }
 
 /** Every game's configuration. */
@@ -1280,10 +1282,10 @@ export const getGameConfigs = async (): Promise<GameConfig[]> => {
     return response.data;
 };
 
-/** Patch one game's availability, content mode or reset cadence. */
+/** Patch one game's availability, content mode, reset cadence or grid size. */
 export const updateGameConfig = async (
     gameId: string,
-    payload: Partial<Pick<GameConfig, 'enabled' | 'is_hidden' | 'content_mode' | 'reset_cadence'>>
+    payload: Partial<Pick<GameConfig, 'enabled' | 'is_hidden' | 'content_mode' | 'reset_cadence' | 'grid_size'>>
 ): Promise<GameConfig> => {
     const response = await axios.put(`${API_URL}/admin/games/config/${gameId}`, payload, {
         headers: getAuthHeaders(),
@@ -2029,6 +2031,194 @@ export const completeReactionTimeAttempt = async (payload: {
         payload,
         { headers: getAuthHeaders() }
     );
+    return response.data;
+};
+
+// --- Two-Key Escape Gameplay Endpoints ---
+//
+// The cooperative maze: one shared template per period, one live overlay per
+// mutually selected couple. Role clicks stay local until confirmed; the
+// confirmations, moves and key uses below are the only writes, and each
+// answers the authoritative state so the screen renders what it is given.
+
+/** The two complementary roles. Finalized exactly once per couple game. */
+export type TwoKeyEscapeRole = 'navigator' | 'key_operator';
+
+/** One orthogonal step. */
+export type TwoKeyEscapeDirection = 'up' | 'down' | 'left' | 'right';
+
+/** Where the caller stands in the couple's maze. */
+export type TwoKeyEscapeStage = 'no_couple' | 'selecting_roles' | 'playing' | 'completed';
+
+/** One key charge: its locked-cell target and whether it is spent. */
+export interface TwoKeyEscapeKeyView {
+    key_index: number;
+    target_row: number;
+    target_col: number;
+    used: boolean;
+}
+
+/** The settled couple result, finalized exactly once at the exit. */
+export interface TwoKeyEscapeResultView {
+    completed: boolean;
+    total_moves: number;
+    total_keys: number;
+    /** Seconds from the first valid move to the exit, including time away. */
+    elapsed_seconds: number | null;
+    score: number;
+    completed_at: string | null;
+}
+
+/**
+ * The caller's place in the maze, as the page opens and after every write.
+ * `my_submitted_role` / `partner_submitted_role` carry both confirmed
+ * choices so a conflict names itself; `conflict` is the sentence both sides
+ * resolve. The board (walls, locked, blocked, player, exit, keys, cooldown,
+ * movement gate) is the same authoritative overlay for both participants.
+ */
+export interface TwoKeyEscapeState {
+    stage: TwoKeyEscapeStage;
+    game_id: string | null;
+    session_id: string | null;
+    /** The caller's pending partner choice, shared with the Questionnaire. */
+    my_selection: { selected_user_id: string; selected_user_name: string } | null;
+    partner: { id: string; name: string } | null;
+    my_role: TwoKeyEscapeRole | null;
+    my_submitted_role: TwoKeyEscapeRole | null;
+    partner_submitted_role: TwoKeyEscapeRole | null;
+    roles_finalized: boolean;
+    conflict: string | null;
+    grid_size: number | null;
+    key_charges: number;
+    player_row: number | null;
+    player_col: number | null;
+    exit_row: number | null;
+    exit_col: number | null;
+    walls: number[][];
+    locked_cells: number[][];
+    blocked_cells: number[][];
+    keys: TwoKeyEscapeKeyView[];
+    keys_remaining: number;
+    cooldown_seconds_remaining: number;
+    movement_required: boolean;
+    moves_since_last_key: number;
+    total_moves: number;
+    total_keys: number;
+    state_version: number;
+    result: TwoKeyEscapeResultView | null;
+}
+
+/** One couple's standing in the current period, in rank order. */
+export interface TwoKeyEscapeLeaderboardEntry {
+    rank: number;
+    couple_names: string[];
+    completed: boolean;
+    total_moves: number;
+    total_keys: number;
+    elapsed_seconds: number | null;
+    score: number;
+}
+
+/** The caller's current state. Never creates anything. */
+export const getTwoKeyEscapeState = async (): Promise<TwoKeyEscapeState> => {
+    const response = await axios.get(`${API_URL}/games/two-key-escape`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Every participant the caller may choose, excluding only themselves. The
+ * Questionnaire's own candidate list: settling the pairing here or there
+ * chooses from the same people under the same rules.
+ */
+export const getTwoKeyEscapePartners = async (): Promise<CouplePartnerCandidate[]> => {
+    const response = await axios.get(`${API_URL}/games/two-key-escape/partners`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
+ * Record the caller's partner choice through the Questionnaire's selection.
+ * A changed mind replaces the previous pick; a mutual pick creates the one
+ * session for the pair, visible in both games at once. Answers the caller's
+ * escape state, so the screen advances in one round trip.
+ */
+export const selectTwoKeyEscapePartner = async (
+    selectedUserId: string
+): Promise<TwoKeyEscapeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/two-key-escape/selection`,
+        { selected_user_id: selectedUserId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Confirm this role choice. Writes only the caller's submission; a distinct
+ * pair finalizes atomically, identical choices surface the conflict. Safe to
+ * retry once finalized.
+ */
+export const submitTwoKeyEscapeRole = async (
+    role: TwoKeyEscapeRole
+): Promise<TwoKeyEscapeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/two-key-escape/role-submit`,
+        { role },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Replace this caller's confirmed choice before finalization. Refused once
+ * finalized, so the removed control is gone server-side as well.
+ */
+export const changeTwoKeyEscapeRole = async (
+    role: TwoKeyEscapeRole
+): Promise<TwoKeyEscapeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/two-key-escape/role-change`,
+        { role },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** Advance the character one cell. Navigator only; refusals change nothing. */
+export const moveTwoKeyEscape = async (
+    direction: TwoKeyEscapeDirection
+): Promise<TwoKeyEscapeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/two-key-escape/move`,
+        { direction },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Spend one key charge. Key Operator only; refusals consume nothing and
+ * reset nothing.
+ */
+export const spendTwoKeyEscapeKey = async (
+    keyIndex: number
+): Promise<TwoKeyEscapeState> => {
+    const response = await axios.post(
+        `${API_URL}/games/two-key-escape/key`,
+        { key_index: keyIndex },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/** This period's couples in rank order: completed first, then by play. */
+export const getTwoKeyEscapeLeaderboard = async (): Promise<TwoKeyEscapeLeaderboardEntry[]> => {
+    const response = await axios.get(`${API_URL}/games/two-key-escape/leaderboard`, {
+        headers: getAuthHeaders(),
+    });
     return response.data;
 };
 

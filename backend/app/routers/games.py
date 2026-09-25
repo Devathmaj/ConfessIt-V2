@@ -11,6 +11,7 @@ from ..db_models import (
     CoupleGameRecord,
     ReactionTimeGameRecord,
     TriviaDropQuestionRecord,
+    TwoKeyEscapeGameRecord,
     WordleGameRecord,
 )
 from ..dependencies import get_db
@@ -35,6 +36,7 @@ _GAME_NAMES = {
     "reaction-time": "Reaction Time",
     "connections": "Connections",
     "trivia-drop": "Trivia Drop",
+    "two-key-escape": "Two-Key Escape",
 }
 
 _SESSION_MODELS = {
@@ -43,6 +45,7 @@ _SESSION_MODELS = {
     "couple-questionnaire": CoupleGameRecord,
     "reaction-time": ReactionTimeGameRecord,
     "connections": ConnectionsGameRecord,
+    "two-key-escape": TwoKeyEscapeGameRecord,
 }
 
 
@@ -158,6 +161,7 @@ async def game_selection(
                 "reaction-time",
                 "connections",
                 "trivia-drop",
+                "two-key-escape",
             )
             if (entry := _entry(session, game_id, today, featured_id)) is not None
         ]

@@ -279,6 +279,7 @@ const gameConfig = (
   is_hidden: false,
   content_mode: contentMode,
   reset_cadence: 'daily',
+  grid_size: null,
 });
 
 describe('AdminGamesDashboard: the front page', () => {

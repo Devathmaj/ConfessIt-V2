@@ -1427,17 +1427,21 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop", "two-key-escape"]
 
 
 class GameConfig(BaseModel):
-    """One game's availability, content mode and reset cadence, as stored."""
+    """One game's availability, content mode, reset cadence and grid size, as stored."""
 
     game_id: str
     enabled: bool = True
     is_hidden: bool = False
     content_mode: Optional[GameContentMode] = None
     reset_cadence: GameResetCadence = "daily"
+    # The Two-Key Escape maze edge length. None for every other game: it is
+    # that game's own knob, not a second content mode, and no other screen
+    # may read or write it.
+    grid_size: Optional[int] = None
 
 
 class GameConfigUpdate(BaseModel):
@@ -1449,6 +1453,7 @@ class GameConfigUpdate(BaseModel):
     is_hidden: Optional[bool] = None
     content_mode: Optional[GameContentMode] = None
     reset_cadence: Optional[GameResetCadence] = None
+    grid_size: Optional[int] = None
 
 
 class FeaturedGame(BaseModel):
@@ -2035,3 +2040,129 @@ class TriviaDropResults(BaseModel):
     ended_at: Optional[datetime] = None
     my_submission: Optional[TriviaDropLeaderboardEntry] = None
     leaderboard: List[TriviaDropLeaderboardEntry] = []
+
+# --- Two-Key Escape ------------------------------------------------------------
+#
+# The participant side of the cooperative maze. One global session period owns
+# a single maze template (edge length, seed, walls, locked cells); each
+# mutually selected couple owns one live overlay on it. Roles are submitted
+# then finalized: each side confirms one of ``navigator`` / ``key_operator``,
+# and the assignment becomes real only when both are stored and distinct.
+# Clients submit actions (move, key), never state; the service validates and
+# commits each one atomically under row lock.
+
+TwoKeyEscapeRole = Literal["navigator", "key_operator"]
+TwoKeyEscapeDirection = Literal["up", "down", "left", "right"]
+
+
+class TwoKeyEscapeRoleRequest(BaseModel):
+    """Confirming one role choice: submit on first confirm, change before final."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: TwoKeyEscapeRole
+
+
+class TwoKeyEscapeMoveRequest(BaseModel):
+    """One Navigator step: exactly one orthogonally adjacent cell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    direction: TwoKeyEscapeDirection
+
+
+class TwoKeyEscapeKeyRequest(BaseModel):
+    """Spending one key charge: ``key_index`` into the template locked list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key_index: int = Field(ge=0)
+
+
+class TwoKeyEscapeKeyView(BaseModel):
+    """One key charge as the Key Operator sees it: its target and whether spent."""
+
+    key_index: int
+    target_row: int
+    target_col: int
+    used: bool
+
+
+class TwoKeyEscapeResultView(BaseModel):
+    """The settled couple result, finalized exactly once at the exit.
+
+    ``elapsed_seconds`` is the whole ranking: seconds from the first valid
+    move to the exit, including any time away. ``total_moves`` and
+    ``total_keys`` are progress facts, never tiebreaks.
+    """
+
+    completed: bool
+    total_moves: int = 0
+    total_keys: int = 0
+    elapsed_seconds: Optional[float] = None
+    score: int = 0
+    completed_at: Optional[datetime] = None
+
+
+class TwoKeyEscapeState(BaseModel):
+    """This caller`s place in the couple`s maze, as the page opens and after
+    every write. Reading this never creates an escape game for a caller with
+    no couple session; the first confirmed role submission creates it.
+
+    ``stage`` is ``no_couple`` (no mutual-selection session yet),
+    ``selecting_roles`` (roles unfinalized, with both sides` confirmed
+    choices carried so a conflict names itself), ``playing`` or
+    ``completed``. The board (walls, locked, blocked, player, exit, keys,
+    cooldown, movement gate) is the same authoritative overlay for both
+    participants; ``my_role`` is the caller`s own finalized role, or null
+    before finalization.
+    """
+
+    stage: Literal["no_couple", "selecting_roles", "playing", "completed"]
+    game_id: Optional[str] = None
+    session_id: Optional[str] = None
+    # This caller's pending questionnaire partner choice, if they made one.
+    # Choosing here and choosing in the Couple Questionnaire are the same
+    # act on the same row, so a pair formed in either game opens the other.
+    my_selection: Optional[CoupleSelectionView] = None
+    partner: Optional[CouplePartnerView] = None
+    my_role: Optional[TwoKeyEscapeRole] = None
+    my_submitted_role: Optional[TwoKeyEscapeRole] = None
+    partner_submitted_role: Optional[TwoKeyEscapeRole] = None
+    roles_finalized: bool = False
+    conflict: Optional[str] = None
+    grid_size: Optional[int] = None
+    key_charges: int = 0
+    player_row: Optional[int] = None
+    player_col: Optional[int] = None
+    exit_row: Optional[int] = None
+    exit_col: Optional[int] = None
+    walls: List[List[int]] = []
+    locked_cells: List[List[int]] = []
+    blocked_cells: List[List[int]] = []
+    keys: List[TwoKeyEscapeKeyView] = []
+    keys_remaining: int = 0
+    cooldown_seconds_remaining: float = 0
+    movement_required: bool = False
+    moves_since_last_key: int = 0
+    total_moves: int = 0
+    total_keys: int = 0
+    state_version: int = 0
+    result: Optional[TwoKeyEscapeResultView] = None
+
+
+class TwoKeyEscapeLeaderboardEntry(BaseModel):
+    """One couple`s standing in the current period, in rank order.
+
+    Completed couples rank above incomplete ones; among completed, the
+    shorter start-to-finish time wins. ``score`` is the deterministic
+    display number settled at completion (higher is better).
+    """
+
+    rank: int
+    couple_names: List[str]
+    completed: bool
+    total_moves: int
+    total_keys: int
+    elapsed_seconds: Optional[float] = None
+    score: int

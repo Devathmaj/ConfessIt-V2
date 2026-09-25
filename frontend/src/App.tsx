@@ -29,6 +29,7 @@ import { AnagramGamePage } from "./pages/AnagramGamePage";
 import { ConnectionsGamePage } from "./pages/ConnectionsGamePage";
 import { TriviaDropGamePage } from "./pages/TriviaDropGamePage";
 import { CoupleQuestionnairePage } from "./pages/CoupleQuestionnairePage";
+import { TwoKeyEscapePage } from "./pages/TwoKeyEscapePage";
 import { ReactionTimeGamePage } from "./pages/ReactionTimeGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
@@ -410,6 +411,7 @@ const AppRoutes = () => {
         <Route path="connections" element={<ConnectionsGamePage />} />
         <Route path="trivia-drop" element={<TriviaDropGamePage />} />
         <Route path="couple-questionnaire" element={<CoupleQuestionnairePage />} />
+        <Route path="two-key-escape" element={<TwoKeyEscapePage />} />
         <Route path="reaction-time" element={<ReactionTimeGamePage />} />
       </Route>
       {/* The old /mini-games page is gone; deep links retire to the section that replaced

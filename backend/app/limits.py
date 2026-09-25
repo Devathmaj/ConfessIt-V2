@@ -283,6 +283,7 @@ GAME_IDS: tuple[str, ...] = (
     "reaction-time",
     "connections",
     "trivia-drop",
+    "two-key-escape",
 )
 
 # The only reset cadences a game may carry. Stored as the strings below; each game
@@ -376,6 +377,28 @@ CONNECTIONS_WORD_MAX = 50
 TRIVIA_OPTIONS_COUNT = 4
 TRIVIA_QUESTION_TEXT_MAX = 500
 TRIVIA_OPTION_TEXT_MAX = 200
+
+# Two-Key Escape. A square grid maze played by one couple with complementary
+# roles: the Navigator moves one cell at a time, the Key Operator spends key
+# charges that each unlock one locked cell and block one traversable cell.
+#
+# The grid size is the only gameplay knob an administrator may set (7-10); the
+# number of key charges is derived from it by the single mapping below, kept
+# here rather than restated on the frontend so the two cannot drift apart.
+# The cooldown between successful key activations is fixed at ten seconds and
+# enforced server-side, and the Navigator must make at least one valid move
+# between key uses -- both are gameplay rules, not session timers.
+TWO_KEY_ESCAPE_GRID_SIZES: tuple[int, ...] = (12, 13, 14, 15)
+TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE = 12
+TWO_KEY_ESCAPE_KEY_CHARGES: dict[int, int] = {12: 12, 13: 13, 14: 14, 15: 15}
+TWO_KEY_ESCAPE_KEY_COOLDOWN_SECONDS = 10
+TWO_KEY_ESCAPE_ROLES: tuple[str, ...] = ("navigator", "key_operator")
+
+
+def two_key_escape_key_charges(grid_size: int) -> int:
+    """How many key charges a maze of ``grid_size`` grants, one charge per key."""
+    return TWO_KEY_ESCAPE_KEY_CHARGES[grid_size]
+
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #

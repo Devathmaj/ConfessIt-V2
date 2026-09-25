@@ -91,6 +91,9 @@ RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "admin": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "moderator": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "users": ("emoji",),
+    # The failed-move counter Two-Key Escape kept briefly: scoring counts
+    # start-to-finish elapsed time only, so the column has no reader left.
+    "two_key_escape_sessions": ("failed_moves",),
 }
 
 
@@ -589,6 +592,7 @@ class PostgresClient:
                 "couple_games",
                 "reaction_time_games",
                 "connections_games",
+                "two_key_escape_games",
             ):
                 present = {
                     row[0]

@@ -6,6 +6,7 @@ import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
 import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
 import { AdminFeaturedSchedule } from '@/components/AdminFeaturedSchedule';
 import { AdminReactionTimeConfig } from '@/components/AdminReactionTimeConfig';
+import { AdminTwoKeyEscapeConfig } from '@/components/AdminTwoKeyEscapeConfig';
 import { AdminWordleConfig } from '@/components/AdminWordleConfig';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
@@ -52,9 +53,9 @@ export const AdminGamesManage = () => {
           <h1 className="text-3xl font-semibold">Manage games</h1>
           <p className="text-sm text-muted-foreground">
             The featured spotlight and the current Wordle, Anagram,
-            Connections, Couple Questionnaire, Reaction Time and Trivia Drop
-            sessions. Changes here show up on the player-facing section
-            straight away.
+            Connections, Couple Questionnaire, Two-Key Escape, Reaction Time
+            and Trivia Drop sessions. Changes here show up on the player-facing
+            section straight away.
           </p>
         </div>
         {mayManage && (
@@ -114,6 +115,7 @@ export const AdminGamesManage = () => {
       {mayManage && <AdminWordleConfig />}
       {mayManage && <AdminAnagramConfig />}
       {mayManage && <AdminCoupleConfig />}
+      {mayManage && <AdminTwoKeyEscapeConfig />}
       {mayManage && <AdminReactionTimeConfig />}
     </div>
   );

@@ -48,6 +48,7 @@ from ..db_models import (
     CoupleGameSessionRecord,
     ReactionTimeGameRecord,
     ScheduledGameContentRecord,
+    TwoKeyEscapeGameRecord,
     WordleGameRecord,
 )
 from ..limits import (
@@ -66,6 +67,7 @@ _GAME_MODELS: dict[str, Any] = {
     "couple-questionnaire": CoupleGameRecord,
     "reaction-time": ReactionTimeGameRecord,
     "connections": ConnectionsGameRecord,
+    "two-key-escape": TwoKeyEscapeGameRecord,
 }
 
 
@@ -449,6 +451,28 @@ def _open_period(
         opened = _open_connections_session(
             session,
             groups=groups,
+            period_start=start,
+            period_end=end,
+            now=moment,
+            created_by="scheduler",
+        )
+        return {
+            "game_id": game_id,
+            "action": "created",
+            "session_id": str(opened.id),
+            "status": opened.status,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        }
+    if game_id == "two-key-escape":
+        # Two-Key Escape: a new global period with a fresh maze template.
+        # The edge length is the stored grid-size configuration (persisted
+        # across periods, defaulting to 12x12); per-couple games are created
+        # lazily on first role submission, so nothing rolls over.
+        from . import two_key_escape_gameplay
+
+        opened = two_key_escape_gameplay.create_global_session(
+            session,
             period_start=start,
             period_end=end,
             now=moment,

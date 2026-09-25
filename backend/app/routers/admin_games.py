@@ -56,6 +56,7 @@ async def update_game_config(
             is_hidden=payload.is_hidden,
             content_mode=payload.content_mode,
             reset_cadence=payload.reset_cadence,
+            grid_size=payload.grid_size,
         )
     )
 

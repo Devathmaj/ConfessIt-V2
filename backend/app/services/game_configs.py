@@ -39,6 +39,7 @@ _GAME_LOCK_KEYS: dict[str, int] = {
     "reaction-time": 7_260_004,
     "connections": 7_260_005,
     "trivia-drop": 7_260_006,
+    "two-key-escape": 7_260_007,
 }
 
 _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
@@ -48,6 +49,13 @@ _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
     "reaction-time": None,
     "connections": "manual",
     "trivia-drop": None,
+    "two-key-escape": None,
+}
+
+# The maze edge length a fresh Two-Key Escape row starts with: 12x12 until an
+# administrator picks otherwise. No other game reads this column.
+_DEFAULT_GRID_SIZE: dict[str, Optional[int]] = {
+    "two-key-escape": 12,
 }
 
 
@@ -90,13 +98,23 @@ def get_config(session, game_id: str) -> GameConfigRecord:
         return row
     session.execute(
         pg_insert(GameConfigRecord)
-        .values(game_id=game_id, content_mode=default_content_mode(game_id))
+        .values(
+            game_id=game_id,
+            content_mode=default_content_mode(game_id),
+            grid_size=_DEFAULT_GRID_SIZE.get(game_id),
+        )
         .on_conflict_do_nothing(index_elements=["game_id"])
     )
     row = session.scalar(
         select(GameConfigRecord).where(GameConfigRecord.game_id == game_id)
     )
     assert row is not None, "the insert-or-nothing must leave the game's row"
+    # A legacy row predating the column reads the default rather than NULL,
+    # so the game is playable before any admin opens its settings.
+    if game_id == "two-key-escape" and row.grid_size is None:
+        from ..limits import TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
+
+        row.grid_size = TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
     return row
 
 
@@ -107,6 +125,7 @@ def _as_dict(row: GameConfigRecord) -> dict:
         "is_hidden": bool(row.is_hidden),
         "content_mode": row.content_mode,
         "reset_cadence": row.reset_cadence,
+        "grid_size": row.grid_size,
     }
 
 
@@ -114,6 +133,16 @@ def list_configs(db: Database) -> list[dict]:
     """Every game's configuration, creating missing rows with defaults."""
     with db.sessions.begin() as session:
         return [_as_dict(get_config(session, game_id)) for game_id in GAME_IDS]
+
+
+def default_grid_size(game_id: str) -> Optional[int]:
+    """The maze edge length a fresh Two-Key Escape row starts with (12x12)."""
+    from ..limits import TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
+
+    validate_game_id(game_id)
+    if game_id != "two-key-escape":
+        return None
+    return _DEFAULT_GRID_SIZE.get(game_id, TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE)
 
 
 def update_config(
@@ -124,6 +153,7 @@ def update_config(
     is_hidden: Optional[bool] = None,
     content_mode: Optional[str] = None,
     reset_cadence: Optional[str] = None,
+    grid_size: Optional[int] = None,
 ) -> dict:
     """Patch one game's configuration, refusing values outside the vocabularies."""
     validate_game_id(game_id)
@@ -164,6 +194,20 @@ def update_config(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Trivia Drop has no reset cadence; questions release individually.",
         )
+    if grid_size is not None:
+        from ..limits import TWO_KEY_ESCAPE_GRID_SIZES
+
+        if game_id != "two-key-escape":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only Two-Key Escape has a grid size.",
+            )
+        if grid_size not in TWO_KEY_ESCAPE_GRID_SIZES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown grid size {grid_size!r}. "
+                f"Expected one of {', '.join(str(size) for size in TWO_KEY_ESCAPE_GRID_SIZES)}.",
+            )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)
         if enabled is not None:
@@ -174,6 +218,14 @@ def update_config(
             row.content_mode = content_mode
         if reset_cadence is not None:
             row.reset_cadence = reset_cadence
+        if grid_size is not None:
+            row.grid_size = grid_size
+        # A legacy row predating the column reads the default rather than
+        # NULL, so the game is playable before any admin opens its settings.
+        if game_id == "two-key-escape" and row.grid_size is None:
+            from ..limits import TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
+
+            row.grid_size = TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
         session.flush()
         return _as_dict(row)
 
