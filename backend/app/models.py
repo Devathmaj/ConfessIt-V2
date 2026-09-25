@@ -1983,6 +1983,39 @@ class TriviaDropLeaderboardEntry(BaseModel):
     selected_indexes: List[int]
 
 
+class TriviaDropMySubmission(BaseModel):
+    """This caller's own settled answer on one question.
+
+    A slice of the leaderboard entry without rank or identity: whether it was
+    correct, how long after release it landed, and the complete selection it
+    carried.
+    """
+
+    is_correct: bool
+    response_time_ms: int
+    submitted_at: datetime
+    selected_indexes: List[int]
+
+
+class TriviaDropPreviousQuestion(BaseModel):
+    """The most recently ended question, with its answer key revealed.
+
+    The key belongs to history once the session ends, so this is public to
+    players -- unlike the live question, which never names it. Empty
+    (``question_id`` null) when no question has ended yet, in which case the
+    screen shows nothing at all.
+    """
+
+    question_id: Optional[str] = None
+    question_text: Optional[str] = None
+    options: List[TriviaDropPublicOption] = []
+    correct_indexes: List[int] = []
+    answer_mode: Optional[TriviaDropAnswerMode] = None
+    released_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    my_submission: Optional[TriviaDropMySubmission] = None
+
+
 class TriviaDropResults(BaseModel):
     """An ended question with its key revealed and its leaderboard settled.
 

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { CheckCircle2, Loader2, Trophy } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { Button } from '@/components/ui/button';
@@ -16,9 +16,11 @@ import {
 import { cn } from '@/lib/utils';
 import {
   getCurrentTrivia,
+  getPreviousTrivia,
   getTriviaResults,
   submitTriviaAnswer,
   type TriviaCurrentQuestion,
+  type TriviaPreviousQuestion,
   type TriviaResults,
 } from '@/services/api';
 
@@ -50,6 +52,11 @@ export const TriviaDropGamePage = () => {
   const [answeredId, setAnsweredId] = useState<string | null>(null);
   const [results, setResults] = useState<TriviaResults | null>(null);
   const [resultsState, setResultsState] = useState<'idle' | 'loading' | 'waiting' | 'ready' | 'error'>('idle');
+  // The most recently ended question, with its answer revealed. Null while
+  // loading, and empty (no question id) when nothing has ended yet -- in
+  // both cases the section below stays hidden. A best-effort read: failing
+  // here must never break the live question above it.
+  const [previous, setPrevious] = useState<TriviaPreviousQuestion | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,7 +78,20 @@ export const TriviaDropGamePage = () => {
 
   useEffect(() => {
     void load();
+    getPreviousTrivia().then(setPrevious).catch(() => {});
   }, [load]);
+
+  // Results load themselves once an answer exists: no button to press, so
+  // there is no dead control -- while the question is live the panel says
+  // so with a working re-check, and once it ends the board appears on its
+  // own. Guarded per question so a new answer re-triggers exactly once.
+  const resultsOpenedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (answeredId && resultsOpenedForRef.current !== answeredId) {
+      resultsOpenedForRef.current = answeredId;
+      void openResults();
+    }
+  });
 
   const choose = (index: number, mode: TriviaAnswerMode) => {
     setSelection((previous) => toggleSelection(previous, index, mode));
@@ -181,12 +201,6 @@ export const TriviaDropGamePage = () => {
               Your answer has been recorded. Results appear here once this
               question ends.
             </p>
-            {answeredId && resultsState === 'idle' && (
-              <Button type="button" variant="outline" onClick={openResults}>
-                <Trophy />
-                View results
-              </Button>
-            )}
             {answeredId && resultsState !== 'idle' && (
               <ResultsPanel
                 state={resultsState}
@@ -199,6 +213,7 @@ export const TriviaDropGamePage = () => {
             </NavLink>
           </CardContent>
         </Card>
+        <PreviousAnswerSection previous={previous} />
       </div>
     );
   }
@@ -223,12 +238,19 @@ export const TriviaDropGamePage = () => {
             </NavLink>
           </CardContent>
         </Card>
+        <PreviousAnswerSection previous={previous} />
       </div>
     );
   }
 
   const mode = question.answer_mode ?? 'single';
   const instruction = instructionForMode(mode);
+  // The current selection as names, in option order -- shown on the confirm
+  // step so a mis-tap is visible before the one submission locks it in.
+  const selectedNames = question.options
+    .filter((option) => selection.includes(option.option_index))
+    .map((option) => option.option_text)
+    .join(', ');
 
   return (
     <div>
@@ -284,7 +306,7 @@ export const TriviaDropGamePage = () => {
                 {submitting
                   ? 'Submitting...'
                   : confirmArmed
-                    ? 'Click again to confirm your answer'
+                    ? `Confirm: ${selectedNames}`
                     : 'SUBMIT ANSWER'}
               </Button>
               {selection.length > 0 && (
@@ -308,8 +330,69 @@ export const TriviaDropGamePage = () => {
             </p>
           </CardContent>
         </Card>
+        <PreviousAnswerSection previous={previous} />
       </div>
     </div>
+  );
+};
+
+/**
+ * The previous round, answered and ended: its question with the correct
+ * options revealed. Renders nothing while loading or when no question has
+ * ended yet -- an empty history is no section, not a placeholder.
+ */
+const PreviousAnswerSection = ({ previous }: { previous: TriviaPreviousQuestion | null }) => {
+  if (!previous || previous.question_id === null) return null;
+  const correctTexts = previous.correct_indexes
+    .map((index) => previous.options.find((option) => option.option_index === index)?.option_text)
+    .filter(Boolean);
+  return (
+    <section aria-label="Previous question" className="mx-auto w-full max-w-2xl">
+      <Card>
+        <CardContent className="flex flex-col gap-3 py-6">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            Previously
+          </p>
+          <h2 className="text-lg font-semibold">{previous.question_text}</h2>
+          <ul className="flex flex-col gap-1 text-sm">
+            {previous.options.map((option) => {
+              const correct = previous.correct_indexes.includes(option.option_index);
+              return (
+                <li key={option.option_index}>
+                  <span className={cn(correct && 'font-semibold')}>{option.option_text}</span>
+                  {correct && (
+                    <span className="whitespace-nowrap text-xs font-bold text-green-600">
+                      {' '}✓ correct
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {correctTexts.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              Answer: <span className="font-semibold text-foreground">{correctTexts.join(', ')}</span>
+            </p>
+          )}
+          {previous.my_submission && (
+            <p className="text-sm">
+              Your answer:{' '}
+              <span
+                className={cn(
+                  'font-semibold',
+                  previous.my_submission.is_correct ? 'text-green-600' : 'text-muted-foreground',
+                )}
+              >
+                {previous.my_submission.is_correct ? 'Correct' : 'Incorrect'}
+              </span>{' '}
+              <span className="font-mono text-muted-foreground">
+                ({formatResponseTime(previous.my_submission.response_time_ms)})
+              </span>
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 };
 
@@ -331,9 +414,14 @@ const ResultsPanel = ({
   }
   if (state === 'waiting') {
     return (
-      <p className="max-w-sm text-sm text-muted-foreground">
-        This question is still live — results appear once it ends.
-      </p>
+      <div className="flex flex-col items-center gap-2">
+        <p className="max-w-sm text-sm text-muted-foreground">
+          This question is still live — results appear once it ends.
+        </p>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Check again
+        </Button>
+      </div>
     );
   }
   if (state === 'error' || !results) {

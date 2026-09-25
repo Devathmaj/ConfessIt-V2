@@ -48,6 +48,7 @@ from ..db_models import (
 from ..limits import TRIVIA_OPTIONS_COUNT
 from ..models import (
     TriviaDropCurrentQuestion,
+    TriviaDropPreviousQuestion,
     TriviaDropResults,
     TriviaDropSubmitResponse,
 )
@@ -253,6 +254,66 @@ def submit_answer(
             question_id=str(question.id),
             submitted=True,
             submitted_at=now,
+        )
+
+
+def previous_trivia(db: Database, user_id: str) -> TriviaDropPreviousQuestion:
+    """The most recently ended question, with its answer key revealed.
+
+    Reading this never creates anything. Ended sessions belong to history,
+    so the key, the options and this caller's own settled answer are all
+    public here -- the opposite rule from the live question, which names
+    none of them. With no ended question yet the answer is empty, and the
+    screen shows nothing at all rather than an invented previous round.
+    Drafts, scheduled and cancelled questions are never candidates; only the
+    live question's predecessor chain counts.
+    """
+    from .game_configs import check_playable
+
+    with db.sessions.begin() as session:
+        check_playable(session, "trivia-drop")
+    with db.sessions() as session:
+        previous = session.scalar(
+            select(TriviaDropQuestionRecord)
+            .where(TriviaDropQuestionRecord.status == "ended")
+            .order_by(
+                TriviaDropQuestionRecord.ended_at.desc(),
+                TriviaDropQuestionRecord.created_at.desc(),
+            )
+            .limit(1)
+        )
+        if previous is None:
+            return TriviaDropPreviousQuestion()
+        options = _options_for(session, str(previous.id))
+        correct = sorted(_correct_set(options))
+        row = session.scalar(
+            select(TriviaDropSubmissionRecord).where(
+                TriviaDropSubmissionRecord.question_id == previous.id,
+                TriviaDropSubmissionRecord.user_id == user_id,
+            )
+        )
+        mine = (
+            {
+                "is_correct": bool(row.is_correct),
+                "response_time_ms": row.response_time_ms,
+                "submitted_at": row.submitted_at,
+                "selected_indexes": sorted(row.selected_options),
+            }
+            if row is not None
+            else None
+        )
+        return TriviaDropPreviousQuestion(
+            question_id=str(previous.id),
+            question_text=previous.question_text,
+            options=[
+                {"option_index": option.option_index, "option_text": option.option_text}
+                for option in options
+            ],
+            correct_indexes=correct,
+            answer_mode=answer_mode_for(len(correct)),
+            released_at=previous.released_at,
+            ended_at=previous.ended_at,
+            my_submission=mine,
         )
 
 

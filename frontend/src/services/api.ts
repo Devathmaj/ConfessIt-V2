@@ -1775,6 +1775,37 @@ export const submitTriviaAnswer = async (
     return response.data;
 };
 
+/** This caller's own settled answer on one question. */
+export interface TriviaMySubmission {
+    is_correct: boolean;
+    response_time_ms: number;
+    submitted_at: string;
+    selected_indexes: number[];
+}
+
+/**
+ * The most recently ended question, with its answer key revealed. Empty
+ * (`question_id` null) when no question has ended yet.
+ */
+export interface TriviaPreviousQuestion {
+    question_id: string | null;
+    question_text: string | null;
+    options: TriviaPublicOption[];
+    correct_indexes: number[];
+    answer_mode: TriviaAnswerMode | null;
+    released_at: string | null;
+    ended_at: string | null;
+    my_submission: TriviaMySubmission | null;
+}
+
+/** The most recently ended question with its answer. Empty when none has ended. */
+export const getPreviousTrivia = async (): Promise<TriviaPreviousQuestion> => {
+    const response = await axios.get(`${API_URL}/games/trivia-drop/previous`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 /** One ended question's results and leaderboard. Refused while it is live. */
 export const getTriviaResults = async (questionId: string): Promise<TriviaResults> => {
     const response = await axios.get(`${API_URL}/games/trivia-drop/results/${questionId}`, {

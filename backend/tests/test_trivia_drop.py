@@ -1091,7 +1091,108 @@ def test_unknown_and_unreleased_questions_have_no_results(db):
     assert client.get(f"/games/trivia-drop/results/{draft['id']}").status_code == 404
 
 
-# --- 5. selection scope --------------------------------------------------------------
+# --- 5. previous question --------------------------------------------------------------
+
+
+def test_previous_is_empty_when_nothing_has_ended(db):
+    user = make_player(db, PLAYER_UUID, "triviaprevnone")
+    client = make_player_client(user)
+    body = client.get("/games/trivia-drop/previous").json()
+    assert body["question_id"] is None
+    assert body["options"] == []
+    assert body["my_submission"] is None
+
+    # A live question is not a previous one: still nothing to show.
+    seed_question(db)
+    assert client.get("/games/trivia-drop/previous").json()["question_id"] is None
+
+
+def test_previous_returns_the_latest_ended_question_with_its_answer(db):
+    admin = make_admin_client()
+    user = make_player(db, PLAYER_UUID, "triviaprev")
+    client = make_player_client(user)
+
+    _set_admin()
+    first = admin.post(
+        "/admin/trivia-drop",
+        json={
+            "question_text": "First?",
+            "options": OPTIONS,
+            "correct_indexes": [1],
+            "release_mode": "now",
+        },
+    ).json()
+    _set_user(user)
+    assert (
+        client.post(
+            "/games/trivia-drop/submit",
+            json={"question_id": first["id"], "selected_indexes": [1]},
+        ).status_code
+        == 200
+    )
+    _set_admin()
+    admin.post(
+        "/admin/trivia-drop",
+        json={
+            "question_text": "Second?",
+            "options": MULTI_OPTIONS,
+            "correct_indexes": [0, 2],
+            "release_mode": "now",
+        },
+    )
+    _set_user(user)
+    previous = client.get("/games/trivia-drop/previous").json()
+    assert previous["question_id"] == first["id"]
+    assert previous["question_text"] == "First?"
+    assert previous["correct_indexes"] == [1]
+    assert [option["option_text"] for option in previous["options"]] == OPTIONS
+    assert previous["my_submission"]["is_correct"] is True
+    assert previous["my_submission"]["selected_indexes"] == [1]
+    assert previous["my_submission"]["response_time_ms"] >= 0
+
+
+def test_previous_picks_the_latest_by_end_time(db):
+    user = make_player(db, PLAYER_UUID, "triviaprevorder")
+    client = make_player_client(user)
+    now = datetime.now(timezone.utc)
+    seed_question(
+        db,
+        text_body="Older?",
+        status="ended",
+        released_at=now - timedelta(hours=3),
+        ended_at=now - timedelta(hours=2),
+    )
+    newer = seed_question(
+        db,
+        text_body="Newer?",
+        options=MULTI_OPTIONS,
+        correct=[3],
+        status="ended",
+        released_at=now - timedelta(hours=1),
+        ended_at=now - timedelta(minutes=30),
+    )
+    previous = client.get("/games/trivia-drop/previous").json()
+    assert previous["question_id"] == newer["id"]
+    assert previous["correct_indexes"] == [3]
+    assert previous["my_submission"] is None
+
+
+def test_previous_respects_availability(db):
+    admin = make_admin_client()
+    user = make_player(db, PLAYER_UUID, "triviaprevhidden")
+    client = make_player_client(user)
+    seed_question(
+        db,
+        status="ended",
+        released_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    set_config(admin, "trivia-drop", {"is_hidden": True})
+    _set_user(user)
+    assert client.get("/games/trivia-drop/previous").status_code == 403
+
+
+# --- 6. selection scope --------------------------------------------------------------
 
 
 def test_selection_discovery_and_availability(db):

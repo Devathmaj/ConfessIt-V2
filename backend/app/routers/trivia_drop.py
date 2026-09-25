@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from ..dependencies import get_db
 from ..models import (
     TriviaDropCurrentQuestion,
+    TriviaDropPreviousQuestion,
     TriviaDropResults,
     TriviaDropSubmitRequest,
     TriviaDropSubmitResponse,
@@ -57,6 +58,20 @@ async def submit(
     return trivia_gameplay.submit_answer(
         db, user.id, payload.question_id, list(payload.selected_indexes)
     )
+
+
+@router.get("/previous", response_model=TriviaDropPreviousQuestion)
+async def previous(
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> TriviaDropPreviousQuestion:
+    """The most recently ended question, with its answer key revealed.
+
+    Reading this never creates anything. Ended sessions belong to history, so
+    the key is public here; with no ended question yet the answer is empty
+    and the screen shows nothing at all.
+    """
+    return trivia_gameplay.previous_trivia(db, user.id)
 
 
 @router.get("/results/{question_id}", response_model=TriviaDropResults)

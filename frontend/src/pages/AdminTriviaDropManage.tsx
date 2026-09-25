@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { ArrowLeft, CircleHelp, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, CircleHelp, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { AdminGameStatusControls } from '@/components/AdminGameStatusControls';
 import { Badge } from '@/components/ui/badge';
@@ -673,6 +673,7 @@ export const AdminTriviaDropManage = () => {
             questions={history}
             loading={loading}
             listError={listError}
+            startCollapsed
             renderActions={(question) => (
               <span className="text-xs text-muted-foreground">
                 {question.status === 'ended'
@@ -695,6 +696,7 @@ const QuestionGroup = ({
   listError,
   renderActions,
   renderExpanded,
+  startCollapsed = false,
 }: {
   title: string;
   empty: string;
@@ -703,15 +705,35 @@ const QuestionGroup = ({
   listError: string | null;
   renderActions: (question: TriviaQuestion) => React.ReactNode;
   renderExpanded?: (question: TriviaQuestion) => React.ReactNode;
-}) => (
+  /** Collapse the list behind a Show/Hide toggle -- for groups like History
+   * that grow without bound while the working controls stay above them. */
+  startCollapsed?: boolean;
+}) => {
+  const [open, setOpen] = useState(!startCollapsed);
+  return (
   <div className="flex flex-col gap-3 border-t border-border/40 pt-4">
     <div className="flex items-center justify-between gap-3">
       <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </h4>
-      <span className="text-xs text-muted-foreground">
-        {loading ? 'Loading...' : `${questions.length}`}
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">
+          {loading ? 'Loading...' : `${questions.length}`}
+        </span>
+        {startCollapsed && questions.length > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            aria-label={open ? `Hide ${title.toLowerCase()}` : `Show ${title.toLowerCase()}`}
+          >
+            {open ? <ChevronUp /> : <ChevronDown />}
+            {open ? 'Hide' : 'Show'}
+          </Button>
+        )}
+      </div>
     </div>
     {listError && (
       <p role="alert" className="text-sm font-medium text-destructive">
@@ -721,7 +743,7 @@ const QuestionGroup = ({
     {!loading && !listError && questions.length === 0 && (
       <p className="text-sm text-muted-foreground">{empty}</p>
     )}
-    {questions.length > 0 && (
+    {open && questions.length > 0 && (
       <ul className="flex flex-col gap-2">
         {questions.map((question) => (
           <li
@@ -754,6 +776,7 @@ const QuestionGroup = ({
       </ul>
     )}
   </div>
-);
+  );
+};
 
 export default AdminTriviaDropManage;
