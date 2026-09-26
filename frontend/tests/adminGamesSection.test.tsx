@@ -301,9 +301,12 @@ describe('AdminGamesDashboard: the front page', () => {
     expect(screen.getAllByText(featured.game.name).length).toBeGreaterThan(0);
     expect(screen.getByText(featured.explicit ? 'Pinned' : 'Rotation')).toBeInTheDocument();
 
-    // The seeded activity the dashboard opens with, newest first.
-    expect(screen.getByText('Weekly leaderboard standings recalculated')).toBeInTheDocument();
-    expect(screen.getByText('Games catalogue synchronised with the player-facing section')).toBeInTheDocument();
+    // The seeded activity the dashboard opens with names today's pick.
+    expect(
+      screen.getByText(`${featured.game.name} set as today's featured game`),
+    ).toBeInTheDocument();
+    // Play-derived figures are empty until telemetry exists.
+    expect(screen.getByText('No standings yet. They appear here once a leaderboard backend exists.')).toBeInTheDocument();
   });
 });
 
@@ -420,7 +423,7 @@ describe('AdminGamesManage: the Reaction Time card', () => {
 });
 
 describe('AdminGamesLeaderboard: the board and its destructive actions', () => {
-  it('shows the standings with the filters and controls an administrator acts on', () => {
+  it('shows the filters with an empty board until a backend exists', () => {
     renderSection('/admin/games/leaderboard');
 
     expect(screen.getByRole('heading', { name: 'Leaderboard' })).toBeInTheDocument();
@@ -430,14 +433,10 @@ describe('AdminGamesLeaderboard: the board and its destructive actions', () => {
     expect(screen.getByText('Incomplete')).toBeInTheDocument();
     expect(screen.getAllByRole('combobox')).toHaveLength(3);
     expect(screen.getAllByText(/Every game on one board/)[0]).toBeInTheDocument();
-
-    const rows = rowActionCount();
-    expect(rows).toBeGreaterThan(3);
-    expect(within(standings()).getAllByRole('button', { name: /inspect/i })).toHaveLength(rows);
-    expect(within(standings()).getAllByRole('button', { name: /reset player/i })).toHaveLength(rows);
+    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
   });
 
-  it('narrows the board to a single title when the scope changes', async () => {
+  it('keeps the single-title scope without any rows to narrow', async () => {
     renderSection('/admin/games/leaderboard');
 
     await chooseOption(0, 'Game');
@@ -446,73 +445,15 @@ describe('AdminGamesLeaderboard: the board and its destructive actions', () => {
       expect(screen.getAllByText(/Standings for a single title/)[0]).toBeInTheDocument();
     });
     expect(screen.queryByText('Game type')).not.toBeInTheDocument();
-    // Every row now reports the one title asked for, re-ranked from the top.
-    const gameName = AVAILABLE_GAMES[0].name;
-    await waitFor(() => {
-      expect(within(standings()).getAllByText(new RegExp(`^${gameName} · `))).toHaveLength(
-        rowActionCount(),
-      );
-    });
+    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
   });
 
-  it('takes a score down only after the removal is confirmed', async () => {
-    renderSection('/admin/games/leaderboard');
-    await waitFor(() => expect(screen.getByRole('region', { name: 'Standings' })).toBeInTheDocument());
-    await waitFor(() =>
-      expect(
-        within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length,
-      ).toBeGreaterThan(0),
-    );
-    const before = within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length;
-
-    fireEvent.click(within(standings()).getAllByRole('button', { name: /remove score/i })[0]);
-    const dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByText(/will be taken down/)).toBeInTheDocument();
-    expect(within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length).toBe(before);
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
-    expect(within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length).toBe(before);
-
-    fireEvent.click(within(standings()).getAllByRole('button', { name: /remove score/i })[0]);
-    const reopened = await screen.findByRole('alertdialog');
-    fireEvent.click(within(reopened).getByRole('button', { name: /remove score/i }));
-
-    await waitFor(() => expect(within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length).toBe(before - 1));
-    expect(toast.success).toHaveBeenCalledWith(
-      expect.stringMatching(/score on .* removed\.$/),
-    );
-  });
-
-  it('resets the board behind its own confirmation, and restores it on request', async () => {
-    renderSection('/admin/games/leaderboard');
-    const before = rowActionCount();
-
-    fireEvent.click(screen.getByRole('button', { name: /reset leaderboard/i }));
-    const dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByText(/will be cleared/)).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /reset leaderboard/i }));
-    await waitFor(() => expect(rowActionCount()).toBe(0));
-    expect(toast.success).toHaveBeenCalledWith('Leaderboard reset for these filters.');
-    expect(screen.getByText('The leaderboard was reset for these filters.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /restore standings/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /restore standings/i }));
-    await waitFor(() => expect(rowActionCount()).toBe(before));
-  });
-
-  it('opens the full standing behind a row for inspection', async () => {
+  it('leaves reset unavailable on an empty board', () => {
     renderSection('/admin/games/leaderboard');
 
-    fireEvent.click(within(standings()).getAllByRole('button', { name: /inspect/i })[0]);
-    const dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByText('Sessions')).toBeInTheDocument();
-    expect(within(dialog).getByText('Rank trend')).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /close/i }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
-    expect(rowActionCount()).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /reset leaderboard/i })).toBeDisabled();
+    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });
 

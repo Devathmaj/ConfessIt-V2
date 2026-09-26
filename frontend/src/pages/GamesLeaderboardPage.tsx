@@ -25,10 +25,9 @@ import { cn } from '@/lib/utils';
 /**
  * Leaderboards.
  *
- * Two filter dimensions -- a time scope and a game -- both run entirely on the frontend over
- * src/lib/gamesLeaderboard. The page only ever asks that module for entries matching the
- * current filters, so a real API can take its place without the UI changing: the controls,
- * podium, rows and empty state are all shaped around the single query result.
+ * Scope and game filters select from the leaderboard query; with no
+ * leaderboard backend the boards are empty and the page shows its empty
+ * state.
  */
 
 const RANK_ACCENTS = ['bg-gradient-hero', 'bg-gradient-romantic', 'bg-gradient-passion'];
@@ -220,7 +219,7 @@ export const GamesLeaderboardPage = () => {
       )}
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
-        Rankings are preview data for now and go live with the games backend.
+        Standings go live with the games leaderboard backend.
       </p>
     </div>
   );

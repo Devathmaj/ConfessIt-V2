@@ -31,10 +31,8 @@ const ACTIVITY_LABELS: Record<GamesActivityKind, string> = {
  * The section's front page: availability, today's spotlight, this week's play and a way into
  * the two screens that do the actual work.
  *
- * Every number is derived -- from the live configuration, the mock play table or the shared
- * leaderboard query -- rather than stored here, so the tiles cannot drift from what the manage
- * and leaderboard screens show. It is the only admin screen that reads the activity log, which
- * is where every action taken anywhere in the section surfaces.
+ * Catalogue counts come from the live configuration. Play-derived figures
+ * stay empty until telemetry exists on the backend.
  */
 export const AdminGamesDashboard = () => {
   const { config, activity, featured, isEnabled } = useGamesConfig();
@@ -155,26 +153,32 @@ export const AdminGamesDashboard = () => {
             <CardHeader>
               <CardTitle className="text-xl">Recent activity</CardTitle>
               <CardDescription>
-                Configuration changes made in this session, plus the nightly housekeeping.
+                Featured picks and configuration changes made in this session.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {activity.slice(0, 6).map((entry) => (
-                <div
-                  key={entry.id}
-                  className="flex items-start justify-between gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0"
-                >
-                  <div className="min-w-0">
-                    <Badge variant="outline" className="mb-1.5 text-[10px] uppercase tracking-wider">
-                      {ACTIVITY_LABELS[entry.kind]}
-                    </Badge>
-                    <p className="truncate text-sm">{entry.message}</p>
+              {activity.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">
+                  No activity yet. Featured picks and admin actions appear here.
+                </p>
+              ) : (
+                activity.slice(0, 6).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-start justify-between gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0"
+                  >
+                    <div className="min-w-0">
+                      <Badge variant="outline" className="mb-1.5 text-[10px] uppercase tracking-wider">
+                        {ACTIVITY_LABELS[entry.kind]}
+                      </Badge>
+                      <p className="truncate text-sm">{entry.message}</p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatActivityTime(entry.at)}
+                    </span>
                   </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatActivityTime(entry.at)}
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </CardContent>
           </Card>
         </div>
@@ -289,7 +293,12 @@ export const AdminGamesDashboard = () => {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {snapshot.map((row) => (
+          {snapshot.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              No standings yet. They appear here once a leaderboard backend exists.
+            </p>
+          ) : (
+            snapshot.map((row) => (
             <div key={row.playerId} className="flex items-center gap-3">
               <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums">
                 {row.rank}
@@ -307,7 +316,8 @@ export const AdminGamesDashboard = () => {
                 {row.score.toLocaleString()}
               </span>
             </div>
-          ))}
+            ))
+          )}
         </CardContent>
       </Card>
     </div>

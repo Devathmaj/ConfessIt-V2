@@ -10,7 +10,6 @@ import {
   Target,
   Trophy,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { Button } from '@/components/ui/button';
@@ -25,26 +24,21 @@ import {
   summarizeCurrentUser,
   ALL_GAMES_FILTER,
 } from '@/lib/gamesLeaderboard';
-import { MOCK_PLAYER_STATS, MOCK_RECENTLY_PLAYED, MOCK_WEEKLY_CHALLENGE } from '@/lib/gamesStats';
+import { MOCK_RECENTLY_PLAYED } from '@/lib/gamesStats';
 
 /**
  * The Games dashboard: the landing screen of the section.
  *
- * Everything is prototype data pulled from src/lib/gamesStats and src/lib/gamesLeaderboard,
- * so the layout is stable while the numbers are fake. Points and rank are read from the same
- * leaderboard query the leaderboard page uses, which keeps the two screens in agreement and
- * leaves one function to replace when a real backend exists.
+ * Quick access and the featured spotlight read the real catalogue and the
+ * shared configuration. Stats, streaks, challenges and leaderboard teasers
+ * stay empty until their backends exist.
  */
 
-/** Plays a game: navigate to its screen when one exists, toast until it does. */
+/** Plays a game: every catalogued game has a real screen behind its route. */
 const useLaunchPlay = () => {
   const navigate = useNavigate();
   return (game: GameDefinition) => {
-    if (game.route) {
-      navigate(game.route);
-    } else {
-      toast(`${game.name} opens here once its game screen lands 🎮`);
-    }
+    navigate(game.route);
   };
 };
 
@@ -63,9 +57,6 @@ export const GamesDashboardPage = () => {
     (game) => game.status === 'available' && isEnabled(game.id),
   ).slice(0, 4);
   const firstName = user?.name?.trim().split(' ')[0];
-  const challengePercent = Math.round(
-    (MOCK_WEEKLY_CHALLENGE.current / MOCK_WEEKLY_CHALLENGE.target) * 100,
-  );
 
   return (
     <div>
@@ -91,12 +82,12 @@ export const GamesDashboardPage = () => {
         }
       />
 
-      {/* Stat strip */}
+      {/* Stat strip: leaderboard-backed figures only; the rest is empty until telemetry exists. */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard
           label="Points"
-          value={(summary?.score ?? MOCK_PLAYER_STATS.points).toLocaleString()}
-          hint="+320 this week"
+          value={summary ? summary.score.toLocaleString() : '—'}
+          hint={summary ? 'All-time standings' : 'No standings yet'}
           icon={Star}
           accent="bg-gradient-romantic"
         />
@@ -109,15 +100,15 @@ export const GamesDashboardPage = () => {
         />
         <StatCard
           label="Current streak"
-          value={`${MOCK_PLAYER_STATS.currentStreakDays} days`}
-          hint={`Longest: ${MOCK_PLAYER_STATS.longestStreakDays} days`}
+          value="—"
+          hint="No streak data yet"
           icon={Flame}
           accent="bg-gradient-passion"
         />
         <StatCard
           label="Games played"
-          value={MOCK_PLAYER_STATS.gamesPlayed}
-          hint={`${MOCK_PLAYER_STATS.gamesPlayedThisWeek} this week · ${MOCK_PLAYER_STATS.winRate}% win rate`}
+          value="—"
+          hint="No play history yet"
           icon={Gamepad2}
           accent="bg-gradient-love"
         />
@@ -246,27 +237,19 @@ export const GamesDashboardPage = () => {
             </CardContent>
           </Card>
 
-          {/* Weekly challenge */}
+          {/* Weekly challenge: empty until challenges exist on the backend. */}
           <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base font-bold">
                 <Target className="h-4 w-4 text-romantic" />
                 Weekly challenge
               </CardTitle>
-              <CardDescription>{MOCK_WEEKLY_CHALLENGE.label}</CardDescription>
+              <CardDescription>No weekly challenge right now</CardDescription>
             </CardHeader>
             <CardContent>
-              <Progress value={challengePercent} className="h-2.5 rounded-full" />
+              <Progress value={0} className="h-2.5 rounded-full" />
               <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>
-                  {MOCK_WEEKLY_CHALLENGE.current} of {MOCK_WEEKLY_CHALLENGE.target}{' '}
-                  {MOCK_WEEKLY_CHALLENGE.unit}
-                </span>
-                {MOCK_WEEKLY_CHALLENGE.reward && (
-                  <span className="font-semibold text-romantic">
-                    {MOCK_WEEKLY_CHALLENGE.reward}
-                  </span>
-                )}
+                <span>Check back once challenges go live</span>
               </div>
             </CardContent>
           </Card>
@@ -286,29 +269,35 @@ export const GamesDashboardPage = () => {
               <CardDescription>Global all-time standings.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {globalBoard.slice(0, 3).map((entry) => (
-                <div
-                  key={entry.playerId}
-                  className={`flex items-center gap-3 rounded-xl border p-2.5 ${
-                    entry.isCurrentUser
-                      ? 'border-romantic/50 bg-romantic/10'
-                      : 'border-border/50 bg-background/40'
-                  }`}
-                >
-                  <span className="w-5 text-center text-xs font-extrabold tabular-nums text-muted-foreground">
-                    {entry.rank}
-                  </span>
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
-                    {entry.monogram}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                    {entry.displayName}
-                  </span>
-                  <span className="text-sm font-bold tabular-nums">
-                    {entry.score.toLocaleString()}
-                  </span>
-                </div>
-              ))}
+              {globalBoard.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">
+                  No standings yet. Be the first to play.
+                </p>
+              ) : (
+                globalBoard.slice(0, 3).map((entry) => (
+                  <div
+                    key={entry.playerId}
+                    className={`flex items-center gap-3 rounded-xl border p-2.5 ${
+                      entry.isCurrentUser
+                        ? 'border-romantic/50 bg-romantic/10'
+                        : 'border-border/50 bg-background/40'
+                    }`}
+                  >
+                    <span className="w-5 text-center text-xs font-extrabold tabular-nums text-muted-foreground">
+                      {entry.rank}
+                    </span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
+                      {entry.monogram}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {entry.displayName}
+                    </span>
+                    <span className="text-sm font-bold tabular-nums">
+                      {entry.score.toLocaleString()}
+                    </span>
+                  </div>
+                ))
+              )}
             </CardContent>
           </Card>
         </div>

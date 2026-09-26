@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { Gamepad2, Sparkles } from 'lucide-react';
-import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,17 +12,9 @@ import { getFeaturedToday } from '@/services/api';
 /**
  * Today's featured game.
  *
- * Deliberately lightweight: one mini-game in the spotlight for the day, in the spirit of a
- * daily puzzle rotation. There is no artwork or marketing copy to lean on yet, so the page is
- * built around the pick itself, a reset countdown and a single obvious way to play.
+ * The server's spotlight (`GET /games/featured`) resolved against the real
+ * catalogue. Empty until a game is featured.
  */
-
-/** Mock engagement numbers until play events exist on the backend. */
-const FEATURED_TODAY_STATS = {
-  playsToday: 1204,
-  yourBest: 480,
-  averageScore: 312,
-};
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -88,11 +79,7 @@ export const GamesFeaturedPage = () => {
         : undefined;
 
   const notifyPlay = (current: GameDefinition) => {
-    if (current.route) {
-      navigate(current.route);
-    } else {
-      toast(`${current.name} opens here once its game screen lands 🎮`);
-    }
+    navigate(current.route);
   };
 
   if (!game) {
@@ -168,33 +155,6 @@ export const GamesFeaturedPage = () => {
           <p className="text-sm leading-relaxed text-muted-foreground sm:text-base">
             {game.tagline} Play it today before the spotlight moves on to another game.
           </p>
-
-          <div className="grid grid-cols-3 overflow-hidden rounded-2xl border border-border/60 bg-background/40 text-center">
-            <div className="p-3 sm:p-4">
-              <p className="text-lg font-extrabold tabular-nums sm:text-xl">
-                {FEATURED_TODAY_STATS.playsToday.toLocaleString()}
-              </p>
-              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Plays today
-              </p>
-            </div>
-            <div className="border-x border-border/60 p-3 sm:p-4">
-              <p className="text-lg font-extrabold tabular-nums sm:text-xl">
-                {FEATURED_TODAY_STATS.yourBest}
-              </p>
-              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Your best
-              </p>
-            </div>
-            <div className="p-3 sm:p-4">
-              <p className="text-lg font-extrabold tabular-nums sm:text-xl">
-                {FEATURED_TODAY_STATS.averageScore}
-              </p>
-              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Avg. score
-              </p>
-            </div>
-          </div>
 
           <Button
             type="button"

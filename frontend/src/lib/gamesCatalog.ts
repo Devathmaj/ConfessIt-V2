@@ -1,28 +1,18 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   CircleHelp,
-  Gift,
   Grid3x3,
-  Heart,
   HeartHandshake,
-  MessageCircle,
-  Scale,
   Shuffle,
-  Smile,
-  Star,
   Timer,
 } from 'lucide-react';
 
 /**
  * The catalogue of games the Games section can show.
  *
- * Everything the Games UI knows about a game lives here so that adding a title later is a
- * data change rather than a UI change: the dashboard quick-access grid, the selection page
- * grid, the featured picker and the leaderboard's game filter all read from the same list.
- *
- * This is prototype data. Nothing here is fetched, so the shapes are deliberately small and
- * close to what a future API would return -- swapping the constants for a request should not
- * require touching any component that renders them.
+ * Only games with a real backend session lifecycle and a real game screen
+ * are listed here. There is no placeholder or coming-soon data: a game is
+ * either playable through its route or it is absent from this list.
  */
 
 export type GameCategoryId =
@@ -56,11 +46,11 @@ export const GAME_TYPES: GameType[] = [
 ];
 
 /**
- * `available` games are selectable today (the game screen itself does not exist yet, so the
- * Play action is still a placeholder toast). `coming-soon` games render in a muted state so
- * the catalogue can advertise titles that are not ready without the page looking broken.
+ * Playable now through a real game screen and a real session lifecycle.
+ * Games without an implementation are absent rather than listed as
+ * coming soon.
  */
-export type GameStatus = 'available' | 'coming-soon';
+export type GameStatus = 'available';
 
 export interface GameDefinition {
   id: string;
@@ -77,8 +67,8 @@ export interface GameDefinition {
   /** Tailwind gradient class used for the game's icon tile. */
   accent: string;
   status: GameStatus;
-  /** The app route a Play action navigates to, when the game screen exists. Absent for titles whose screen is still a placeholder. */
-  route?: string;
+  /** The app route a Play action navigates to. Every catalogued game has one. */
+  route: string;
 }
 
 export interface GameCategory {
@@ -193,97 +183,6 @@ export const AVAILABLE_GAMES: GameDefinition[] = [
     status: 'available',
     route: '/games/trivia-drop',
   },
-  {
-    id: 'truth-dare',
-    name: 'Truth or Dare',
-    tagline: 'The classic, with a romantic twist every round.',
-    category: 'party',
-    type: 'couple',
-    difficulty: 'easy',
-    players: '2–6 players',
-    duration: '~5 min',
-    icon: Heart,
-    accent: 'bg-gradient-romantic',
-    status: 'available',
-  },
-  {
-    id: 'compatibility-quiz',
-    name: 'Compatibility Quiz',
-    tagline: 'Answer together and see how well you match.',
-    category: 'trivia',
-    type: 'couple',
-    difficulty: 'medium',
-    players: '2 players',
-    duration: '~4 min',
-    icon: Star,
-    accent: 'bg-gradient-love',
-    status: 'available',
-  },
-  {
-    id: 'love-letter-builder',
-    name: 'Love Letter Builder',
-    tagline: 'Take turns building one letter, line by line.',
-    category: 'wordplay',
-    type: 'couple',
-    difficulty: 'easy',
-    players: '2 players',
-    duration: '~6 min',
-    icon: MessageCircle,
-    accent: 'bg-gradient-passion',
-    status: 'available',
-  },
-  {
-    id: 'hearts-memory-match',
-    name: 'Hearts Memory Match',
-    tagline: 'Flip and find the pairs before the timer runs out.',
-    category: 'memory',
-    type: 'single',
-    difficulty: 'hard',
-    players: 'Solo',
-    duration: '~3 min',
-    icon: Gift,
-    accent: 'bg-gradient-hero',
-    status: 'available',
-  },
-  {
-    id: 'would-you-rather',
-    name: 'Would You Rather?',
-    tagline: 'Two awkward choices, one winner per round.',
-    category: 'icebreaker',
-    type: 'couple',
-    difficulty: 'easy',
-    players: '2–4 players',
-    duration: '~4 min',
-    icon: Scale,
-    accent: 'bg-gradient-love',
-    status: 'available',
-  },
-  {
-    id: 'emoji-decoded',
-    name: 'Emoji Decoded',
-    tagline: 'Read the emoji chain, guess the phrase.',
-    category: 'trivia',
-    type: 'single',
-    difficulty: 'medium',
-    players: 'Solo',
-    duration: '~2 min',
-    icon: Smile,
-    accent: 'bg-gradient-romantic',
-    status: 'coming-soon',
-  },
-  {
-    id: 'sweet-nothings-sprint',
-    name: 'Sweet Nothings Sprint',
-    tagline: 'Type the most compliments before the clock hits zero.',
-    category: 'wordplay',
-    type: 'single',
-    difficulty: 'hard',
-    players: 'Solo',
-    duration: '~90 sec',
-    icon: Timer,
-    accent: 'bg-gradient-passion',
-    status: 'coming-soon',
-  },
 ];
 
 export const getGameById = (gameId: string): GameDefinition | undefined =>
@@ -315,8 +214,8 @@ export const featuredGameFrom = (
 
 /**
  * Picks "today's featured game" the same way every time the page is opened on the same day:
- * the day number rotates through the catalogue. A future backend can replace this with a
- * stored daily pick and callers will not notice, because the return shape is unchanged.
+ * the day number rotates through the catalogue. A server-backed spotlight replaces this;
+ * it is kept only as a fallback for renders without server data.
  */
-export const getFeaturedGame = (now: Date = new Date()): GameDefinition =>
-  featuredGameFrom(AVAILABLE_GAMES, now) ?? AVAILABLE_GAMES[0];
+export const getFeaturedGame = (now: Date = new Date()): GameDefinition | undefined =>
+  featuredGameFrom(AVAILABLE_GAMES, now);

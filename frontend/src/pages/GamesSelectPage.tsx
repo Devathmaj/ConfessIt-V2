@@ -24,18 +24,15 @@ const SERVER_MANAGED_IDS = new Set([
   'reaction-time',
   'connections',
   'trivia-drop',
+  'two-key-escape',
 ]);
 
 /**
  * Game selection.
  *
- * The grid is rendered entirely from the catalogue in src/lib/gamesCatalog: adding a game is
- * a data change, and the category chips derive their counts from the same list, so this page
- * never needs restructuring as the library grows. Availability comes from the shared
- * configuration, so a title an administrator switched off on the manage screen leaves this
- * grid -- and the chip counts -- without this page knowing where the switch lives. Play
- * navigates to the game's screen when the catalogue carries a route, and falls back to a
- * placeholder toast for titles whose screen does not exist yet.
+ * The grid renders the real catalogue; availability for server-managed
+ * games comes from `GET /games/select`. Every catalogued game has a real
+ * screen behind its route.
  */
 
 type CategoryFilter = 'all' | GameCategoryId;
@@ -70,11 +67,7 @@ export const GamesSelectPage = () => {
       toast(server.message ?? `${game.name} is not available right now.`);
       return;
     }
-    if (game.route) {
-      navigate(game.route);
-    } else {
-      toast(`${game.name} opens here once its game screen lands 🎮`);
-    }
+    navigate(game.route);
   };
 
   const liveGames = useMemo(

@@ -77,15 +77,9 @@ const TrendIndicator = ({ delta }: { delta: number }) => {
 /**
  * The administrative leaderboard: standings with the columns and the controls.
  *
- * Filters are two dimensions -- scope and period -- rather than the player board's one list of
- * scopes, because the admin questions are "which game" and "since when" separately, and the
- * game selector only appears when it means something. Narrowing the global board to Single or
- * Couple re-ranks what is left, so positions still read 1, 2, 3...
- *
- * Removals are session state on top of the deterministic query: this prototype cannot delete a
- * score from a synthesiser, so the board is the query minus what this admin has removed, and
- * the actions log themselves into the shared activity feed the overview screen reads. When a
- * backend arrives, the same three buttons become three requests and the filtering disappears.
+ * Filters are two dimensions -- scope and period -- and the game selector
+ * only appears when it means something. The board is empty until a
+ * leaderboard backend exists.
  */
 export const AdminGamesLeaderboard = () => {
   const { logActivity } = useGamesConfig();
@@ -438,7 +432,7 @@ export const AdminGamesLeaderboard = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>{inspecting?.displayName ?? ''}</AlertDialogTitle>
             <AlertDialogDescription>
-              The full standing behind this row, as the synthesiser reports it.
+              The full standing behind this row.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {inspecting && (

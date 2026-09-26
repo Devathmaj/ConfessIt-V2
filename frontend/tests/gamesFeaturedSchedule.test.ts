@@ -12,7 +12,6 @@ import {
 } from '@/lib/gamesFeaturedSchedule';
 import { AVAILABLE_GAMES, featuredGameFrom, getFeaturedGame } from '@/lib/gamesCatalog';
 import {
-  GAME_SETTING_DEFINITIONS,
   eligibleFeaturedGames,
   initialGamesConfig,
   isGameEnabled,
@@ -73,25 +72,25 @@ describe('gamesFeaturedSchedule: the day a pick belongs to', () => {
 
 describe('gamesFeaturedSchedule: the schedule as data', () => {
   it('pins a day without mutating the schedule it was given', () => {
-    const schedule = withFeaturedGame({}, '2026-10-08', 'truth-dare');
-    const next = withFeaturedGame(schedule, '2026-10-09', 'hearts-memory-match');
+    const schedule = withFeaturedGame({}, '2026-10-08', 'wordle');
+    const next = withFeaturedGame(schedule, '2026-10-09', 'anagram');
 
-    expect(schedule).toEqual({ '2026-10-08': 'truth-dare' });
-    expect(featuredGameIdFor(next, '2026-10-09')).toBe('hearts-memory-match');
+    expect(schedule).toEqual({ '2026-10-08': 'wordle' });
+    expect(featuredGameIdFor(next, '2026-10-09')).toBe('anagram');
     expect(featuredGameIdFor(schedule, '2026-10-09')).toBeNull();
     expect(featuredGameIdFor({}, '2026-10-08')).toBeNull();
   });
 
   it('clears exactly the day it is asked about', () => {
     const next = {
-      '2026-10-08': 'truth-dare',
-      '2026-10-09': 'hearts-memory-match',
+      '2026-10-08': 'wordle',
+      '2026-10-09': 'anagram',
     };
 
     expect(Object.keys(withoutFeaturedGame(next, '2026-10-08'))).toEqual(['2026-10-09']);
     expect(next).toEqual({
-      '2026-10-08': 'truth-dare',
-      '2026-10-09': 'hearts-memory-match',
+      '2026-10-08': 'wordle',
+      '2026-10-09': 'anagram',
     });
     // A day with no pick is already clear, so the same object comes back rather than a copy
     // that merely looks equal.
@@ -114,23 +113,39 @@ describe('gamesCatalog: the rotation a day without a pick falls back to', () => 
 
     expect(morning?.id).toBe(evening?.id);
     expect(AVAILABLE_GAMES.map((game) => game.id)).toContain(morning?.id);
-    expect(getFeaturedGame(new Date(2026, 9, 8, 12)).id).toBe(morning?.id);
+    expect(getFeaturedGame(new Date(2026, 9, 8, 12))?.id).toBe(morning?.id);
+  });
+
+  it('lists only games with a real implementation', () => {
+    expect(AVAILABLE_GAMES.map((game) => game.id).sort()).toEqual(
+      [
+        'anagram',
+        'connections',
+        'couple-questionnaire',
+        'reaction-time',
+        'trivia-drop',
+        'two-key-escape',
+        'wordle',
+      ].sort(),
+    );
+    AVAILABLE_GAMES.forEach((game) => {
+      expect(game.route).toMatch(/^\/games\//);
+    });
   });
 });
 
 describe('gamesConfig: a configuration nobody has touched', () => {
-  it('starts every catalogue title live, with each declared setting at its default', () => {
+  it('starts every catalogue title live, with no local-only settings', () => {
     const config = initialGamesConfig(AT_NOON);
 
     AVAILABLE_GAMES.forEach((game) => {
       expect(isGameEnabled(config, game.id)).toBe(true);
     });
-    expect(config.settings['truth-dare']).toEqual({ rounds: 3 });
-    expect(config.settings['would-you-rather']).toEqual({ questionSet: 'classic' });
-    expect(config.settings['hearts-memory-match']).toEqual({ countdown: false });
-    // A game that declares nothing gets no entry rather than invented knobs.
-    expect(config.settings['compatibility-quiz']).toBeUndefined();
-    expect(settingsForGame('compatibility-quiz')).toEqual([]);
+    // No game declares local-only settings: availability and content live on the server.
+    AVAILABLE_GAMES.forEach((game) => {
+      expect(settingsForGame(game.id)).toEqual([]);
+      expect(config.settings[game.id]).toBeUndefined();
+    });
 
     // Two weeks of schedule, today's row included, starting from the rotation's own pick.
     const keys = Object.keys(config.featuredSchedule);
@@ -145,13 +160,13 @@ describe('gamesConfig: a configuration nobody has touched', () => {
       featuredSchedule: withFeaturedGame(
         config.featuredSchedule,
         featuredDateKey(AT_NOON),
-        'hearts-memory-match',
+        'anagram',
       ),
     };
 
     const resolved = resolveFeaturedGame(pinned, AT_NOON);
     expect(resolved).toMatchObject({ explicit: true, dateKey: '2026-10-08' });
-    expect(resolved?.game.id).toBe('hearts-memory-match');
+    expect(resolved?.game.id).toBe('anagram');
   });
 
   it('falls back to the rotation when the pinned title has been switched off', () => {
@@ -161,14 +176,14 @@ describe('gamesConfig: a configuration nobody has touched', () => {
       featuredSchedule: withFeaturedGame(
         config.featuredSchedule,
         featuredDateKey(AT_NOON),
-        'hearts-memory-match',
+        'anagram',
       ),
-      availability: { ...config.availability, 'hearts-memory-match': false },
+      availability: { ...config.availability, 'anagram': false },
     };
 
     const resolved = resolveFeaturedGame(pinned, AT_NOON);
     expect(resolved?.explicit).toBe(false);
-    expect(resolved?.game.id).not.toBe('hearts-memory-match');
+    expect(resolved?.game.id).not.toBe('anagram');
     expect(isGameEnabled(pinned, resolved!.game.id)).toBe(true);
     expect(resolved?.game.status).toBe('available');
   });
@@ -196,53 +211,53 @@ describe('gamesConfig: a configuration nobody has touched', () => {
     expect(randomPickCandidates(config)).toHaveLength(eligible.length);
   });
 
-  it('reads a declared setting, falling back to the declaration when untouched', () => {
+  it('reads a stored setting value when one exists', () => {
     const config = initialGamesConfig(AT_NOON);
-    const [rounds] = GAME_SETTING_DEFINITIONS['truth-dare'];
+    const definition = {
+      key: 'rounds',
+      label: 'Rounds per game',
+      kind: 'number' as const,
+      min: 3,
+      max: 12,
+      step: 1,
+    };
 
-    expect(settingValueFor(config, 'truth-dare', rounds)).toBe(3);
+    expect(settingValueFor(config, 'wordle', definition)).toBe(3);
     expect(
       settingValueFor(
-        { ...config, settings: { ...config.settings, 'truth-dare': { rounds: 8 } } },
-        'truth-dare',
-        rounds,
+        { ...config, settings: { ...config.settings, 'wordle': { rounds: 8 } } },
+        'wordle',
+        definition,
       ),
     ).toBe(8);
   });
 });
 
 describe('adminGamesAnalytics: the numbers the overview reports', () => {
-  it('counts the catalogue from the configuration and the mock play table', () => {
+  it('counts the catalogue from the configuration with empty play figures', () => {
     const config = initialGamesConfig(AT_NOON);
     const analytics = gamesAnalytics(config);
 
     expect(analytics.totalGames).toBe(AVAILABLE_GAMES.length);
     expect(analytics.enabledGames).toBe(AVAILABLE_GAMES.length);
     expect(analytics.disabledGames).toBe(0);
-    expect(analytics.playsAllTime).toBeGreaterThanOrEqual(analytics.playsThisWeek);
-    expect(analytics.playsThisWeek).toBeGreaterThanOrEqual(analytics.playsToday);
+    expect(analytics.playsAllTime).toBe(0);
+    expect(analytics.playsThisWeek).toBe(0);
+    expect(analytics.playsToday).toBe(0);
+    expect(analytics.playersToday).toBe(0);
+    expect(analytics.playersThisWeek).toBe(0);
 
-    // Most-played is a ranking, first entry first.
-    expect(analytics.topGames.length).toBeGreaterThan(1);
-    expect(analytics.topGames[0].game.id).toBe('truth-dare');
-    for (let index = 1; index < analytics.topGames.length; index += 1) {
-      expect(analytics.topGames[index - 1].playsWeek).toBeGreaterThanOrEqual(
-        analytics.topGames[index].playsWeek,
-      );
-    }
-
-    // The two types split the week's play between them, to a rounding error.
+    // No telemetry means no top games and no type play.
+    expect(analytics.topGames).toEqual([]);
     expect(analytics.typeBreakdown).toHaveLength(2);
-    const shares = analytics.typeBreakdown.reduce((sum, entry) => sum + entry.share, 0);
-    expect(shares).toBeGreaterThanOrEqual(99);
-    expect(shares).toBeLessThanOrEqual(101);
+    expect(analytics.typeBreakdown.every((entry) => entry.playsWeek === 0)).toBe(true);
   });
 
   it('follows the availability switch rather than the size of the catalogue', () => {
     const config = initialGamesConfig(AT_NOON);
     const oneOff = {
       ...config,
-      availability: { ...config.availability, 'truth-dare': false },
+      availability: { ...config.availability, 'wordle': false },
     };
 
     const analytics = gamesAnalytics(oneOff);
@@ -255,16 +270,12 @@ describe('adminGamesAnalytics: the numbers the overview reports', () => {
     const config = initialGamesConfig(new Date(now));
     const entries = seedGamesActivity(config, now);
 
-    expect(entries).toHaveLength(3);
-    expect(new Set(entries.map((entry) => entry.id)).size).toBe(3);
+    expect(entries).toHaveLength(1);
     expect([...entries].sort((a, b) => b.at - a.at)).toEqual(entries);
 
     const featured = resolveFeaturedGame(config, new Date(now))!;
     expect(entries[0].id).toBe('seed-featured');
     expect(entries[0].message).toBe(`${featured.game.name} set as today's featured game`);
-    expect(entries.map((entry) => entry.message)).toContain(
-      'Weekly leaderboard standings recalculated',
-    );
   });
 
   it('ages an entry the way the overview reads it', () => {

@@ -1,9 +1,8 @@
 /**
  * Player-facing statistics for the Games dashboard.
  *
- * Prototype data, kept in the shape a future endpoint would plausibly return so the dashboard
- * only needs its data source replaced, not its layout. Nothing here is derived from real
- * games -- there are no games to derive it from yet.
+ * There is no stats endpoint, so every figure below is empty until one
+ * exists: the dashboard renders its empty states rather than mock numbers.
  */
 
 export interface PlayerStats {
@@ -34,34 +33,31 @@ export interface WeeklyChallenge {
 /** A single row in "recently played". The game itself is resolved from the catalogue. */
 export interface RecentPlay {
   gameId: string;
-  /** Human relative time, e.g. "2h ago" -- mock data does not keep real timestamps. */
+  /** Human relative time, e.g. "2h ago". */
   playedAt: string;
   score: number;
   personalBest?: boolean;
 }
 
+/** Empty until a stats endpoint exists. */
 export const MOCK_PLAYER_STATS: PlayerStats = {
-  points: 12_480,
-  rank: 42,
-  topPercent: 8,
-  currentStreakDays: 6,
-  longestStreakDays: 14,
-  gamesPlayed: 87,
-  gamesPlayedThisWeek: 9,
-  winRate: 64,
+  points: 0,
+  rank: 0,
+  topPercent: 0,
+  currentStreakDays: 0,
+  longestStreakDays: 0,
+  gamesPlayed: 0,
+  gamesPlayedThisWeek: 0,
+  winRate: 0,
 };
 
+/** Empty until challenges exist on the backend. */
 export const MOCK_WEEKLY_CHALLENGE: WeeklyChallenge = {
-  label: 'Play 5 games this week',
-  current: 3,
-  target: 5,
+  label: 'No weekly challenge right now',
+  current: 0,
+  target: 0,
   unit: 'games',
-  reward: '+250 bonus points',
 };
 
-export const MOCK_RECENTLY_PLAYED: RecentPlay[] = [
-  { gameId: 'hearts-memory-match', playedAt: '2h ago', score: 480, personalBest: true },
-  { gameId: 'truth-dare', playedAt: 'Yesterday', score: 320 },
-  { gameId: 'would-you-rather', playedAt: '2 days ago', score: 210 },
-  { gameId: 'compatibility-quiz', playedAt: '4 days ago', score: 275 },
-];
+/** Empty until play history exists on the backend. */
+export const MOCK_RECENTLY_PLAYED: RecentPlay[] = [];

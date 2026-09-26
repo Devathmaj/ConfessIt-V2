@@ -2,15 +2,10 @@
  * The configuration layer that sits between the game catalogue and everything that shows it.
  *
  * `gamesCatalog` says what a game *is*; this module says what an administrator has *done* to
- * it -- which titles are currently available, what each title's own settings are set to, and
- * which game owns which day's spotlight. The user-facing Games pages and the admin pages read
- * the same instance of this state, which is the whole point: turning a game off here takes it
- * out of `/games/select`, and pinning a title here is what `/games/featured` shows.
- *
- * Everything is an in-memory prototype value shaped the way a persisted record would be:
- * three plain maps keyed by ids, no component state and no behaviour hiding in the UI. A
- * backend swap is replacing `initialGamesConfig` with a fetch and the four mutators in the
- * context with requests -- the selectors and the pages do not change.
+ * it -- which titles are currently available and which game owns which day's spotlight.
+ * The server (`GET /games/select`, `GET /games/featured`, `/admin/featured`) is the source
+ * of truth; this in-memory state only seeds local fallbacks so pages render before the
+ * fetch resolves. There is no mock schedule content beyond the catalogue rotation.
  */
 
 import {
@@ -61,45 +56,12 @@ export interface GameSettingDefinition {
 /**
  * Per-game administrative settings, by game id.
  *
- * Deliberately sparse. Most games need nothing but on/off until they exist as code, and the
- * entries below are the demonstration that the shape works -- a game opts in by adding its own
- * list, and a game with no entry renders as "no game-specific settings" rather than being
- * given invented knobs.
+ * No game declares local-only settings: availability, content mode, reset
+ * cadence and grid size live on the server (`GET /admin/games/config`).
+ * A game opts in by adding its own list here; a game with no entry renders
+ * as "no game-specific settings".
  */
-export const GAME_SETTING_DEFINITIONS: Record<string, GameSettingDefinition[]> = {
-  'truth-dare': [
-    {
-      key: 'rounds',
-      label: 'Rounds per game',
-      kind: 'number',
-      min: 3,
-      max: 12,
-      step: 1,
-      help: 'How many prompts a session runs through before it ends.',
-    },
-  ],
-  'would-you-rather': [
-    {
-      key: 'questionSet',
-      label: 'Question set',
-      kind: 'select',
-      options: [
-        { value: 'classic', label: 'Classic' },
-        { value: 'deep', label: 'Deep talks' },
-        { value: 'silly', label: 'Silly' },
-      ],
-      help: 'Which pool today\'s choices are drawn from.',
-    },
-  ],
-  'hearts-memory-match': [
-    {
-      key: 'countdown',
-      label: 'Countdown timer',
-      kind: 'toggle',
-      help: 'Show the remaining-time counter while cards are being flipped.',
-    },
-  ],
-};
+export const GAME_SETTING_DEFINITIONS: Record<string, GameSettingDefinition[]> = {};
 
 export const settingsForGame = (gameId: string): GameSettingDefinition[] =>
   GAME_SETTING_DEFINITIONS[gameId] ?? [];

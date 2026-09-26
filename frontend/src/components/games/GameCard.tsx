@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
  */
 interface GameCardProps {
   game: GameDefinition;
-  /** Omitted where no play action applies; for coming-soon games the button is disabled. */
+  /** Omitted where no play action applies. */
   onPlay?: (game: GameDefinition) => void;
   playLabel?: string;
   className?: string;
@@ -20,7 +20,6 @@ interface GameCardProps {
 
 export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) => {
   const Icon = game.icon;
-  const isAvailable = game.status === 'available';
 
   return (
     <Card
@@ -35,16 +34,12 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
             className={cn(
               'flex h-12 w-12 items-center justify-center rounded-xl text-white transition-transform duration-300 group-hover:scale-105 sm:h-14 sm:w-14',
               game.accent,
-              !isAvailable && 'opacity-60',
             )}
           >
             <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
           </span>
-          <Badge
-            variant={isAvailable ? 'secondary' : 'outline'}
-            className={cn('shrink-0 capitalize', !isAvailable && 'text-muted-foreground')}
-          >
-            {isAvailable ? categoryLabel(game.category) : 'Coming soon'}
+          <Badge variant="secondary" className="shrink-0 capitalize">
+            {categoryLabel(game.category)}
           </Badge>
         </div>
         <CardTitle className="mt-3 text-lg font-bold leading-snug">{game.name}</CardTitle>
@@ -62,13 +57,12 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
         <Button
           type="button"
           size="sm"
-          variant={isAvailable ? 'default' : 'outline'}
+          variant="default"
           className="w-full rounded-full font-semibold"
-          disabled={!isAvailable}
           onClick={() => onPlay?.(game)}
         >
           <Gamepad2 />
-          {playLabel ?? (isAvailable ? 'Play now' : 'Coming soon')}
+          {playLabel ?? 'Play now'}
         </Button>
       </CardContent>
     </Card>

@@ -31,6 +31,9 @@ const FEATURED_IDS = [
   'anagram',
   'couple-questionnaire',
   'reaction-time',
+  'connections',
+  'trivia-drop',
+  'two-key-escape',
 ] as const;
 
 const GAME_LABELS: Record<string, string> = {
@@ -38,6 +41,9 @@ const GAME_LABELS: Record<string, string> = {
   anagram: 'Anagram',
   'couple-questionnaire': 'Couple Questionnaire',
   'reaction-time': 'Reaction Time',
+  connections: 'Connections',
+  'trivia-drop': 'Trivia Drop',
+  'two-key-escape': 'Two-Key Escape',
 };
 
 /** Today as UTC `YYYY-MM-DD`, the only calendar the schedule speaks. */

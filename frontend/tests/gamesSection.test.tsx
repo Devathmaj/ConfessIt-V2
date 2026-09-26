@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { toast } from 'sonner';
 
 import { AuthContext, type User } from '@/contexts/AuthContext';
 import { GamesLayout } from '@/components/games/GamesLayout';
@@ -15,13 +14,11 @@ import { GamesSelectPage } from '@/pages/GamesSelectPage';
  *
  * The product decision this pins down is that /games is its own area of ConfessIt: it owns
  * its navigation instead of the main navbar, that navigation survives moving between the
- * section's routes, and there is always a way back to the dashboard. A page-level test would
- * miss all of that -- each page can render perfectly while the shell around them quietly
- * disappears.
+ * section's routes, and there is always a way back to the dashboard.
  *
- * It also checks the selection page's contract with the catalogue: games come from
- * src/lib/gamesCatalog, and pressing Play is a placeholder notice rather than a game, since
- * no game screens exist yet.
+ * It also checks the selection page's contract with the catalogue: only games
+ * with a real implementation are offered, and pressing Play navigates to the
+ * game's screen.
  */
 
 vi.mock('sonner', () => ({
@@ -120,31 +117,23 @@ describe('selecting a game', () => {
   const cardFor = (name: string) =>
     screen.getByText(name).closest('.group') as HTMLElement;
 
+  it('offers only games with a real implementation', () => {
+    renderAt('/games/select');
+
+    expect(screen.getByText('Wordle')).toBeInTheDocument();
+    expect(screen.getByText('Anagram')).toBeInTheDocument();
+    // Mock titles are gone: no placeholder catalogue entries.
+    expect(screen.queryByText('Truth or Dare')).not.toBeInTheDocument();
+    expect(screen.queryByText('Emoji Decoded')).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+  });
+
   it('offers the catalogue games with their metadata and a play action', () => {
     renderAt('/games/select');
 
-    const card = cardFor('Truth or Dare');
-    expect(within(card).getByText(/2–6 players/)).toBeInTheDocument();
+    const card = cardFor('Wordle');
+    expect(within(card).getByText(/solo/i)).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: /play now/i })).toBeEnabled();
-    expect(within(card).getByText(/~5 min/)).toBeInTheDocument();
-  });
-
-  it('treats Play as a placeholder notice until game screens exist', () => {
-    renderAt('/games/select');
-
-    fireEvent.click(
-      within(cardFor('Truth or Dare')).getByRole('button', { name: /play now/i }),
-    );
-
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Truth or Dare'));
-  });
-
-  it('marks unimplemented titles as coming soon rather than offering them as playable', () => {
-    renderAt('/games/select');
-
-    const card = cardFor('Emoji Decoded');
-    // Badge and button both say it; either showing is what marks the title as unplayable.
-    expect(within(card).getAllByText('Coming soon').length).toBeGreaterThan(0);
-    expect(within(card).getByRole('button', { name: /coming soon/i })).toBeDisabled();
+    expect(within(card).getByText(/~3 min/)).toBeInTheDocument();
   });
 });

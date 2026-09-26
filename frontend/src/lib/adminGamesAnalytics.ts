@@ -1,16 +1,14 @@
 /**
  * Games analytics for the admin dashboard: the numbers behind the section.
  *
- * Two kinds of figure live here and they are deliberately separated. Catalogue-derived counts
- * (how many games, how many are on) are computed from the live configuration, so they cannot
- * disagree with what the manage screen shows. Engagement counts (plays, players) are mock
- * totals in `MOCK_PLAYS` -- there is no play telemetry to read -- and they sit in one table
- * keyed by catalogue id rather than being scattered through the dashboard's JSX, so replacing
- * them with an endpoint is one import to change.
+ * Catalogue-derived counts (how many games, how many are on) are computed
+ * from the live configuration, so they cannot disagree with what the manage
+ * screen shows. Engagement counts are zero until play telemetry exists on
+ * the backend -- the dashboard renders empty states rather than mock
+ * figures.
  *
- * The activity log is the exception that proves the rule: entries are appended by the real
- * admin actions in the context, so "recent activity" reports what actually happened in this
- * session and only the seeded rows are fiction.
+ * The activity log holds entries appended by real admin actions in the
+ * context, plus one seeded row describing today's resolved pick.
  */
 
 import { AVAILABLE_GAMES, type GameDefinition, type GameTypeId, gameTypeLabel } from './gamesCatalog';
@@ -20,7 +18,7 @@ import {
   type GamesConfigState,
 } from './gamesConfig';
 
-/** Play totals for one title. All three are mock figures until a play event exists. */
+/** Play totals for one title. All zero until play telemetry exists. */
 export interface GamePlayTotals {
   gameId: string;
   playsToday: number;
@@ -28,20 +26,11 @@ export interface GamePlayTotals {
   playsAllTime: number;
 }
 
-const MOCK_PLAYS: Record<string, Omit<GamePlayTotals, 'gameId'>> = {
-  'wordle': { playsToday: 0, playsWeek: 0, playsAllTime: 0 },
-  'truth-dare': { playsToday: 148, playsWeek: 903, playsAllTime: 8_640 },
-  'compatibility-quiz': { playsToday: 121, playsWeek: 774, playsAllTime: 7_120 },
-  'love-letter-builder': { playsToday: 64, playsWeek: 402, playsAllTime: 3_980 },
-  'hearts-memory-match': { playsToday: 96, playsWeek: 631, playsAllTime: 5_410 },
-  'would-you-rather': { playsToday: 87, playsWeek: 545, playsAllTime: 4_760 },
-  'emoji-decoded': { playsToday: 0, playsWeek: 0, playsAllTime: 0 },
-  'sweet-nothings-sprint': { playsToday: 0, playsWeek: 0, playsAllTime: 0 },
-};
+const MOCK_PLAYS: Record<string, Omit<GamePlayTotals, 'gameId'>> = {};
 
-/** Players, not sessions: one account that played five games counts once. */
-export const MOCK_PLAYERS_TODAY = 312;
-export const MOCK_PLAYERS_THIS_WEEK = 847;
+/** Players, not sessions. Zero until telemetry exists. */
+export const MOCK_PLAYERS_TODAY = 0;
+export const MOCK_PLAYERS_THIS_WEEK = 0;
 
 const playTotalsFor = (game: GameDefinition): GamePlayTotals => ({
   gameId: game.id,
@@ -102,8 +91,8 @@ const percentOf = (part: number, whole: number): number =>
   whole === 0 ? 0 : Math.round((part / whole) * 100);
 
 /**
- * Every figure the dashboard shows, computed from the live configuration plus the mock play
- * table. Called on render rather than memoised anywhere: the list is seven games long.
+ * Every figure the dashboard shows, computed from the live configuration.
+ * Play-derived lists stay empty until telemetry exists.
  */
 export const gamesAnalytics = (config: GamesConfigState): GamesAnalytics => {
   const totals = AVAILABLE_GAMES.map((game) => ({ game, totals: playTotalsFor(game) }));
@@ -158,41 +147,26 @@ export const gamesAnalytics = (config: GamesConfigState): GamesAnalytics => {
 export const featuredSnapshot = (config: GamesConfigState) => resolveFeaturedGame(config);
 
 /**
- * The activity log as the dashboard first sees it.
- *
- * Seeded with entries that are true of a fresh configuration -- today's pick, the nightly
- * recalculation, the catalogue sync -- rather than with invented incidents, because a row
- * that claims a game was switched off while the manage screen says it is on is worse than no
- * row at all. Real actions prepend their own entries through the context.
+ * The activity log as the dashboard first sees it: today's resolved pick,
+ * when there is one. Real admin actions prepend their own entries through
+ * the context.
  */
 export const seedGamesActivity = (config: GamesConfigState, now: number = Date.now()): GamesActivityEntry[] => {
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
 
   const featured = resolveFeaturedGame(config, new Date(now));
-  const entries: GamesActivityEntry[] = [
-    {
+  const entries: GamesActivityEntry[] = [];
+
+  if (featured) {
+    entries.push({
       id: 'seed-featured',
       at: todayStart.getTime() + 60_000,
       kind: 'featured',
-      message: featured
-        ? `${featured.game.name} set as today's featured game`
-        : 'No featured game could be selected',
+      message: `${featured.game.name} set as today's featured game`,
       gameId: featured?.game.id,
-    },
-    {
-      id: 'seed-leaderboard',
-      at: now - 14 * 3_600_000,
-      kind: 'leaderboard',
-      message: 'Weekly leaderboard standings recalculated',
-    },
-    {
-      id: 'seed-catalogue',
-      at: now - 30 * 3_600_000,
-      kind: 'system',
-      message: 'Games catalogue synchronised with the player-facing section',
-    },
-  ];
+    });
+  }
 
   return entries.sort((a, b) => b.at - a.at);
 };
