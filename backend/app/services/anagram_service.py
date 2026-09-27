@@ -215,29 +215,54 @@ def _current_session_row(session):
 def update_anagram_session(
     db: Database,
     *,
-    mode: str,
-    word: Optional[str],
-    token: Optional[str],
-    updated_by: str,
+    mode: Optional[str] = None,
+    word: Optional[str] = None,
+    token: Optional[str] = None,
+    updated_by: str = "admin",
     now: Optional[datetime] = None,
+    discard_future_schedules: bool = False,
 ) -> AnagramGame:
     """End the current session and open a brand-new one starting now ("Update").
 
     Same contract as the Wordle Update: the old row is stamped ended and kept
     as history, the new session starts from scratch for today's UTC date under
-    the game's own reset cadence, and the game's content mode follows the
-    update. Atomic under the game's advisory lock.
+    the game's own reset cadence, and -- when ``mode`` is given -- the game's
+    content mode follows the update. Atomic under the game's advisory lock.
+
+    Without a supplied word in manual mode, the earliest scheduled entry
+    inside the new window is consumed, or the session opens pending. Other
+    pending entries dated before the window end are discarded (all of them,
+    including future ones, with ``discard_future_schedules`` for cadence-change
+    re-anchoring). Random mode never touches schedules; a random update
+    without a draw is refused.
     """
     from sqlalchemy import text as _text
 
     from . import game_periods
     from .game_configs import game_lock_key, get_config
+    from .game_scheduler import (
+        _consume_earliest_word,
+        _discard_all_scheduled_words,
+        _discard_scheduled_words_before,
+    )
 
     moment = now or datetime.now(timezone.utc)
     today = moment.date()
-    answer = _resolve_answer(
-        AnagramGameCreate(mode=mode, word=word, token=token), today  # type: ignore[arg-type]
-    )
+    if word is not None:
+        resolve_mode = mode if mode is not None else "custom"
+        answer: Optional[str] = _resolve_answer(
+            AnagramGameCreate(mode=resolve_mode, word=word, token=token),  # type: ignore[arg-type]
+            today,
+        )
+        supplied = True
+    elif mode == "random":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draw a word before saving a random game.",
+        )
+    else:
+        answer = None
+        supplied = False
 
     try:
         with db.sessions.begin() as session:
@@ -246,20 +271,36 @@ def update_anagram_session(
                 {"key": game_lock_key("anagram")},
             )
             config = get_config(session, "anagram")
-            # See ``wordle_service.update_wordle_session``: provenance is not
-            # behaviour, so the content mode follows the update's meaning.
-            config.content_mode = "manual" if mode == "custom" else "random"
+            if mode is not None:
+                # See ``wordle_service.update_wordle_session``: provenance is
+                # not behaviour, so the content mode follows the update's
+                # meaning.
+                config.content_mode = "manual" if mode == "custom" else "random"
+            effective_mode = config.content_mode or "manual"
+            if not supplied and effective_mode == "random":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Draw a word before saving a random game.",
+                )
+            session_mode = "random" if effective_mode == "random" else "custom"
             cadence = config.reset_cadence
             current = _current_session_row(session)
             if current is not None:
                 current.status = "ended"
                 current.ended_at = moment
             start, end = game_periods.period_for_start(today, cadence)
+            if effective_mode == "manual":
+                if not supplied:
+                    answer = _consume_earliest_word(session, "anagram", start, end)
+                if discard_future_schedules:
+                    _discard_all_scheduled_words(session, "anagram")
+                else:
+                    _discard_scheduled_words_before(session, "anagram", end)
             row = AnagramGameRecord(
                 game_date=today,
-                mode=mode,
+                mode=session_mode if mode is None else mode,
                 answer=answer,
-                status="active",
+                status="active" if answer else "pending",
                 period_start_date=start,
                 period_end_date=end,
                 started_at=moment,

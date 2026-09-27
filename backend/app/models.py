@@ -1671,7 +1671,9 @@ class ConnectionsPuzzleCreate(BaseModel):
     ``groups`` holds the four canonical answer groups in order; each group is
     exactly four words. Words are submitted raw -- the service trims them,
     refuses empties and duplicates (case-insensitively), and stores both the
-    display spelling and the normalized spelling comparison runs on.
+    display spelling and the normalized spelling comparison runs on. Omitted
+    entirely, the update instead consumes the earliest scheduled puzzle inside
+    the new window, or opens the session pending when the window holds none.
 
     ``extra="forbid"`` so a key the payload does not carry is refused outright
     rather than accepted and dropped.
@@ -1679,7 +1681,7 @@ class ConnectionsPuzzleCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    groups: List[List[str]]
+    groups: Optional[List[List[str]]] = None
 
 
 class ConnectionsGame(BaseModel):

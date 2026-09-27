@@ -23,9 +23,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.db_models import WordleGameRecord
+from app.db_models import ScheduledGameContentRecord, WordleGameRecord
 from app.main import app
 from app.services.auth_service import get_current_user
 from app.services.wordle_service import solution_words
@@ -173,10 +174,27 @@ def test_an_answer_of_the_wrong_length_is_refused(admin_client: TestClient):
     assert "5 letters" in response.json()["detail"]
 
 
-def test_a_custom_game_with_no_word_is_refused(admin_client: TestClient):
+def test_a_custom_update_with_no_word_uses_the_schedule_or_waits(admin_client: TestClient, db):
+    """No supplied word is not a refusal: the update consumes the earliest
+    scheduled entry inside the new window, or opens the session pending when
+    the window holds none."""
+    from sqlalchemy import select
+
+    from app.db_models import ScheduledGameContentRecord, WordleGameRecord
+
     response = save(admin_client, {"mode": "custom"})
 
-    assert response.status_code == 400
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["answer"] is None
+    with db.sessions() as session:
+        row = session.get(WordleGameRecord, body["id"])
+        assert row is not None and row.status == "pending"
+        assert (
+            session.scalar(select(func.count()).select_from(ScheduledGameContentRecord))
+            == 0
+        )
 
 
 def test_an_unrecognised_mode_is_a_validation_error(admin_client: TestClient):

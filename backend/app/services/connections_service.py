@@ -169,9 +169,10 @@ def _attach_words(session, game_id: str, groups: List[List[str]]) -> None:
 def update_connections_session(
     db: Database,
     *,
-    groups: List[List[str]],
-    updated_by: str,
+    groups: Optional[List[List[str]]] = None,
+    updated_by: str = "admin",
     now: Optional[datetime] = None,
+    discard_future_schedules: bool = False,
 ) -> ConnectionsGame:
     """End the current session and open a brand-new one starting now ("Update").
 
@@ -181,13 +182,25 @@ def update_connections_session(
     content mode stays ``manual`` -- Connections has no random mode. Atomic
     under the game's advisory lock, so an Update racing the 00:01 reset cannot
     leave two active sessions.
+
+    Without supplied groups, the earliest scheduled puzzle inside the new
+    window is consumed, or the session opens pending when the window holds
+    none. Other pending scheduled puzzles dated before the window end are
+    discarded (all of them, including future ones, with
+    ``discard_future_schedules`` for cadence-change re-anchoring).
     """
     from sqlalchemy import text as _text
 
     from . import game_periods
     from .game_configs import game_lock_key, get_config
+    from .game_scheduler import (
+        _consume_earliest_puzzle,
+        _discard_all_scheduled_puzzles,
+        _discard_scheduled_puzzles_before,
+    )
 
-    normalized = validate_puzzle_groups(groups)
+    normalized = validate_puzzle_groups(groups) if groups is not None else None
+    supplied = normalized is not None
     moment = now or datetime.now(timezone.utc)
     today = moment.date()
 
@@ -205,9 +218,15 @@ def update_connections_session(
                 current.status = "ended"
                 current.ended_at = moment
             start, end = game_periods.period_for_start(today, cadence)
+            if not supplied:
+                normalized = _consume_earliest_puzzle(session, start, end)
+            if discard_future_schedules:
+                _discard_all_scheduled_puzzles(session)
+            else:
+                _discard_scheduled_puzzles_before(session, end)
             row = ConnectionsGameRecord(
                 game_date=today,
-                status="active",
+                status="active" if normalized else "pending",
                 period_start_date=start,
                 period_end_date=end,
                 started_at=moment,
@@ -215,7 +234,8 @@ def update_connections_session(
             )
             session.add(row)
             session.flush()
-            _attach_words(session, str(row.id), normalized)
+            if normalized:
+                _attach_words(session, str(row.id), normalized)
             from . import league_finalization
 
             league_finalization.snapshot_opened_safely(
@@ -234,14 +254,15 @@ def update_connections_session(
 
 
 def create_connections_game(
-    db: Database, groups: List[List[str]], created_by: str
+    db: Database, groups: Optional[List[List[str]]], created_by: str
 ) -> ConnectionsGame:
     """Publish the current Connections session ("Update").
 
     ``POST /admin/connections`` is the Update action: it ends the currently
     active/pending session and opens a new one for today with the supplied
-    puzzle. Future puzzles belong on the schedule endpoint below, and history
-    is read-only.
+    puzzle -- or, when no puzzle is supplied, with the earliest scheduled
+    puzzle inside the new window (pending when the window holds none). Future
+    puzzles belong on the schedule endpoint below, and history is read-only.
     """
     return update_connections_session(db, groups=groups, updated_by=created_by)
 

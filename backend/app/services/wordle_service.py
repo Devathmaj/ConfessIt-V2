@@ -197,34 +197,64 @@ def _current_session_row(session):
 def update_wordle_session(
     db: Database,
     *,
-    mode: str,
-    word: Optional[str],
-    token: Optional[str],
+    mode: Optional[str] = None,
+    word: Optional[str] = None,
+    token: Optional[str] = None,
     updated_by: str = "admin",
     now: Optional[datetime] = None,
+    discard_future_schedules: bool = False,
 ) -> WordleGame:
     """End the current session and open a brand-new one starting now ("Update").
 
     Never mutates the old row: it is stamped ended and kept as history with its
     user progress attached, while the new session starts from scratch. The new
     session's period runs from today's UTC date under the game's own reset
-    cadence -- an update at 23:58 does not buy a fresh 24 hours. The game's
-    content mode follows the update: a custom word means manual from now on, a
-    drawn word means random. Atomic under the game's advisory lock, so an Update
-    racing the 00:01 reset cannot leave two active sessions.
+    cadence -- an update at 23:58 does not buy a fresh 24 hours. When ``mode``
+    is given, the game's content mode follows the update: a custom word means
+    manual from now on, a drawn word means random; ``mode=None`` keeps the
+    stored mode (cadence-change re-anchoring). Atomic under the game's
+    advisory lock, so an Update racing the 00:01 reset cannot leave two active
+    sessions.
+
+    Content resolution: a supplied word wins (validated as today, exactly like
+    before, with random draws still requiring their signed token). Without a
+    supplied word in manual mode, the earliest scheduled entry inside the new
+    window is consumed, or the session opens pending when the window holds
+    none. A random update without a draw is still refused. Other pending
+    scheduled entries dated before the window end are discarded; with
+    ``discard_future_schedules`` (cadence-change re-anchoring) every other
+    pending entry goes too, since the old rhythm no longer exists.
     """
     from sqlalchemy import text as _text
 
     from . import game_periods
     from .game_configs import game_lock_key, get_config
+    from .game_scheduler import (
+        _consume_earliest_word,
+        _discard_all_scheduled_words,
+        _discard_scheduled_words_before,
+    )
 
     moment = now or datetime.now(timezone.utc)
     today = moment.date()
-    # An Update always applies to the current session: the draw it confirms was
-    # previewed for today, so the signature is verified against today.
-    answer = _resolve_answer(
-        WordleGameCreate(mode=mode, word=word, token=token), today  # type: ignore[arg-type]
-    )
+    if word is not None:
+        # An Update always applies to the current session: the draw it
+        # confirms was previewed for today, so the signature is verified
+        # against today.
+        resolve_mode = mode if mode is not None else "custom"
+        answer: Optional[str] = _resolve_answer(
+            WordleGameCreate(mode=resolve_mode, word=word, token=token),  # type: ignore[arg-type]
+            today,
+        )
+        supplied = True
+    elif mode == "random":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Draw a word before saving a random game.",
+        )
+    else:
+        answer = None
+        supplied = False
 
     try:
         with db.sessions.begin() as session:
@@ -233,21 +263,40 @@ def update_wordle_session(
                 {"key": game_lock_key("wordle")},
             )
             config = get_config(session, "wordle")
-            # Session modes (custom/random) are provenance; content modes
-            # (manual/random) are behaviour. A typed word means manual from now
-            # on, a drawn word means random.
-            config.content_mode = "manual" if mode == "custom" else "random"
+            if mode is not None:
+                # Session modes (custom/random) are provenance; content modes
+                # (manual/random) are behaviour. A typed word means manual
+                # from now on, a drawn word means random.
+                config.content_mode = "manual" if mode == "custom" else "random"
+            effective_mode = config.content_mode or "manual"
+            if not supplied and effective_mode == "random":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Draw a word before saving a random game.",
+                )
+            session_mode = "random" if effective_mode == "random" else "custom"
             cadence = config.reset_cadence
             current = _current_session_row(session)
             if current is not None:
                 current.status = "ended"
                 current.ended_at = moment
             start, end = game_periods.period_for_start(today, cadence)
+            if not supplied and effective_mode == "manual":
+                answer = _consume_earliest_word(session, "wordle", start, end)
+                if discard_future_schedules:
+                    _discard_all_scheduled_words(session, "wordle")
+                else:
+                    _discard_scheduled_words_before(session, "wordle", end)
+            elif supplied and effective_mode == "manual":
+                if discard_future_schedules:
+                    _discard_all_scheduled_words(session, "wordle")
+                else:
+                    _discard_scheduled_words_before(session, "wordle", end)
             row = WordleGameRecord(
                 game_date=today,
-                mode=mode,
+                mode=session_mode if mode is None else mode,
                 answer=answer,
-                status="active",
+                status="active" if answer else "pending",
                 period_start_date=start,
                 period_end_date=end,
                 started_at=moment,

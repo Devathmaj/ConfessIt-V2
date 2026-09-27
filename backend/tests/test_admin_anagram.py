@@ -27,9 +27,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.db_models import AnagramGameRecord
+from app.db_models import AnagramGameRecord, ScheduledGameContentRecord
 from app.limits import ANAGRAM_RANDOM_MIN_LENGTH
 from app.main import app
 from app.services import anagram_service
@@ -243,10 +244,25 @@ def test_an_invalid_custom_word_is_refused(admin_client: TestClient, word):
     assert response.status_code == 400
 
 
-def test_a_custom_game_with_no_word_is_refused(admin_client: TestClient):
+def test_a_custom_update_with_no_word_uses_the_schedule_or_waits(
+    admin_client: TestClient, db
+):
+    """No supplied word is not a refusal: the update consumes the earliest
+    scheduled entry inside the new window, or opens the session pending when
+    the window holds none."""
     response = save(admin_client, {"mode": "custom"})
 
-    assert response.status_code == 400
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["answer"] is None
+    with db.sessions() as session:
+        row = session.get(AnagramGameRecord, body["id"])
+        assert row is not None and row.status == "pending"
+        assert (
+            session.scalar(select(func.count()).select_from(ScheduledGameContentRecord))
+            == 0
+        )
 
 
 def test_an_unrecognised_mode_is_a_validation_error(admin_client: TestClient):

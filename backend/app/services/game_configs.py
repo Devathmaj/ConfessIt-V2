@@ -21,6 +21,7 @@ Questionnaire resets weekly, and each game is enabled/hidden independently.
   refused, and the scheduler creates no new sessions.
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -154,8 +155,18 @@ def update_config(
     content_mode: Optional[str] = None,
     reset_cadence: Optional[str] = None,
     grid_size: Optional[int] = None,
+    now: Optional[datetime] = None,
 ) -> dict:
-    """Patch one game's configuration, refusing values outside the vocabularies."""
+    """Patch one game's configuration, refusing values outside the vocabularies.
+
+    Switching a scheduled word or puzzle game (Wordle, Anagram, Connections)
+    to a 2/3/5-day cadence additionally re-anchors its live session: the
+    current session ends and a fresh window opens under the new cadence,
+    consuming the earliest scheduled entry inside it and silently discarding
+    the rest (the old rhythm no longer exists, so old dates can never align
+    again). See :func:`game_scheduler.reanchor_for_cadence_change`. All other
+    cadence changes simply take effect at the next boundary.
+    """
     validate_game_id(game_id)
     if content_mode is not None and content_mode not in GAME_CONTENT_MODES:
         raise HTTPException(
@@ -210,6 +221,7 @@ def update_config(
             )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)
+        previous_cadence = row.reset_cadence
         if enabled is not None:
             row.enabled = bool(enabled)
         if is_hidden is not None:
@@ -227,7 +239,26 @@ def update_config(
 
             row.grid_size = TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
         session.flush()
-        return _as_dict(row)
+        result = _as_dict(row)
+    # A multi-day cadence redefines every future window, so switching one on
+    # re-anchors the live session immediately (new window, eligible scheduled
+    # entry consumed, the rest silently discarded) rather than leaving the old
+    # rhythm's schedules to misfire. Silent by design: no warnings or dialogs.
+    # The re-anchor runs after this patch commits because it reads the stored
+    # cadence; both steps are atomic on their own, and the per-game lock keeps
+    # a racing scheduler tick from duplicating anything.
+    if (
+        game_id in ("wordle", "anagram", "connections")
+        and reset_cadence is not None
+        and reset_cadence != previous_cadence
+        and reset_cadence in ("every_2_days", "every_3_days", "every_5_days")
+    ):
+        from .game_scheduler import reanchor_for_cadence_change
+
+        reanchor_for_cadence_change(
+            db, game_id, now=now or datetime.now(timezone.utc)
+        )
+    return result
 
 
 class GameUnavailable(Exception):

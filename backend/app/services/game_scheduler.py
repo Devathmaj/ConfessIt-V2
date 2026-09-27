@@ -125,32 +125,132 @@ def _random_anagram_answer() -> str:
     return random.choice(eligible)
 
 
-def _take_scheduled(session, game_id: str, target: date) -> Optional[str]:
-    """Consume and return the scheduled word for ``target``, if one waits."""
-    row = session.scalar(
+def _window_scheduled_words(session, game_id: str, start: date, end: date) -> list:
+    """Pending scheduled words whose dates fall in ``[start, end)``, earliest first.
+
+    A scheduled date does not need to equal the session's start date: any date
+    inside the half-open window being created qualifies. Ordering is by
+    scheduled date with the row id as the stable tie-break, so selection is
+    deterministic no matter how many entries share the window.
+    """
+    return session.scalars(
+        select(ScheduledGameContentRecord)
+        .where(
+            ScheduledGameContentRecord.game_id == game_id,
+            ScheduledGameContentRecord.target_date >= start,
+            ScheduledGameContentRecord.target_date < end,
+        )
+        .order_by(
+            ScheduledGameContentRecord.target_date.asc(),
+            ScheduledGameContentRecord.id.asc(),
+        )
+    ).all()
+
+
+def _discard_scheduled_words_before(session, game_id: str, cutoff: date) -> int:
+    """Delete pending scheduled words dated before ``cutoff``. Returns the count.
+
+    Used after a window takes its content: past entries and in-window entries
+    that lost the earliest-date selection can never fire in a later window,
+    so they are removed rather than left to linger. Entries on or after the
+    cutoff belong to future windows and are preserved.
+    """
+    rows = session.scalars(
         select(ScheduledGameContentRecord).where(
             ScheduledGameContentRecord.game_id == game_id,
-            ScheduledGameContentRecord.target_date == target,
+            ScheduledGameContentRecord.target_date < cutoff,
         )
-    )
-    if row is None:
+    ).all()
+    for row in rows:
+        session.delete(row)
+    return len(rows)
+
+
+def _discard_all_scheduled_words(session, game_id: str) -> int:
+    """Delete every pending scheduled word for ``game_id``. Returns the count.
+
+    Only for forced re-anchoring (a cadence change redefining the rhythm):
+    old dates no longer align with any future window, so carrying any of them
+    forward would let a stale word activate unexpectedly later.
+    """
+    rows = session.scalars(
+        select(ScheduledGameContentRecord).where(
+            ScheduledGameContentRecord.game_id == game_id,
+        )
+    ).all()
+    for row in rows:
+        session.delete(row)
+    return len(rows)
+
+
+def _window_scheduled_puzzles(session, start: date, end: date) -> list:
+    """Pending scheduled Connections puzzles dated in ``[start, end)``, earliest first.
+
+    Connections has no game column on its schedule table (it is the only
+    writer), so the window alone scopes the selection. Same earliest-date,
+    id-tie-break determinism as the word games.
+    """
+    return session.scalars(
+        select(ConnectionsScheduledPuzzleRecord)
+        .where(
+            ConnectionsScheduledPuzzleRecord.target_date >= start,
+            ConnectionsScheduledPuzzleRecord.target_date < end,
+        )
+        .order_by(
+            ConnectionsScheduledPuzzleRecord.target_date.asc(),
+            ConnectionsScheduledPuzzleRecord.id.asc(),
+        )
+    ).all()
+
+
+def _discard_scheduled_puzzles_before(session, cutoff: date) -> int:
+    """Delete pending scheduled puzzles dated before ``cutoff``. Returns the count."""
+    rows = session.scalars(
+        select(ConnectionsScheduledPuzzleRecord).where(
+            ConnectionsScheduledPuzzleRecord.target_date < cutoff,
+        )
+    ).all()
+    for row in rows:
+        session.delete(row)
+    return len(rows)
+
+
+def _discard_all_scheduled_puzzles(session) -> int:
+    """Delete every pending scheduled Connections puzzle. Returns the count.
+
+    Only for forced re-anchoring (a cadence change redefining the rhythm).
+    """
+    rows = session.scalars(select(ConnectionsScheduledPuzzleRecord)).all()
+    for row in rows:
+        session.delete(row)
+    return len(rows)
+
+
+def _consume_earliest_word(session, game_id: str, start: date, end: date) -> Optional[str]:
+    """Activate the window's word: earliest in ``[start, end)``, then discard the rest.
+
+    Returns the selected word (its row is deleted), or None when the window
+    holds nothing. Non-selected rows dated before the window end can never
+    fire later and are discarded; rows on or after the end belong to future
+    windows and are preserved.
+    """
+    rows = _window_scheduled_words(session, game_id, start, end)
+    if not rows:
         return None
-    word = row.word
-    session.delete(row)
+    word = rows[0].word
+    session.delete(rows[0])
+    _discard_scheduled_words_before(session, game_id, end)
     return word
 
 
-def _take_scheduled_puzzle(session, target: date) -> Optional[list]:
-    """Consume and return the scheduled Connections puzzle for ``target``, if one waits."""
-    row = session.scalar(
-        select(ConnectionsScheduledPuzzleRecord).where(
-            ConnectionsScheduledPuzzleRecord.target_date == target,
-        )
-    )
-    if row is None:
+def _consume_earliest_puzzle(session, start: date, end: date) -> Optional[list]:
+    """Activate the window's Connections puzzle, then discard the rest, as above."""
+    rows = _window_scheduled_puzzles(session, start, end)
+    if not rows:
         return None
-    groups = [list(group) for group in row.groups]
-    session.delete(row)
+    groups = [list(group) for group in rows[0].groups]
+    session.delete(rows[0])
+    _discard_scheduled_puzzles_before(session, end)
     return groups
 
 
@@ -380,7 +480,9 @@ def _maybe_activate_pending(
     if current.status != "pending" or game_id not in ("wordle", "anagram", "connections"):
         return None
     if game_id == "connections":
-        groups = _take_scheduled_puzzle(session, current.period_start_date)
+        groups = _consume_earliest_puzzle(
+            session, current.period_start_date, current.period_end_date
+        )
         if not groups:
             return None
         _end_row(current, moment)
@@ -399,7 +501,9 @@ def _maybe_activate_pending(
     if content_mode == "random":
         word = _random_wordle_answer() if game_id == "wordle" else _random_anagram_answer()
     else:
-        word = _take_scheduled(session, game_id, current.period_start_date)
+        word = _consume_earliest_word(
+            session, game_id, current.period_start_date, current.period_end_date
+        )
     if not word:
         return None
     _end_row(current, moment)
@@ -443,7 +547,10 @@ def _open_period(
                 else _random_anagram_answer()
             )
         else:
-            answer = _take_scheduled(session, game_id, today)
+            # Window-based consumption: any entry dated inside the new
+            # window qualifies, earliest first; the rest below the window
+            # end are discarded, later windows keep theirs.
+            answer = _consume_earliest_word(session, game_id, start, end)
         opened = _open_word_session(
             session,
             model,
@@ -464,11 +571,11 @@ def _open_period(
             "period_end": end.isoformat(),
         }
     if game_id == "connections":
-        # Connections is manual-only: consume a scheduled puzzle when one
-        # waits for today, otherwise open a pending session that stays
-        # unplayable until an administrator supplies its sixteen words. Never
-        # draw, reuse or invent words.
-        groups = _take_scheduled_puzzle(session, today)
+        # Connections is manual-only: consume the earliest scheduled puzzle
+        # dated inside the new window, otherwise open a pending session that
+        # stays unplayable until an administrator supplies its sixteen words.
+        # Never draw, reuse or invent words.
+        groups = _consume_earliest_puzzle(session, start, end)
         opened = _open_connections_session(
             session,
             groups=groups,
@@ -640,6 +747,83 @@ def reset_cycle_succeeded(summary: dict) -> bool:
         return False
     league = summary.get("league")
     return not (isinstance(league, dict) and league.get("action") == "error")
+
+
+def has_current_session(db: Database, game_id: str) -> bool:
+    """Whether ``game_id`` holds an active-or-pending session row right now."""
+    model = _GAME_MODELS.get(game_id)
+    if model is None:
+        return False
+    with db.sessions() as session:
+        return _current_row(session, model) is not None
+
+
+def reanchor_for_cadence_change(
+    db: Database, game_id: str, *, now: Optional[datetime] = None
+) -> Optional[dict]:
+    """Forced re-anchor after an admin switched ``game_id`` to a multi-day cadence.
+
+    Ends the live session (if any) and opens a fresh window under the new
+    cadence starting now, consuming the earliest scheduled entry inside that
+    window -- or opening pending when the window holds none. Every *other*
+    pending scheduled entry is silently discarded, including ones dated after
+    the new window: the rhythm they were planned under no longer exists, so
+    carrying any of them forward would let a stale word activate unexpectedly
+    in a later session.
+
+    Returns the new session summary, or None when no re-anchor applies: games
+    without scheduled words or puzzles keep the old behavior (the new cadence
+    simply takes effect at the next boundary), as do hidden games (which must
+    not open sessions at all), random-mode games (whose draws never consult
+    schedules), and games with no live session to re-anchor.
+
+    The session work itself delegates to the game's Update operation with no
+    supplied content, so locking, terminate-then-create, league snapshots and
+    duplicate protection are identical to a manual reset.
+    """
+    if game_id not in ("wordle", "anagram", "connections"):
+        return None
+    moment = _now_utc(now)
+    with db.sessions() as session:
+        config = get_config(session, game_id)
+        if config.is_hidden:
+            return None
+        if (config.content_mode or "manual") != "manual":
+            return None
+        model = _GAME_MODELS[game_id]
+        if _current_row(session, model) is None:
+            return None
+    if game_id == "wordle":
+        from .wordle_service import update_wordle_session
+
+        result = update_wordle_session(
+            db,
+            mode=None,
+            word=None,
+            token=None,
+            now=moment,
+            discard_future_schedules=True,
+        )
+        return {"game_id": game_id, "action": "reanchored", "session_id": result.id}
+    if game_id == "anagram":
+        from .anagram_service import update_anagram_session
+
+        result = update_anagram_session(
+            db,
+            mode=None,
+            word=None,
+            token=None,
+            updated_by="admin",
+            now=moment,
+            discard_future_schedules=True,
+        )
+        return {"game_id": game_id, "action": "reanchored", "session_id": result.id}
+    from .connections_service import update_connections_session
+
+    result = update_connections_session(
+        db, groups=None, updated_by="admin", now=moment, discard_future_schedules=True
+    )
+    return {"game_id": game_id, "action": "reanchored", "session_id": result.id}
 
 
 def active_session_counts(db: Database) -> dict[str, int]:

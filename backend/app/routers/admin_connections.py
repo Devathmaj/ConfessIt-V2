@@ -36,17 +36,20 @@ async def create_connections_game(
     """Update the current session: end it and open a brand-new one ("Update").
 
     Stores the sixteen supplied words in their four canonical groups on the
-    new session. The old session is stamped ended and kept as history with its
+    new session -- or, when no puzzle is supplied, consumes the earliest
+    scheduled puzzle inside the new window (pending when the window holds
+    none). The old session is stamped ended and kept as history with its
     words and submissions; the new session starts from scratch for today's UTC
     date under the game's own reset cadence. Future puzzles belong on the
     schedule endpoint below.
 
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken
-    from the payload: an administrator cannot publish a puzzle attributed to
-    somebody else.
+    The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
+    an administrator cannot publish a puzzle attributed to somebody else.
     """
     return connections_service.create_connections_game(
-        db, list(payload.groups), created_by=account.regno
+        db,
+        list(payload.groups) if payload.groups is not None else None,
+        created_by=account.regno,
     )
 
 
