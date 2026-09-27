@@ -93,6 +93,28 @@ async def set_featured_game(
     return FeaturedGame(**created)
 
 
+@router.put("/featured", response_model=FeaturedGame)
+async def replace_featured_game(
+    payload: FeaturedGameCreate,
+    db: Database = Depends(get_db),
+    account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> FeaturedGame:
+    """Set one game as featured for one UTC date, replacing any current pick.
+
+    The atomic path for the per-game "Set as Featured" action: when another
+    game holds the date it is removed in the same transaction and the new pick
+    is stored, so the admin confirms once and the schedule never sits empty
+    between a delete and a create. Replacing the spotlight never rewrites
+    league history -- awards snapshot ``is_featured`` at finalization time, so
+    points already earned keep their 2x while only future plays earn 2x on the
+    new game. Featuring never creates or touches any session.
+    """
+    replaced = featured_games.replace_featured(
+        db, payload.game_date, payload.game_id, created_by=account.regno
+    )
+    return FeaturedGame(**replaced)
+
+
 @router.delete("/featured/{game_date}", status_code=204)
 async def clear_featured_game(
     game_date: date,

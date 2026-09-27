@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronUp, CircleHelp, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { AdminGameStatusControls } from '@/components/AdminGameStatusControls';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -357,6 +358,8 @@ export const AdminTriviaDropManage = () => {
         </div>
         {live && <Badge>Live now</Badge>}
       </header>
+
+      <AdminSetFeaturedCard gameId="trivia-drop" gameName="Trivia Drop" />
 
       <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
         <CardHeader>

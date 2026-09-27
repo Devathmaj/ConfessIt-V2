@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
 
 /**
@@ -7,7 +8,7 @@ import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
  * mirroring the Connections and Trivia Drop editors.
  *
  * All Couple Questionnaire configuration lives here -- availability, reset
- * cadence, the featured day and its history. The manage overview only links
+ * cadence and the current session. The manage overview only links
  * here with title, short description and an Open Editor option.
  */
 export const AdminCoupleQuestionnaireManage = () => {
@@ -23,11 +24,12 @@ export const AdminCoupleQuestionnaireManage = () => {
         </NavLink>
         <h1 className="text-3xl font-semibold">Couple Questionnaire</h1>
         <p className="text-sm text-muted-foreground">
-          Answer for yourself, then predict your partner — 15 and 15. One
-          featured day at a time; the questionnaire rolls on its own cadence.
+          Answer for yourself, then predict your partner — 15 and 15. Sessions
+          roll on their own cadence with a fresh question set per couple.
         </p>
       </header>
 
+      <AdminSetFeaturedCard gameId="couple-questionnaire" gameName="Couple Questionnaire" />
       <AdminCoupleConfig />
     </div>
   );

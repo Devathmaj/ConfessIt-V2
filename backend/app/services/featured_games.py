@@ -66,6 +66,39 @@ def set_featured(
         ) from exc
 
 
+def replace_featured(
+    db: Database, game_date: date, game_id: str, created_by: str
+) -> dict:
+    """Set ``game_id`` as the featured game for ``game_date``, replacing any pick.
+
+    Unlike :func:`set_featured` this never 409s: when another game holds the
+    date it is removed in the same transaction and the new pick is stored.
+    When the same game already holds the date the existing row is returned
+    unchanged (idempotent). League awards already finalized keep the snapshot
+    they were scored with -- finalization reads the schedule once at scoring
+    time and never re-derives it -- so replacing the spotlight only changes
+    which game earns 2x from now on.
+    """
+    validate_game_id(game_id)
+    with db.sessions.begin() as session:
+        existing = session.scalar(
+            select(FeaturedGameRecord).where(
+                FeaturedGameRecord.game_date == game_date
+            )
+        )
+        if existing is not None and existing.game_id == game_id:
+            return _as_dict(existing)
+        if existing is not None:
+            session.delete(existing)
+            session.flush()
+        row = FeaturedGameRecord(
+            game_date=game_date, game_id=game_id, created_by=created_by
+        )
+        session.add(row)
+        session.flush()
+        return _as_dict(row)
+
+
 def clear_featured(db: Database, game_date: date) -> None:
     """Remove the featured pick for ``game_date``; a day with none is a 404."""
     with db.sessions.begin() as session:

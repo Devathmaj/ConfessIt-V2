@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -35,6 +36,10 @@ const CADENCE_LABELS: Record<GameConfig['reset_cadence'], string> = {
  * the scheduler from opening new sessions. The reset cadence belongs to the
  * game, never to the spotlight -- featuring a game changes none of this.
  *
+ * The cadence picker stages its change: picking a frequency only arms a Save
+ * button next to it, and nothing is sent until Save is clicked, so browsing
+ * the options can never rewrite production config by itself.
+ *
  * `hideResetCadence` is for games that release individually rather than on
  * any cadence (Trivia Drop): the stored cadence is never read for them, so
  * the picker is not offered and cannot suggest otherwise.
@@ -53,10 +58,19 @@ export const AdminGameStatusControls = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // The staged cadence. Picking a frequency stages it without saving --
+  // staging the saved value clears again -- and Save persists it.
+  const [stagedCadence, setStagedCadence] = useState<GameConfig['reset_cadence'] | null>(null);
+  const [cadenceError, setCadenceError] = useState<string | null>(null);
+  const hasUnsavedCadence =
+    stagedCadence !== null && config !== null && stagedCadence !== config.reset_cadence;
+
   const refresh = useCallback(async () => {
     try {
       const configs = (await getGameConfigs()) ?? [];
       setConfig(configs.find((entry) => entry.game_id === gameId) ?? null);
+      setStagedCadence(null);
+      setCadenceError(null);
       setLoadError(null);
     } catch (error) {
       setLoadError(describeApiError(error, 'Could not load game status.'));
@@ -75,6 +89,26 @@ export const AdminGameStatusControls = ({
       setConfig(await updateGameConfig(gameId, payload));
     } catch (error) {
       toast.error(describeApiError(error, 'Could not save game status.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Stage a cadence without saving it; staging the saved value clears. */
+  const selectCadence = (next: GameConfig['reset_cadence']) => {
+    setStagedCadence(config !== null && next === config.reset_cadence ? null : next);
+    setCadenceError(null);
+  };
+
+  const handleSaveCadence = async () => {
+    if (stagedCadence === null) return;
+    setSaving(true);
+    setCadenceError(null);
+    try {
+      setConfig(await updateGameConfig(gameId, { reset_cadence: stagedCadence }));
+      setStagedCadence(null);
+    } catch (error) {
+      setCadenceError(describeApiError(error, 'Could not save the reset frequency.'));
     } finally {
       setSaving(false);
     }
@@ -131,24 +165,61 @@ export const AdminGameStatusControls = ({
           {!hideResetCadence && (
             <div className="flex flex-col gap-2">
               <Label>Session reset</Label>
-              <Select
-                value={config.reset_cadence}
-                disabled={saving}
-                onValueChange={(next) =>
-                  void patch({ reset_cadence: next as GameConfig['reset_cadence'] })
-                }
-              >
-                <SelectTrigger className="w-52">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(CADENCE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={stagedCadence ?? config.reset_cadence}
+                  disabled={saving}
+                  onValueChange={(next) =>
+                    selectCadence(next as GameConfig['reset_cadence'])
+                  }
+                >
+                  <SelectTrigger className="w-52">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(CADENCE_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {hasUnsavedCadence && (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSaveCadence}
+                      disabled={saving}
+                    >
+                      {saving ? 'Saving...' : 'Save'}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={saving}
+                      onClick={() => {
+                        setStagedCadence(null);
+                        setCadenceError(null);
+                      }}
+                    >
+                      Discard
+                    </Button>
+                  </>
+                )}
+              </div>
+              {hasUnsavedCadence && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Unsaved changes — the new frequency applies from the next
+                  session onwards once saved. The current session is untouched.
+                </p>
+              )}
+              {cadenceError && (
+                <p role="alert" className="text-sm font-medium text-destructive">
+                  {cadenceError}
+                </p>
+              )}
             </div>
           )}
           <p className="text-xs text-muted-foreground">

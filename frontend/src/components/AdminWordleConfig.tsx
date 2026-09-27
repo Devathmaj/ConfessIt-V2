@@ -90,6 +90,7 @@ export const AdminWordleConfig = () => {
   const [scheduleWord, setScheduleWord] = useState('');
   const [scheduled, setScheduled] = useState<ScheduledWord[]>([]);
   const [scheduling, setScheduling] = useState(false);
+  const [drawingSchedule, setDrawingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<WordleGame | null>(null);
@@ -212,9 +213,22 @@ export const AdminWordleConfig = () => {
     }
   };
 
+  /** Draw a random word into the scheduling box; typing still works afterwards. */
+  const handleDrawSchedule = async () => {
+    setDrawingSchedule(true);
+    setScheduleError(null);
+    try {
+      const drawnSchedule = await drawWordleAnswer(scheduleDate || undefined);
+      setScheduleWord(drawnSchedule.word);
+    } catch (error) {
+      setScheduleError(describeApiError(error, 'Could not draw a word.'));
+    } finally {
+      setDrawingSchedule(false);
+    }
+  };
+
   const handleSchedule = async () => {
-    if (!scheduleDate || !scheduleWord.trim()) return;
-    setScheduling(true);
+    if (!scheduleDate || !scheduleWord.trim()) return;    setScheduling(true);
     setScheduleError(null);
     try {
       const created = await scheduleWordleWord(scheduleDate, scheduleWord.trim());
@@ -454,6 +468,16 @@ export const AdminWordleConfig = () => {
             </div>
             <Button
               type="button"
+              variant="outline"
+              onClick={handleDrawSchedule}
+              disabled={!scheduleDate || drawingSchedule || scheduling}
+              aria-label="Generate a random word for the scheduled date"
+            >
+              <Dices />
+              {drawingSchedule ? 'Generating...' : 'Generate'}
+            </Button>
+            <Button
+              type="button"
               onClick={handleSchedule}
               disabled={!scheduleDate || !scheduleWord.trim() || scheduling}
             >
@@ -461,8 +485,8 @@ export const AdminWordleConfig = () => {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Within 30 days ahead. The word waits until its period opens and never activates
-            early.
+            Within 30 days ahead. Type a word or generate one — the word waits
+            until its period opens and never activates early.
           </p>
           {scheduleError && (
             <p role="alert" className="text-sm font-medium text-destructive">

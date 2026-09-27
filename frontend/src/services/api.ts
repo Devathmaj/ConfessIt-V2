@@ -1324,6 +1324,27 @@ export const setFeaturedGame = async (
     return response.data;
 };
 
+/**
+ * Set one game as featured for one UTC date, replacing any current pick.
+ *
+ * The atomic path for the per-game "Set as Featured" action: when another
+ * game holds the date it is removed in the same transaction. Replacing never
+ * rewrites league history -- awards snapshot `is_featured` at finalization
+ * time, so points already earned keep their 2x while only future plays earn
+ * 2x on the new game.
+ */
+export const replaceFeaturedGame = async (
+    gameDate: string,
+    gameId: string
+): Promise<FeaturedGame> => {
+    const response = await axios.put(
+        `${API_URL}/admin/featured`,
+        { game_date: gameDate, game_id: gameId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 /** Remove the featured pick for one UTC date. */
 export const clearFeaturedGame = async (gameDate: string): Promise<void> => {
     await axios.delete(`${API_URL}/admin/featured/${gameDate}`, {

@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminWordleConfig } from '@/components/AdminWordleConfig';
 
 /**
@@ -28,6 +29,7 @@ export const AdminWordleManage = () => {
         </p>
       </header>
 
+      <AdminSetFeaturedCard gameId="wordle" gameName="Wordle" />
       <AdminWordleConfig />
     </div>
   );

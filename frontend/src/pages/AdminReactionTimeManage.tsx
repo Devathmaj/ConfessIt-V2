@@ -1,13 +1,14 @@
 import { NavLink } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminReactionTimeConfig } from '@/components/AdminReactionTimeConfig';
 
 /**
  * The Reaction Time console: its own page under /admin/games/manage,
  * mirroring the Connections and Trivia Drop editors.
  *
- * All Reaction Time configuration lives here -- availability, reset cadence,
- * the featured day and its history. The manage overview only links here with
+ * All Reaction Time configuration lives here -- availability, reset cadence
+ * and the current session. The manage overview only links here with
  * title, short description and an Open Editor option.
  */
 export const AdminReactionTimeManage = () => {
@@ -23,11 +24,12 @@ export const AdminReactionTimeManage = () => {
         </NavLink>
         <h1 className="text-3xl font-semibold">Reaction Time</h1>
         <p className="text-sm text-muted-foreground">
-          Wait for green, then click as fast as you can — five tries. One
-          featured day at a time; play rolls on its own cadence.
+          Wait for green, then click as fast as you can — five tries. Play
+          rolls on its own cadence with five fresh submissions per period.
         </p>
       </header>
 
+      <AdminSetFeaturedCard gameId="reaction-time" gameName="Reaction Time" />
       <AdminReactionTimeConfig />
     </div>
   );

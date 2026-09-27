@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Network, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Network, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { AdminGameStatusControls } from '@/components/AdminGameStatusControls';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -201,6 +202,10 @@ export const AdminConnectionsManage = () => {
   const [scheduling, setScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
+  // Session history stays collapsed so a long season of past sessions does not
+  // push the working controls off the screen.
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   const refresh = useCallback(async () => {
     try {
       setGames(await getAdminConnectionsGames());
@@ -314,6 +319,8 @@ export const AdminConnectionsManage = () => {
           </Badge>
         )}
       </header>
+
+      <AdminSetFeaturedCard gameId="connections" gameName="Connections" />
 
       <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
         <CardHeader>
@@ -444,9 +451,24 @@ export const AdminConnectionsManage = () => {
               <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 Session history
               </h4>
-              <span className="text-xs text-muted-foreground">
-                {loading ? 'Loading...' : `${games.length} sessions`}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {loading ? 'Loading...' : `${games.length} sessions`}
+                </span>
+                {games.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setHistoryOpen((open) => !open)}
+                    aria-expanded={historyOpen}
+                    aria-label={historyOpen ? 'Hide session history' : 'Show session history'}
+                  >
+                    {historyOpen ? <ChevronUp /> : <ChevronDown />}
+                    {historyOpen ? 'Hide' : 'Show'}
+                  </Button>
+                )}
+              </div>
             </div>
             {listError && (
               <p role="alert" className="text-sm font-medium text-destructive">
@@ -458,7 +480,7 @@ export const AdminConnectionsManage = () => {
                 No sessions yet. The reset loop opens the first one automatically.
               </p>
             )}
-            {games.length > 0 && (
+            {historyOpen && games.length > 0 && (
               <ul className="flex flex-col gap-2">
                 {games.map((game) => (
                   <li

@@ -46,6 +46,7 @@ import {
   getAdminIndividualLeaderboard,
   getScheduledAnagramWords,
   getScheduledWordleWords,
+  replaceFeaturedGame,
   runScheduledResets,
   scheduleAnagramWord,
   scheduleWordleWord,
@@ -119,6 +120,7 @@ vi.mock('@/services/api', () => ({
   updateGameConfig: vi.fn(),
   getFeaturedGames: vi.fn(),
   setFeaturedGame: vi.fn(),
+  replaceFeaturedGame: vi.fn(),
   clearFeaturedGame: vi.fn(),
   runScheduledResets: vi.fn(),
   getGameSelection: vi.fn(),
@@ -422,7 +424,7 @@ describe('AdminReactionTimeManage: the Reaction Time editor page', () => {
     throw new Error('The Reaction Time card could not be found from its heading.');
   };
 
-  it('features a day through the server and reports the session period', async () => {
+  it('reports the session period with no per-period content to author', async () => {
     vi.mocked(getCurrentAdminReactionTimeSession).mockResolvedValue({
       id: 'session-1',
       game_date: todayIso(),
@@ -432,47 +434,73 @@ describe('AdminReactionTimeManage: the Reaction Time editor page', () => {
     });
     renderSection('/admin/games/manage/reaction-time');
     const card = reactionCard();
-    expect(await within(card).findByText(/Nothing featured yet/)).toBeInTheDocument();
     expect(await within(card).findByText(/Current session period/)).toBeInTheDocument();
+    // No per-period authoring and no shared history for this game.
+    expect(within(card).queryByText(/Schedule a future/)).not.toBeInTheDocument();
+    expect(within(card).queryByText(/Session history/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save featured day/i })).not.toBeInTheDocument();
+  });
+
+  it('sets itself as featured for today when nothing holds the spotlight', async () => {
+    renderSection('/admin/games/manage/reaction-time');
+    expect(await screen.findByText(/No game holds today/)).toBeInTheDocument();
 
     const created = {
-      id: 'reaction-1',
+      id: 'featured-1',
       game_date: todayIso(),
+      game_id: 'reaction-time',
       created_by: 'TEST001',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    vi.mocked(createReactionTimeGame).mockResolvedValue(created);
-    vi.mocked(getAdminReactionTimeGames).mockResolvedValue([created]);
+    vi.mocked(replaceFeaturedGame).mockResolvedValue(created);
 
-    fireEvent.click(within(card).getByRole('button', { name: /save featured day/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set as featured/i }));
 
     await waitFor(() =>
-      expect(createReactionTimeGame).toHaveBeenCalledWith({ game_date: todayIso() }),
+      expect(replaceFeaturedGame).toHaveBeenCalledWith(todayIso(), 'reaction-time'),
     );
-    expect(toast.success).toHaveBeenCalledWith(`Reaction Time featured for ${todayIso()}.`);
-    await waitFor(() =>
-      expect(within(card).getAllByText(new RegExp(todayIso())).length).toBeGreaterThan(0),
-    );
+    expect(toast.success).toHaveBeenCalledWith(`Reaction Time is featured for ${todayIso()}.`);
   });
 
-  it('keeps the one-game-per-date refusal on the screen', async () => {
-    renderSection('/admin/games/manage/reaction-time');
-    const card = reactionCard();
-    await within(card).findByText(/Nothing featured yet/);
-
-    vi.mocked(createReactionTimeGame).mockRejectedValue({
-      response: {
-        status: 409,
-        data: { detail: `A featured game is already set for ${todayIso()}.` },
+  it('confirms before replacing the game that holds today, keeping earned 2x', async () => {
+    vi.mocked(getFeaturedGames).mockResolvedValue([
+      {
+        id: 'featured-wordle',
+        game_date: todayIso(),
+        game_id: 'wordle',
+        created_by: 'TEST001',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       },
-    });
+    ]);
+    renderSection('/admin/games/manage/reaction-time');
+    expect(await screen.findByText(/is featured today/)).toBeInTheDocument();
+    expect(screen.getByText('Wordle')).toBeInTheDocument();
 
-    fireEvent.click(within(card).getByRole('button', { name: /save featured day/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set as featured/i }));
 
-    const alert = await within(card).findByRole('alert');
-    expect(alert).toHaveTextContent('A featured game is already set');
-    expect(toast.success).not.toHaveBeenCalled();
+    // The popup names the displaced game and states earned scores persist.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Replace today/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Scores already earned keep their 2x/)).toBeInTheDocument();
+
+    const created = {
+      id: 'featured-2',
+      game_date: todayIso(),
+      game_id: 'reaction-time',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    vi.mocked(replaceFeaturedGame).mockResolvedValue(created);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /replace featured/i }));
+
+    await waitFor(() =>
+      expect(replaceFeaturedGame).toHaveBeenCalledWith(todayIso(), 'reaction-time'),
+    );
+    expect(toast.success).toHaveBeenCalledWith(`Reaction Time is featured for ${todayIso()}.`);
   });
 });
 
@@ -729,6 +757,24 @@ describe('AdminWordleManage: the Wordle editor page', () => {
     );
   });
 
+  it('generates a random word into the scheduling box without clearing typing', async () => {
+    renderSection('/admin/games/manage/wordle');
+    const card = wordleCard();
+    await within(card).findByText(/No sessions yet/);
+
+    vi.mocked(drawWordleAnswer).mockResolvedValue({ word: 'cigar', token: 'signed-for-schedule' });
+    fireEvent.click(
+      within(card).getByRole('button', { name: /generate a random word for the scheduled date/i }),
+    );
+
+    expect(await within(card).findByDisplayValue('cigar')).toBeInTheDocument();
+    expect(drawWordleAnswer).toHaveBeenCalledWith(todayIso());
+
+    // Typing still works after a generate.
+    fireEvent.change(within(card).getByLabelText('Future word'), { target: { value: 'crane' } });
+    expect(within(card).getByLabelText('Future word')).toHaveValue('crane');
+  });
+
   it('keeps the games console from an account without games:manage', () => {
     const staffWithoutGames: AuthContextValue = {
       ...adminSession,
@@ -896,6 +942,24 @@ describe('AdminAnagramManage: the Anagram editor page', () => {
     expect(createWordleGame).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  it('generates a random word into the scheduling box without clearing typing', async () => {
+    renderSection('/admin/games/manage/anagram');
+    const card = anagramCard();
+    await within(card).findByText(/No sessions yet/);
+
+    vi.mocked(drawAnagramAnswer).mockResolvedValue({ word: 'GARDEN', token: 'signed-for-schedule' });
+    fireEvent.click(
+      within(card).getByRole('button', { name: /generate a random word for the scheduled date/i }),
+    );
+
+    expect(await within(card).findByDisplayValue('GARDEN')).toBeInTheDocument();
+    expect(drawAnagramAnswer).toHaveBeenCalledWith(todayIso());
+
+    // Typing still works after a generate.
+    fireEvent.change(within(card).getByLabelText('Future word'), { target: { value: 'meadow' } });
+    expect(within(card).getByLabelText('Future word')).toHaveValue('meadow');
+  });
 });
 
 describe('Per-game editors: status and collapsed history', () => {
@@ -952,7 +1016,7 @@ describe('Per-game editors: status and collapsed history', () => {
     );
   });
 
-  it('changes the reset cadence from inside the game card', async () => {
+  it('stages the reset frequency and only saves on Save', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('anagram', 'manual')]);
     vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('anagram', 'manual'));
     renderSection('/admin/games/manage/anagram');
@@ -967,10 +1031,107 @@ describe('Per-game editors: status and collapsed history', () => {
     });
     fireEvent.click(await screen.findByRole('option', { name: 'Weekly (Mon–Sun UTC)' }));
 
+    // Picking alone stages without saving.
+    expect(await within(group).findByText(/Unsaved changes/)).toBeInTheDocument();
+    expect(updateGameConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(within(group).getByRole('button', { name: /^save$/i }));
+
     await waitFor(() =>
       expect(updateGameConfig).toHaveBeenCalledWith('anagram', {
         reset_cadence: 'weekly',
       }),
     );
+  });
+
+  it('discards a staged reset frequency without saving', async () => {
+    vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('anagram', 'manual')]);
+    renderSection('/admin/games/manage/anagram');
+    const card = anagramCard();
+    const group = statusGroup(card, 'Anagram');
+    await within(group).findByRole('switch', { name: 'Anagram enabled' });
+
+    fireEvent.pointerDown(within(group).getByRole('combobox'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'Weekly (Mon–Sun UTC)' }));
+    expect(await within(group).findByText(/Unsaved changes/)).toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole('button', { name: /discard/i }));
+    await waitFor(() =>
+      expect(within(group).queryByText(/Unsaved changes/)).not.toBeInTheDocument(),
+    );
+    expect(updateGameConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminTwoKeyEscapeManage: the maze size', () => {
+  const twoKeyCard = () => {
+    const headings = screen.getAllByRole('heading', { name: 'Two-Key Escape' });
+    for (const heading of headings) {
+      const card = heading.closest('.rounded-2xl');
+      if (card) return card as HTMLElement;
+    }
+    throw new Error('The Two-Key Escape card could not be found from its heading.');
+  };
+
+  it('stages the grid size and only saves on Save', async () => {
+    vi.mocked(getGameConfigs).mockResolvedValue([
+      { ...gameConfig('two-key-escape'), grid_size: 12 },
+    ]);
+    vi.mocked(updateGameConfig).mockResolvedValue({
+      ...gameConfig('two-key-escape'),
+      grid_size: 13,
+    });
+    renderSection('/admin/games/manage/two-key-escape');
+    const card = twoKeyCard();
+    await within(card).findByText(/The only gameplay setting/);
+
+    // The page holds two pickers (reset frequency, then grid size) -- the
+    // grid size is the second one.
+    const gridPicker = within(card).getAllByRole('combobox')[1];
+    fireEvent.pointerDown(gridPicker, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: /13 × 13/ }));
+
+    // Picking alone stages without saving.
+    expect(await within(card).findByText(/Unsaved changes/)).toBeInTheDocument();
+    expect(updateGameConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(within(card).getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(updateGameConfig).toHaveBeenCalledWith('two-key-escape', { grid_size: 13 }),
+    );
+    expect(toast.success).toHaveBeenCalledWith('Maze size set to 13x13 (13 locks).');
+  });
+
+  it('discards a staged grid size without saving', async () => {
+    vi.mocked(getGameConfigs).mockResolvedValue([
+      { ...gameConfig('two-key-escape'), grid_size: 12 },
+    ]);
+    renderSection('/admin/games/manage/two-key-escape');
+    const card = twoKeyCard();
+    await within(card).findByText(/The only gameplay setting/);
+
+    const gridPicker = within(card).getAllByRole('combobox')[1];
+    fireEvent.pointerDown(gridPicker, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: /13 × 13/ }));
+    expect(await within(card).findByText(/Unsaved changes/)).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole('button', { name: /discard/i }));
+    await waitFor(() =>
+      expect(within(card).queryByText(/Unsaved changes/)).not.toBeInTheDocument(),
+    );
+    expect(updateGameConfig).not.toHaveBeenCalled();
   });
 });

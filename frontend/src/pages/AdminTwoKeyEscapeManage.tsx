@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminTwoKeyEscapeConfig } from '@/components/AdminTwoKeyEscapeConfig';
 
 /**
@@ -29,6 +30,7 @@ export const AdminTwoKeyEscapeManage = () => {
         </p>
       </header>
 
+      <AdminSetFeaturedCard gameId="two-key-escape" gameName="Two-Key Escape" />
       <AdminTwoKeyEscapeConfig />
     </div>
   );

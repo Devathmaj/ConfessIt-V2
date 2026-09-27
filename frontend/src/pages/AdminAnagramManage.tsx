@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
 
 /**
@@ -28,6 +29,7 @@ export const AdminAnagramManage = () => {
         </p>
       </header>
 
+      <AdminSetFeaturedCard gameId="anagram" gameName="Anagram" />
       <AdminAnagramConfig />
     </div>
   );
