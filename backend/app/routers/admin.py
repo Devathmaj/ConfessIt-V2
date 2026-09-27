@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from sqlalchemy import func, select, text
 
 from ..postgres import new_id, is_valid_id
@@ -18,10 +18,12 @@ from ..services.authorization import require_capability
 from ..services.storage_service import storage_service
 from ..services.admin_service import (
     ADMIN_USERS_MAX_LIMIT,
+    CONFESSIONS_MAX_LIMIT,
     serialize_datetime,
     serialize_user_doc,
     _account_row_payload,
     get_admin_users_data,
+    get_admin_confessions_data,
     get_all_confessions_data,
     get_confession_reports_data,
     get_admin_statistics_data,
@@ -65,19 +67,30 @@ def _user_payload(user):
     }
 
 
-@router.get("/confessions", response_model=List[Dict[str, Any]])
+@router.get("/confessions", response_model=Dict[str, Any])
 async def get_all_confessions(
+    skip: int = Query(0, ge=0, description="How many matching confessions to skip."),
+    limit: int = Query(50, ge=1, le=CONFESSIONS_MAX_LIMIT, description="How many matching confessions to return. Clamped so one request can never materialise the whole table with every comment, report and reactor row attached."),
+    q: Optional[str] = Query(None, description="Case-insensitive substring match on the body, the recipient name and the sender's name, regno and email."),
+    filter: str = Query("all", description="Narrow to a subset: all, reported, anonymous or with-comments."),
+    sort: str = Query("recent", description="Order the page: recent, reports, comments or reactions."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
-) -> List[Dict[str, Any]]:
-    """Return every confession for admin review.
+) -> Dict[str, Any]:
+    """Return one page of confessions for admin review.
 
     Everything a reviewer acts on is here -- body, timestamps, reports, comments, engagement --
     with one exception: the sender of an anonymous confession. That identity is withheld for
     staff exactly as it is for users, and the redaction happens in the service so it is not
     merely absent from the screen but absent from the response.
+
+    The search is a SQL WHERE across the confession and its sender, the filter picker a SQL
+    WHERE, the sort picker a SQL ORDER BY, and every page a SQL LIMIT/OFFSET: the backend
+    reads at most one page no matter how many confessions exist, and ``total`` is a COUNT
+    under the same filter so the screen can load more downwards without holding the posts
+    it is not showing.
     """
-    return get_all_confessions_data(db)
+    return get_admin_confessions_data(db, skip=skip, limit=limit, query=q, filter_option=filter, sort=sort)
 
 
 @router.delete("/confessions/{confession_id}")

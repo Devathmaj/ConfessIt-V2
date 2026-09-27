@@ -181,7 +181,7 @@ def test_the_review_endpoint_withholds_the_sender_for_both_staff_tables(
     client = request.getfixturevalue(staff_fixture)
     response = client.get("/admin/confessions")
     assert response.status_code == 200
-    item = find(response.json(), anonymous_post)
+    item = find(response.json()["confessions"], anonymous_post)
     assert item["sender_hidden"] is True
     assert set(item["sender"].values()) == {None}
     assert "ghostwriter" not in response.text
@@ -291,5 +291,5 @@ def test_the_review_endpoint_serves_reaction_users(db, request, staff_fixture):
 
     response = client.get("/admin/confessions")
     assert response.status_code == 200
-    item = find(response.json(), confession_id)
+    item = find(response.json()["confessions"], confession_id)
     assert item["reaction_users"]["whoa"][0]["name"] == "Whoa Reactor"

@@ -443,9 +443,54 @@ export const getAdminStats = async () => {
     return response.data;
 };
 
-export const getAdminConfessions = async () => {
-    const response = await axios.get(`${API_URL}/admin/confessions`, { headers: getAuthHeaders() });
-    return response.data;
+export interface AdminConfessionsQuery {
+    skip?: number;
+    limit?: number;
+    q?: string;
+    filter?: 'all' | 'reported' | 'anonymous' | 'with-comments';
+    sort?: 'recent' | 'reports' | 'comments' | 'reactions';
+}
+
+export interface AdminConfessionsPage {
+    confessions: any[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+/**
+ * One page of confessions for the review screen, with every comment, report and
+ * reactor row attached to the confessions on it.
+ *
+ * The search is a SQL WHERE across each confession and its sender, the filter picker a
+ * SQL WHERE, the sort picker a SQL ORDER BY, and every page a SQL LIMIT/OFFSET on the
+ * server, so a deployment with thousands of confessions returns at most one page per
+ * request instead of the whole table. Accepts both the new
+ * `{confessions, total, skip, limit}` envelope and a legacy bare array (older servers
+ * and unit-test mocks), normalising the latter to a single page whose total is the
+ * array length.
+ */
+export const getAdminConfessions = async (params?: AdminConfessionsQuery): Promise<AdminConfessionsPage> => {
+    const response = await axios.get(`${API_URL}/admin/confessions`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.q ? { q: params.q } : {}),
+            ...(params?.filter && params.filter !== 'all' ? { filter: params.filter } : {}),
+            ...(params?.sort ? { sort: params.sort } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { confessions: data, total: data.length, skip: 0, limit: data.length };
+    }
+    return {
+        confessions: data?.confessions ?? [],
+        total: data?.total ?? (data?.confessions?.length ?? 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (data?.confessions?.length ?? 0),
+    };
 };
 
 export const deleteAdminConfession = async (confessionId: string) => {

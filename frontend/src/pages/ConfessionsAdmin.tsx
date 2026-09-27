@@ -1,9 +1,10 @@
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -119,6 +120,100 @@ type ConfessionSortOption = 'recent' | 'reports' | 'comments' | 'reactions';
 type ConfessionFilterOption = 'all' | 'reported' | 'anonymous' | 'with-comments';
 
 /**
+ * How many confessions one read returns. Rows here are heavy -- every confession carries
+ * its comments, reports and reactor names -- so the page is smaller than the love-note
+ * one, and the backend clamps anything larger regardless.
+ */
+const CONFESSIONS_PAGE_SIZE = 10;
+
+/** The rows inside a `getAdminConfessions` answer, whether it is the page envelope or a legacy bare array. */
+const confessionsOf = (answer: unknown): AdminConfession[] => {
+  if (Array.isArray(answer)) return answer as AdminConfession[];
+  const confessions = (answer as { confessions?: AdminConfession[] } | null | undefined)?.confessions;
+  return Array.isArray(confessions) ? confessions : [];
+};
+
+/** The matching-row count beside a `getAdminConfessions` answer, falling back to the rows at hand. */
+const totalOf = (answer: unknown, fallback: number): number => {
+  if (Array.isArray(answer)) return answer.length;
+  const total = (answer as { total?: unknown } | null | undefined)?.total;
+  return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+};
+
+/**
+ * One server row into the shape the screen renders, filling every field the review
+ * needs so a sparse row cannot break a card further down. Shared by the first page,
+ * every appended page and every refresh alike.
+ */
+const normalizeConfession = (item: Partial<AdminConfession>, index: number): AdminConfession => ({
+  id: item.id ?? `confession-${index}`,
+  body: item.body ?? '',
+  recipient_name: item.recipient_name ?? null,
+  anonymous: item.anonymous ?? true,
+  sender_hidden: item.sender_hidden ?? item.anonymous ?? true,
+  comments_enabled: item.comments_enabled ?? true,
+  created_at: item.created_at ?? null,
+  sender: {
+    id: item.sender?.id ?? null,
+    name: item.sender?.name ?? null,
+    regno: item.sender?.regno ?? null,
+    email: item.sender?.email ?? null,
+  },
+  report_count: item.report_count ?? 0,
+  reported_by: Array.isArray(item.reported_by) ? item.reported_by : [],
+  reports: Array.isArray(item.reports)
+    ? item.reports.map((report: Partial<AdminReport>, reportIndex) => ({
+        id: report.id ?? `confession-${index}-report-${reportIndex}`,
+        reason: report.reason ?? null,
+        created_at: report.created_at ?? null,
+        reporter: {
+          id: report.reporter?.id ?? null,
+          name: report.reporter?.name ?? null,
+        },
+      }))
+    : [],
+  reactions: item.reactions ?? {},
+  reaction_users: item.reaction_users ?? {},
+  heart_count: item.heart_count ?? 0,
+  haha_count: item.haha_count ?? 0,
+  whoa_count: item.whoa_count ?? 0,
+  heartbreak_count: item.heartbreak_count ?? 0,
+  comment_count: item.comment_count ?? 0,
+  content_removed: item.content_removed ?? false,
+  removed_at: item.removed_at ?? null,
+  removed_by_regno: item.removed_by_regno ?? null,
+  comments: Array.isArray(item.comments)
+    ? item.comments.map((comment: Partial<AdminComment>, commentIndex) => ({
+        id: comment.id ?? `confession-${index}-comment-${commentIndex}`,
+        body: comment.body ?? '',
+        created_at: comment.created_at ?? null,
+        user: {
+          id: comment.user?.id ?? null,
+          name: comment.user?.name ?? null,
+        },
+        report_count: comment.report_count ?? 0,
+        reported_by: Array.isArray(comment.reported_by) ? comment.reported_by : [],
+        like_count: comment.like_count ?? 0,
+        dislike_count: comment.dislike_count ?? 0,
+        reports: Array.isArray(comment.reports)
+          ? comment.reports.map((commentReport: Partial<AdminReport>, reportIndex) => ({
+              id: commentReport.id ?? `confession-${index}-comment-${commentIndex}-report-${reportIndex}`,
+              reason: commentReport.reason ?? null,
+              created_at: commentReport.created_at ?? null,
+              reporter: {
+                id: commentReport.reporter?.id ?? null,
+                name: commentReport.reporter?.name ?? null,
+              },
+            }))
+          : [],
+        content_removed: comment.content_removed ?? false,
+        removed_at: comment.removed_at ?? null,
+        removed_by_regno: comment.removed_by_regno ?? null,
+      }))
+    : [],
+});
+
+/**
  * The denormalised counter beside each emoji, which is what every other surface shows.
  *
  * Kept as the count rather than `reactors.length` because the two are stored independently: the
@@ -151,8 +246,29 @@ const formatTimestamp = (created_at: string | null) => {
 };
 
 export const ConfessionsAdmin = () => {
-  const [confessions, setConfessions] = useState<AdminConfession[]>([]);
+  /**
+   * The confessions on screen: always the contiguous window [0, items.length) of the
+   * server order for the current question, so a refresh is one clean re-read and a
+   * "show more" click appends beneath what is already read.
+   */
+  const [items, setItems] = useState<AdminConfession[]>([]);
+  /** How many confessions match the current question on the server, loaded or not. */
+  const [total, setTotal] = useState(0);
+  /**
+   * The one unfiltered list, only ever set from legacy bare-array answers (older servers
+   * and unit-test mocks), which ignore request params. The real server answers envelopes
+   * and leaves this `null`, which is what switches the screen from client filtering to
+   * server pages: a bare array re-filtered client-side would hide rows the server
+   * correctly returned and break the totals beside them.
+   */
+  const [legacyRows, setLegacyRows] = useState<AdminConfession[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  /** A filter change, order flip, search submit or moderation action re-reading while the list stays up. */
+  const [refreshing, setRefreshing] = useState(false);
+  /** A next page appending beneath the list, so only its button reads busy. */
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** Whether the first load is still in flight, which is the only one that takes the loading screen. */
+  const isFirstLoad = useRef(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedConfessionId, setSelectedConfessionId] = useState<string | null>(null);
   // The comment awaiting confirmation, and whether it lives on a confession that is already
@@ -170,105 +286,133 @@ export const ConfessionsAdmin = () => {
   const [expandedReaction, setExpandedReaction] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<ConfessionSortOption>('reports');
   const [filterOption, setFilterOption] = useState<ConfessionFilterOption>('all');
+  /** What the search box currently says. Draft only: nothing is fetched until it is submitted. */
   const [searchTerm, setSearchTerm] = useState('');
+  /**
+   * The search text the server has actually been asked about.
+   *
+   * Set only by the Search button (or Enter), never by typing: each keystroke firing a
+   * read of confession threads -- every comment, report and reactor row attached -- would
+   * be a self-inflicted load test, and the half-typed query it answered would be obsolete
+   * before it returned. The box stays a draft until submitted, so the request that goes
+   * out is the question the operator meant.
+   */
+  const [appliedSearch, setAppliedSearch] = useState('');
 
+  /**
+   * Submit the draft search box as the query the read is issued with, back on the first
+   * page: the previous offset may not exist under the new question, and staying on it
+   * would show an empty list for a question that has answers.
+   */
+  const submitSearch = () => {
+    setAppliedSearch(searchTerm.trim());
+  };
+
+  /** A new filter question or order starts on the first page, for the same reason. */
+  const changeFilterOption = (value: ConfessionFilterOption) => {
+    setFilterOption(value);
+  };
+
+  const changeSortOption = (value: ConfessionSortOption) => {
+    setSortOption(value);
+  };
+
+  /** Clear the search and the filter together, back on the first page. The sort stays:
+   * it orders whatever matches rather than narrowing it. */
+  const clearSearchAndFilter = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setFilterOption('all');
+  };
+
+  /**
+   * One read: the next `limit` confessions for the current question. The submitted query
+   * is a SQL WHERE across each confession and its sender, the filter picker a SQL WHERE
+   * and the sort picker a SQL ORDER BY, so the backend reads at most one page no matter
+   * how many confessions exist.
+   */
+  const readPage = async (
+    skip: number,
+    limit: number,
+    question: { q?: string; filter: ConfessionFilterOption; sort: ConfessionSortOption },
+  ): Promise<{ rows: AdminConfession[]; total: number }> => {
+    const answer = await getAdminConfessions({
+      skip,
+      limit,
+      ...(question.q ? { q: question.q } : {}),
+      ...(question.filter !== 'all' ? { filter: question.filter } : {}),
+      sort: question.sort,
+    });
+    return {
+      rows: confessionsOf(answer).map((item, index) => normalizeConfession(item, skip + index)),
+      total: totalOf(answer, 0),
+    };
+  };
+
+  /**
+   * First page, freshly: what a search submit, a filter change, an order flip and the
+   * first load all do. A bare-array answer means the params went nowhere, so the one
+   * list they all are becomes the legacy rows the screen filters itself below.
+   */
   useEffect(() => {
+    let cancelled = false;
     const fetchConfessions = async () => {
       try {
-        setLoading(true);
-        const data = await getAdminConfessions();
-        const normalized = Array.isArray(data)
-          ? data.map((item: Partial<AdminConfession>, index) => ({
-              id: item.id ?? `confession-${index}`,
-              body: item.body ?? '',
-              recipient_name: item.recipient_name ?? null,
-              anonymous: item.anonymous ?? true,
-              sender_hidden: item.sender_hidden ?? item.anonymous ?? true,
-              comments_enabled: item.comments_enabled ?? true,
-              created_at: item.created_at ?? null,
-              sender: {
-                id: item.sender?.id ?? null,
-                name: item.sender?.name ?? null,
-                regno: item.sender?.regno ?? null,
-                email: item.sender?.email ?? null,
-              },
-              report_count: item.report_count ?? 0,
-              reported_by: Array.isArray(item.reported_by) ? item.reported_by : [],
-              reports: Array.isArray(item.reports)
-                ? item.reports.map((report: Partial<AdminReport>, reportIndex) => ({
-                    id: report.id ?? `confession-${index}-report-${reportIndex}`,
-                    reason: report.reason ?? null,
-                    created_at: report.created_at ?? null,
-                    reporter: {
-                      id: report.reporter?.id ?? null,
-                      name: report.reporter?.name ?? null,
-                    },
-                  }))
-                : [],
-               reactions: item.reactions ?? {},
-               reaction_users: item.reaction_users ?? {},
-              heart_count: item.heart_count ?? 0,
-              haha_count: item.haha_count ?? 0,
-              whoa_count: item.whoa_count ?? 0,
-              heartbreak_count: item.heartbreak_count ?? 0,
-              comment_count: item.comment_count ?? 0,
-              content_removed: item.content_removed ?? false,
-              removed_at: item.removed_at ?? null,
-              removed_by_regno: item.removed_by_regno ?? null,
-              comments: Array.isArray(item.comments)
-                ? item.comments.map((comment: Partial<AdminComment>, commentIndex) => ({
-                    id: comment.id ?? `confession-${index}-comment-${commentIndex}`,
-                    body: comment.body ?? '',
-                    created_at: comment.created_at ?? null,
-                    user: {
-                      id: comment.user?.id ?? null,
-                      name: comment.user?.name ?? null,
-                    },
-                    report_count: comment.report_count ?? 0,
-                    reported_by: Array.isArray(comment.reported_by) ? comment.reported_by : [],
-                    like_count: comment.like_count ?? 0,
-                    dislike_count: comment.dislike_count ?? 0,
-reports: Array.isArray(comment.reports)
-                        ? comment.reports.map((commentReport: Partial<AdminReport>, reportIndex) => ({
-                            id: commentReport.id ?? `confession-${index}-comment-${commentIndex}-report-${reportIndex}`,
-                            reason: commentReport.reason ?? null,
-                            created_at: commentReport.created_at ?? null,
-                            reporter: {
-                              id: commentReport.reporter?.id ?? null,
-                              name: commentReport.reporter?.name ?? null,
-                            },
-                          }))
-                        : [],
-                    content_removed: comment.content_removed ?? false,
-                    removed_at: comment.removed_at ?? null,
-                    removed_by_regno: comment.removed_by_regno ?? null,
-                  }))
-                : [],
-            }))
-          : [];
-        setConfessions(normalized);
+        if (isFirstLoad.current) setLoading(true);
+        else setRefreshing(true);
+        const question = {
+          q: appliedSearch.trim() || undefined,
+          filter: filterOption,
+          sort: sortOption,
+        };
+        const answer = await getAdminConfessions({
+          skip: 0,
+          limit: CONFESSIONS_PAGE_SIZE,
+          ...(question.q ? { q: question.q } : {}),
+          ...(question.filter !== 'all' ? { filter: question.filter } : {}),
+          sort: question.sort,
+        });
+        if (cancelled) return;
+        if (Array.isArray(answer)) {
+          setLegacyRows(
+            confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
+          );
+        } else {
+          setLegacyRows(null);
+          setItems(
+            confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
+          );
+          setTotal(totalOf(answer, 0));
+        }
       } catch (error) {
-        console.error('Failed to fetch confessions', error);
-        toast.error('Unable to load confessions for review.');
+        if (!cancelled) {
+          console.error('Failed to fetch confessions', error);
+          toast.error('Unable to load confessions for review.');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+          isFirstLoad.current = false;
+        }
       }
     };
 
     fetchConfessions();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedSearch, filterOption, sortOption]);
 
-  const totalReports = useMemo(
-    () =>
-      confessions.reduce(
-        (acc, item) => acc + (item.report_count ?? 0) + (item.reports?.length ?? 0),
-        0
-      ),
-    [confessions]
-  );
+  /** Whether answers arrive as server pages (`null` legacy rows) or one legacy list. */
+  const serverDriven = legacyRows === null;
 
   const processedConfessions = useMemo(() => {
-    let entries = [...confessions];
+    // Against the server the reads themselves are already searched, filtered and
+    // ordered: re-applying any of it here would narrow one database page a second time,
+    // hiding rows the server correctly returned and breaking the totals beside them.
+    if (serverDriven) return items;
+    let entries = [...(legacyRows ?? [])];
 
     if (filterOption === 'reported') {
       entries = entries.filter(
@@ -325,7 +469,61 @@ reports: Array.isArray(comment.reports)
     }
 
     return sorted;
-  }, [confessions, filterOption, searchTerm, sortOption]);
+  }, [legacyRows, serverDriven, items, filterOption, searchTerm, sortOption]);
+
+  /**
+   * Re-read the whole window currently on screen, so a moderation action pulls the
+   * freshly modified rows back in their new state: hidden flags stamped, comment counts
+   * decremented, totals true. The window stays contiguous from zero, which is what keeps
+   * a later "show more" a single clean append.
+   */
+  const refreshWindow = async () => {
+    setRefreshing(true);
+    try {
+      const question = {
+        q: appliedSearch.trim() || undefined,
+        filter: filterOption,
+        sort: sortOption,
+      };
+      const page = await readPage(0, Math.max(items.length, CONFESSIONS_PAGE_SIZE), question);
+      setItems(page.rows);
+      setTotal(page.total);
+    } catch (error) {
+      console.error('Failed to refresh confessions', error);
+      toast.error('Unable to refresh the confessions.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  /**
+   * Grow the list downwards: the next page appends beneath the confessions already on
+   * screen, so the reader's place never moves and the accordion they have open stays
+   * open. Shown only while the server holds more than the list is showing.
+   */
+  const loadMore = async () => {
+    if (loadingMore || refreshing) return;
+    setLoadingMore(true);
+    try {
+      const question = {
+        q: appliedSearch.trim() || undefined,
+        filter: filterOption,
+        sort: sortOption,
+      };
+      const page = await readPage(items.length, CONFESSIONS_PAGE_SIZE, question);
+      setItems((prev) => [...prev, ...page.rows]);
+      setTotal(page.total);
+    } catch (error) {
+      console.error('Failed to load more confessions', error);
+      toast.error('Unable to load more confessions.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  /** Whether the search box, the filter, or both are narrowing the list right now. */
+  const activeSearch = serverDriven ? appliedSearch : searchTerm;
+  const filtersNarrowed = activeSearch.trim() !== '' || filterOption !== 'all';
 
   const handleHide = (confessionId: string) => {
     setSelectedConfessionId(confessionId);
@@ -341,18 +539,27 @@ reports: Array.isArray(comment.reports)
       // needs to see that this one is already handled, and the hidden state is the evidence.
       // `already_hidden` is answered separately so a double click says so rather than claiming
       // a second moderation action happened.
-      setConfessions((prev) =>
-        prev.map((item) =>
-          item.id === confessionId
-            ? {
-                ...item,
-                content_removed: true,
-                removed_at: result?.removed_at ?? item.removed_at ?? null,
-                removed_by_regno: result?.removed_by_regno ?? item.removed_by_regno ?? null,
-              }
-            : item
-        )
-      );
+      if (!serverDriven) {
+        // Legacy single list: the move is local, exactly as before pagination existed.
+        setLegacyRows((prev) =>
+          prev
+            ? prev.map((item) =>
+                item.id === confessionId
+                  ? {
+                      ...item,
+                      content_removed: true,
+                      removed_at: result?.removed_at ?? item.removed_at ?? null,
+                      removed_by_regno: result?.removed_by_regno ?? item.removed_by_regno ?? null,
+                    }
+                  : item
+              )
+            : prev
+        );
+      } else {
+        // The hiding stamps the row server-side, so the window is re-read to fetch the
+        // newly modified row back in its hidden state with true totals beside it.
+        await refreshWindow();
+      }
       toast.success(
         result?.already_hidden
           ? 'This confession was already hidden.'
@@ -372,30 +579,37 @@ reports: Array.isArray(comment.reports)
     const commentId = pendingCommentId;
     try {
       const result = await hideAdminComment(commentId);
-      setConfessions((prev) =>
-        prev.map((item) => {
-          if (!item.comments.some((comment) => comment.id === commentId)) return item;
-          // The parent's comment count is decremented server-side with the removal, so it is
-          // restated here from the same `Math.max` the row already uses. Patched rather than
-          // refetched, for the reason the confession hide is: a refetch would make the list
-          // jump under the next click.
-          const nextTotal = Math.max((item.comment_count ?? 0) - 1, 0);
-          return {
-            ...item,
-            comment_count: nextTotal,
-            comments: item.comments.map((comment) =>
-              comment.id === commentId
-                ? {
-                    ...comment,
-                    content_removed: true,
-                    removed_at: result?.removed_at ?? comment.removed_at ?? null,
-                    removed_by_regno: result?.removed_by_regno ?? comment.removed_by_regno ?? null,
-                  }
-                : comment
-            ),
-          };
-        })
-      );
+      if (!serverDriven) {
+        // Legacy single list: the move is local, exactly as before pagination existed.
+        setLegacyRows((prev) =>
+          prev
+            ? prev.map((item) => {
+                if (!item.comments.some((comment) => comment.id === commentId)) return item;
+                // The parent's comment count is decremented server-side with the removal, so it is
+                // restated here from the same `Math.max` the row already uses.
+                const nextTotal = Math.max((item.comment_count ?? 0) - 1, 0);
+                return {
+                  ...item,
+                  comment_count: nextTotal,
+                  comments: item.comments.map((comment) =>
+                    comment.id === commentId
+                      ? {
+                          ...comment,
+                          content_removed: true,
+                          removed_at: result?.removed_at ?? comment.removed_at ?? null,
+                          removed_by_regno: result?.removed_by_regno ?? comment.removed_by_regno ?? null,
+                        }
+                      : comment
+                  ),
+                };
+              })
+            : prev
+        );
+      } else {
+        // The hiding stamps the comment and decrements its parent server-side, so the window
+        // is re-read to fetch the newly modified rows back with true counts beside them.
+        await refreshWindow();
+      }
       toast.success(
         result?.already_hidden
           ? 'This comment was already hidden.'
@@ -433,30 +647,55 @@ reports: Array.isArray(comment.reports)
             collapsed to the line a reviewer triages on; expand one to read it in full and act on
             it.
           </p>
-          <p className="text-xs text-muted-foreground/80">
-            Total confessions: {confessions.length} · Reports in queue: {totalReports}
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-muted-foreground/80">
+              Total confessions: {serverDriven ? total : processedConfessions.length}
+              {refreshing ? ' · Updating…' : ''}
+            </p>
+            {/* The total is the server count under the current question; the list is the one
+                page this screen holds, so the two disagree by design once confessions outgrow
+                a page. */}
+            <Badge variant="secondary" className="w-max gap-2">
+              Showing {processedConfessions.length} of {serverDriven ? total : processedConfessions.length}
+            </Badge>
+          </div>
         </header>
 
         <section className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="relative w-full md:max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search by confession text or sender details"
-              className="pl-9"
-            />
+          {/* The box is a draft; the button sends it. Firing a thread read per keystroke --
+              every comment, report and reactor row attached -- would answer a query the
+              operator had already retyped, so typing only edits the draft and Search (or
+              Enter) issues the one request the database answers. */}
+          <div className="flex w-full gap-2 md:max-w-xl">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submitSearch();
+                  }
+                }}
+                placeholder="Search by confession text or sender details"
+                className="pl-9"
+              />
+            </div>
+            <Button variant="secondary" onClick={submitSearch} disabled={refreshing} aria-label="Search confessions">
+              <Search className="mr-2 h-4 w-4" />
+              Search
+            </Button>
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium uppercase text-muted-foreground">Sort</span>
+              <Label htmlFor="confession-sort" className="text-xs font-medium uppercase text-muted-foreground">Sort</Label>
               <Select
                 value={sortOption}
-                onValueChange={(value) => setSortOption(value as ConfessionSortOption)}
+                onValueChange={(value) => changeSortOption(value as ConfessionSortOption)}
               >
-                <SelectTrigger className="w-44">
+                <SelectTrigger id="confession-sort" className="w-44">
                   <SelectValue placeholder="Sort" />
                 </SelectTrigger>
                 <SelectContent>
@@ -469,12 +708,12 @@ reports: Array.isArray(comment.reports)
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium uppercase text-muted-foreground">Filter</span>
+              <Label htmlFor="confession-filter" className="text-xs font-medium uppercase text-muted-foreground">Filter</Label>
               <Select
                 value={filterOption}
-                onValueChange={(value) => setFilterOption(value as ConfessionFilterOption)}
+                onValueChange={(value) => changeFilterOption(value as ConfessionFilterOption)}
               >
-                <SelectTrigger className="w-48">
+                <SelectTrigger id="confession-filter" className="w-48">
                   <SelectValue placeholder="Filter" />
                 </SelectTrigger>
                 <SelectContent>
@@ -485,6 +724,14 @@ reports: Array.isArray(comment.reports)
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Only rendered when something is actually narrowing the list, so a control that
+                clears nothing is not sitting there implying that something is. */}
+            {filtersNarrowed && (
+              <Button variant="ghost" size="sm" onClick={clearSearchAndFilter}>
+                Clear
+              </Button>
+            )}
           </div>
         </section>
 
@@ -502,6 +749,7 @@ reports: Array.isArray(comment.reports)
               </CardContent>
             </Card>
           ) : (
+            <>
             <Accordion type="single" collapsible className="space-y-3">
               {processedConfessions.map((confession) => {
                 const senderVisible = visibleSenders[confession.id];
@@ -843,6 +1091,25 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
               );
             })}
             </Accordion>
+            {/* The list only grows downwards: the next page appends beneath the confessions
+                already read, so the reader's place never moves and the thread they have open
+                stays open. Shown only while the server holds more than the list is showing. */}
+            {serverDriven && total - processedConfessions.length > 0 && (
+              <div className="flex justify-center pt-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore || refreshing}
+                  aria-label="Show more confessions"
+                >
+                  {loadingMore
+                    ? 'Loading…'
+                    : `Show more (${total - processedConfessions.length} remaining)`}
+                </Button>
+              </div>
+            )}
+            </>
           )}
         </div>
       </div>

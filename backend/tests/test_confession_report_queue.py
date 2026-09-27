@@ -546,7 +546,7 @@ def test_removed_content_is_still_visible_to_staff(admin_client, moderator_clien
     report_id = make_report(db, confession_id, make_user(db, "reporter"))
     moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
 
-    reviewed = [row for row in admin_client.get("/admin/confessions").json() if row["id"] == confession_id]
+    reviewed = [row for row in admin_client.get("/admin/confessions").json()["confessions"] if row["id"] == confession_id]
     assert len(reviewed) == 1
     assert reviewed[0]["content_removed"] is True
     assert reviewed[0]["removed_by_regno"] == "moduser"
@@ -796,7 +796,7 @@ def test_a_hidden_confession_reads_back_as_already_hidden_from_the_review_screen
     confession_id = make_confession(db, make_user(db, "author"))
     moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
 
-    item = find_confession(admin_client.get("/admin/confessions").json(), confession_id)
+    item = find_confession(admin_client.get("/admin/confessions").json()["confessions"], confession_id)
 
     assert item["content_removed"] is True
     assert item["removed_at"] is not None
@@ -1074,7 +1074,7 @@ def test_hiding_a_comment_takes_it_out_of_the_confession_but_not_the_review_scre
     ]
     assert len(participant) == 1
     assert [c["id"] for c in participant[0]["comments"]] == [keep_id]
-    staff = find_confession(admin_client.get("/admin/confessions").json(), confession_id)
+    staff = find_confession(admin_client.get("/admin/confessions").json()["confessions"], confession_id)
     hidden = {c["id"]: c for c in staff["comments"]}[hide_id]
     assert hidden["content_removed"] is True
     assert hidden["removed_at"] is not None

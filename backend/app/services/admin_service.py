@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 
 from ..postgres import new_id
 from ..postgres import Database
@@ -185,6 +185,55 @@ def count_active_sessions(db: Database, window_hours: int = 24) -> int:
     return len(account_ids)
 
 
+# Hard ceiling for one page of the admin confession list. The endpoint clamps anything
+# larger, so no client -- present or future, well-meaning or not -- can ask for every
+# confession, with every comment, report and reactor row attached, and make the backend
+# materialise them all at once.
+CONFESSIONS_MAX_LIMIT = 100
+
+CONFESSION_FILTERS = frozenset({"all", "reported", "anonymous", "with-comments"})
+
+CONFESSION_SORTS = frozenset({"recent", "reports", "comments", "reactions"})
+
+
+def _load_admin_confession_relations(session, confessions):
+    """Comments, reports and user rows for exactly the confessions handed in.
+
+    One bulk read per related table rather than a query per row: a page of confessions
+    with a hundred comments each must not cost a hundred queries to render. The author of
+    an anonymous confession is never loaded at all, so the identity is absent from this
+    process rather than filtered out of the payload later; commenters are a different
+    population and are always resolved.
+
+    Reactors are resolved too, with one exception applied later per confession: an
+    anonymous confession's author reacting to their own post is the most likely reactor
+    on any anonymous confession, and naming them in a reactor list would de-anonymise
+    the post on the same screen that promises it cannot. That exception cannot be
+    applied here by excluding the id from the query -- someone who has written a public
+    confession is loaded legitimately for it, and dropping their id here would strip the
+    name off that public post as well -- so the decision belongs where the confession
+    is, which is why the build step below makes it per confession.
+    """
+    confession_ids = [row.id for row in confessions]
+    comments = session.scalars(select(ConfessionCommentRecord).where(
+        ConfessionCommentRecord.confession_id.in_(confession_ids)
+    ).order_by(ConfessionCommentRecord.created_at.desc())).all() if confession_ids else []
+    comment_ids = [row.id for row in comments]
+    report_targets = []
+    if confession_ids:
+        report_targets.append(ReportRecord.confession_id.in_(confession_ids))
+    if comment_ids:
+        report_targets.append(ReportRecord.comment_id.in_(comment_ids))
+    reports = session.scalars(select(ReportRecord).where(or_(*report_targets))).all() if report_targets else []
+    user_ids = {row.author_id for row in confessions if not row.anonymous}
+    user_ids |= {row.user_id for row in comments}
+    for row in confessions:
+        for reactor_ids in (row.reactions or {}).values():
+            user_ids.update(str(reactor) for reactor in reactor_ids)
+    users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all() if user_ids else []
+    return comments, reports, users
+
+
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all confessions with comments and reports.
 
@@ -198,42 +247,23 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     A confession that was never anonymous is unaffected: it still names its author, and the
     review screen still decides for itself when to show that name.
     """
-    reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
-    items: List[Dict[str, Any]] = []
     with db.sessions() as session:
         confessions = session.scalars(select(ConfessionRecord).order_by(ConfessionRecord.created_at.desc())).all()
-        confession_ids = [row.id for row in confessions]
-        comments = session.scalars(select(ConfessionCommentRecord).where(
-            ConfessionCommentRecord.confession_id.in_(confession_ids)
-        ).order_by(ConfessionCommentRecord.created_at.desc())).all() if confession_ids else []
-        comment_ids = [row.id for row in comments]
-        report_targets = []
-        if confession_ids:
-            report_targets.append(ReportRecord.confession_id.in_(confession_ids))
-        if comment_ids:
-            report_targets.append(ReportRecord.comment_id.in_(comment_ids))
-        reports = session.scalars(select(ReportRecord).where(or_(*report_targets))).all() if report_targets else []
-        # The author of an anonymous confession is not loaded at all, so the identity is
-        # absent from this process rather than filtered out of the payload later. Commenters
-        # are a different population and are always resolved.
-        #
-        # Reactors are a different population from the author and are resolved, with one
-        # exception applied later: an anonymous confession's author reacting to their own post is
-        # the most likely reactor on any anonymous confession, and naming them in a reactor list
-        # would de-anonymise the post on the same screen that promises it cannot be.
-        #
-        # That exception cannot be applied here by excluding the id from the query, the way the
-        # author block above does. Excluding it works only while the id appears nowhere else, and
-        # someone who has written a public confession is loaded legitimately for it -- dropping
-        # their id here would strip the name off that public post as well. An id is in this
-        # process for reasons unrelated to any one confession, so the decision belongs where the
-        # confession is, which is why it is made per confession below.
-        user_ids = {row.author_id for row in confessions if not row.anonymous}
-        user_ids |= {row.user_id for row in comments}
-        for row in confessions:
-            for reactor_ids in (row.reactions or {}).values():
-                user_ids.update(str(reactor) for reactor in reactor_ids)
-        users = session.scalars(select(UserRecord).where(UserRecord.id.in_(user_ids))).all() if user_ids else []
+        comments, reports, users = _load_admin_confession_relations(session, confessions)
+    return _build_admin_confession_items(confessions, comments, reports, users)
+
+
+def _build_admin_confession_items(confessions, comments, reports, users) -> List[Dict[str, Any]]:
+    """Assemble staff-facing confession payloads from loaded rows.
+
+    One builder for both readers -- the unfiltered list and the filtered page -- so the
+    anonymity promise has exactly one implementation: an anonymous sender is never named,
+    reactors resolve with the per-confession author exception, and removed rows arrive
+    flagged rather than filtered. What differs between the readers is only which
+    confessions are handed in.
+    """
+    reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
+    items: List[Dict[str, Any]] = []
     users_by_id = {user.id: user for user in users}
     comments_by_confession: Dict[str, List[ConfessionCommentRecord]] = defaultdict(list)
     for comment in comments:
@@ -386,6 +416,159 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
         )
 
     return items
+
+
+def _admin_confession_search_filters(query: Optional[str]) -> list:
+    """A case-insensitive substring match on a confession and its sender, as SQL clauses.
+
+    Done in SQL rather than in Python so a deployment with thousands of confessions never
+    loads them all to discard all but twenty. Matches the body and the recipient name on
+    the confession row, plus the sender's name, regno and email through a join that
+    instantiates no user rows.
+
+    The sender clauses apply only to non-anonymous confessions. Without that gate the
+    search would be an oracle for the withheld identity: asking for an anonymous author's
+    name would surface a row the response itself refuses to name, and the old client-side
+    search never matched one either, because the sender fields arrive empty there.
+    """
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return []
+    pattern = f"%{cleaned}%"
+    sender_match = and_(
+        ConfessionRecord.anonymous.is_(False),
+        or_(
+            UserRecord.name.ilike(pattern),
+            UserRecord.regno.ilike(pattern),
+            UserRecord.email.ilike(pattern),
+        ),
+    )
+    return [or_(
+        ConfessionRecord.body.ilike(pattern),
+        ConfessionRecord.recipient_name.ilike(pattern),
+        sender_match,
+    )]
+
+
+def _admin_confession_status_filters(filter_option: str) -> list:
+    """The screen's filter picker as SQL clauses: reported, anonymous, or with-comments."""
+    if filter_option == "reported":
+        # A report row for the confession itself, or for any comment under it, or a
+        # denormalised counter saying one was filed: the screen treats "reported" as any
+        # evidence a report exists, and any one of the three is that evidence.
+        confession_reported = select(ReportRecord.id).where(
+            ReportRecord.confession_id == ConfessionRecord.id
+        ).exists()
+        comment_reported = select(ReportRecord.id).where(
+            ReportRecord.comment_id.in_(
+                select(ConfessionCommentRecord.id).where(
+                    ConfessionCommentRecord.confession_id == ConfessionRecord.id
+                )
+            )
+        ).exists()
+        return [or_(
+            ConfessionRecord.report_count > 0,
+            confession_reported,
+            comment_reported,
+        )]
+    if filter_option == "anonymous":
+        return [ConfessionRecord.anonymous.is_(True)]
+    if filter_option == "with-comments":
+        # A comment row under the confession, not the denormalised counter: the counter is
+        # decremented when a comment is taken down while the row survives for audit, so the
+        # counter answers "how many are readable" and the row answers "is there a thread".
+        return [select(ConfessionCommentRecord.id).where(
+            ConfessionCommentRecord.confession_id == ConfessionRecord.id
+        ).exists()]
+    return []
+
+
+def _admin_confession_ordering(sort: str):
+    """The screen's sort picker as ORDER BY, with the id last so pages are stable.
+
+    A deterministic tail matters because the count and the page are two queries: an
+    unordered tail reshuffles between them, and a load-more list that reorders under the
+    reader shows some confessions twice.
+    """
+    if sort == "reports":
+        return [
+            ConfessionRecord.report_count.desc(),
+            ConfessionRecord.created_at.desc(),
+            ConfessionRecord.id.asc(),
+        ]
+    if sort == "comments":
+        return [
+            ConfessionRecord.comment_count.desc(),
+            ConfessionRecord.created_at.desc(),
+            ConfessionRecord.id.asc(),
+        ]
+    if sort == "reactions":
+        engagement = (
+            func.coalesce(ConfessionRecord.heart_count, 0)
+            + func.coalesce(ConfessionRecord.haha_count, 0)
+            + func.coalesce(ConfessionRecord.whoa_count, 0)
+            + func.coalesce(ConfessionRecord.heartbreak_count, 0)
+        )
+        return [engagement.desc(), ConfessionRecord.created_at.desc(), ConfessionRecord.id.asc()]
+    return [ConfessionRecord.created_at.desc(), ConfessionRecord.id.asc()]
+
+
+def get_admin_confessions_data(
+    db: Database,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    query: Optional[str] = None,
+    filter_option: str = "all",
+    sort: str = "recent",
+) -> Dict[str, Any]:
+    """One page of confessions for admin review, searched, filtered, ordered and counted in SQL.
+
+    The search is a SQL WHERE across the confession and (through a non-instantiating
+    join) its sender, the filter picker a SQL WHERE, the sort picker a SQL ORDER BY, and
+    every page a SQL LIMIT/OFFSET: with thousands of confessions -- each carrying its
+    comments, reports and reactor rows -- the backend reads and serialises at most
+    ``limit`` of them, never the whole table, and ``total`` is a COUNT under the same
+    WHERE so the screen can load more downwards without ever holding the confessions it
+    is not showing.
+
+    The per-row payload is identical to ``get_all_confessions_data``: the same redaction
+    of anonymous senders, the same comments, reports and engagement snapshot. Only the
+    row selection changed, from "everything, newest first" to one filtered page.
+    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), CONFESSIONS_MAX_LIMIT))
+    if filter_option not in CONFESSION_FILTERS:
+        from fastapi import HTTPException, status as _status
+
+        raise HTTPException(status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid filter")
+    if sort not in CONFESSION_SORTS:
+        from fastapi import HTTPException, status as _status
+
+        raise HTTPException(status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid sort")
+
+    filters = _admin_confession_search_filters(query) + _admin_confession_status_filters(filter_option)
+    ordering = _admin_confession_ordering(sort)
+
+    with db.sessions() as session:
+        base = (
+            select(ConfessionRecord)
+            .outerjoin(UserRecord, UserRecord.id == ConfessionRecord.author_id)
+            .where(*filters)
+        )
+        total = session.scalar(
+            select(func.count()).select_from(ConfessionRecord)
+            .outerjoin(UserRecord, UserRecord.id == ConfessionRecord.author_id)
+            .where(*filters)
+        ) or 0
+        confessions = session.scalars(base.order_by(*ordering).offset(skip).limit(limit)).all()
+        comments, reports, users = _load_admin_confession_relations(session, confessions)
+
+    # Same payload as the unfiltered read, built by the one shared builder: which rows
+    # are handed in is the only thing the paginated reader decides differently.
+    items = _build_admin_confession_items(confessions, comments, reports, users)
+
+    return {"confessions": items, "total": total, "skip": skip, "limit": limit}
 
 
 def get_confession_reports_data(
