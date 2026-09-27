@@ -149,6 +149,25 @@ const totalOf = (answer: unknown, fallback: number): number => {
   return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
 };
 
+/**
+ * Bring a section heading back into view after its pager turns the page.
+ *
+ * A fresh page of cards renders where the old one was, which can leave the operator staring
+ * at the bottom of the new grid -- the pager they just pressed -- with no heading in sight.
+ * Scrolling to the heading keeps the context ("these are the Participants, page 2") attached
+ * to the cards. Guarded for environments without layout (jsdom), where `scrollIntoView`
+ * does not exist and the call must simply be a no-op.
+ */
+const scrollToSectionTop = (sectionId: string) => {
+  if (typeof document === 'undefined') return;
+  const heading = document.getElementById(`profile-section-${sectionId}`);
+  try {
+    heading?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  } catch {
+    // No layout engine (tests) or a detached node: the page turn itself already happened.
+  }
+};
+
 interface AdminUserProfile {
   id: string;
   regno?: string | null;
@@ -760,15 +779,17 @@ export const ProfileReview = () => {
 
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  /** What the search box currently says. Draft only: nothing is fetched until it is submitted. */
   const [searchTerm, setSearchTerm] = useState('');
   /**
-   * The search text the server has been asked about, lagging one debounce behind the box.
+   * The search text the server has actually been asked about.
    *
-   * The box filters the loaded cards immediately (see `filteredProfiles`), so typing never
-   * waits on the network; this is what is sent with the next page request, so a deployment
-   * with ten thousand participants narrows in SQL rather than by loading them all first.
+   * Set only by the Search button (or Enter), never by typing: each keystroke firing four
+   * reads against ten thousand participants would be a self-inflicted load test, and the
+   * half-typed query it answered would be obsolete before it returned. The box stays a
+   * draft until submitted, so the request that goes out is the question the operator meant.
    */
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
   /** Which server page of ordinary participants is showing (zero-based). */
   const [page, setPage] = useState(0);
   /** Which server page of the flagged work queue is showing (zero-based). */
@@ -836,18 +857,47 @@ export const ProfileReview = () => {
   const [createForm, setCreateForm] = useState<CreateUserForm>(() => buildDefaultCreateForm('users'));
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 400);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
-
-  // A new question starts on the first page: the previous page number may not exist under
-  // the new filters, and staying on it would show an empty grid for a question that has
-  // answers.
-  useEffect(() => {
+  /**
+   * Submit the draft search box as the query every read is issued with.
+   *
+   * Pages reset here rather than in an effect so a new question issues exactly one round
+   * of reads: the previous page number may not exist under the new filters, and staying
+   * on it would show an empty grid for a question that has answers.
+   */
+  const submitSearch = () => {
+    setAppliedSearch(searchTerm.trim());
     setPage(0);
     setFlaggedPage(0);
-  }, [debouncedSearch, yearFilter, departmentFilter, sortOption]);
+  };
+
+  /** A new cohort question or order starts on the first page, for the same reason. */
+  const changeYearFilter = (value: string) => {
+    setYearFilter(value);
+    setPage(0);
+    setFlaggedPage(0);
+  };
+
+  const changeDepartmentFilter = (value: string) => {
+    setDepartmentFilter(value);
+    setPage(0);
+    setFlaggedPage(0);
+  };
+
+  const changeSortOption = (value: ProfileSortOption) => {
+    setSortOption(value);
+    setPage(0);
+    setFlaggedPage(0);
+  };
+
+  /** Clear every narrowing control at once, search draft included, back on the first page. */
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setYearFilter(ALL_YEARS);
+    setDepartmentFilter(ALL_DEPARTMENTS);
+    setPage(0);
+    setFlaggedPage(0);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -855,7 +905,7 @@ export const ProfileReview = () => {
       try {
         if (isFirstLoad.current) setLoading(true);
         else setRefreshing(true);
-        const q = debouncedSearch.trim() || undefined;
+        const q = appliedSearch.trim() || undefined;
         const year = yearFilter === ALL_YEARS ? undefined : Number(yearFilter);
         const department = departmentFromValue(departmentFilter) ?? undefined;
         const ordinarySort = SERVER_SORTS[sortOption];
@@ -926,7 +976,7 @@ export const ProfileReview = () => {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
+  }, [appliedSearch, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
 
   /**
    * The years and departments the cards can be filtered to, accumulated across every page
@@ -984,7 +1034,21 @@ export const ProfileReview = () => {
   const availableDepartments = useMemo(() => seenDepartments, [seenDepartments]);
 
   /**
+   * The search text currently narrowing the list: the submitted query against the real
+   * server, the live draft against legacy bare-array answers (tests and older servers),
+   * which ignore request params and hand back one unfiltered list.
+   */
+  const activeSearch = useServerTotals ? appliedSearch : searchTerm;
+
+  /**
    * The accounts left after the search box and the two cohort filters.
+   *
+   * Against the real server this is the reads themselves: every read already carries the
+   * submitted query and the cohort filters as SQL WHERE, and re-applying them here would
+   * narrow one database page a second time -- hiding rows the server correctly returned
+   * and breaking the pager totals beside them. Against legacy bare-array answers the
+   * params went nowhere, so the same three predicates run here over the one list, which
+   * is also what keeps the narrowing immediate while typing there.
    *
    * All three are applied here rather than in parallel memos feeding the sections, because the
    * header count, the "no accounts match" message and the sections themselves all have to be
@@ -992,6 +1056,7 @@ export const ProfileReview = () => {
    * until the day one of them was not wired into all three places.
    */
   const filteredProfiles = useMemo(() => {
+    if (useServerTotals) return profiles;
     const query = searchTerm.trim().toLowerCase();
     const year = yearFilter === ALL_YEARS ? null : Number(yearFilter);
     const department = departmentFromValue(departmentFilter);
@@ -1031,11 +1096,11 @@ export const ProfileReview = () => {
       }
       return true;
     });
-  }, [profiles, searchTerm, yearFilter, departmentFilter]);
+  }, [profiles, searchTerm, yearFilter, departmentFilter, useServerTotals]);
 
   /** Whether anything at all is narrowing the list, which is what the clear button is for. */
   const filtersNarrowed =
-    searchTerm.trim() !== '' || yearFilter !== ALL_YEARS || departmentFilter !== ALL_DEPARTMENTS;
+    activeSearch.trim() !== '' || yearFilter !== ALL_YEARS || departmentFilter !== ALL_DEPARTMENTS;
 
   /**
    * The four groups this screen shows, in the order an operator should meet them.
@@ -1119,8 +1184,14 @@ export const ProfileReview = () => {
           page: flaggedPage,
           pageCount: flaggedPageCount,
           total: flaggedTotal,
-          onPrev: () => setFlaggedPage((prev) => Math.max(0, prev - 1)),
-          onNext: () => setFlaggedPage((prev) => Math.min(flaggedPageCount - 1, prev + 1)),
+          onPrev: () => {
+            setFlaggedPage((prev) => Math.max(0, prev - 1));
+            scrollToSectionTop(FLAGGED_SECTION_ID);
+          },
+          onNext: () => {
+            setFlaggedPage((prev) => Math.min(flaggedPageCount - 1, prev + 1));
+            scrollToSectionTop(FLAGGED_SECTION_ID);
+          },
           prevLabel: 'Previous flagged page',
           nextLabel: 'Next flagged page',
         },
@@ -1141,8 +1212,14 @@ export const ProfileReview = () => {
           page,
           pageCount: ordinaryPageCount,
           total: ordinaryTotal,
-          onPrev: () => setPage((prev) => Math.max(0, prev - 1)),
-          onNext: () => setPage((prev) => Math.min(ordinaryPageCount - 1, prev + 1)),
+          onPrev: () => {
+            setPage((prev) => Math.max(0, prev - 1));
+            scrollToSectionTop(PARTICIPANTS_SECTION_ID);
+          },
+          onNext: () => {
+            setPage((prev) => Math.min(ordinaryPageCount - 1, prev + 1));
+            scrollToSectionTop(PARTICIPANTS_SECTION_ID);
+          },
           prevLabel: 'Previous participants page',
           nextLabel: 'Next participants page',
         },
@@ -1580,14 +1657,35 @@ export const ProfileReview = () => {
   const filterControls = (
     <>
       <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-4">
-        <div className="relative w-full lg:max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search by name, register number, email, or class"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="pl-9"
-          />
+        {/* The box is a draft; the button sends it. Firing four reads per keystroke against
+            ten thousand participants would answer a query the operator had already retyped,
+            so typing only edits the draft and Search (or Enter) issues the one request the
+            database answers -- one filtered, counted page per section. */}
+        <div className="flex w-full gap-2 lg:max-w-xl">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by name, register number, email, or class"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  submitSearch();
+                }
+              }}
+              className="pl-9"
+            />
+          </div>
+          <Button
+            variant="secondary"
+            onClick={submitSearch}
+            disabled={refreshing}
+            aria-label="Search profiles"
+          >
+            <Search className="mr-2 h-4 w-4" />
+            Search
+          </Button>
         </div>
 
         {/* `htmlFor` onto the trigger's `id` rather than an `aria-label` on the trigger: the
@@ -1600,7 +1698,7 @@ export const ProfileReview = () => {
           >
             Year
           </Label>
-          <Select value={yearFilter} onValueChange={setYearFilter}>
+          <Select value={yearFilter} onValueChange={changeYearFilter}>
             <SelectTrigger id="profile-year-filter" className="w-32">
               <SelectValue placeholder="Year" />
             </SelectTrigger>
@@ -1622,7 +1720,7 @@ export const ProfileReview = () => {
           >
             Department
           </Label>
-          <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+          <Select value={departmentFilter} onValueChange={changeDepartmentFilter}>
             <SelectTrigger id="profile-department-filter" className="w-48">
               <SelectValue placeholder="Department" />
             </SelectTrigger>
@@ -1646,7 +1744,7 @@ export const ProfileReview = () => {
           </Label>
           <Select
             value={sortOption}
-            onValueChange={(value) => setSortOption(value as ProfileSortOption)}
+            onValueChange={(value) => changeSortOption(value as ProfileSortOption)}
           >
             <SelectTrigger id="profile-sort" className="w-48">
               <SelectValue placeholder="Sort" />
@@ -1663,15 +1761,7 @@ export const ProfileReview = () => {
         {/* Only rendered when something is actually narrowing the list, so a control that
             clears nothing is not sitting there implying that something is. */}
         {filtersNarrowed && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSearchTerm('');
-              setYearFilter(ALL_YEARS);
-              setDepartmentFilter(ALL_DEPARTMENTS);
-            }}
-          >
+          <Button variant="ghost" size="sm" onClick={clearAllFilters}>
             Clear filters
           </Button>
         )}
@@ -1684,7 +1774,8 @@ export const ProfileReview = () => {
           section, the two cohort selects reach only the participants, and the sort picker is
           offered only for the ordinary participants. */}
       <p className="-mt-4 text-xs text-muted-foreground">
-        The search box applies to all four sections. The year and department filters apply to both
+        Search applies to all four sections once submitted, and pages through the matching
+        accounts like everything else here. The year and department filters apply to both
         participant sections only: admins and moderators have neither to match on, so those two
         sections stay complete whatever you pick here.
       </p>
@@ -1747,11 +1838,7 @@ export const ProfileReview = () => {
                   variant="outline"
                   size="sm"
                   className="w-max"
-                  onClick={() => {
-                    setSearchTerm('');
-                    setYearFilter(ALL_YEARS);
-                    setDepartmentFilter(ALL_DEPARTMENTS);
-                  }}
+                  onClick={clearAllFilters}
                 >
                   Show all accounts
                 </Button>
