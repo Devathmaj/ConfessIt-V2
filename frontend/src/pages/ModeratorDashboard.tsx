@@ -90,12 +90,23 @@ const envelopeTotal = (payload: unknown): number | null => {
   return typeof total === 'number' ? total : null;
 };
 
-/** How many submitted notes are still waiting to be approved or rejected. */
+/**
+ * How many submitted notes are still waiting to be approved or rejected.
+ *
+ * Against the paginated endpoint this is the `total` of a `pending_review` read, counted
+ * in SQL under the same filter -- asking for one row and reading the count beside it, so
+ * the dashboard never loads the queue to count it. A legacy bare array (unit-test mocks
+ * and older servers) is counted by hand instead.
+ */
 const pendingNotesIn = (payload: unknown): number | null => {
-  if (!Array.isArray(payload)) {
-    return null;
+  const total = (payload as { total?: unknown } | null)?.total;
+  if (typeof total === 'number') {
+    return total;
   }
-  return payload.filter((note) => (note as { status?: unknown })?.status === 'pending_review').length;
+  if (Array.isArray(payload)) {
+    return payload.filter((note) => (note as { status?: unknown })?.status === 'pending_review').length;
+  }
+  return null;
 };
 
 /**
@@ -159,7 +170,10 @@ export const ModeratorDashboard = () => {
       ]);
     }
     if (canReadLoveNotes) {
-      tasks.push(['pending-love-notes', readCount('love note', getAdminLoveNotes, pendingNotesIn)]);
+      tasks.push([
+        'pending-love-notes',
+        readCount('love note', () => getAdminLoveNotes({ status: 'pending_review', limit: 1 }), pendingNotesIn),
+      ]);
     }
 
     if (tasks.length === 0) {

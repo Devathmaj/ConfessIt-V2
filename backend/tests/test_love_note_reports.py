@@ -617,7 +617,7 @@ def test_a_removed_note_is_still_listed_for_staff(moderator_client, client, logi
     assert queued["id"] == report_id
     assert queued["content_removed"] is True
 
-    listed = moderator_client.get("/admin/love-notes").json()
+    listed = moderator_client.get("/admin/love-notes").json()["notes"]
     matching = [note for note in listed if note["id"] == note_id]
     assert matching, "the note vanished from the staff list instead of being flagged removed"
     assert matching[0]["content_removed"] is True
@@ -637,7 +637,7 @@ def test_the_review_list_carries_the_words_and_nothing_about_the_people(admin_cl
         db, sender, recipient, body="the words under review", anonymous=True
     )
 
-    listed = admin_client.get("/admin/love-notes").json()
+    listed = admin_client.get("/admin/love-notes").json()["notes"]
 
     assert [note["id"] for note in listed] == [note_id]
     note = listed[0]
@@ -655,7 +655,7 @@ def test_the_review_list_still_carries_what_moderation_needs(admin_client, db):
     fields are the record of who took a note down."""
     note_id = note_between(db)
 
-    listed = admin_client.get("/admin/love-notes").json()
+    listed = admin_client.get("/admin/love-notes").json()["notes"]
 
     assert listed[0]["id"] == note_id
     assert listed[0]["status"] == "approved"

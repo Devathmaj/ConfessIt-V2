@@ -488,9 +488,50 @@ export const hideAdminComment = async (commentId: string) => {
     return response.data;
 };
 
-export const getAdminLoveNotes = async () => {
-    const response = await axios.get(`${API_URL}/admin/love-notes`, { headers: getAuthHeaders() });
-    return response.data;
+export interface AdminLoveNotesQuery {
+    skip?: number;
+    limit?: number;
+    status?: 'all' | 'pending_review' | 'approved' | 'rejected';
+    order?: 'newest' | 'oldest';
+}
+
+export interface AdminLoveNotesPage {
+    notes: any[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+/**
+ * One page of love notes for the moderation screen.
+ *
+ * The status filter is a SQL WHERE, the timeline order a SQL ORDER BY, and every page a
+ * SQL LIMIT/OFFSET on the server, so a deployment with thousands of notes returns at most
+ * one page per request instead of the whole table. Accepts both the new
+ * `{notes, total, skip, limit}` envelope and a legacy bare array (older servers and
+ * unit-test mocks), normalising the latter to a single page whose total is the array
+ * length.
+ */
+export const getAdminLoveNotes = async (params?: AdminLoveNotesQuery): Promise<AdminLoveNotesPage> => {
+    const response = await axios.get(`${API_URL}/admin/love-notes`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.status && params.status !== 'all' ? { status: params.status } : {}),
+            ...(params?.order ? { order: params.order } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { notes: data, total: data.length, skip: 0, limit: data.length };
+    }
+    return {
+        notes: data?.notes ?? [],
+        total: data?.total ?? (data?.notes?.length ?? 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (data?.notes?.length ?? 0),
+    };
 };
 
 export const updateAdminLoveNoteStatus = async (noteId: string, status: "approved" | "rejected" | "pending_review") => {

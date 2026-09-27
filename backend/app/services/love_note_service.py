@@ -251,44 +251,93 @@ async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails,
 # Admin-only Love Note Functions
 # ============================================================================
 
-async def get_all_love_notes_for_admin(db: Database) -> List[Dict[str, Any]]:
+# Hard ceiling for one page of the admin love-note list. The endpoint clamps anything
+# larger, so no client -- present or future, well-meaning or not -- can ask for every note
+# and make the backend materialise them all at once.
+LOVE_NOTES_MAX_LIMIT = 100
+
+LOVE_NOTE_STATUSES = frozenset({"pending_review", "approved", "rejected"})
+
+LOVE_NOTE_ORDERS = frozenset({"newest", "oldest"})
+
+
+def _serialise_admin_love_note(doc: Any) -> Dict[str, Any]:
+    """One love note as the moderation list carries it: text and audit fields, no people."""
+    return {
+        "id": str(doc.id),
+        "body": doc.body,
+        "status": doc.status,
+        "created_at": isoformat_datetime(doc.created_at),
+        # Flagged, not filtered: staff see removed notes so a removal can be audited, and
+        # ``status`` above keeps answering the separate question of whether the note was
+        # judged acceptable.
+        "content_removed": doc.removed_at is not None,
+        "removed_at": isoformat_datetime(doc.removed_at),
+        "removed_by_regno": doc.removed_by_regno,
+    }
+
+
+async def get_admin_love_notes_data(
+    db: Database,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    status: str = "all",
+    order: str = "newest",
+) -> Dict[str, Any]:
+    """One page of love notes for moderation, filtered, ordered and counted in SQL.
+
+    Every filter here is a WHERE, the timeline order is an ORDER BY, and every page is a
+    LIMIT/OFFSET on the database itself: with thousands of notes the backend reads and
+    serialises at most ``limit`` rows, never the whole table, and ``total`` is a COUNT
+    under the same WHERE so the screen can keep loading more downwards without ever
+    holding the notes it is not showing.
+
+    Each note travels as its text and nothing else. A reviewer of an anonymous love note
+    is judging a message, not the people who exchanged it, so sender and recipient ids,
+    names, regnos and emails, the ``anonymous`` flag and the read receipt are withheld --
+    none of it is needed to decide whether a note is acceptable, and loading it at all
+    would put the identities in the response where a future field could surface them.
+    The image is withheld for the same reason: a reviewer can only rule on the words the
+    reviewer can read. What stays is what moderation needs to act and to be audited: the
+    note id (every action takes it), the body, the moderation status, when it arrived,
+    and the removal flags -- so a removed note is still listed and still shows who took
+    it down and when.
     """
-    Fetch every love note for moderation, as the note's text and nothing else.
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), LOVE_NOTES_MAX_LIMIT))
+    if status not in LOVE_NOTE_STATUSES and status != "all":
+        from fastapi import HTTPException, status as _status
 
-    A reviewer of an anonymous love note is judging a message, not the people who exchanged
-    it, so this deliberately withholds every field that identifies either party -- sender and
-    recipient ids, names, regnos and emails, the ``anonymous`` flag that says which of them is
-    hidden, and the read receipt that says the recipient opened it. None of it is needed to
-    decide whether a note is acceptable, and loading it at all would put the identities in
-    the response where a future field could surface them.
+        raise HTTPException(status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
+    if order not in LOVE_NOTE_ORDERS:
+        from fastapi import HTTPException, status as _status
 
-    The image is withheld for the same reason. It is content in its own right, so a reviewer
-    can only rule on the words the reviewer can read, and this endpoint does not carry the
-    viewer's account, so it has no way to decide whether it may mint a delivery token for a
-    review at all. The report queue (``get_love_note_reports_for_admin``) does, and it is the
-    screen a moderator opens to actually look at a reported note.
+        raise HTTPException(status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order")
 
-    What stays is what moderation needs to act and to be audited: the note id (every action
-    takes it), the body, the moderation status, when it arrived, and the removal flags -- so
-    a removed note is still listed and still shows who took it down and when.
-    """
-    items: List[Dict[str, Any]] = []
+    filters: list = []
+    if status != "all":
+        filters.append(LoveNoteRecord.status == status)
+    # ``id`` second so two notes stamped in the same instant still come back in the same
+    # order on every page: an unordered tail reshuffles between the count and the read,
+    # and a load-more list that reorders under the reader shows some notes twice.
+    ordering = (
+        [LoveNoteRecord.created_at.desc(), LoveNoteRecord.id.asc()]
+        if order == "newest"
+        else [LoveNoteRecord.created_at.asc(), LoveNoteRecord.id.asc()]
+    )
+
     with db.sessions() as session:
-        rows = session.scalars(select(LoveNoteRecord).order_by(LoveNoteRecord.created_at.desc())).all()
-    for doc in rows:
-        items.append({
-            "id": str(doc.id),
-            "body": doc.body,
-            "status": doc.status,
-            "created_at": isoformat_datetime(doc.created_at),
-            # Flagged, not filtered: staff see removed notes so a removal can be audited, and
-            # ``status`` above keeps answering the separate question of whether the note was
-            # judged acceptable.
-            "content_removed": doc.removed_at is not None,
-            "removed_at": isoformat_datetime(doc.removed_at),
-            "removed_by_regno": doc.removed_by_regno,
-        })
-    return items
+        total = session.scalar(select(func.count()).select_from(LoveNoteRecord).where(*filters)) or 0
+        rows = session.scalars(
+            select(LoveNoteRecord).where(*filters).order_by(*ordering).offset(skip).limit(limit)
+        ).all()
+    return {
+        "notes": [_serialise_admin_love_note(doc) for doc in rows],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
 
 
 async def update_love_note_status_service(

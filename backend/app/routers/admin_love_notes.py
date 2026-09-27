@@ -1,6 +1,6 @@
 # app/routers/admin_love_notes.py
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
 from ..postgres import Database
@@ -10,7 +10,8 @@ from ..accounts import AccountRef, Capability
 from ..models import AccountDetails
 from ..services.authorization import require_capability
 from ..services.love_note_service import (
-    get_all_love_notes_for_admin,
+    LOVE_NOTES_MAX_LIMIT,
+    get_admin_love_notes_data,
     update_love_note_status_service,
     delete_love_note_service,
     get_love_note_reports_for_admin,
@@ -20,19 +21,28 @@ from ..services.report_resolution_service import resolve_love_note_report
 router = APIRouter(prefix="/admin/love-notes", tags=["Admin - Love Notes"])
 
 
-@router.get("", response_model=List[Dict[str, Any]])
+@router.get("", response_model=Dict[str, Any])
 async def get_all_love_notes(
+    skip: int = Query(0, ge=0, description="How many matching notes to skip."),
+    limit: int = Query(50, ge=1, le=LOVE_NOTES_MAX_LIMIT, description="How many matching notes to return. Clamped so one request can never materialise the whole table."),
+    status: str = Query("all", description="Narrow to one moderation state: all, pending_review, approved or rejected."),
+    order: str = Query("newest", description="Timeline order by arrival: newest or oldest first."),
     db: Database = Depends(get_db),
     admin: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_REVIEW))
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
-    Return every love note for moderation as text only.
+    Return one page of love notes for moderation as text only.
 
     No sender, no recipient, no image, no anonymity flag: the reviewer judges the words. The
     operational fields the screen needs to act -- id, status, arrival time, and whether the
     note was already taken down -- come with it.
+
+    The status filter is a SQL WHERE, the timeline order a SQL ORDER BY, and every page a
+    SQL LIMIT/OFFSET: the backend reads at most one page no matter how many notes exist,
+    and ``total`` is a COUNT under the same filter so the screen can load more downwards
+    without holding the notes it is not showing.
     """
-    return await get_all_love_notes_for_admin(db)
+    return await get_admin_love_notes_data(db, skip=skip, limit=limit, status=status, order=order)
 
 
 @router.put("/{note_id}/status")
