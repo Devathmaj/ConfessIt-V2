@@ -131,6 +131,8 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/featured"),
     ("POST", "/admin/featured"),
     ("PUT", "/admin/featured"),
+    ("POST", "/admin/featured/range"),
+    ("PUT", "/admin/featured/range"),
     ("DELETE", "/admin/featured/{game_date}"),
     ("POST", "/admin/games/run-resets"),
 ]

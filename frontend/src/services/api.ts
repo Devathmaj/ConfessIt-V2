@@ -1352,6 +1352,46 @@ export const clearFeaturedGame = async (gameDate: string): Promise<void> => {
     });
 };
 
+/**
+ * Feature one game for a whole span, start to end inclusive.
+ *
+ * Every date in the span must be free of other games (the first taken date
+ * answers 409), and the span merged with the same game's bordering picks may
+ * not run more than a week (422). Returns the created rows.
+ */
+export const setFeaturedRange = async (
+    startDate: string,
+    endDate: string,
+    gameId: string
+): Promise<FeaturedGame[]> => {
+    const response = await axios.post(
+        `${API_URL}/admin/featured/range`,
+        { game_id: gameId, start_date: startDate, end_date: endDate },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+/**
+ * Feature one game for a whole span, erasing any other picks it covers.
+ *
+ * The override path for the schedule page: the admin confirms once against
+ * the listed dates, and the server replaces them in one transaction. An
+ * overlong consecutive run is still a 422, and league history is untouched.
+ */
+export const replaceFeaturedRange = async (
+    startDate: string,
+    endDate: string,
+    gameId: string
+): Promise<FeaturedGame[]> => {
+    const response = await axios.put(
+        `${API_URL}/admin/featured/range`,
+        { game_id: gameId, start_date: startDate, end_date: endDate },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 /** Evaluate every game's session boundary now (the manual 00:01 UTC trigger). */
 export const runScheduledResets = async (): Promise<{
     resets: Record<string, { action: string; session_id?: string | null }>;

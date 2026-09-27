@@ -11,6 +11,7 @@ from ..models import (
     AccountDetails,
     FeaturedGame,
     FeaturedGameCreate,
+    FeaturedGameRangeCreate,
     GameConfig,
     GameConfigUpdate,
     LeagueCoupleBoard,
@@ -113,6 +114,47 @@ async def replace_featured_game(
         db, payload.game_date, payload.game_id, created_by=account.regno
     )
     return FeaturedGame(**replaced)
+
+
+@router.post("/featured/range", response_model=List[FeaturedGame], status_code=201)
+async def set_featured_range(
+    payload: FeaturedGameRangeCreate,
+    db: Database = Depends(get_db),
+    account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> List[FeaturedGame]:
+    """Feature one game for a whole span, start to end inclusive.
+
+    Every date in the span must be free of other games: the first date held
+    by another game is a 409 naming it, and nothing is stored. A span whose
+    consecutive run -- merged with the same game's picks bordering it -- would
+    pass a week is a 422. Featuring never creates or touches any session.
+    """
+    created = featured_games.set_featured_range(
+        db, payload.start_date, payload.end_date, payload.game_id,
+        created_by=account.regno,
+    )
+    return [FeaturedGame(**entry) for entry in created]
+
+
+@router.put("/featured/range", response_model=List[FeaturedGame])
+async def replace_featured_range(
+    payload: FeaturedGameRangeCreate,
+    db: Database = Depends(get_db),
+    account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> List[FeaturedGame]:
+    """Feature one game for a whole span, erasing any other picks it covers.
+
+    The override path for the schedule page: dates held by other games are
+    removed in the same transaction and the new picks stored, so the admin
+    confirms once and the schedule never sits half-written. A span whose
+    consecutive run would pass a week is still a 422. League history is
+    untouched -- awards snapshot ``is_featured`` at finalization time.
+    """
+    replaced = featured_games.replace_featured_range(
+        db, payload.start_date, payload.end_date, payload.game_id,
+        created_by=account.regno,
+    )
+    return [FeaturedGame(**entry) for entry in replaced]
 
 
 @router.delete("/featured/{game_date}", status_code=204)

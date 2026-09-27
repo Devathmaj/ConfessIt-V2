@@ -10,6 +10,7 @@ import { GamesConfigProvider } from '@/contexts/GamesConfigContext';
 import { AdminGamesDashboard } from '@/pages/AdminGamesDashboard';
 import { AdminGamesLeaderboard } from '@/pages/AdminGamesLeaderboard';
 import { AdminGamesManage } from '@/pages/AdminGamesManage';
+import { AdminFeaturedManage } from '@/pages/AdminFeaturedManage';
 import { AdminWordleManage } from '@/pages/AdminWordleManage';
 import { AdminAnagramManage } from '@/pages/AdminAnagramManage';
 import { AdminCoupleQuestionnaireManage } from '@/pages/AdminCoupleQuestionnaireManage';
@@ -47,10 +48,12 @@ import {
   getScheduledAnagramWords,
   getScheduledWordleWords,
   replaceFeaturedGame,
+  replaceFeaturedRange,
   runScheduledResets,
   scheduleAnagramWord,
   scheduleWordleWord,
   setFeaturedGame,
+  setFeaturedRange,
   updateGameConfig,
   type AnagramGame,
   type GameConfig,
@@ -120,6 +123,8 @@ vi.mock('@/services/api', () => ({
   updateGameConfig: vi.fn(),
   getFeaturedGames: vi.fn(),
   setFeaturedGame: vi.fn(),
+  setFeaturedRange: vi.fn(),
+  replaceFeaturedRange: vi.fn(),
   replaceFeaturedGame: vi.fn(),
   clearFeaturedGame: vi.fn(),
   runScheduledResets: vi.fn(),
@@ -181,6 +186,7 @@ const renderSection = (path: string, session: AuthContextValue = adminSession) =
             <Route path="/admin/games" element={<AdminGamesLayout />}>
               <Route index element={<AdminGamesDashboard />} />
               <Route path="manage" element={<AdminGamesManage />} />
+              <Route path="manage/featured" element={<AdminFeaturedManage />} />
               <Route path="manage/wordle" element={<AdminWordleManage />} />
               <Route path="manage/anagram" element={<AdminAnagramManage />} />
               <Route path="manage/couple-questionnaire" element={<AdminCoupleQuestionnaireManage />} />
@@ -366,9 +372,9 @@ describe('AdminGamesDashboard: the front page', () => {
   });
 });
 
-describe('AdminGamesManage: the spotlight', () => {
+describe('AdminFeaturedManage: the dedicated schedule', () => {
   it('pins a game for a date through the server schedule', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/featured');
     const card = withinFeaturedCard();
     expect(await within(card).findByText(/Nothing featured yet/)).toBeInTheDocument();
 
@@ -395,7 +401,7 @@ describe('AdminGamesManage: the spotlight', () => {
   });
 
   it('keeps the server’s one-game-per-date refusal on the screen', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/featured');
     const card = withinFeaturedCard();
     await within(card).findByText(/Nothing featured yet/);
 
@@ -411,6 +417,220 @@ describe('AdminGamesManage: the spotlight', () => {
     const alert = await within(card).findByRole('alert');
     expect(alert).toHaveTextContent('A featured game is already set');
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('confirms the exact date before erasing a single-date pick', async () => {
+    vi.mocked(getFeaturedGames).mockResolvedValue([
+      {
+        id: 'featured-anagram',
+        game_date: todayIso(),
+        game_id: 'anagram',
+        created_by: 'TEST001',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    renderSection('/admin/games/manage/featured');
+    const card = withinFeaturedCard();
+    await within(card).findByText(todayIso());
+
+    // The form defaults to today + Wordle, which Anagram holds.
+    fireEvent.click(within(card).getByRole('button', { name: /set featured/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Erase this featured pick/)).toBeInTheDocument();
+    expect(within(dialog).getByText(new RegExp(todayIso()))).toBeInTheDocument();
+    expect(setFeaturedGame).not.toHaveBeenCalled();
+
+    const replaced = {
+      id: 'featured-wordle',
+      game_date: todayIso(),
+      game_id: 'wordle',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    vi.mocked(replaceFeaturedGame).mockResolvedValue(replaced);
+    fireEvent.click(within(dialog).getByRole('button', { name: /erase and feature/i }));
+
+    await waitFor(() =>
+      expect(replaceFeaturedGame).toHaveBeenCalledWith(todayIso(), 'wordle'),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      `Wordle featured for ${todayIso()} (replacing Anagram).`,
+    );
+  });
+
+  it('features a span from start to end', async () => {
+    renderSection('/admin/games/manage/featured');
+    const heading = await screen.findByRole('heading', { name: 'Feature a span' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) throw new Error('The span card could not be found from its heading.');
+    const scope = within(card as HTMLElement);
+
+    const created = [0, 1, 2].map((offset) => ({
+      id: `featured-span-${offset}`,
+      game_date: todayIso(),
+      game_id: 'wordle',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+    vi.mocked(setFeaturedRange).mockResolvedValue(created);
+
+    fireEvent.click(scope.getByRole('button', { name: /feature span/i }));
+
+    await waitFor(() =>
+      expect(setFeaturedRange).toHaveBeenCalledWith(todayIso(), todayIso(), 'wordle'),
+    );
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('refuses a span longer than a week without calling the server', async () => {
+    renderSection('/admin/games/manage/featured');
+    const heading = await screen.findByRole('heading', { name: 'Feature a span' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) throw new Error('The span card could not be found from its heading.');
+    const scope = within(card as HTMLElement);
+
+    const endInput = scope.getByLabelText(/End \(UTC\)/) as HTMLInputElement;
+    fireEvent.change(endInput, { target: { value: '2026-10-19' } });
+    const startInput = scope.getByLabelText(/Start \(UTC\)/) as HTMLInputElement;
+    fireEvent.change(startInput, { target: { value: '2026-10-12' } });
+
+    fireEvent.click(scope.getByRole('button', { name: /feature span/i }));
+
+    expect(await scope.findByText(/at most 7 days in a row/)).toBeInTheDocument();
+    expect(setFeaturedRange).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('keeps the server’s overlong-chain refusal on the screen', async () => {
+    renderSection('/admin/games/manage/featured');
+    const heading = await screen.findByRole('heading', { name: 'Feature a span' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) throw new Error('The span card could not be found from its heading.');
+    const scope = within(card as HTMLElement);
+
+    vi.mocked(setFeaturedRange).mockRejectedValue({
+      response: {
+        status: 422,
+        data: { detail: 'Featuring wordle for 2026-10-12 to 2026-10-18 would run it 8 days in a row' },
+      },
+    });
+
+    fireEvent.click(scope.getByRole('button', { name: /feature span/i }));
+
+    const alert = await scope.findByRole('alert');
+    expect(alert).toHaveTextContent('8 days in a row');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('lists every covered date before erasing a span', async () => {
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const held = [todayIso(), tomorrow].map((day, offset) => ({
+      id: `featured-held-${offset}`,
+      game_date: day,
+      game_id: 'wordle',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+    vi.mocked(getFeaturedGames).mockResolvedValue(held);
+    renderSection('/admin/games/manage/featured');
+    const heading = await screen.findByRole('heading', { name: 'Feature a span' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) throw new Error('The span card could not be found from its heading.');
+    const scope = within(card as HTMLElement);
+
+    await chooseOption(0, 'Anagram');
+    const endInput = scope.getByLabelText(/End \(UTC\)/) as HTMLInputElement;
+    fireEvent.change(endInput, { target: { value: tomorrow } });
+
+    fireEvent.click(scope.getByRole('button', { name: /feature span/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Erase these featured picks/)).toBeInTheDocument();
+    expect(within(dialog).getAllByText(todayIso()).length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText(tomorrow).length).toBeGreaterThan(0);
+    expect(setFeaturedRange).not.toHaveBeenCalled();
+
+    const created = held.map((entry) => ({ ...entry, game_id: 'anagram' }));
+    vi.mocked(replaceFeaturedRange).mockResolvedValue(created);
+    fireEvent.click(within(dialog).getByRole('button', { name: /erase and feature/i }));
+
+    await waitFor(() =>
+      expect(replaceFeaturedRange).toHaveBeenCalledWith(todayIso(), tomorrow, 'anagram'),
+    );
+    expect(toast.success).toHaveBeenCalled();
+  });
+});
+
+describe('AdminGamesManage: the spotlight front door', () => {
+  it('sets the chosen game as featured for today', async () => {
+    renderSection('/admin/games/manage');
+    const heading = await screen.findByRole('heading', { name: 'Featured spotlight' });
+    const card = heading.closest('.rounded-2xl');
+    if (!card) throw new Error('The spotlight card could not be found from its heading.');
+    const scope = within(card as HTMLElement);
+    expect(await scope.findByText(/No game holds today/)).toBeInTheDocument();
+
+    const created = {
+      id: 'featured-1',
+      game_date: todayIso(),
+      game_id: 'wordle',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    vi.mocked(replaceFeaturedGame).mockResolvedValue(created);
+
+    fireEvent.click(scope.getByRole('button', { name: /set as featured for today/i }));
+
+    await waitFor(() =>
+      expect(replaceFeaturedGame).toHaveBeenCalledWith(todayIso(), 'wordle'),
+    );
+    expect(toast.success).toHaveBeenCalledWith(`Wordle is featured for ${todayIso()}.`);
+  });
+
+  it('confirms before replacing today’s pick and links the full schedule', async () => {
+    vi.mocked(getFeaturedGames).mockResolvedValue([
+      {
+        id: 'featured-wordle',
+        game_date: todayIso(),
+        game_id: 'wordle',
+        created_by: 'TEST001',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    renderSection('/admin/games/manage');
+    expect(await screen.findByText('Today: Wordle')).toBeInTheDocument();
+
+    await chooseOption(0, 'Anagram');
+    fireEvent.click(screen.getByRole('button', { name: /set as featured for today/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Replace today/)).toBeInTheDocument();
+
+    const created = {
+      id: 'featured-2',
+      game_date: todayIso(),
+      game_id: 'anagram',
+      created_by: 'TEST001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    vi.mocked(replaceFeaturedGame).mockResolvedValue(created);
+    fireEvent.click(within(dialog).getByRole('button', { name: /replace featured/i }));
+
+    await waitFor(() =>
+      expect(replaceFeaturedGame).toHaveBeenCalledWith(todayIso(), 'anagram'),
+    );
+    expect(screen.getByRole('link', { name: /full schedule/i })).toHaveAttribute(
+      'href',
+      '/admin/games/manage/featured',
+    );
   });
 });
 
@@ -793,6 +1013,7 @@ describe('AdminWordleManage: the Wordle editor page', () => {
     // Every panel on this console publishes to the server now -- the featured schedule
     // and the per-game editors -- so the whole console content is gated.
     expect(screen.queryByRole('heading', { name: 'Featured game' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Featured spotlight' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Manage games' })).toBeInTheDocument();
   });
 

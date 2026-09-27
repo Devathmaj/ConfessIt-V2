@@ -1476,6 +1476,16 @@ class FeaturedGameCreate(BaseModel):
     game_id: GameId
 
 
+class FeaturedGameRangeCreate(BaseModel):
+    """Featuring one game for a whole span; free dates only, one-week chains."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: GameId
+    start_date: date
+    end_date: date
+
+
 class ScheduledWord(BaseModel):
     """A manual word waiting for its session period to begin."""
 

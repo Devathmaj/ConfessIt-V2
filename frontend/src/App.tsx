@@ -33,6 +33,7 @@ import { TwoKeyEscapePage } from "./pages/TwoKeyEscapePage";
 import { ReactionTimeGamePage } from "./pages/ReactionTimeGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
+import { AdminFeaturedManage } from "./pages/AdminFeaturedManage";
 import { AdminWordleManage } from "./pages/AdminWordleManage";
 import { AdminAnagramManage } from "./pages/AdminAnagramManage";
 import { AdminCoupleQuestionnaireManage } from "./pages/AdminCoupleQuestionnaireManage";
@@ -341,6 +342,7 @@ const AppRoutes = () => {
       >
         <Route index element={<AdminGamesDashboard />} />
         <Route path="manage" element={<AdminGamesManage />} />
+        <Route path="manage/featured" element={<AdminFeaturedManage />} />
         <Route path="manage/wordle" element={<AdminWordleManage />} />
         <Route path="manage/anagram" element={<AdminAnagramManage />} />
         <Route path="manage/couple-questionnaire" element={<AdminCoupleQuestionnaireManage />} />

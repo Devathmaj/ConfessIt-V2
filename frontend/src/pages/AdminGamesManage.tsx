@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { AdminFeaturedSchedule } from '@/components/AdminFeaturedSchedule';
+import { AdminFeaturedTodayCard } from '@/components/AdminFeaturedTodayCard';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { CAPABILITIES } from '@/lib/capabilities';
@@ -26,14 +26,14 @@ const MANAGE_ROUTES: Record<string, string> = {
 };
 
 /**
- * The games console: the spotlight schedule plus one row per game.
+ * The games console: the spotlight front door plus one row per game.
  *
- * Every game's configuration -- availability, reset cadence, sessions,
- * schedules and history -- lives on that game's own editor page, mirroring
- * the Connections and Trivia Drop editors. This screen keeps the featured
- * spotlight (which belongs to no single game) and the manual reset trigger,
- * and otherwise only lists each title with its short description and an Open
- * Editor option.
+ * Featuring is the central aspect here: one big spotlight card shows
+ * today's pick and sets one chosen game as featured for today. The full
+ * schedule -- every date, ranges, clearing days -- lives on the dedicated
+ * featured page behind its "Full schedule" action. Every game's own
+ * configuration lives on that game's editor page, so this screen otherwise
+ * only lists each title with its short description and an Open Editor option.
  * Screens render only for an account holding `games:manage`, and the server
  * refuses the same writes again regardless of what this gate believes.
  */
@@ -79,7 +79,7 @@ export const AdminGamesManage = () => {
         )}
       </header>
 
-      {mayManage && <AdminFeaturedSchedule />}
+      {mayManage && <AdminFeaturedTodayCard />}
 
       {mayManage && (
         <div className="flex flex-col gap-3">
