@@ -564,6 +564,11 @@ def ensure_game_sessions(
     finalized as a side effect (best-effort, logged, never reflected in the
     returned summary): awards belong to ended opportunities only, so the
     boundary run is the existing closure signal rather than a new timer.
+
+    Strict by design: an unexpected failure in one game aborts the pass, so a
+    bug surfaces loudly at boot, on the manual trigger, and in tests. The
+    unattended cron path uses :func:`run_reset_cycle` instead, which isolates
+    per-game failures so one game's bug can never starve the rest.
     """
     summary = {game_id: ensure_single_game(db, game_id, now) for game_id in GAME_IDS}
     try:
@@ -575,6 +580,66 @@ def ensure_game_sessions(
 
         logging.getLogger(__name__).exception("League due scan failed after reset run")
     return summary
+
+
+def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
+    """One full reset pass with per-game failure isolation, for the cron path.
+
+    Calls the same per-game entry point as boot and the manual trigger
+    (:func:`ensure_single_game`), so every update-handling rule holds here:
+    per-game advisory locks serialize a tick racing an admin Update, the
+    partial unique index refuses a duplicate active session, pending sessions
+    activate in-period, hidden games are skipped, Trivia Drop releases through
+    its own entry point, and closed league events are finalized afterwards.
+
+    The one deliberate difference from :func:`ensure_game_sessions`: an
+    unexpected failure in one game is logged and recorded as
+    ``action: "error"`` while the pass continues with the remaining games and
+    the league scan, instead of aborting them. An unattended 00:01 tick must
+    never let one game's bug starve the other six.
+    """
+    import logging
+
+    moment = _now_utc(now)
+    games: dict[str, dict] = {}
+    for game_id in GAME_IDS:
+        try:
+            games[game_id] = ensure_single_game(db, game_id, moment)
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Scheduled reset failed for game %s; continuing with the rest",
+                game_id,
+            )
+            games[game_id] = {
+                "game_id": game_id,
+                "action": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    league: dict = {"action": "ok"}
+    try:
+        from . import league_finalization
+
+        league_finalization.finalize_due_opportunities(db)
+    except Exception as exc:
+        logging.getLogger(__name__).exception("League due scan failed after reset run")
+        league = {"action": "error", "error": f"{type(exc).__name__}: {exc}"}
+    return {"games": games, "league": league, "at": moment.isoformat()}
+
+
+def reset_cycle_succeeded(summary: dict) -> bool:
+    """Whether a :func:`run_reset_cycle` pass finished without any failure."""
+    if not isinstance(summary, dict):
+        return False
+    games = summary.get("games")
+    if not isinstance(games, dict):
+        return False
+    if any(
+        isinstance(info, dict) and info.get("action") == "error"
+        for info in games.values()
+    ):
+        return False
+    league = summary.get("league")
+    return not (isinstance(league, dict) and league.get("action") == "error")
 
 
 def active_session_counts(db: Database) -> dict[str, int]:

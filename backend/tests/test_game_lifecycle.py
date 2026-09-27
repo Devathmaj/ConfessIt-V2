@@ -347,12 +347,16 @@ def test_a_scheduled_word_activates_its_period(db):
 # --- 6/7. Update creates a new session; history survives -----------------------
 
 
-def test_admin_update_creates_a_new_session_and_keeps_history(db):
+def test_admin_update_creates_a_new_session_and_keeps_history(db, monkeypatch):
     admin = make_admin_client()
     user = make_player(db, "22222222-2222-2222-2222-222222222222", "historyplayer")
 
     from app.models import WordleGuessRequest
     from app.services import wordle_gameplay
+
+    # The guess path reads the real clock; pin it to the test's fixed date so
+    # this test is green on any calendar day, not just October 8th.
+    monkeypatch.setattr(wordle_gameplay, "_today", lambda: THU)
 
     game_scheduler.ensure_single_game(db, "wordle", at(THU))
     with db.sessions() as session:
@@ -549,7 +553,13 @@ def _question_set(db, pair_session_id: str) -> tuple[set, dict]:
         return {str(row.question_id) for row in rows}, counts
 
 
-def test_each_questionnaire_session_deals_fresh_questions(db):
+def test_each_questionnaire_session_deals_fresh_questions(db, monkeypatch):
+    from app.services import couple_gameplay
+
+    # Partner selection reads the real clock to find the playable session; pin
+    # it to the test's fixed date so this test holds on any calendar day.
+    monkeypatch.setattr(couple_gameplay, "_today", lambda: THU)
+
     seed_couple_questions(db)
     user_a = make_player(db, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1", "qa_one", "Al")
     user_b = make_player(db, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2", "qb_two", "Bo")

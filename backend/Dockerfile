@@ -7,6 +7,13 @@ WORKDIR /app
 # Copy the requirements file into the container
 COPY requirements.txt .
 
+# cron powers the game-scheduler sidecar (same image, overridden command): the
+# 00:01 UTC game reset trigger. Installed here rather than in a second
+# Dockerfile so the sidecar shares the exact interpreter and dependencies the
+# app ships; the API process itself never starts cron.
+RUN apt-get update && apt-get install -y --no-install-recommends cron \
+    && rm -rf /var/lib/apt/lists/*
+
 # Ensure pip and wheel are up-to-date, then install a setuptools version that still provides pkg_resources
 RUN pip install --no-cache-dir --upgrade pip wheel "setuptools<81"
 RUN pip install --no-cache-dir -r requirements.txt

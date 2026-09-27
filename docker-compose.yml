@@ -100,6 +100,28 @@ services:
       # names, which is a separate migration and would change the H4 spanmetrics
       # labels at the same time as this one.
       OTEL_SEMCONV_STABILITY_OPT_IN: "http"
+  game-scheduler:
+    build:
+      context: ./backend
+    # Same image as the API; only the command differs. This process never
+    # serves traffic: its entrypoint runs one catch-up reset pass at start,
+    # then hands PID 1 to cron for the daily 00:01 UTC tick
+    # (backend/scripts/game-scheduler-entrypoint.sh). Each tick runs
+    # backend/scripts/run_game_resets.py, which calls the same per-game entry
+    # points as boot and POST /admin/games/run-resets -- advisory locks,
+    # terminate-then-create updates, pending activation, hidden skips and the
+    # league due scan all hold here exactly as they do there. No ports: the
+    # only observable output is the per-game summary in `docker compose logs`.
+    command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - postgres
+    environment:
+      TZ: UTC
+      DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt"
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     # Published to the host on loopback only, so a host-side psql/DBeaver can attach
