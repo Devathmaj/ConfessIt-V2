@@ -1,9 +1,9 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import Dict, List, Optional, Any
 from ..dependencies import get_db
 from ..postgres import Database
-from ..services.confession_service import ConfessionService
+from ..services.confession_service import ConfessionService, FEED_MAX_LIMIT
 from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ConfessionCooldown, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate
 from ..services.authorization import (
     get_current_participant_optional,
@@ -26,10 +26,23 @@ def get_confession_service(db: Database = Depends(get_db)) -> ConfessionService:
 def create_confession(confession_data: ConfessionCreate, service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
     return service.create_confession(confession_data, str(current_user.id))
 
-@router.get("/confessions", response_model=List[Confession], response_model_by_alias=False)
-def get_confessions(sort_by: str = Query('time', enum=['popularity', 'time', 'comments']), service: ConfessionService = Depends(get_confession_service), current_user: Optional[UserDetails] = Depends(get_current_participant_optional)):
+@router.get("/confessions", response_model=Dict[str, Any])
+def get_confessions(
+    sort_by: str = Query('time', enum=['popularity', 'time', 'comments']),
+    skip: int = Query(0, ge=0, description="How many visible confessions to skip."),
+    limit: int = Query(50, ge=1, le=FEED_MAX_LIMIT, description="How many visible confessions to return. Clamped so one request can never materialise the whole feed at once."),
+    service: ConfessionService = Depends(get_confession_service),
+    current_user: Optional[UserDetails] = Depends(get_current_participant_optional),
+):
+    """One page of the participant feed, sorted and counted in SQL.
+
+    The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET: the backend
+    reads at most one page -- with only its comments, authors and reporter ids
+    attached -- no matter how many confessions exist, and ``total`` counts the visible
+    posts so the screen can load more downwards without holding the feed behind it.
+    """
     user_id = str(current_user.id) if current_user else None
-    return service.get_confessions(sort_by, user_id)
+    return service.get_confessions(sort_by, user_id, skip=skip, limit=limit)
 
 @router.get("/confessions/cooldown", response_model=ConfessionCooldown)
 def get_confession_cooldown(service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
@@ -41,6 +54,28 @@ def get_confession_cooldown(service: ConfessionService = Depends(get_confession_
     in advance instead of refusing after the fact.
     """
     return service.get_confession_cooldown(str(current_user.id))
+
+@router.get("/confessions/{confession_id}/comments", response_model=Dict[str, Any])
+def get_confession_comments(
+    confession_id: str,
+    sort: str = Query('latest', enum=['latest', 'relevant'], description="Thread order: newest first, or most approved first."),
+    skip: int = Query(0, ge=0, description="How many visible comments to skip."),
+    limit: int = Query(10, ge=1, le=FEED_MAX_LIMIT, description="How many visible comments to return."),
+    service: ConfessionService = Depends(get_confession_service),
+    current_user: Optional[UserDetails] = Depends(get_current_participant_optional),
+):
+    """One thread page for the dialog, with the total beside it.
+
+    The feed embeds only the opening window of each thread; this is what the "show
+    more" beneath it reads, in either order. A missing or taken-down confession reads
+    as absent here, exactly as the feed treats it.
+    """
+    user_id = str(current_user.id) if current_user else None
+    page = service.get_confession_comments(confession_id, user_id, skip=skip, limit=limit, sort=sort)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Confession not found.")
+    return page
+
 
 @router.get("/confessions/total_count", response_model=int)
 def get_total_confessions_count(service: ConfessionService = Depends(get_confession_service)):

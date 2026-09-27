@@ -91,13 +91,13 @@ export const UserDashboard = () => {
     try {
       setIsLoading(true);
       // Fetch confessions ordered by popularity
-      const popularConfessions = await getConfessions('popularity');
-      
+      const popularConfessions = (await getConfessions('popularity', { limit: 2 })).confessions;
+
       // Fetch confessions ordered by time (recent)
-      const recentConfessions = await getConfessions('time');
-      
+      const recentConfessions = (await getConfessions('time', { limit: 2 })).confessions;
+
       // Fetch confessions ordered by comments
-      const commentedConfessions = await getConfessions('comments');
+      const commentedConfessions = (await getConfessions('comments', { limit: 2 })).confessions;
       
       // Select 4 unique trending confessions
       const selectedConfessions = [];

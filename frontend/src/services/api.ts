@@ -139,9 +139,83 @@ axios.interceptors.response.use(
 
 // --- Confession Endpoints ---
 
-export const getConfessions = async (sortBy = 'time') => {
-  const response = await axios.get(`${API_URL}/confessions?sort_by=${sortBy}`, { headers: getAuthHeaders() });
-  return response.data;
+export interface ConfessionsPage {
+  confessions: any[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+/**
+ * One page of the participant feed in the requested order, with the total beside it.
+ *
+ * The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET on the server --
+ * with only the page's comments, authors and reporter ids attached -- so a feed with
+ * thousands of posts returns at most one page per request instead of the whole table.
+ * Accepts both the new `{confessions, total, skip, limit}` envelope and a legacy bare
+ * array (older servers and unit-test mocks), normalising the latter to a single page
+ * whose total is the array length.
+ */
+export interface ConfessionCommentsPage {
+  comments: any[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+/**
+ * One thread page for the dialog, newest first, with the total beside it.
+ *
+ * The feed embeds only the opening window of each thread; this is what the "show
+ * more" beneath it reads. Accepts both the new `{comments, total, skip, limit}`
+ * envelope and a legacy bare array, normalising the latter to a single page.
+ */
+export const getConfessionComments = async (
+  confessionId: string,
+  params?: { skip?: number; limit?: number; sort?: 'latest' | 'relevant' },
+): Promise<ConfessionCommentsPage> => {
+  const response = await axios.get(`${API_URL}/confessions/${confessionId}/comments`, {
+    headers: getAuthHeaders(),
+    params: {
+      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+      ...(params?.sort ? { sort: params.sort } : {}),
+    },
+  });
+  const data = response.data;
+  if (Array.isArray(data)) {
+    return { comments: data, total: data.length, skip: 0, limit: data.length };
+  }
+  return {
+    comments: data?.comments ?? [],
+    total: data?.total ?? (data?.comments?.length ?? 0),
+    skip: data?.skip ?? 0,
+    limit: data?.limit ?? (data?.comments?.length ?? 0),
+  };
+};
+
+export const getConfessions = async (
+  sortBy = 'time',
+  params?: { skip?: number; limit?: number },
+): Promise<ConfessionsPage> => {
+  const response = await axios.get(`${API_URL}/confessions`, {
+    headers: getAuthHeaders(),
+    params: {
+      sort_by: sortBy,
+      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+    },
+  });
+  const data = response.data;
+  if (Array.isArray(data)) {
+    return { confessions: data, total: data.length, skip: 0, limit: data.length };
+  }
+  return {
+    confessions: data?.confessions ?? [],
+    total: data?.total ?? (data?.confessions?.length ?? 0),
+    skip: data?.skip ?? 0,
+    limit: data?.limit ?? (data?.confessions?.length ?? 0),
+  };
 };
 
 export const getTotalConfessionsCount = async () => {

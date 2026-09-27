@@ -527,11 +527,11 @@ def test_removed_content_leaves_the_participant_feed(db, client, moderator_clien
     """
     confession_id = make_confession(db, make_user(db, "author"), body="still visible")
     report_id = make_report(db, confession_id, make_user(db, "reporter"))
-    assert any(row["id"] == confession_id for row in client.get("/confessions").json())
+    assert any(row["id"] == confession_id for row in client.get("/confessions").json()["confessions"])
 
     moderator_client.patch(f"/admin/confessions/reports/{report_id}", params={"status": "removed"})
 
-    assert client.get("/confessions").json() == []
+    assert client.get("/confessions").json()["confessions"] == []
     assert client.get("/confessions/total_count").json() == 0
 
 
@@ -598,7 +598,7 @@ def test_removing_a_confession_leaves_its_comments_alone_but_invisible(moderator
         assert comment.removed_at is None
     # The feed is the only participant read of a confession, so it is the only place a removed
     # post can still leak from.
-    assert client.get("/confessions").json() == []
+    assert client.get("/confessions").json()["confessions"] == []
 
 
 def test_removed_content_takes_no_further_reactions_or_comments(db, client, moderator_client):
@@ -826,11 +826,11 @@ def test_hiding_and_removing_through_a_report_land_in_the_same_state(db, moderat
 def test_hiding_a_confession_takes_it_out_of_the_participant_feed(db, client, moderator_client):
     """Same guarantee as a report-driven removal, asserted on the other door."""
     confession_id = make_confession(db, make_user(db, "author"))
-    assert any(row["id"] == confession_id for row in client.get("/confessions").json())
+    assert any(row["id"] == confession_id for row in client.get("/confessions").json()["confessions"])
 
     moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
 
-    assert client.get("/confessions").json() == []
+    assert client.get("/confessions").json()["confessions"] == []
     assert client.get("/confessions/total_count").json() == 0
 
 
@@ -1070,7 +1070,7 @@ def test_hiding_a_comment_takes_it_out_of_the_confession_but_not_the_review_scre
     moderator_client.patch(f"/admin/comments/{hide_id}/hide")
 
     participant = [
-        row for row in client.get("/confessions").json() if row["id"] == confession_id
+        row for row in client.get("/confessions").json()["confessions"] if row["id"] == confession_id
     ]
     assert len(participant) == 1
     assert [c["id"] for c in participant[0]["comments"]] == [keep_id]

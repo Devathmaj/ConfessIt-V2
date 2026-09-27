@@ -24,7 +24,7 @@ import {
   Edit,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getConfessions, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
+import { getConfessions, getConfessionComments, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
@@ -99,8 +99,58 @@ const UserAvatar = ({ info, className = 'w-10 h-10' }: { info?: Pick<UserInfo, '
   <ProfileAvatar src={info?.profile_picture_url} name={info?.name} className={className} />
 );
 
+/**
+ * How many confessions one feed read returns. Cards carry their threads, so ten keeps
+ * one read cheap while a "show more" click still grows the feed by a visible amount.
+ * The backend clamps anything larger regardless.
+ */
+const FEED_PAGE_SIZE = 10;
+
+/**
+ * How many comments one thread read returns: the opening window the feed embeds, and
+ * every "show more" page inside the dialog after it.
+ */
+const COMMENTS_PAGE_SIZE = 10;
+
+/**
+ * Client-side relevance order for legacy bare-array answers, mirroring the server's:
+ * share of likes among all votes first, then more likes, then newest. Only read where
+ * no server paging exists to order with; the paged dialog never reorders a page.
+ */
+const compareRelevant = (
+  a: { like_count: number; dislike_count: number; created_at: string },
+  b: { like_count: number; dislike_count: number; created_at: string },
+): number => {
+  const share = (row: typeof a) =>
+    row.like_count + row.dislike_count === 0
+      ? 0
+      : row.like_count / (row.like_count + row.dislike_count);
+  return (
+    share(b) - share(a) ||
+    b.like_count - a.like_count ||
+    (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0)
+  );
+};
+
 export const ConfessionsPage = () => {
+  /**
+   * The posts on screen: always the contiguous window [0, confessions.length) of the
+   * server order for the current sort, so a refresh is one clean re-read and a "show
+   * more" click appends beneath the posts already read.
+   */
   const [confessions, setConfessions] = useState<Confession[]>([]);
+  /** How many visible confessions the server holds, loaded or not. */
+  const [total, setTotal] = useState(0);
+  /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
+  const [pagedFeed, setPagedFeed] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
+  /**
+   * How the open thread is ordered: newest first, or most approved first. Reset every
+   * time a dialog opens, so each thread starts where the feed left it -- the embedded
+   * window is always latest-first -- and an explicit tap is what re-ranks it.
+   */
+  const [commentSort, setCommentSort] = useState<'latest' | 'relevant'>('latest');
   const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('time');
   const [newConfession, setNewConfession] = useState('');
   const [confessingTo, setConfessingTo] = useState('');
@@ -184,21 +234,149 @@ export const ConfessionsPage = () => {
   const [editIsAnonymous, setEditIsAnonymous] = useState(false);
   const [editAllowComments, setEditAllowComments] = useState(false);
 
+  /** Split one feed answer into its rows, total and answer shape. Shared by every read. */
+  const splitPage = (answer: unknown) => {
+    // A legacy bare array ignores the params and hands back one unfiltered list; an
+    // envelope answers the page that was asked for. Telling them apart keeps the old
+    // servers and the unit-test mocks on the single-list behaviour they were written for.
+    if (Array.isArray(answer)) {
+      const rows = answer as Confession[];
+      return { rows, total: rows.length, enveloped: false };
+    }
+    const page = answer as { confessions?: Confession[]; total?: unknown };
+    const rows = Array.isArray(page.confessions) ? page.confessions : [];
+    return {
+      rows,
+      total:
+        typeof page.total === 'number' && Number.isFinite(page.total) ? page.total : rows.length,
+      enveloped: true,
+    };
+  };
+
   useEffect(() => {
+    let cancelled = false;
     const fetchConfessions = async () => {
       try {
-        const data = await getConfessions(sortBy);
-        setConfessions(data);
+        const page = splitPage(await getConfessions(sortBy, { skip: 0, limit: FEED_PAGE_SIZE }));
+        if (cancelled) return;
+        setConfessions(page.rows);
+        setTotal(page.total);
+        setPagedFeed(page.enveloped);
       } catch (error) {
-        toast.error("Failed to load confessions. Please try again.");
-        console.error(error);
+        if (!cancelled) {
+          toast.error("Failed to load confessions. Please try again.");
+          console.error(error);
+        }
       }
     };
     fetchConfessions();
+    return () => {
+      cancelled = true;
+    };
   }, [sortBy, isAuthenticated]);
 
+  /**
+   * Grow the feed downwards: the next page appends beneath the posts already on screen,
+   * so the reader's place never moves. Shown only while the server holds more than the
+   * feed is showing; legacy answers never page.
+   */
+  const loadMore = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = splitPage(
+        await getConfessions(sortBy, { skip: confessions.length, limit: FEED_PAGE_SIZE }),
+      );
+      setConfessions((prev) => [...prev, ...page.rows]);
+      setTotal(page.total);
+      setPagedFeed(page.enveloped);
+    } catch (error) {
+      toast.error("Failed to load more confessions. Please try again.");
+      console.error(error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  /** Re-read the first page, where a brand-new post belongs under a time order. */
+  const refreshFirstPage = async () => {
+    const page = splitPage(await getConfessions(sortBy, { skip: 0, limit: FEED_PAGE_SIZE }));
+    setConfessions(page.rows);
+    setTotal(page.total);
+    setPagedFeed(page.enveloped);
+  };
+
+  /**
+   * Grow the open thread downwards: the next comments page appends beneath the comments
+   * already read, in the dialog and in the feed row behind it alike, so closing and
+   * reopening the dialog does not lose the appended page.
+   */
+  const loadMoreComments = async () => {
+    if (!selectedConfession || loadingMoreComments) return;
+    const confessionId = selectedConfession.id;
+    const sort = commentSort;
+    setLoadingMoreComments(true);
+    try {
+      const answer = await getConfessionComments(confessionId, {
+        skip: selectedConfession.comments.length,
+        limit: COMMENTS_PAGE_SIZE,
+        sort,
+      });
+      const rows = (
+        Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
+      );
+      setSelectedConfession((prev) =>
+        prev && prev.id === confessionId ? { ...prev, comments: [...prev.comments, ...rows] } : prev,
+      );
+      setConfessions((prev) =>
+        prev.map((conf) =>
+          conf.id === confessionId ? { ...conf, comments: [...conf.comments, ...rows] } : conf,
+        ),
+      );
+    } catch (error) {
+      toast.error("Failed to load more comments. Please try again.");
+      console.error(error);
+    } finally {
+      setLoadingMoreComments(false);
+    }
+  };
+
   const handleCommentClick = (confession: Confession) => {
+    setCommentSort('latest');
     setSelectedConfession(confession);
+  };
+
+  /**
+   * Re-rank the open thread: page one in the new order, replacing dialog and feed-row
+   * copies alike so closing and reopening shows the same order. A sorter that only
+   * reordered the loaded window would strand rows the new order puts first.
+   */
+  const changeCommentSort = async (sort: 'latest' | 'relevant') => {
+    if (!selectedConfession || sort === commentSort) return;
+    const id = selectedConfession.id;
+    setCommentSort(sort);
+    try {
+      const answer = await getConfessionComments(id, {
+        skip: 0,
+        limit: Math.max(selectedConfession.comments.length, COMMENTS_PAGE_SIZE),
+        sort,
+      });
+      const fetched = (
+        Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
+      );
+      // Legacy answers ignore the params and hand back one unordered list, so the toggle
+      // orders it here; server pages arrive in the order that was asked for.
+      const rows = !pagedFeed && sort === 'relevant' ? [...fetched].sort(compareRelevant) : fetched;
+      setSelectedConfession((prev) =>
+        prev && prev.id === id ? { ...prev, comments: rows } : prev,
+      );
+      setConfessions((prev) =>
+        prev.map((conf) => (conf.id === id ? { ...conf, comments: rows } : conf)),
+      );
+    } catch (error) {
+      toast.error("Failed to reorder comments. Please try again.");
+      console.error(error);
+    }
   };
 
   const handlePostComment = async (confessionId: string) => {
@@ -213,20 +391,52 @@ export const ConfessionsPage = () => {
     
     try {
       const newCommentData = await createComment(confessionId, newComment);
-      
-      let updatedConfessionsList: Confession[] = [];
-      setConfessions(prev => {
-        updatedConfessionsList = prev.map(conf => 
-          conf.id === confessionId 
-            ? { ...conf, comments: [newCommentData, ...conf.comments], comment_count: conf.comment_count + 1 } 
-            : conf
+
+      if (commentSort === 'relevant' && pagedFeed) {
+        // Newest-first no longer describes this thread: the reply belongs at its ranked
+        // position, so the window is re-read instead of prepended -- prepending would put
+        // it first under every order and skew the next offset. The count comes back with
+        // the window because the write already incremented it server-side.
+        const answer = await getConfessionComments(confessionId, {
+          skip: 0,
+          limit: Math.max(selectedConfession?.comments.length ?? 0, COMMENTS_PAGE_SIZE),
+          sort: commentSort,
+        });
+        const rows = (
+          Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
         );
-        return updatedConfessionsList;
-      });
-      
-      const updatedSelectedConfession = updatedConfessionsList.find(c => c.id === confessionId);
-      if (updatedSelectedConfession) {
-        setSelectedConfession(updatedSelectedConfession);
+        const total = Array.isArray(answer as unknown)
+          ? undefined
+          : (answer as { total?: unknown }).total;
+        const applyCount = (prev: number) =>
+          typeof total === 'number' && Number.isFinite(total) ? total : prev + 1;
+        setSelectedConfession((prev) =>
+          prev && prev.id === confessionId
+            ? { ...prev, comments: rows, comment_count: applyCount(prev.comment_count) }
+            : prev,
+        );
+        setConfessions((prev) =>
+          prev.map((conf) =>
+            conf.id === confessionId
+              ? { ...conf, comments: rows, comment_count: applyCount(conf.comment_count) }
+              : conf,
+          ),
+        );
+      } else {
+        let updatedConfessionsList: Confession[] = [];
+        setConfessions(prev => {
+          updatedConfessionsList = prev.map(conf =>
+            conf.id === confessionId
+              ? { ...conf, comments: [newCommentData, ...conf.comments], comment_count: conf.comment_count + 1 }
+              : conf
+          );
+          return updatedConfessionsList;
+        });
+
+        const updatedSelectedConfession = updatedConfessionsList.find(c => c.id === confessionId);
+        if (updatedSelectedConfession) {
+          setSelectedConfession(updatedSelectedConfession);
+        }
       }
 
       setNewComment('');
@@ -401,8 +611,11 @@ export const ConfessionsPage = () => {
         anonymous: isAnonymous,
         comments_enabled: allowComments,
       };
-      const newConfessionResponse = await createConfession(confessionData);
-      setConfessions([newConfessionResponse, ...confessions]);
+      await createConfession(confessionData);
+      // The new post belongs at the head of a time-ordered feed but anywhere in the
+      // others, so the first page is re-read instead of prepending: prepending would put
+      // it first under every sort and grow the window past its page.
+      await refreshFirstPage();
       setNewConfession('');
       setConfessingTo('');
       setIsPostDialogOpen(false);
@@ -814,6 +1027,21 @@ export const ConfessionsPage = () => {
             </Card>
           );
         })}
+        {/* The feed only grows downwards: the next page appends beneath the posts already
+            on screen, so the reader's place never moves. Shown only while the server holds
+            more visible posts than the feed is showing; legacy answers never page. */}
+        {pagedFeed && confessions.length < total && (
+          <div className="flex justify-center pt-2">
+            <Button
+              variant="outline"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              aria-label="Show more confessions"
+            >
+              {loadingMore ? 'Loading…' : `Show more (${total - confessions.length} remaining)`}
+            </Button>
+          </div>
+        )}
       </div>
       
       <Dialog open={!!selectedConfession} onOpenChange={(isOpen) => !isOpen && setSelectedConfession(null)}>
@@ -843,7 +1071,31 @@ export const ConfessionsPage = () => {
               </div>
 
               <div className="flex-grow overflow-y-auto p-6 space-y-4">
-                <h4 className="text-lg font-semibold text-romantic">Comments ({selectedConfession.comment_count})</h4>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-lg font-semibold text-romantic">Comments ({selectedConfession.comment_count})</h4>
+                  {/* Latest is newest first; Relevant ranks by share of likes, so an
+                      approved remark reads above a piled-on one. The order is a server
+                      question -- switching re-reads page one rather than shuffling the
+                      loaded window, which would strand rows the new order puts first. */}
+                  <div className="flex items-center gap-1" role="group" aria-label="Sort comments">
+                    {(
+                      [
+                        ['relevant', 'Relevant'],
+                        ['latest', 'Latest'],
+                      ] as const
+                    ).map(([option, label]) => (
+                      <Button
+                        key={option}
+                        variant={commentSort === option ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => void changeCommentSort(option)}
+                        className="h-7 px-2 text-xs"
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
                 {selectedConfession.comments.length > 0 ? (
                   selectedConfession.comments.map(comment => {
                     const hasReported = user && comment.reported_by.includes(user.id);
@@ -903,6 +1155,26 @@ export const ConfessionsPage = () => {
                 ) : (
                   <p className="text-sm text-center text-muted-foreground py-4">No comments yet. Be the first to share your thoughts!</p>
                 )}
+                {/* The thread only grows downwards: the next page appends beneath the
+                    comments already read, so the reader's place never moves. Shown only
+                    while the post holds more visible comments than the dialog is showing;
+                    legacy answers carry whole threads and never page. */}
+                {pagedFeed &&
+                  selectedConfession.comments.length < (selectedConfession.comment_count ?? 0) && (
+                    <div className="flex justify-center pt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void loadMoreComments()}
+                        disabled={loadingMoreComments}
+                        aria-label="Show more comments"
+                      >
+                        {loadingMoreComments
+                          ? 'Loading…'
+                          : `Show more (${(selectedConfession.comment_count ?? 0) - selectedConfession.comments.length} remaining)`}
+                      </Button>
+                    </div>
+                  )}
               </div>
 
               <DialogFooter className="p-4 border-t bg-background/95">
@@ -916,7 +1188,7 @@ export const ConfessionsPage = () => {
                         className="flex-grow bg-background border-romantic/30 focus:border-romantic"
                         rows={2}
                         />
-                        <Button onClick={() => handlePostComment(selectedConfession.id)} className="btn-romantic" size="icon">
+                        <Button onClick={() => handlePostComment(selectedConfession.id)} className="btn-romantic" size="icon" aria-label="Send comment">
                         <Send className="w-4 h-4" />
                         </Button>
                     </div>

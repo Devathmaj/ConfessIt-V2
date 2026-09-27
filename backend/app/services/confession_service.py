@@ -1,6 +1,6 @@
 from ..logger import get_logger
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Float, case, cast, func, or_, select, update
 from ..postgres import PostgresClient, get_postgres_client
 from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
@@ -13,10 +13,21 @@ from .storage_service import storage_service
 
 logger = get_logger(__name__)
 
-# A participant may post one confession every CONFESSION_COOLDOWN_HOURS. The feed is read in
-# full by every visitor on every page load, so the throttle is what stops one account from
-# filling it on its own.
+# A participant may post one confession every CONFESSION_COOLDOWN_HOURS. The feed is
+# read one page at a time, so the throttle is what stops one account from filling it on
+# its own.
 CONFESSION_COOLDOWN_HOURS = 2
+
+# Hard ceiling for one feed page. The endpoint clamps anything larger, so no client can
+# ask for every confession -- with every comment and user row attached -- and make the
+# backend materialise the whole feed in one response.
+FEED_MAX_LIMIT = 100
+
+# A single confession's thread opens with this many newest comments, and grows by
+# this many per "show more" click. The dialog reads the thread, and an unbounded one
+# would let a single viral post blow past the page bound the feed is read under;
+# ``comment_count`` still carries the true total beside either window.
+FEED_COMMENTS_INITIAL = 10
 
 
 def _cooldown_message(seconds_remaining: float) -> str:
@@ -220,35 +231,214 @@ class ConfessionService:
             "remaining_seconds": int(seconds),
         }
 
-    def get_confessions(self, sort_by: str = 'time', user_id: Optional[str] = None) -> List[Confession]:
+    def _hydrate_comments(
+        self, session, comment_models, user_id: Optional[str], user_map=None,
+    ) -> list:
+        """Comment rows into response payloads, in input order: authors, reporter ids and
+        the caller's own like/dislike, all in bulk.
+
+        One users read and one report read no matter how many comments are handed in --
+        the per-row lookups this replaces opened a fresh session for every comment on
+        every post. Shared by the feed (which hydrates one page's threads and hands in
+        the map it already read) and the single-thread read below.
+        """
+        if user_map is None:
+            user_ids = {str(row.user_id) for row in comment_models}
+            user_map = {
+                user.id: user for user in session.scalars(
+                    select(UserRecord).where(UserRecord.id.in_(user_ids))
+                ).all()
+            } if user_ids else {}
+        ids = [str(row.id) for row in comment_models]
+        reporters: dict = {}
+        if ids:
+            for target_id, reporter_id in session.execute(
+                select(ReportRecord.comment_id, ReportRecord.reported_by_id).where(
+                    ReportRecord.comment_id.in_(ids)
+                )
+            ).all():
+                reporters.setdefault(str(target_id), []).append(str(reporter_id))
+        hydrated = []
+        for row in comment_models:
+            payload = self._comment_payload(row, user_map.get(row.user_id))
+            payload["reported_by"] = reporters.get(str(row.id), [])
+            payload["report_count"] = len(payload["reported_by"])
+            reaction = None
+            if user_id:
+                if user_id in payload.get('likes', []):
+                    reaction = 'like'
+                elif user_id in payload.get('dislikes', []):
+                    reaction = 'dislike'
+            payload['user_reaction'] = reaction
+            hydrated.append(payload)
+        return hydrated
+
+    def get_confession_comments(
+        self, confession_id: str, user_id: Optional[str] = None,
+        skip: int = 0, limit: int = 10, sort: str = 'latest',
+    ) -> Optional[dict]:
+        """One thread page for the dialog, with the total beside it.
+
+        The feed embeds only the opening window of each thread; this is what the "show
+        more" beneath it reads -- one SQL page plus the same bulk hydration as the feed,
+        so opening a thread never loads what the dialog is not showing. ``total`` counts
+        every visible comment on the post, loaded or not, under no order at all.
+
+        ``sort`` is ``latest`` (newest first) or ``relevant``: the share of likes among
+        all votes, so a comment with 3 likes and no dislikes outranks one with 6 likes
+        and 4 dislikes. Votes are the denormalised counters, coalesced for hand-written
+        rows; a comment with no votes at all scores zero rather than dividing by it.
+        Ties break toward more likes, then newest, then id, so pages are stable.
+
+        None when the confession is missing or taken down: a removed post reads as
+        absent rather than as a placeholder, exactly as ``get_confession`` answers it.
+        """
+        skip = max(0, int(skip or 0))
+        limit = max(1, min(int(limit or 10), FEED_MAX_LIMIT))
+        if sort not in ("latest", "relevant"):
+            from fastapi import HTTPException as _HTTPException, status as _status
+
+            raise _HTTPException(
+                status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid sort",
+            )
+        likes = func.coalesce(ConfessionCommentRecord.like_count, 0)
+        dislikes = func.coalesce(ConfessionCommentRecord.dislike_count, 0)
+        relevance = case(
+            ((likes + dislikes) == 0, 0.0),
+            else_=cast(likes, Float) / cast(likes + dislikes, Float),
+        )
+        if sort == "relevant":
+            ordering = [
+                relevance.desc(), likes.desc(),
+                ConfessionCommentRecord.created_at.desc(), ConfessionCommentRecord.id.asc(),
+            ]
+        else:
+            ordering = [ConfessionCommentRecord.created_at.desc(), ConfessionCommentRecord.id.asc()]
         with self.sessions() as session:
-            # Both tables are filtered on removed_at rather than deleted: a confession taken
-            # down by a moderator still has a report pointing at it, and the row has to stay
-            # for that report to mean anything. What changes is that it is no longer a thing
-            # a participant can read, react to, or count. Staff surfaces deliberately do not
-            # filter -- see app.services.report_resolution_service for why.
-            confession_models = session.scalars(
-                select(ConfessionRecord).where(ConfessionRecord.removed_at.is_(None))
-            ).all()
+            row = session.get(ConfessionRecord, str(confession_id))
+            if row is None or row.removed_at is not None:
+                return None
+            visible = [
+                ConfessionCommentRecord.confession_id == str(confession_id),
+                ConfessionCommentRecord.removed_at.is_(None),
+            ]
+            total = session.scalar(
+                select(func.count()).select_from(ConfessionCommentRecord).where(*visible)
+            ) or 0
             comment_models = session.scalars(
                 select(ConfessionCommentRecord)
-                .where(ConfessionCommentRecord.removed_at.is_(None))
-                .order_by(ConfessionCommentRecord.created_at.desc())
+                .where(*visible)
+                .order_by(*ordering)
+                .offset(skip).limit(limit)
             ).all()
-            user_map = {user.id: user for user in session.scalars(select(UserRecord)).all()}
+            payloads = self._hydrate_comments(session, comment_models, user_id)
+        return {
+            "comments": [ConfessionComment(**payload) for payload in payloads],
+            "total": total, "skip": skip, "limit": limit,
+        }
+
+    def get_confessions(
+        self, sort_by: str = 'time', user_id: Optional[str] = None,
+        skip: int = 0, limit: int = 50,
+    ) -> dict:
+        """One feed page, sorted and counted in SQL.
+
+        The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET: with
+        thousands of confessions the backend reads and serialises at most one page, never
+        the whole feed, and ``total`` is a COUNT under the same filter so the screen can
+        load more downwards without ever holding the posts it is not showing. Every
+        relation behind a page -- comments, authors and commenters, reporter ids -- is one
+        bulk read grouped in Python rather than a query per row, which is what the old
+        full-table read did once per confession and once per comment on top of loading
+        the entire users table for every visitor.
+        """
+        skip = max(0, int(skip or 0))
+        limit = max(1, min(int(limit or 50), FEED_MAX_LIMIT))
+        # Both tables are filtered on removed_at rather than deleted: a confession taken
+        # down by a moderator still has a report pointing at it, and the row has to stay
+        # for that report to mean anything. What changes is that it is no longer a thing
+        # a participant can read, react to, or count. Staff surfaces deliberately do not
+        # filter -- see app.services.report_resolution_service for why.
+        visible = [ConfessionRecord.removed_at.is_(None)]
+        if sort_by == "popularity":
+            engagement = sum(
+                func.coalesce(getattr(ConfessionRecord, f"{kind}_count"), 0)
+                for kind in self.REACTION_TYPES
+            )
+            ordering = [engagement.desc(), ConfessionRecord.created_at.asc(), ConfessionRecord.id.asc()]
+        elif sort_by == "comments":
+            ordering = [
+                func.coalesce(ConfessionRecord.comment_count, 0).desc(),
+                ConfessionRecord.created_at.asc(), ConfessionRecord.id.asc(),
+            ]
+        else:
+            # Newest first; the old Python sort broke creation-time ties by author name,
+            # which no reader could observe and no index could serve, so the stable tail
+            # is the id instead.
+            ordering = [ConfessionRecord.created_at.desc(), ConfessionRecord.id.asc()]
+        with self.sessions() as session:
+            total = session.scalar(
+                select(func.count()).select_from(ConfessionRecord).where(*visible)
+            ) or 0
+            confession_models = session.scalars(
+                select(ConfessionRecord).where(*visible)
+                .order_by(*ordering).offset(skip).limit(limit)
+            ).all()
+            confession_ids = [str(row.id) for row in confession_models]
+            # Newest N comments per confession on the page, ranked in SQL: two bounded
+            # reads no matter how long any single thread is, instead of every comment on
+            # every post. ``comment_count`` on the row still carries the true total.
+            ranked = (
+                select(
+                    ConfessionCommentRecord.id,
+                    func.row_number().over(
+                        partition_by=ConfessionCommentRecord.confession_id,
+                        order_by=ConfessionCommentRecord.created_at.desc(),
+                    ).label("thread_rank"),
+                )
+                .where(
+                    ConfessionCommentRecord.removed_at.is_(None),
+                    ConfessionCommentRecord.confession_id.in_(confession_ids),
+                )
+                .subquery()
+                if confession_ids else None
+            )
+            kept_ids = session.scalars(
+                select(ranked.c.id).where(ranked.c.thread_rank <= FEED_COMMENTS_INITIAL)
+            ).all() if ranked is not None else []
+            comment_models = session.scalars(
+                select(ConfessionCommentRecord)
+                .where(ConfessionCommentRecord.id.in_(kept_ids))
+                .order_by(ConfessionCommentRecord.created_at.desc())
+            ).all() if kept_ids else []
+            # Only the accounts this page actually names: its authors and its commenters.
+            # Reactors need no rows -- the feed carries counts plus id lists, never names.
+            wanted_user_ids = {str(row.author_id) for row in confession_models}
+            wanted_user_ids |= {str(row.user_id) for row in comment_models}
+            user_map = {
+                user.id: user for user in session.scalars(
+                    select(UserRecord).where(UserRecord.id.in_(wanted_user_ids))
+                ).all()
+            } if wanted_user_ids else {}
+            # Reporter ids in two grouped reads: one for the page's confessions, one for
+            # its comments. The old code opened a fresh session per row for this.
+            confession_reporters: dict = {}
+            if confession_ids:
+                for target_id, reporter_id in session.execute(
+                    select(ReportRecord.confession_id, ReportRecord.reported_by_id).where(
+                        ReportRecord.confession_id.in_(confession_ids)
+                    )
+                ).all():
+                    confession_reporters.setdefault(str(target_id), []).append(str(reporter_id))
             confession_rows = [self._confession_payload(row) for row in confession_models]
             comments_by_confession = {}
-            for row in comment_models:
-                comment = self._comment_payload(row, user_map.get(row.user_id))
+            for comment in self._hydrate_comments(session, comment_models, user_id, user_map):
                 comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
 
         for confession in confession_rows:
-            confession["reported_by"] = self._reporter_ids(confession["id"])
+            confession["reported_by"] = confession_reporters.get(str(confession["id"]), [])
             confession["report_count"] = len(confession["reported_by"])
             confession_id = str(confession["id"])
-            for comment in comments_by_confession.get(confession_id, []):
-                comment["reported_by"] = self._reporter_ids(comment["id"])
-                comment["report_count"] = len(comment["reported_by"])
             confession["comments"] = sorted(
                 comments_by_confession.get(confession_id, []),
                 key=lambda comment: comment.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
@@ -263,22 +453,6 @@ class ConfessionService:
                 # uses to hide that name.
                 "profile_picture_url": _profile_picture_url(author) if not confession.get("anonymous") else None,
             }
-
-        def timestamp_key(row):
-            value = row.get("created_at")
-            return value or datetime.datetime.min.replace(tzinfo=timezone.utc)
-
-        if sort_by == "popularity":
-            confession_rows.sort(key=lambda row: timestamp_key(row))
-            confession_rows.sort(key=lambda row: sum(row.get(f"{kind}_count", 0) or 0 for kind in self.REACTION_TYPES), reverse=True)
-        elif sort_by == "comments":
-            confession_rows.sort(key=timestamp_key)
-            confession_rows.sort(key=lambda row: row.get("comment_count", 0) or 0, reverse=True)
-        elif sort_by == "time":
-            confession_rows.sort(key=lambda row: (row.get("user_info", {}).get("name") or "").lower())
-            confession_rows.sort(key=timestamp_key, reverse=True)
-        else:
-            confession_rows.sort(key=timestamp_key, reverse=True)
 
         confessions = []
         for confession_doc in confession_rows:
@@ -301,11 +475,11 @@ class ConfessionService:
                         user_reaction = reaction_type
                         break
             confession_doc['user_reaction'] = user_reaction
-            
+
             confessions.append(Confession(**confession_doc))
-            
+
         logger.info(f"Retrieved {len(confessions)} confessions sorted by {sort_by}")
-        return confessions
+        return {"confessions": confessions, "total": total, "skip": skip, "limit": limit}
 
     def get_confession(self, confession_id: str, user_id: Optional[str] = None) -> Optional[Confession]:
         with self.sessions() as session:
