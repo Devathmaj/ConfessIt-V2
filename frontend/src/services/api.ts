@@ -599,9 +599,57 @@ export const updateAdminMessageReportStatus = async (
     return response.data;
 };
 
-export const getAdminUsers = async () => {
-    const response = await axios.get(`${API_URL}/admin/users`, { headers: getAuthHeaders() });
-    return response.data;
+export interface AdminUsersQuery {
+    skip?: number;
+    limit?: number;
+    q?: string;
+    account_type?: AccountType | string;
+    year?: number;
+    department?: string;
+    sort?: string;
+    flagged?: 'all' | 'flagged' | 'ordinary';
+}
+
+export interface AdminUsersPage {
+    users: any[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+/**
+ * One page of accounts for the profile-review screen.
+ *
+ * Every filter is a SQL WHERE and every page is a SQL LIMIT/OFFSET on the server, so a
+ * deployment with ten thousand participants returns at most one page per request instead
+ * of the whole table. Accepts both the new `{users, total, skip, limit}` envelope and a
+ * legacy bare array (older servers and unit-test mocks), normalising the latter to a
+ * single page whose total is the array length.
+ */
+export const getAdminUsers = async (params?: AdminUsersQuery): Promise<AdminUsersPage> => {
+    const response = await axios.get(`${API_URL}/admin/users`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.q ? { q: params.q } : {}),
+            ...(params?.account_type ? { account_type: params.account_type } : {}),
+            ...(params?.year !== undefined && params.year !== null ? { year: params.year } : {}),
+            ...(params?.department ? { department: params.department } : {}),
+            ...(params?.sort ? { sort: params.sort } : {}),
+            ...(params?.flagged && params.flagged !== 'all' ? { flagged: params.flagged } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { users: data, total: data.length, skip: 0, limit: data.length };
+    }
+    return {
+        users: data?.users ?? [],
+        total: data?.total ?? (data?.users?.length ?? 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (data?.users?.length ?? 0),
+    };
 };
 
 /**

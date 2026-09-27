@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -126,6 +126,28 @@ const FLAGGED_SECTION_ID = 'flagged';
  * controls somewhere else on the page.
  */
 const PARTICIPANTS_SECTION_ID = 'participants';
+
+/**
+ * How many participant rows one server read returns. The backend clamps to 100; fifty
+ * keeps one page to a single screenful of cards while keeping the request count low.
+ * Staff reads use a larger bound because those tables are tiny by construction.
+ */
+const PARTICIPANT_PAGE_SIZE = 50;
+const STAFF_PAGE_SIZE = 100;
+
+/** The rows inside a `getAdminUsers` answer, whether it is the new page envelope or a legacy bare array. */
+const rowsOf = (answer: unknown): AdminUserProfile[] => {
+  if (Array.isArray(answer)) return answer as AdminUserProfile[];
+  const users = (answer as { users?: AdminUserProfile[] } | null | undefined)?.users;
+  return Array.isArray(users) ? users : [];
+};
+
+/** The matching-row count beside a `getAdminUsers` answer, falling back to the rows at hand. */
+const totalOf = (answer: unknown, fallback: number): number => {
+  if (Array.isArray(answer)) return answer.length;
+  const total = (answer as { total?: unknown } | null | undefined)?.total;
+  return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+};
 
 interface AdminUserProfile {
   id: string;
@@ -473,6 +495,18 @@ const SORT_COMPARATORS: Record<ProfileSortOption, (a: AdminUserProfile, b: Admin
   };
 
 /**
+ * The client sort picker in server words, sent with the ordinary-participants page read so
+ * the database orders before it slices. The flagged queue never uses this: it is always
+ * `removals_desc`, which the picker deliberately does not offer.
+ */
+const SERVER_SORTS: Record<ProfileSortOption, string> = {
+  'name': 'name',
+  'name-desc': 'name_desc',
+  'year': 'year',
+  'year-desc': 'year_desc',
+};
+
+/**
  * Orders one section's accounts, copying the list first.
  *
  * The copy is the point. Each list handed here is built by a `filter`, but `sort` mutates in
@@ -509,6 +543,20 @@ interface ProfileSection {
    * discovered.
    */
   create?: { label: string; accountType: AccountType };
+  /**
+   * Present only on the two participant sections, which are server pages rather than whole
+   * lists: the screen holds one page of each, and the rest stays in the database until the
+   * operator asks for it.
+   */
+  pagination?: {
+    page: number;
+    pageCount: number;
+    total: number;
+    onPrev: () => void;
+    onNext: () => void;
+    prevLabel: string;
+    nextLabel: string;
+  };
 }
 
 /**
@@ -714,6 +762,35 @@ export const ProfileReview = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   /**
+   * The search text the server has been asked about, lagging one debounce behind the box.
+   *
+   * The box filters the loaded cards immediately (see `filteredProfiles`), so typing never
+   * waits on the network; this is what is sent with the next page request, so a deployment
+   * with ten thousand participants narrows in SQL rather than by loading them all first.
+   */
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  /** Which server page of ordinary participants is showing (zero-based). */
+  const [page, setPage] = useState(0);
+  /** Which server page of the flagged work queue is showing (zero-based). */
+  const [flaggedPage, setFlaggedPage] = useState(0);
+  /** Server-side totals for the current filters, so the pager knows how many pages exist. */
+  const [ordinaryTotal, setOrdinaryTotal] = useState(0);
+  const [flaggedTotal, setFlaggedTotal] = useState(0);
+  const [staffTotal, setStaffTotal] = useState(0);
+  /**
+   * Whether the last fetch answered with page envelopes rather than legacy bare arrays.
+   *
+   * Unit-test mocks resolve bare arrays (one full list per read, params ignored); the real
+   * server returns `{users, total, skip, limit}` per read. Totals across four reads only add
+   * up for envelopes -- four bare arrays would quadruple-count -- so the header and the
+   * pager read the server totals for envelopes and the merged rows for arrays.
+   */
+  const [useServerTotals, setUseServerTotals] = useState(false);
+  /** Background page/filter fetches after the first load; the grid stays up while they run. */
+  const [refreshing, setRefreshing] = useState(false);
+  /** Whether the next fetch is still the first one, which is the only one that takes the loading screen. */
+  const isFirstLoad = useRef(true);
+  /**
    * The year and the department the cards are narrowed to, or the sentinel for "not narrowed".
    *
    * Two filters rather than one combined cohort, because they are two axes and an operator reaches
@@ -760,59 +837,151 @@ export const ProfileReview = () => {
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // A new question starts on the first page: the previous page number may not exist under
+  // the new filters, and staying on it would show an empty grid for a question that has
+  // answers.
+  useEffect(() => {
+    setPage(0);
+    setFlaggedPage(0);
+  }, [debouncedSearch, yearFilter, departmentFilter, sortOption]);
+
+  useEffect(() => {
+    let cancelled = false;
     const fetchProfiles = async () => {
       try {
-        setLoading(true);
-        const data = await getAdminUsers();
-        setProfiles(data);
+        if (isFirstLoad.current) setLoading(true);
+        else setRefreshing(true);
+        const q = debouncedSearch.trim() || undefined;
+        const year = yearFilter === ALL_YEARS ? undefined : Number(yearFilter);
+        const department = departmentFromValue(departmentFilter) ?? undefined;
+        const ordinarySort = SERVER_SORTS[sortOption];
+        // Four bounded reads rather than one unbounded one. Staff tables are tiny by
+        // construction, so both arrive whole; each participant read is one SQL page
+        // (WHERE plus LIMIT/OFFSET on the database), so the backend serialises at most
+        // two pages no matter how many participants exist. The flagged queue is its own
+        // read in removal order because it is a work queue, not a slice of the ordinary
+        // list: the most-removed participant platform-wide belongs on top even when the
+        // ordinary list is sorted by name and sitting on page nine.
+        const [admins, moderators, flagged, ordinary] = await Promise.all([
+          getAdminUsers({ account_type: 'admin', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
+          getAdminUsers({ account_type: 'moderator', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
+          getAdminUsers({
+            account_type: 'users',
+            flagged: 'flagged',
+            sort: 'removals_desc',
+            skip: flaggedPage * PARTICIPANT_PAGE_SIZE,
+            limit: PARTICIPANT_PAGE_SIZE,
+            ...(q ? { q } : {}),
+            ...(year !== undefined ? { year } : {}),
+            ...(department ? { department } : {}),
+          }),
+          getAdminUsers({
+            account_type: 'users',
+            flagged: 'ordinary',
+            sort: ordinarySort,
+            skip: page * PARTICIPANT_PAGE_SIZE,
+            limit: PARTICIPANT_PAGE_SIZE,
+            ...(q ? { q } : {}),
+            ...(year !== undefined ? { year } : {}),
+            ...(department ? { department } : {}),
+          }),
+        ]);
+        if (cancelled) return;
+        const answers = [admins, moderators, flagged, ordinary];
+        const enveloped = answers.some((answer) => !Array.isArray(answer));
+        setUseServerTotals(enveloped);
+        const merged: AdminUserProfile[] = [];
+        const seen = new Set<string>();
+        for (const batch of answers) {
+          for (const row of rowsOf(batch)) {
+            const id = (row as AdminUserProfile)?.id;
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            merged.push(row as AdminUserProfile);
+          }
+        }
+        setProfiles(merged);
+        setStaffTotal(totalOf(admins, 0) + totalOf(moderators, 0));
+        setFlaggedTotal(totalOf(flagged, 0));
+        setOrdinaryTotal(totalOf(ordinary, 0));
       } catch (error) {
-        console.error('Failed to fetch profiles', error);
-        toast.error('Unable to load user profiles.');
+        if (!cancelled) {
+          console.error('Failed to fetch profiles', error);
+          toast.error('Unable to load user profiles.');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+          isFirstLoad.current = false;
+        }
       }
     };
 
     fetchProfiles();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedSearch, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
 
   /**
-   * The years and departments the cards can be filtered to, read off the accounts already loaded.
+   * The years and departments the cards can be filtered to, accumulated across every page
+   * read so far rather than read off the current page alone.
    *
-   * Derived from the rows rather than from `USER_YEAR_OPTIONS` or a second request, because an
-   * option for a cohort nobody is in can only ever produce an empty list: an operator who picks
-   * "Year 5" and is shown nothing is told the platform has no fifth-years, when the truth is that
-   * the filter was narrower than they thought. One memo over data the page already has is also one
-   * request fewer than asking the server for its own cohort list.
+   * The current page is all the screen holds -- the server keeps the rest -- so deriving
+   * the options from it would let them collapse the moment a filter narrows the list:
+   * filtering to year 2 would leave year 2 as the only year on offer. The cache only ever
+   * grows within a session, so an option, once seen, stays pickable; every entry still
+   * names a cohort somebody is actually in, because it came from a server row.
    *
    * Staff are skipped, for the same reason the filters below skip them: there is no year or
    * department on an `admin` or `moderator` row for an option to be built out of.
    */
-  const availableYears = useMemo(() => {
-    const years = new Set<number>();
-    for (const profile of profiles) {
-      const year = yearOf(profile);
-      if (year !== null && !isStaffAccount(profile)) years.add(year);
-    }
-    return [...years].sort((a, b) => a - b);
+  const [seenYears, setSeenYears] = useState<number[]>([]);
+  const [seenDepartments, setSeenDepartments] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSeenYears((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const profile of profiles) {
+        const year = yearOf(profile);
+        if (year !== null && !isStaffAccount(profile) && !next.has(year)) {
+          next.add(year);
+          changed = true;
+        }
+      }
+      return changed ? [...next].sort((a, b) => a - b) : prev;
+    });
+    setSeenDepartments((prev) => {
+      const byLowerCase = new Map<string, string>();
+      for (const department of prev) byLowerCase.set(department.toLowerCase(), department);
+      let changed = false;
+      for (const profile of profiles) {
+        if (isStaffAccount(profile)) continue;
+        const department = profile.department?.trim();
+        if (!department) continue;
+        const key = department.toLowerCase();
+        if (!byLowerCase.has(key)) {
+          byLowerCase.set(key, department);
+          changed = true;
+        }
+      }
+      return changed
+        ? [...byLowerCase.values()].sort((a, b) =>
+            a.localeCompare(b, undefined, { sensitivity: 'base' })
+          )
+        : prev;
+    });
   }, [profiles]);
 
-  const availableDepartments = useMemo(() => {
-    // Keyed case-insensitively so a department registered two ways at different times is one
-    // option and not two that each hide half the people in it. `trim` first, so the same name
-    // typed with a trailing space collapses too.
-    const byLowerCase = new Map<string, string>();
-    for (const profile of profiles) {
-      if (isStaffAccount(profile)) continue;
-      const department = profile.department?.trim();
-      if (!department) continue;
-      const key = department.toLowerCase();
-      if (!byLowerCase.has(key)) byLowerCase.set(key, department);
-    }
-    return [...byLowerCase.values()].sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' })
-    );
-  }, [profiles]);
+  const availableYears = useMemo(() => seenYears, [seenYears]);
+
+  const availableDepartments = useMemo(() => seenDepartments, [seenDepartments]);
 
   /**
    * The accounts left after the search box and the two cohort filters.
@@ -898,6 +1067,18 @@ export const ProfileReview = () => {
       (profile) => totalRemovalsFor(profile) <= FLAGGED_REMOVAL_THRESHOLD
     );
 
+    // Each participant section is one server page: the pager walks the database pages while the
+    // section itself keeps showing whatever the current page holds. The counts beside them are
+    // the server totals under the same filters, so "page 1 of 200" is visible without holding
+    // the other 199 pages. Against legacy bare-array answers there are no server pages -- the
+    // one merged list is everything -- so the pager stays off however many rows it holds.
+    const flaggedPageCount = useServerTotals
+      ? Math.max(1, Math.ceil(flaggedTotal / PARTICIPANT_PAGE_SIZE))
+      : 1;
+    const ordinaryPageCount = useServerTotals
+      ? Math.max(1, Math.ceil(ordinaryTotal / PARTICIPANT_PAGE_SIZE))
+      : 1;
+
     return [
       {
         id: 'admins',
@@ -934,6 +1115,15 @@ export const ProfileReview = () => {
         icon: ShieldAlert,
         badgeVariant: 'destructive',
         accounts: flagged,
+        pagination: {
+          page: flaggedPage,
+          pageCount: flaggedPageCount,
+          total: flaggedTotal,
+          onPrev: () => setFlaggedPage((prev) => Math.max(0, prev - 1)),
+          onNext: () => setFlaggedPage((prev) => Math.min(flaggedPageCount - 1, prev + 1)),
+          prevLabel: 'Previous flagged page',
+          nextLabel: 'Next flagged page',
+        },
       },
       {
         id: PARTICIPANTS_SECTION_ID,
@@ -947,9 +1137,18 @@ export const ProfileReview = () => {
         badgeVariant: 'outline',
         accounts: sortProfiles(ordinary, sortOption),
         create: { label: 'Create participant', accountType: 'users' },
+        pagination: {
+          page,
+          pageCount: ordinaryPageCount,
+          total: ordinaryTotal,
+          onPrev: () => setPage((prev) => Math.max(0, prev - 1)),
+          onNext: () => setPage((prev) => Math.min(ordinaryPageCount - 1, prev + 1)),
+          prevLabel: 'Previous participants page',
+          nextLabel: 'Next participants page',
+        },
       },
     ];
-  }, [filteredProfiles, filtersNarrowed, sortOption]);
+  }, [filteredProfiles, filtersNarrowed, sortOption, page, flaggedPage, ordinaryTotal, flaggedTotal, useServerTotals]);
 
   /**
    * Whether a filter has hidden every account on the platform.
@@ -960,8 +1159,19 @@ export const ProfileReview = () => {
    */
   const nothingMatches = filteredProfiles.length === 0 && filtersNarrowed;
 
-  const flaggedCount =
-    sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0;
+  /**
+   * The server total for the work queue under the current filters, not just the rows on
+   * this page. The section badge still counts the cards it shows; this is what the header
+   * reports, so a queue of two hundred reads as two hundred with fifty on screen. Falls
+   * back to the cards when the answers were legacy bare arrays, whose per-read counts
+   * would otherwise quadruple-count one list.
+   */
+  const flaggedCount = useServerTotals
+    ? flaggedTotal
+    : (sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0);
+
+  /** Every account the server reports under the current filters, across all four reads. */
+  const serverTotal = useServerTotals ? staffTotal + ordinaryTotal + flaggedTotal : profiles.length;
 
   /**
    * Whether the create dialog is currently making a participant.
@@ -1319,6 +1529,40 @@ export const ProfileReview = () => {
                 ))}
               </div>
             )}
+            {/* One server page is on screen; the rest stays in the database. Shown only once
+                there is more than one page, so a small deployment never sees a pager for a
+                list that fits. */}
+            {section.pagination && section.pagination.pageCount > 1 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                <p className="text-xs text-muted-foreground">
+                  Page {section.pagination.page + 1} of {section.pagination.pageCount} ·{' '}
+                  {section.pagination.total} in total
+                  {refreshing ? ' · Updating…' : ''}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={section.pagination.prevLabel}
+                    disabled={section.pagination.page === 0 || refreshing}
+                    onClick={section.pagination.onPrev}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={section.pagination.nextLabel}
+                    disabled={
+                      section.pagination.page >= section.pagination.pageCount - 1 || refreshing
+                    }
+                    onClick={section.pagination.onNext}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </section>
@@ -1460,14 +1704,18 @@ export const ProfileReview = () => {
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-xs text-muted-foreground/80">
-              Total users: {profiles.length} · Blocked: {profiles.filter((p) => p.is_blocked).length} ·
+              Total users: {serverTotal} · Blocked: {profiles.filter((p) => p.is_blocked).length} ·
               Over {FLAGGED_REMOVAL_THRESHOLD} removals: {flaggedCount}
+              {refreshing ? ' · Updating…' : ''}
             </p>
             {/* Kept up here rather than travelling with the controls, because it answers a
-                question about the whole platform and not about the participants below them. */}
+                question about the whole platform and not about the participants below them. The
+                totals are the server counts under the current filters; the cards are the one
+                page this screen holds, so the two disagree by design once the platform outgrows
+                a page. */}
             <Badge variant="secondary" className="w-max gap-2">
               <Users className="h-4 w-4" />
-              Showing {filteredProfiles.length} of {profiles.length} profiles
+              Showing {filteredProfiles.length} of {serverTotal} profiles
             </Badge>
           </div>
         </header>

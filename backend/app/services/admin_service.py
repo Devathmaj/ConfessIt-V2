@@ -12,10 +12,24 @@ from ..postgres import Database
 from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionRecord,
     LoginTokenRecord, LoveNoteRecord, ReportRecord, UserRecord,
     resolve_account_by_id)
-from ..accounts import AccountType, normalize_account_type
+from ..accounts import AccountType, is_valid_account_type, normalize_account_type
 from ..services.report_resolution_service import pending_report_totals, resolve_status_filter
 from ..services.storage_service import storage_service
 from .report_counters import tally_for_row
+
+# Above how many upheld removals a participant lands in the flagged work queue.
+# Mirrors FLAGGED_REMOVAL_THRESHOLD on the profile-review screen: strictly more than
+# this, summed across the three content kinds, is flagged.
+FLAGGED_REMOVAL_THRESHOLD = 5
+
+# Hard ceiling for one page of the admin user list. The endpoint clamps anything larger,
+# so no client -- present or future, well-meaning or not -- can ask for 10 000 rows and
+# make the backend materialise them all at once.
+ADMIN_USERS_MAX_LIMIT = 100
+
+ADMIN_USERS_SORTS = frozenset({"name", "name_desc", "year", "year_desc", "removals_desc"})
+
+ADMIN_USERS_FLAG_FILTERS = frozenset({"all", "flagged", "ordinary"})
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
@@ -618,3 +632,134 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
         "pending_report_queues": report_queues,
         "blocked_users": blocked_accounts,
     }
+
+
+def _total_removals_expr(model: Any):
+    """SQL expression for a participant's upheld removals summed across the three kinds."""
+    return (
+        func.coalesce(model.confession_removal_count, 0)
+        + func.coalesce(model.love_note_removal_count, 0)
+        + func.coalesce(model.message_removal_count, 0)
+    )
+
+
+def _apply_account_search(model: Any, filters: list, query: Optional[str], *, include_department: bool) -> None:
+    """Append a case-insensitive substring match on identity columns to ``filters``.
+
+    Done in SQL rather than in Python so a deployment with ten thousand participants never
+    loads them all to discard all but twenty. ``q`` matches name, regno and email on every
+    table, plus department on ``users`` where the column exists.
+    """
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return
+    pattern = f"%{cleaned}%"
+    clauses = [model.name.ilike(pattern), model.regno.ilike(pattern), model.email.ilike(pattern)]
+    if include_department:
+        clauses.append(model.department.ilike(pattern))
+    filters.append(or_(*clauses))
+
+
+def _account_ordering(model: Any, account_type: str, sort: str):
+    """ORDER BY for one account table, honouring ``sort`` only where the column exists.
+
+    Staff tables have no year and no removal counters, so a participant sort requested
+    against one falls back to name order rather than erroring: the screen keeps one sort
+    control for a list that spans tables with different shapes.
+    """
+    if sort == "name_desc":
+        return [model.name.desc(), model.id.asc()]
+    if sort == "removals_desc" and account_type == AccountType.USERS.value:
+        return [_total_removals_expr(model).desc(), model.name.asc(), model.id.asc()]
+    if sort in ("year", "year_desc") and account_type == AccountType.USERS.value:
+        ordering = model.year.desc() if sort == "year_desc" else model.year.asc()
+        return [ordering, model.name.asc(), model.id.asc()]
+    return [model.name.asc(), model.id.asc()]
+
+
+def get_admin_users_data(
+    db: Database,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    query: Optional[str] = None,
+    account_type: Optional[str] = None,
+    year: Optional[int] = None,
+    department: Optional[str] = None,
+    sort: str = "name",
+    flagged: str = "all",
+) -> Dict[str, Any]:
+    """One page of accounts for the profile-review screen, filtered and counted in SQL.
+
+    Every filter here is a WHERE and every page is a LIMIT/OFFSET on the database itself:
+    with ten thousand participants the backend reads and serialises at most ``limit``
+    participant rows (plus the handful of staff rows, which are capped per table), never
+    the whole population. The ``total`` beside the page is a COUNT with the same WHERE, so
+    the screen can page without ever holding the rows it is not showing.
+
+    ``skip``/``limit`` apply to the ``users`` page. Staff tables are tiny by construction
+    (their caps are an order of magnitude below the participant one), so when no
+    ``account_type`` is given the staff matches come back whole -- still behind a LIMIT --
+    alongside the one participant page. A caller that wants strict per-table paging asks
+    per ``account_type`` instead.
+    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), ADMIN_USERS_MAX_LIMIT))
+    if sort not in ADMIN_USERS_SORTS:
+        sort = "name"
+    if flagged not in ADMIN_USERS_FLAG_FILTERS:
+        flagged = "all"
+
+    wanted = [normalize_account_type(account_type)] if account_type else list(ACCOUNT_MODELS)
+    # An unrecognised account_type resolves to users by normalisation; refuse it instead so a
+    # typo cannot silently answer out of the participant table.
+    if account_type and not is_valid_account_type(account_type):
+        from fastapi import HTTPException, status as _status
+
+        raise HTTPException(status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid account_type")
+
+    cleaned_department = (department or "").strip() or None
+
+    docs: List[Dict[str, Any]] = []
+    total = 0
+    with db.sessions() as session:
+        for current_type in wanted:
+            model = ACCOUNT_MODELS[current_type]
+            is_participants = current_type == AccountType.USERS.value
+            filters: list = []
+            _apply_account_search(model, filters, query, include_department=is_participants)
+            if is_participants:
+                if year is not None:
+                    filters.append(model.year == year)
+                if cleaned_department:
+                    filters.append(func.lower(model.department) == cleaned_department.lower())
+                if flagged != "all":
+                    removals = _total_removals_expr(model)
+                    if flagged == "flagged":
+                        filters.append(removals > FLAGGED_REMOVAL_THRESHOLD)
+                    else:
+                        filters.append(removals <= FLAGGED_REMOVAL_THRESHOLD)
+
+            count = session.scalar(select(func.count()).select_from(model).where(*filters)) or 0
+            total += count
+
+            ordering = _account_ordering(model, current_type, sort)
+            if is_participants or account_type:
+                rows = session.scalars(
+                    select(model).where(*filters).order_by(*ordering).offset(skip).limit(limit)
+                ).all()
+            else:
+                # Staff when the caller asked for everything: bounded but complete, so the
+                # admin/moderator sections never lose a row behind a participant page.
+                rows = session.scalars(
+                    select(model).where(*filters).order_by(*ordering).limit(ADMIN_USERS_MAX_LIMIT)
+                ).all()
+            docs.extend(serialize_user_doc(_account_row_payload(current_type, row)) for row in rows)
+
+    # Stable cross-table order for the combined ("everything") shape: staff first by table,
+    # then the participant page in the order the database returned it.
+    if not account_type:
+        order = {AccountType.ADMIN.value: 0, AccountType.MODERATOR.value: 1, AccountType.USERS.value: 2}
+        docs.sort(key=lambda doc: (order.get(doc.get("account_type"), 9), str(doc.get("name") or "")))
+
+    return {"users": docs, "total": total, "skip": skip, "limit": limit}

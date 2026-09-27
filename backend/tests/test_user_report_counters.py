@@ -782,7 +782,7 @@ def test_the_admin_user_payload_carries_the_tally_for_participants(db, admin_cli
 
     response = admin_client.get("/admin/users")
     assert response.status_code == 200
-    row = next(item for item in response.json() if item["regno"] == person["regno"])
+    row = next(item for item in response.json()["users"] if item["regno"] == person["regno"])
 
     assert row["report_history"][CONFESSION] == {"reports": 1, "removals": 0}
 
@@ -798,7 +798,7 @@ def test_the_admin_user_payload_omits_the_tally_for_staff(db, admin_client):
 
     response = admin_client.get("/admin/users")
     assert response.status_code == 200
-    row = next(item for item in response.json() if item["regno"] == moderator["regno"])
+    row = next(item for item in response.json()["users"] if item["regno"] == moderator["regno"])
 
     assert row["account_type"] == AccountType.MODERATOR.value
     assert "report_history" not in row
@@ -811,7 +811,7 @@ def test_the_admin_user_payload_reports_an_upheld_removal(db, admin_client):
     resolve_confession_report(db, report_id, "removed", "mod")
 
     response = admin_client.get("/admin/users")
-    row = next(item for item in response.json() if item["regno"] == person["regno"])
+    row = next(item for item in response.json()["users"] if item["regno"] == person["regno"])
 
     # The removal figure is what an administrator is looking for, so it has to arrive populated.
     assert row["report_history"][CONFESSION]["removals"] == 1

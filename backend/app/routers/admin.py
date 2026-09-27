@@ -17,9 +17,11 @@ from ..accounts import (
 from ..services.authorization import require_capability
 from ..services.storage_service import storage_service
 from ..services.admin_service import (
+    ADMIN_USERS_MAX_LIMIT,
     serialize_datetime,
     serialize_user_doc,
     _account_row_payload,
+    get_admin_users_data,
     get_all_confessions_data,
     get_confession_reports_data,
     get_admin_statistics_data,
@@ -225,25 +227,35 @@ async def update_confession_report(
     return resolve_confession_report(db, report_id, new_status, reviewer.regno)
 
 
-@router.get("/users", response_model=List[Dict[str, Any]])
+@router.get("/users", response_model=Dict[str, Any])
 async def get_all_users(
+    skip: int = Query(0, ge=0, description="How many matching participants to skip. Applies to the users table only when no account_type is given."),
+    limit: int = Query(50, ge=1, le=ADMIN_USERS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole table."),
+    q: Optional[str] = Query(None, description="Case-insensitive substring match on name, regno, email (and department for participants)."),
+    account_type: Optional[str] = Query(None, description="Restrict to one account table: users, admin or moderator."),
+    year: Optional[int] = Query(None, description="Participants only: exact year of study."),
+    department: Optional[str] = Query(None, description="Participants only: exact department, case-insensitive."),
+    sort: str = Query("name", description="name, name_desc, year, year_desc or removals_desc. Year/removals fall back to name on staff tables."),
+    flagged: str = Query("all", description="Participants only: all, flagged (more than 5 removals) or ordinary."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.USERS_REVIEW))
-) -> List[Dict[str, Any]]:
-    """Return every account, from all three tables, for review.
+) -> Dict[str, Any]:
+    """Return one page of accounts, from all three tables, for review.
 
     Staff and participants arrive through one endpoint because they are one population of
     accounts; the ``account_type`` on each document is which table it came from. Splitting
     the admin list per table would mean the search box on it would have to know which table
     to search, which is not a distinction a person administering the app should have to make.
+
+    Every filter is a SQL WHERE and every page is a SQL LIMIT/OFFSET: with ten thousand
+    participants the backend reads and serialises at most one page, never the whole table,
+    and ``total`` is a COUNT under the same WHERE so the screen can page without holding
+    the rows it is not showing. ``limit`` is clamped to 100 for the same reason.
     """
-    with db.sessions() as session:
-        docs: List[Dict[str, Any]] = []
-        for account_type in _ACCOUNT_TABLE_ORDER:
-            model = ACCOUNT_MODELS[account_type.value]
-            rows = session.scalars(select(model).order_by(model.name.asc())).all()
-            docs.extend(serialize_user_doc(_account_row_payload(account_type.value, row)) for row in rows)
-        return docs
+    return get_admin_users_data(
+        db, skip=skip, limit=limit, query=q, account_type=account_type,
+        year=year, department=department, sort=sort, flagged=flagged,
+    )
 
 
 @router.post("/users", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
