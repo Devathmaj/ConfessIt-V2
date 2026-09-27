@@ -15,6 +15,7 @@ from ..accounts import (
     normalize_account_type,
 )
 from ..services.authorization import require_capability
+from .. import limits as app_limits
 from ..services.storage_service import storage_service
 from ..services.admin_service import (
     ADMIN_USERS_MAX_LIMIT,
@@ -43,6 +44,69 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 # page whenever PostgreSQL chose a different plan, and the admin would have to re-find what
 # they were looking at after an unrelated edit to an unrelated account.
 _ACCOUNT_TABLE_ORDER = (AccountType.ADMIN, AccountType.MODERATOR, AccountType.USERS)
+
+
+def _distinct_department_count(session) -> int:
+    """How many distinct departments/divisions exist, case-insensitive.
+
+    ``func.lower`` keeps "CSE" and "cse" as one department.
+    """
+    return session.scalar(
+        select(func.count(func.distinct(func.lower(UserRecord.department))))
+    ) or 0
+
+
+def _department_value_exists(session, department: str, exclude_id: Any = None) -> bool:
+    """Whether any participant row already carries ``department`` (case-insensitive)."""
+    wanted = department.strip().lower()
+    query = select(UserRecord.id).where(func.lower(UserRecord.department) == wanted)
+    if exclude_id is not None:
+        query = query.where(UserRecord.id != exclude_id)
+    return session.scalar(query.limit(1)) is not None
+
+
+def _ensure_department_capacity(
+    session,
+    new_department: str,
+    exclude_id: Any = None,
+    current_department: Any = None,
+) -> None:
+    """Refuse a brand-new department once ``MAX_DEPARTMENTS`` distinct values exist.
+
+    Joining a department somebody already uses never counts against the cap -- only a
+    value no row carries opens a new slot. Renaming the last holder of a department to
+    another brand-new value is a swap rather than growth, so it is allowed even at the
+    ceiling; otherwise lowering the cap would freeze every edit rather than just new
+    names.
+    """
+    if not isinstance(new_department, str) or not new_department.strip():
+        return
+    new_norm = new_department.strip().lower()
+    if isinstance(current_department, str) and current_department.strip().lower() == new_norm:
+        return
+    if _department_value_exists(session, new_norm, exclude_id=exclude_id):
+        return
+    # An update that moves the *only* holder of its old department onto a new name keeps
+    # the distinct count flat (one leaves as one arrives), so it is not new growth.
+    if exclude_id is not None and isinstance(current_department, str) and current_department.strip():
+        old_norm = current_department.strip().lower()
+        if not _department_value_exists(session, old_norm, exclude_id=exclude_id):
+            return
+    # Read off the module on every call -- not captured at import -- so editing the one
+    # number in ``backend/app/limits.py`` (or monkeypatching it in a test) takes effect
+    # without a reload. There is no second copy of this cap anywhere.
+    cap = app_limits.MAX_DEPARTMENTS
+    distinct = _distinct_department_count(session)
+    if distinct >= cap:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"The department/division limit has been reached "
+                f"({distinct} of {cap}). No new departments or divisions "
+                f"can be added. Use one of the existing departments, or raise "
+                f"MAX_DEPARTMENTS in backend/app/limits.py."
+            ),
+        )
 
 def _user_payload(user):
     if user is None: return None
@@ -392,6 +456,13 @@ async def create_user(
                 ),
             )
 
+        # Departments/divisions are free text with no table of their own, so the
+        # ``MAX_DEPARTMENTS`` ceiling is on distinct ``users.department`` values. The
+        # users-table advisory lock above already serialises this count against the
+        # insert below, so two concurrent creates cannot both open the 51st slot.
+        if account_type is AccountType.USERS:
+            _ensure_department_capacity(session, account_fields["department"])
+
         user = model(**account_fields)
         session.add(user)
         session.flush()
@@ -511,6 +582,21 @@ async def update_user_details(
                     key: value for key, value in update_payload.items()
                     if key not in participant_only
                 }
+            # A department edit that introduces a value nobody uses opens a new
+            # department/division slot, so it is held to MAX_DEPARTMENTS. Serialised
+            # behind the users-table advisory lock for the same reason creation is:
+            # without it two concurrent renames could both open the 51st slot.
+            if account_type == AccountType.USERS.value and "department" in update_payload:
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                    {"lock_key": account_cap_lock_key(AccountType.USERS.value)},
+                )
+                _ensure_department_capacity(
+                    session,
+                    update_payload["department"],
+                    exclude_id=account.id,
+                    current_department=account.department,
+                )
             for key, value in update_payload.items():
                 setattr(account, key, value)
             updated_doc = _account_row_payload(account_type, account)

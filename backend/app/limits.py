@@ -110,6 +110,22 @@ USER_REGNO_MAX = 100
 # field and a matchmaking grouping, not a filter anything is required to match against.
 USER_DEPARTMENT_MAX = 80
 
+# How many distinct departments/divisions may exist at once, counted as distinct
+# (case-insensitive) ``users.department`` values.
+#
+# Departments are free text -- there is no departments table -- so this is a cap on how many
+# *different* values the column holds, not on how many rows hold one. Joining an existing
+# department never counts against it; only a value nobody already uses opens a new slot.
+# Enforced in ``app/routers/admin.py`` on participant create and on any edit that moves a
+# participant onto a brand-new department, behind the same advisory lock as the account caps
+# so two concurrent creates cannot both open the 51st slot.
+#
+# Product knob, not a technical one: raise it to onboard more divisions, lower it to freeze
+# the current set. Lowering it below the number already stored does not delete anything --
+# it only refuses brand-new values until the count falls back under the new ceiling.
+# Change this one number and the enforcement follows; there is no second copy to update.
+MAX_DEPARTMENTS = 50
+
 # The closed set of genders an account may carry, and the one place the list is written down.
 #
 # Closed rather than free text because gender is a *filter*, not a description: matchmaking
