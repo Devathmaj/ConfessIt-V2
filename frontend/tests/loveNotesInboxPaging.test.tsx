@@ -171,4 +171,28 @@ describe('LoveNotesPage: paged inbox', () => {
     expect(screen.getByText(/Inbox \(2\)/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument();
   });
+
+  it('reads an empty inbox once and then stops', async () => {
+    await renderAt('/love-notes?tab=inbox');
+    await screen.findByText(/no love notes yet/i);
+
+    // An empty inbox is a steady state: give any refetch loop time to fire more
+    // reads, then require the mount read to still be the only one.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.getReceivedLoveNotes.mock.calls.length).toBe(1);
+  });
+
+  it('revisiting an empty inbox re-reads once and then stops', async () => {
+    await renderAt('/love-notes');
+    await screen.findByText('Inbox (0)');
+    expect(api.getReceivedLoveNotes.mock.calls.length).toBe(1);
+
+    // Opening the tab refreshes the empty list in case a note arrived meanwhile.
+    fireEvent.click(screen.getByRole('button', { name: /inbox \(0\)/i }));
+    await screen.findByText(/no love notes yet/i);
+    expect(api.getReceivedLoveNotes.mock.calls.length).toBe(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.getReceivedLoveNotes.mock.calls.length).toBe(2);
+  });
 });

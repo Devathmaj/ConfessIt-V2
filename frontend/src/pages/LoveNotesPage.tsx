@@ -311,11 +311,17 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         fetchInitialData();
     }, []);
 
-    // Used to refresh received love notes when inbox tab becomes active. Skipped while
-    // the mount fetch is still in flight: without the guard the two reads race and the
-    // first page travels twice.
+    // Used to refresh an empty inbox when the reader opens the tab: a note may have
+    // arrived while they were on the create tab. Fires only on the flip edge into the
+    // tab, never on the list or loading flags -- an empty inbox is a steady state, and
+    // refetching it on every loading toggle re-reads forever. Skipped while the mount
+    // fetch is still in flight, and afterwards the mount has already answered, so this
+    // reads at most once per visit.
+    const prevTabRef = useRef(activeTab);
     useEffect(() => {
-        if (activeTab === 'inbox' && receivedNotes.length === 0 && !loadingNotes) {
+        const visitingInbox = activeTab === 'inbox' && prevTabRef.current !== 'inbox';
+        prevTabRef.current = activeTab;
+        if (visitingInbox && receivedNotes.length === 0 && !loadingNotes) {
             const fetchReceivedNotes = async () => {
                 try {
                     setLoadingNotes(true);
@@ -330,7 +336,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
 
             fetchReceivedNotes();
         }
-    }, [activeTab, receivedNotes.length, loadingNotes]);
+    }, [activeTab]);
 
     // A notification about a received love note arrives here as
     // /love-notes?tab=inbox&note=<note_id>. The reader clicked it to read the note, so
