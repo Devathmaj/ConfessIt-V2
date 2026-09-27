@@ -85,6 +85,13 @@ interface Message {
   is_sender?: boolean;
 }
 
+/**
+ * How many messages one thread read returns. A conversation caps at 200, so thirty
+ * opens on the newest window with room to grow upwards in a handful of clicks, and no
+ * read ever needs to consider more than the ceiling allows.
+ */
+const THREAD_PAGE_SIZE = 30;
+
 export const ConversationDialog: React.FC<ConversationDialogProps> = ({ 
   onClose, 
   onRefresh, 
@@ -95,7 +102,30 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [conversationData, setConversationData] = useState<ConversationData | null>(initialConversationData || null);
   const [loading, setLoading] = useState(!initialConversationData);
   const [messageText, setMessageText] = useState('');
+  /**
+   * The thread on screen: always the contiguous newest-anchored window of what has been
+   * read, oldest first with the newest last. Older pages prepend above; live arrivals
+   * and sends append below.
+   */
   const [messages, setMessages] = useState<Message[]>([]);
+  /** How many visible messages the thread holds, loaded or not. The pager reads it. */
+  const [totalMessages, setTotalMessages] = useState(0);
+  /** False while answers arrive without a total (older servers, unit-test mocks). */
+  const [pagedThread, setPagedThread] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  /** The scroll container, for holding the reader's place when older pages prepend above. */
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * A pending scroll correction, set just before older rows prepend and consumed by the
+   * effect below once they have rendered. Carries the length it expects so a live
+   * arrival winning the race cannot spend it on the wrong render.
+   */
+  const pendingPrependRef = useRef<{
+    prevLength: number;
+    added: number;
+    top: number;
+    height: number;
+  } | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [accepting, setAccepting] = useState(false);
   const [rejecting, setRejecting] = useState(false);
@@ -138,6 +168,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     if (messages.length > 0) {
       messagesBackupRef.current = messages;
     }
+  }, [messages]);
+
+  // Spend a pending scroll correction after older rows prepend: the new rows grow the
+  // scrollable height above the reader, so the top offset moves down by exactly the
+  // growth and the message that was at the top stays where it was. Skipped unless the
+  // render holds precisely the rows the prepend promised -- a live arrival in between
+  // consumes nothing and the reader keeps whatever place the live update gave them.
+  useEffect(() => {
+    const anchor = pendingPrependRef.current;
+    pendingPrependRef.current = null;
+    const container = scrollContainerRef.current;
+    if (!anchor || !container) return;
+    if (messages.length !== anchor.prevLength + anchor.added) return;
+    container.scrollTop = anchor.top + (container.scrollHeight - anchor.height);
   }, [messages]);
 
   useEffect(() => {
@@ -263,7 +307,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             ...newMessage,
             is_sender: isFromCaller
           };
-          setMessages((prev) => [...prev, messageWithFlag]);
+          // Dedupe against the backup: a message redelivered while a page read is in
+          // flight must not land twice, and the total below must not count it twice
+          // either -- a phantom extra row would offer one empty older page too many,
+          // which at least heals on the next read.
+          if (!messagesBackupRef.current.some((message) => message.id === newMessage.id)) {
+            setMessages((prev) => [...prev, messageWithFlag]);
+            setTotalMessages((prev) => prev + 1);
+          }
           // The live socket is how a partner's message reaches this thread, so the allowance
           // has to move here too or the composer keeps offering a room that is no longer
           // there. Derived from the server's counts rather than recounted from the list, and
@@ -318,9 +369,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     setLoadingMessages(true);
     try {
       console.log('🔄 Fetching messages for:', conversationData.conversation.id);
-      const { messages, quota: fetchedQuota } = await fetchMessages(conversationData.conversation.id, token);
+      // The opening window is the newest one: latest message last, as the thread reads.
+      const {
+        messages,
+        quota: fetchedQuota,
+        total: fetchedTotal,
+      } = await fetchMessages(conversationData.conversation.id, token, THREAD_PAGE_SIZE);
       console.log('✅ Messages fetched:', messages.length);
-      
+
       // Add is_sender flag to each message
       const messagesWithFlags = messages.map((msg) => ({
         ...msg,
@@ -328,6 +384,11 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       }));
 
       setMessages(messagesWithFlags);
+      // A numeric total means the server pages: the window above is the newest page and
+      // older ones wait behind the pager. Without one the whole thread came back, as it
+      // always did before paging existed.
+      setTotalMessages(typeof fetchedTotal === 'number' ? fetchedTotal : messagesWithFlags.length);
+      setPagedThread(typeof fetchedTotal === 'number');
       // An allowance the server did not report falls back to the full one rather than to a
       // closed composer: guessing "full" can cost one refused send, guessing "empty" would
       // lock a conversation that has room in it.
@@ -339,6 +400,51 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       throw error; // Re-throw so caller knows it failed
     } finally {
       setLoadingMessages(false);
+    }
+  };
+
+  /**
+   * Grow the thread upwards: the next older page prepends above the messages already on
+   * screen, and the reader stays on the message they were reading -- the newest page is
+   * the anchor at the bottom, not the place a pager should return anyone to. Guarded so
+   * overlapping clicks cannot interleave two prepends.
+   */
+  const loadOlderMessages = async () => {
+    if (!conversationData || !token || loadingOlder) return;
+    const oldest = messages[0];
+    if (!oldest) return;
+    setLoadingOlder(true);
+    try {
+      const { messages: older, total: fetchedTotal } = await fetchMessages(
+        conversationData.conversation.id,
+        token,
+        THREAD_PAGE_SIZE,
+        oldest.id,
+      );
+      const container = scrollContainerRef.current;
+      if (container) {
+        pendingPrependRef.current = {
+          prevLength: messages.length,
+          added: older.length,
+          top: container.scrollTop,
+          height: container.scrollHeight,
+        };
+      }
+      const flagged = older.map((msg) => ({
+        ...msg,
+        is_sender: msg.sender_regno === currentUserRef.current,
+      }));
+      setMessages((prev) => {
+        const known = new Set(prev.map((message) => message.id));
+        return [...flagged.filter((message) => !known.has(message.id)), ...prev];
+      });
+      if (typeof fetchedTotal === 'number') setTotalMessages(fetchedTotal);
+    } catch (error) {
+      pendingPrependRef.current = null;
+      console.error('❌ Failed to load older messages:', error);
+      toast.error('Failed to load older messages');
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
@@ -658,12 +764,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             // If there were no messages, try to load them
             console.log('📥 No saved messages, loading from backend...');
             fetchMessages(newConversationData.conversation.id, token)
-              .then(({ messages: fetchedMessages, quota: fetchedQuota }) => {
+              .then(({ messages: fetchedMessages, quota: fetchedQuota, total: fetchedTotal }) => {
                 const messagesWithFlags = fetchedMessages.map((msg) => ({
                   ...msg,
                   is_sender: msg.sender_regno === currentUserRef.current
                 }));
                 setMessages(messagesWithFlags);
+                setTotalMessages(
+                  typeof fetchedTotal === 'number' ? fetchedTotal : messagesWithFlags.length,
+                );
+                setPagedThread(typeof fetchedTotal === 'number');
                 messagesBackupRef.current = messagesWithFlags;
                 // The allowance comes back with the history rather than being carried over:
                 // this reload is the freshest reading of it, and it is also the answer that
@@ -839,7 +949,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 {(isAccepted || isTerminated) && (
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <MessageCircle className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="whitespace-nowrap">{messages.length} msgs</span>
+                    <span className="whitespace-nowrap">{totalMessages} msgs</span>
                   </div>
                 )}
                 {isConnected && (
@@ -935,7 +1045,25 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             )}
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
+            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
+              {/* Older history grows upwards, latest last: the pager sits above the
+                  oldest loaded message rather than below the newest one, and a click
+                  prepends without moving the reader off the message they were on. */}
+              {pagedThread && messages.length < totalMessages && (
+                <div className="flex justify-center pb-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void loadOlderMessages()}
+                    disabled={loadingOlder}
+                    aria-label="Show older messages"
+                  >
+                    {loadingOlder
+                      ? 'Loading…'
+                      : `Show older messages (${totalMessages - messages.length} remaining)`}
+                  </Button>
+                </div>
+              )}
               {isRequested && isReceiver && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4 mb-4">
                   <p className="text-xs sm:text-sm text-blue-900 mb-3">

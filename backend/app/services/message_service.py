@@ -1,8 +1,8 @@
 # app/services/message_service.py
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
-from sqlalchemy import func, select
+from typing import Dict, Any, Optional
+from sqlalchemy import and_, func, or_, select
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
 from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord, UserRecord
@@ -376,10 +376,22 @@ class MessageService:
         db: Database,
         conversation_id: str,
         user: UserDetails,
-        limit: int = CONVERSATION_MESSAGE_MAX
-    ) -> List[Dict[str, Any]]:
+        limit: int = CONVERSATION_MESSAGE_MAX,
+        before: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Get messages for a conversation
+        One thread window for the dialog, oldest first with the newest last, plus the total.
+
+        The dialog opens on the newest window and grows upwards: ``before`` names the
+        oldest message on screen and the read answers the next older page, so the
+        reader's place never moves. A skip offset would shift under concurrent sends --
+        a new message landing between two reads would push every row one slot down and
+        the second page would repeat one -- while an anchor names a row that cannot
+        move. ``total`` counts every visible message in the thread, loaded or not, so
+        the dialog knows how many older ones remain.
+
+        A conversation cannot hold more than CONVERSATION_MESSAGE_MAX messages -- the
+        send path refuses past it -- so no window here ever needs to consider more.
 
         Enforces:
         - User is participant in conversation
@@ -400,48 +412,83 @@ class MessageService:
                 detail=ACCOUNT_UNAVAILABLE_DETAIL
             )
 
-        # Fetch messages
+        limit = max(1, min(int(limit or CONVERSATION_MESSAGE_MAX), CONVERSATION_MESSAGE_MAX))
+        visible = [
+            MessageRecord.conversation_id == str(conversation_id),
+            MessageRecord.removed_at.is_(None),
+        ]
         with db.sessions() as session:
-            rows = session.scalars(
-                # A removed message is invisible on the participant read, which is the only
-                # read there is.
-                select(MessageRecord).where(
+            anchor = None
+            if before is not None:
+                anchor = session.get(MessageRecord, str(before))
+                if anchor is None or str(anchor.conversation_id) != str(conversation_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Message not found.",
+                    )
+            if anchor is not None:
+                # Strictly older than the anchor, ties broken by id: two messages stamped
+                # in the same instant still page without repeating or skipping one.
+                visible.append(or_(
+                    MessageRecord.created_at < anchor.created_at,
+                    and_(
+                        MessageRecord.created_at == anchor.created_at,
+                        MessageRecord.id < str(anchor.id),
+                    ),
+                ))
+            total = session.scalar(
+                select(func.count()).select_from(MessageRecord).where(
                     MessageRecord.conversation_id == str(conversation_id),
                     MessageRecord.removed_at.is_(None),
-                ).order_by(MessageRecord.created_at.asc()).limit(limit)
+                )
+            ) or 0
+            # Newest first for the slice, then back to oldest-first for the reply: the
+            # dialog renders latest-last, and the slice has to be taken from the newest
+            # end for the opening window to be the newest one.
+            newest_first = session.scalars(
+                # A removed message is invisible on the participant read, which is the only
+                # read there is.
+                select(MessageRecord).where(*visible)
+                .order_by(MessageRecord.created_at.desc(), MessageRecord.id.desc())
+                .limit(limit)
             ).all()
+            rows = list(reversed(newest_first))
             messages = [{"id": str(row.id), "conversation_id": row.conversation_id,
                 "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
                 "created_at": row.created_at, "is_read": row.is_read} for row in rows]
+            returned_ids = [str(row.id) for row in rows]
 
-        # Mark messages as read for receiver. Scoped to the messages actually returned above,
-        # so reading a thread marks read exactly what the reader was shown.
+        # Mark messages as read for receiver, scoped to the ids actually returned above.
+        # Reading an older page must not mark newer, unloaded messages as though they were
+        # seen: the unread badge answers what is unread, and a page that cleared it for
+        # rows nobody opened would be lying about that.
         with db.sessions.begin() as session:
-            rows = session.scalars(select(MessageRecord).where(
-                MessageRecord.conversation_id == str(conversation_id),
-                MessageRecord.receiver_regno == user.regno,
-                MessageRecord.is_read.is_(False),
-                # Matches the read above: if the message is not visible, reading the
-                # thread did not read it, so it must not be marked as though it did.
-                MessageRecord.removed_at.is_(None),
-            )).all()
-            for row in rows:
-                row.is_read = True
-        
+            if returned_ids:
+                rows = session.scalars(select(MessageRecord).where(
+                    MessageRecord.id.in_(returned_ids),
+                    MessageRecord.receiver_regno == user.regno,
+                    MessageRecord.is_read.is_(False),
+                )).all()
+                for row in rows:
+                    row.is_read = True
+
         # Format response
-        return [
-            {
-                "id": str(msg["id"]),
-                "conversation_id": conversation_id,
-                "sender_regno": msg["sender_regno"],
-                "receiver_regno": msg["receiver_regno"],
-                "body": msg["body"],
-                "created_at": isoformat_datetime(msg["created_at"]),
-                "is_read": msg.get("is_read", False),
-                "is_sender": msg["sender_regno"] == user.regno
-            }
-            for msg in messages
-        ]
+        return {
+            "messages": [
+                {
+                    "id": str(msg["id"]),
+                    "conversation_id": conversation_id,
+                    "sender_regno": msg["sender_regno"],
+                    "receiver_regno": msg["receiver_regno"],
+                    "body": msg["body"],
+                    "created_at": isoformat_datetime(msg["created_at"]),
+                    "is_read": msg.get("is_read", False),
+                    "is_sender": msg["sender_regno"] == user.regno
+                }
+                for msg in messages
+            ],
+            "total": total,
+        }
     
     def report_message(
         self,

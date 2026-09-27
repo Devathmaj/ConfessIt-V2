@@ -129,7 +129,7 @@ def test_the_history_of_an_expired_conversation_is_still_readable(db):
             datetime.now(timezone.utc) - WINDOW - timedelta(minutes=1)
         )
 
-    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))["messages"]
 
     assert [m["body"] for m in messages] == ["still here?"]
 
@@ -147,7 +147,7 @@ def test_both_sides_keep_reading_an_expired_conversation(db):
         )
 
     for regno in ("alice", "bob"):
-        bodies = [m["body"] for m in message_service.get_messages(db, conversation_id, as_user(db, regno))]
+        bodies = [m["body"] for m in message_service.get_messages(db, conversation_id, as_user(db, regno))["messages"]]
         assert bodies == ["first", "second"]
 
 
@@ -159,14 +159,14 @@ def test_an_expired_thread_already_open_is_readable_without_a_reload(db):
     _, conversation_id = make_accepted_conversation(db, "alice", "bob")
     message_service.send_message(db, conversation_id, as_user(db, "alice"), "hello")
 
-    first = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    first = message_service.get_messages(db, conversation_id, as_user(db, "alice"))["messages"]
 
     with db.sessions.begin() as session:
         session.get(ConversationRecord, conversation_id).created_at = (
             datetime.now(timezone.utc) - WINDOW - timedelta(minutes=1)
         )
 
-    second = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    second = message_service.get_messages(db, conversation_id, as_user(db, "alice"))["messages"]
 
     assert [m["body"] for m in first] == ["hello"]
     assert [m["body"] for m in second] == ["hello"]

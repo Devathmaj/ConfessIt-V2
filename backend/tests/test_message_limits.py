@@ -294,7 +294,7 @@ def test_a_removed_message_still_counts_towards_the_share(db):
     assert all(
         m["id"] != removed_id for m in message_service.get_messages(
             db, conversation_id, as_user(db, "alice")
-        )
+        )["messages"]
     )
     # ...but the allowance it spent is not given back.
     assert message_service.conversation_quota(db, conversation_id, "alice")[
@@ -391,9 +391,9 @@ def test_every_message_of_a_full_conversation_is_returned_in_one_read(db):
     fill(db, conversation_id, "alice", half)
     fill(db, conversation_id, "bob", half, other="alice", start=half)
 
-    assert len(message_service.get_messages(db, conversation_id, as_user(db, "alice"))) == (
-        CONVERSATION_MESSAGE_MAX
-    )
+    page = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    assert len(page["messages"]) == CONVERSATION_MESSAGE_MAX
+    assert page["total"] == CONVERSATION_MESSAGE_MAX
 
 
 # --------------------------------------------------------------------------- the race itself

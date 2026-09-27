@@ -36,6 +36,8 @@ export interface SentMessage extends Message {
 export interface ConversationTranscript {
   messages: Message[];
   quota: MessageQuota | null;
+  /** How many visible messages the thread holds, loaded or not. Absent on legacy answers. */
+  total?: number;
 }
 
 interface WebSocketMessage {
@@ -268,16 +270,21 @@ export async function sendMessage(
 /**
  * Fetch message history, and the conversation's remaining allowance alongside it.
  *
- * The whole transcript fits in one response -- a conversation cannot hold more messages than
- * this endpoint's default window -- so the limit is only there for a caller that wants less,
- * and the returned array is the thread rather than a page of it.
+ * One window, oldest first with the newest last: `limit` caps the window (defaulting to
+ * the conversation ceiling, which is the whole thread -- a conversation cannot hold more
+ * messages than that), and `before` names the oldest message on screen to read the next
+ * older page above it. `total` counts every visible message in the thread so the dialog
+ * knows how many older ones remain.
  */
 export async function fetchMessages(
   conversationId: string,
   token: string,
-  limit: number = CONVERSATION_MESSAGE_MAX
+  limit: number = CONVERSATION_MESSAGE_MAX,
+  before?: string,
 ): Promise<ConversationTranscript> {
-  const url = `${API_URL}/messages/${conversationId}?limit=${limit}`;
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  const url = `${API_URL}/messages/${conversationId}?${params.toString()}`;
   console.log('🌐 Fetching messages from:', url);
   console.log('🔑 Using token:', token ? 'TOKEN_EXISTS' : 'NO_TOKEN');
   
@@ -301,8 +308,13 @@ export async function fetchMessages(
     console.log('✅ Fetch response data:', data);
     // Null rather than a default: a response without the field means the server did not say,
     // and `messageQuota` decides what an absent allowance means rather than this file
-    // inventing one.
-    return { messages: data.messages, quota: data.quota ?? null };
+    // inventing one. `total` is absent on legacy answers, which the dialog reads as
+    // "everything came back".
+    return {
+      messages: Array.isArray(data) ? data : (data.messages ?? []),
+      quota: data.quota ?? null,
+      total: Array.isArray(data) ? data.length : (data.total ?? data.messages?.length ?? 0),
+    };
   } catch (error) {
     console.error('❌ Fetch exception:', error);
     throw error;

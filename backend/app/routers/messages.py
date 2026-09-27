@@ -82,33 +82,37 @@ def get_messages(
     # conversation cannot hold more than this many messages, so a larger `limit` could only
     # ever be a number that returns the same reply. Refusing it says so, where silently
     # clamping would leave the caller believing it had asked for a window it cannot have.
-    limit: int = Query(CONVERSATION_MESSAGE_MAX, ge=1, le=CONVERSATION_MESSAGE_MAX)
+    limit: int = Query(CONVERSATION_MESSAGE_MAX, ge=1, le=CONVERSATION_MESSAGE_MAX),
+    before: Optional[str] = Query(
+        None,
+        description="A message id anchoring the older page: the read answers the next page older than it, so the dialog grows upwards without shifting under concurrent sends.",
+    ),
 ):
     """
-    Get messages for a conversation
-    
-    Validates:
-    - User is participant in conversation
-    - Marks messages as read
+    Get one thread window for the dialog, oldest first with the newest last.
 
-    Every message a conversation can hold fits in one response -- the ceiling on the
-    conversation is the same as this endpoint's default window -- so `limit` trims the reply
-    for a caller who asks for less and never hides the newest part of the thread.
+    The dialog opens on the newest window and grows upwards: `before` names the oldest
+    message on screen and the read answers the next older page, while `total` counts
+    every visible message in the thread so the dialog knows how many older ones remain.
+    An anchor is stable where an offset is not -- a message sent between two reads
+    would shift every offset down and repeat a row, while a row id cannot move.
 
     `quota` is the message allowance as it stands for the caller, which is what the dialog
     reads to decide whether to offer the composer at all.
     """
-    messages = message_service.get_messages(
+    page = message_service.get_messages(
         db=db,
         conversation_id=conversation_id,
         user=current_user,
-        limit=limit
+        limit=limit,
+        before=before,
     )
-    
+
     return {
         "conversation_id": conversation_id,
-        "messages": messages,
-        "count": len(messages),
+        "messages": page["messages"],
+        "count": len(page["messages"]),
+        "total": page["total"],
         "quota": message_service.conversation_quota(
             db=db, conversation_id=conversation_id, regno=current_user.regno
         ),
