@@ -10,6 +10,11 @@ import { GamesConfigProvider } from '@/contexts/GamesConfigContext';
 import { AdminGamesDashboard } from '@/pages/AdminGamesDashboard';
 import { AdminGamesLeaderboard } from '@/pages/AdminGamesLeaderboard';
 import { AdminGamesManage } from '@/pages/AdminGamesManage';
+import { AdminWordleManage } from '@/pages/AdminWordleManage';
+import { AdminAnagramManage } from '@/pages/AdminAnagramManage';
+import { AdminCoupleQuestionnaireManage } from '@/pages/AdminCoupleQuestionnaireManage';
+import { AdminTwoKeyEscapeManage } from '@/pages/AdminTwoKeyEscapeManage';
+import { AdminReactionTimeManage } from '@/pages/AdminReactionTimeManage';
 import { GamesFeaturedPage } from '@/pages/GamesFeaturedPage';
 import { GamesSelectPage } from '@/pages/GamesSelectPage';
 import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
@@ -174,6 +179,11 @@ const renderSection = (path: string, session: AuthContextValue = adminSession) =
             <Route path="/admin/games" element={<AdminGamesLayout />}>
               <Route index element={<AdminGamesDashboard />} />
               <Route path="manage" element={<AdminGamesManage />} />
+              <Route path="manage/wordle" element={<AdminWordleManage />} />
+              <Route path="manage/anagram" element={<AdminAnagramManage />} />
+              <Route path="manage/couple-questionnaire" element={<AdminCoupleQuestionnaireManage />} />
+              <Route path="manage/two-key-escape" element={<AdminTwoKeyEscapeManage />} />
+              <Route path="manage/reaction-time" element={<AdminReactionTimeManage />} />
               <Route path="leaderboard" element={<AdminGamesLeaderboard />} />
             </Route>
             <Route path="/games/select" element={<GamesSelectPage />} />
@@ -250,18 +260,17 @@ beforeEach(() => {
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 /**
- * One puzzle console on the manage screen, found by its heading and held by the card around
- * it. The Anagram console sits directly below the Wordle one with the same controls, so a
- * query made against the whole page finds two of everything and says nothing about which
- * card answered.
+ * One puzzle console on its own editor page, found by its card heading.
+ * Each editor page renders a page-level h1 plus the config card's own heading
+ * with the same name, so the lookup skips headings that are not inside a card.
  */
 const puzzleCard = (title: 'Wordle' | 'Anagram') => {
-  const heading = screen.getByRole('heading', { name: title });
-  const card = heading.closest('.rounded-2xl');
-  if (!card) {
-    throw new Error(`The ${title} card could not be found from its heading.`);
+  const headings = screen.getAllByRole('heading', { name: title });
+  for (const heading of headings) {
+    const card = heading.closest('.rounded-2xl');
+    if (card) return card as HTMLElement;
   }
-  return card as HTMLElement;
+  throw new Error(`The ${title} card could not be found from its heading.`);
 };
 
 const wordleCard = () => puzzleCard('Wordle');
@@ -403,14 +412,14 @@ describe('AdminGamesManage: the spotlight', () => {
   });
 });
 
-describe('AdminGamesManage: the Reaction Time card', () => {
+describe('AdminReactionTimeManage: the Reaction Time editor page', () => {
   const reactionCard = () => {
-    const heading = screen.getByRole('heading', { name: 'Reaction Time' });
-    const card = heading.closest('.rounded-2xl');
-    if (!card) {
-      throw new Error('The Reaction Time card could not be found from its heading.');
+    const headings = screen.getAllByRole('heading', { name: 'Reaction Time' });
+    for (const heading of headings) {
+      const card = heading.closest('.rounded-2xl');
+      if (card) return card as HTMLElement;
     }
-    return card as HTMLElement;
+    throw new Error('The Reaction Time card could not be found from its heading.');
   };
 
   it('features a day through the server and reports the session period', async () => {
@@ -421,7 +430,7 @@ describe('AdminGamesManage: the Reaction Time card', () => {
       period_start_date: todayIso(),
       period_end_date: todayIso(),
     });
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/reaction-time');
     const card = reactionCard();
     expect(await within(card).findByText(/Nothing featured yet/)).toBeInTheDocument();
     expect(await within(card).findByText(/Current session period/)).toBeInTheDocument();
@@ -448,7 +457,7 @@ describe('AdminGamesManage: the Reaction Time card', () => {
   });
 
   it('keeps the one-game-per-date refusal on the screen', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/reaction-time');
     const card = reactionCard();
     await within(card).findByText(/Nothing featured yet/);
 
@@ -583,9 +592,9 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
   });
 });
 
-describe('AdminGamesManage: the Wordle answer', () => {
+describe('AdminWordleManage: the Wordle editor page', () => {
   it('draws a word, shows it, and updates the session with exactly that word', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     expect(await within(card).findByText(/No sessions yet/)).toBeInTheDocument();
 
@@ -629,7 +638,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
   });
 
   it('keeps the server’s reason for a refused update on the screen', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -651,7 +660,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
   });
 
   it('waits for five letters, then shows what the server says about the word', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -679,7 +688,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
 
   it('stages the content mode on toggle without saving until confirmed', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('wordle', 'manual')]);
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -702,7 +711,7 @@ describe('AdminGamesManage: the Wordle answer', () => {
   it('saves the staged content mode for the next session onwards', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('wordle', 'manual')]);
     vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('wordle', 'random'));
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -729,18 +738,35 @@ describe('AdminGamesManage: the Wordle answer', () => {
 
     renderSection('/admin/games/manage', staffWithoutGames);
 
-    expect(screen.queryByRole('heading', { name: 'Wordle' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Anagram' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Couple Prediction' })).not.toBeInTheDocument();
-    // Every panel on this console publishes to the server now -- the featured schedule,
-    // the lifecycle configuration and the per-game sessions -- so the whole console is
-    // gated, not just the session cards.
+    // The overview is list-only: no inline editors, only title + Open Editor links.
+    expect(screen.queryByRole('link', { name: /Open Wordle editor/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open Anagram editor/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /Open Reaction Time editor/i }),
+    ).not.toBeInTheDocument();
+    // Every panel on this console publishes to the server now -- the featured schedule
+    // and the per-game editors -- so the whole console content is gated.
     expect(screen.queryByRole('heading', { name: 'Featured game' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Manage games' })).toBeInTheDocument();
   });
+
+  it('lists every game with title, short description and Open Editor', async () => {
+    renderSection('/admin/games/manage');
+
+    for (const game of AVAILABLE_GAMES) {
+      const link = await screen.findByRole('link', { name: `Open ${game.name} editor` });
+      expect(link).toHaveAttribute('href', `/admin/games/manage/${game.id}`);
+      expect(within(link).getByText(game.name)).toBeInTheDocument();
+      expect(within(link).getByText(game.tagline)).toBeInTheDocument();
+      expect(within(link).getByText('Open editor')).toBeInTheDocument();
+    }
+    // No inline configuration lives here anymore -- editors own their pages.
+    expect(screen.queryByRole('button', { name: /update session/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save featured day/i })).not.toBeInTheDocument();
+  });
 });
 
-describe('AdminGamesManage: the Anagram word', () => {
+describe('AdminAnagramManage: the Anagram editor page', () => {
   /** The saved puzzle a test's `createAnagramGame` resolves to. */
   const anPuzzle = (overrides: Partial<AnagramGame> = {}): AnagramGame => ({
     id: '33333333-3333-3333-3333-333333333333',
@@ -754,7 +780,7 @@ describe('AdminGamesManage: the Anagram word', () => {
   });
 
   it('saves a typed word and shows the spelling the server stored', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/anagram');
     const card = anagramCard();
     expect(await within(card).findByText(/No sessions yet/)).toBeInTheDocument();
 
@@ -786,7 +812,7 @@ describe('AdminGamesManage: the Anagram word', () => {
   });
 
   it('draws a word, shows it, and updates the session with exactly that word', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/anagram');
     const card = anagramCard();
     expect(await within(card).findByText(/No sessions yet/)).toBeInTheDocument();
 
@@ -827,7 +853,7 @@ describe('AdminGamesManage: the Anagram word', () => {
   it('stages the content mode on toggle and saves it on confirm', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('anagram', 'manual')]);
     vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('anagram', 'random'));
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/anagram');
     const card = anagramCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -850,7 +876,7 @@ describe('AdminGamesManage: the Anagram word', () => {
   });
 
   it('keeps the server’s reason for a refused update on the screen', async () => {
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/anagram');
     const card = anagramCard();
     await within(card).findByText(/No sessions yet/);
 
@@ -866,13 +892,13 @@ describe('AdminGamesManage: the Anagram word', () => {
 
     const alert = await within(card).findByRole('alert');
     expect(alert).toHaveTextContent('An answer is letters only');
-    // The Wordle console beside it was never asked to save anything.
+    // The Wordle editor on its own page was never asked to save anything.
     expect(createWordleGame).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
-describe('AdminGamesManage: per-game status and collapsed history', () => {
+describe('Per-game editors: status and collapsed history', () => {
   /** The status block inside one game card, found by its accessible group name. */
   const statusGroup = (card: HTMLElement, name: string) =>
     within(card).getByRole('group', { name: `${name} status and reset` });
@@ -880,7 +906,7 @@ describe('AdminGamesManage: per-game status and collapsed history', () => {
   it('keeps session history collapsed until the admin expands it', async () => {
     const saved = aPuzzle({ answer: 'cigar', mode: 'random' });
     vi.mocked(getAdminWordleGames).mockResolvedValue([saved]);
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
 
     // The count shows, but no row renders until expanded.
@@ -908,7 +934,7 @@ describe('AdminGamesManage: per-game status and collapsed history', () => {
   it('toggles availability from inside the game card', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('wordle', 'manual')]);
     vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('wordle', 'manual'));
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
     const group = statusGroup(card, 'Wordle');
     const enabledSwitch = await within(group).findByRole('switch', {
@@ -929,7 +955,7 @@ describe('AdminGamesManage: per-game status and collapsed history', () => {
   it('changes the reset cadence from inside the game card', async () => {
     vi.mocked(getGameConfigs).mockResolvedValue([gameConfig('anagram', 'manual')]);
     vi.mocked(updateGameConfig).mockResolvedValue(gameConfig('anagram', 'manual'));
-    renderSection('/admin/games/manage');
+    renderSection('/admin/games/manage/anagram');
     const card = anagramCard();
     const group = statusGroup(card, 'Anagram');
     await within(group).findByRole('switch', { name: 'Anagram enabled' });

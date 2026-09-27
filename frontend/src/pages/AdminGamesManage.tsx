@@ -1,31 +1,39 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { CircleHelp, Network, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { AdminAnagramConfig } from '@/components/AdminAnagramConfig';
-import { AdminCoupleConfig } from '@/components/AdminCoupleConfig';
 import { AdminFeaturedSchedule } from '@/components/AdminFeaturedSchedule';
-import { AdminReactionTimeConfig } from '@/components/AdminReactionTimeConfig';
-import { AdminTwoKeyEscapeConfig } from '@/components/AdminTwoKeyEscapeConfig';
-import { AdminWordleConfig } from '@/components/AdminWordleConfig';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { CAPABILITIES } from '@/lib/capabilities';
+import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
 import { describeApiError } from '@/lib/apiError';
 import { runScheduledResets } from '@/services/api';
 
 /**
- * The games console: the spotlight schedule, the Connections and Trivia Drop
- * editor links, and the Wordle, Anagram, Couple Questionnaire and Reaction
- * Time cards.
+ * The sub-editor each catalogue title opens. The manage overview never
+ * configures a game inline -- it only lists the title, the short description
+ * and an Open Editor option that walks to the game's own page.
+ */
+const MANAGE_ROUTES: Record<string, string> = {
+  wordle: '/admin/games/manage/wordle',
+  anagram: '/admin/games/manage/anagram',
+  'couple-questionnaire': '/admin/games/manage/couple-questionnaire',
+  'two-key-escape': '/admin/games/manage/two-key-escape',
+  'reaction-time': '/admin/games/manage/reaction-time',
+  connections: '/admin/games/manage/connections',
+  'trivia-drop': '/admin/games/manage/trivia-drop',
+};
+
+/**
+ * The games console: the spotlight schedule plus one row per game.
  *
- * Everything here goes to the server. The featured schedule pins at most one
- * game per UTC date without touching any session; each game card owns its own
- * availability and reset cadence alongside its sessions, so there is no
- * separate status section to keep in sync. The Wordle and Anagram cards Update
- * sessions (terminate-then-create) and schedule future manual words, while the
- * Couple and Reaction Time cards hold a featured-day picker plus the live
- * session period because their mechanics are fixed by the app.
+ * Every game's configuration -- availability, reset cadence, sessions,
+ * schedules and history -- lives on that game's own editor page, mirroring
+ * the Connections and Trivia Drop editors. This screen keeps the featured
+ * spotlight (which belongs to no single game) and the manual reset trigger,
+ * and otherwise only lists each title with its short description and an Open
+ * Editor option.
  * Screens render only for an account holding `games:manage`, and the server
  * refuses the same writes again regardless of what this gate believes.
  */
@@ -52,10 +60,9 @@ export const AdminGamesManage = () => {
         <div className="flex min-w-0 flex-col gap-2">
           <h1 className="text-3xl font-semibold">Manage games</h1>
           <p className="text-sm text-muted-foreground">
-            The featured spotlight and the current Wordle, Anagram,
-            Connections, Couple Questionnaire, Two-Key Escape, Reaction Time
-            and Trivia Drop sessions. Changes here show up on the player-facing
-            section straight away.
+            The featured spotlight and every game&apos;s own editor. Open a
+            game below to change its sessions and settings — changes show up
+            on the player-facing section straight away.
           </p>
         </div>
         {mayManage && (
@@ -75,48 +82,32 @@ export const AdminGamesManage = () => {
       {mayManage && <AdminFeaturedSchedule />}
 
       {mayManage && (
-        <NavLink
-          to="/admin/games/manage/connections"
-          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/70 px-5 py-4 backdrop-blur transition-colors hover:border-romantic/50"
-        >
-          <span className="flex items-center gap-3">
-            <Network className="h-5 w-5" />
-            <span className="min-w-0">
-              <span className="block text-base font-semibold">Connections puzzles</span>
-              <span className="block text-sm text-muted-foreground">
-                Sixteen words in four hidden groups -- its own editor, same
-                session lifecycle as the other games.
-              </span>
-            </span>
-          </span>
-          <span className="shrink-0 text-sm font-semibold text-romantic">Open editor</span>
-        </NavLink>
+        <div className="flex flex-col gap-3">
+          {AVAILABLE_GAMES.map((game) => {
+            const Icon = game.icon;
+            const to = MANAGE_ROUTES[game.id] ?? `/admin/games/manage/${game.id}`;
+            return (
+              <NavLink
+                key={game.id}
+                to={to}
+                aria-label={`Open ${game.name} editor`}
+                className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/70 px-5 py-4 backdrop-blur transition-colors hover:border-romantic/50"
+              >
+                <span className="flex items-center gap-3">
+                  <Icon className="h-5 w-5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block text-base font-semibold">{game.name}</span>
+                    <span className="block text-sm text-muted-foreground">
+                      {game.tagline}
+                    </span>
+                  </span>
+                </span>
+                <span className="shrink-0 text-sm font-semibold text-romantic">Open editor</span>
+              </NavLink>
+            );
+          })}
+        </div>
       )}
-
-      {mayManage && (
-        <NavLink
-          to="/admin/games/manage/trivia-drop"
-          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/70 px-5 py-4 backdrop-blur transition-colors hover:border-romantic/50"
-        >
-          <span className="flex items-center gap-3">
-            <CircleHelp className="h-5 w-5" />
-            <span className="min-w-0">
-              <span className="block text-base font-semibold">Trivia Drop questions</span>
-              <span className="block text-sm text-muted-foreground">
-                One live question at a time — its own editor, individual
-                releases, no reset cadence.
-              </span>
-            </span>
-          </span>
-          <span className="shrink-0 text-sm font-semibold text-romantic">Open editor</span>
-        </NavLink>
-      )}
-
-      {mayManage && <AdminWordleConfig />}
-      {mayManage && <AdminAnagramConfig />}
-      {mayManage && <AdminCoupleConfig />}
-      {mayManage && <AdminTwoKeyEscapeConfig />}
-      {mayManage && <AdminReactionTimeConfig />}
     </div>
   );
 };

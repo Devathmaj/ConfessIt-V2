@@ -33,6 +33,11 @@ import { TwoKeyEscapePage } from "./pages/TwoKeyEscapePage";
 import { ReactionTimeGamePage } from "./pages/ReactionTimeGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
+import { AdminWordleManage } from "./pages/AdminWordleManage";
+import { AdminAnagramManage } from "./pages/AdminAnagramManage";
+import { AdminCoupleQuestionnaireManage } from "./pages/AdminCoupleQuestionnaireManage";
+import { AdminTwoKeyEscapeManage } from "./pages/AdminTwoKeyEscapeManage";
+import { AdminReactionTimeManage } from "./pages/AdminReactionTimeManage";
 import { AdminTriviaDropManage } from "./pages/AdminTriviaDropManage";
 import { AdminConnectionsManage } from "./pages/AdminConnectionsManage";
 import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
@@ -336,6 +341,11 @@ const AppRoutes = () => {
       >
         <Route index element={<AdminGamesDashboard />} />
         <Route path="manage" element={<AdminGamesManage />} />
+        <Route path="manage/wordle" element={<AdminWordleManage />} />
+        <Route path="manage/anagram" element={<AdminAnagramManage />} />
+        <Route path="manage/couple-questionnaire" element={<AdminCoupleQuestionnaireManage />} />
+        <Route path="manage/two-key-escape" element={<AdminTwoKeyEscapeManage />} />
+        <Route path="manage/reaction-time" element={<AdminReactionTimeManage />} />
         <Route path="manage/connections" element={<AdminConnectionsManage />} />
         <Route path="manage/trivia-drop" element={<AdminTriviaDropManage />} />
         <Route path="leaderboard" element={<AdminGamesLeaderboard />} />
