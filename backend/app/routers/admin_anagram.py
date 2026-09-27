@@ -1,12 +1,13 @@
 # app/routers/admin_anagram.py
 
 from datetime import date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
 from ..dependencies import get_db
 from ..accounts import Capability
+from ..services.anagram_service import ANAGRAM_GAMES_MAX_LIMIT
 from ..models import (
     AccountDetails,
     AnagramDraw,
@@ -131,13 +132,15 @@ async def delete_anagram_scheduled(
     return None
 
 
-@router.get("", response_model=List[AnagramGame])
+@router.get("", response_model=Dict[str, Any])
 async def list_anagram_games(
+    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    limit: int = Query(50, ge=1, le=ANAGRAM_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
-) -> List[AnagramGame]:
-    """Every configured puzzle, newest day first."""
-    return anagram_service.list_anagram_games(db)
+) -> Dict[str, Any]:
+    """One page of every configured puzzle, newest day first, with the total beside it."""
+    return anagram_service.list_anagram_games(db, skip=skip, limit=limit)
 
 
 @router.get("/{game_id}", response_model=AnagramGame)

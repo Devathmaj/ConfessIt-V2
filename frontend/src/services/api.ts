@@ -909,10 +909,51 @@ export const createWordleGame = async (payload: WordleGamePayload): Promise<Word
     return response.data;
 };
 
-/** Every configured puzzle, newest day first. */
-export const getAdminWordleGames = async (): Promise<WordleGame[]> => {
-    const response = await axios.get(`${API_URL}/admin/wordle`, { headers: getAuthHeaders() });
-    return response.data;
+/**
+ * One page of every configured puzzle, newest day first, with the total beside it.
+ *
+ * The page is a SQL LIMIT/OFFSET and the total a COUNT on the server, so a season of
+ * daily sessions loads downwards instead of all at once. Accepts both the new
+ * `{games, total, skip, limit}` envelope and a legacy bare array (older servers and
+ * unit-test mocks), normalising the latter to a single page whose total is the array
+ * length.
+ */
+export interface AdminGamesPage<T> {
+    games: T[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+const normalizeGamesPage = <T,>(data: unknown, key: string): { rows: T[]; total: number } => {
+    if (Array.isArray(data)) {
+        return { rows: data as T[], total: data.length };
+    }
+    const rows = (data as Record<string, unknown> | null | undefined)?.[key];
+    return {
+        rows: Array.isArray(rows) ? (rows as T[]) : [],
+        total:
+            typeof (data as Record<string, unknown> | null | undefined)?.total === 'number'
+                ? (data as { total: number }).total
+                : Array.isArray(rows)
+                  ? rows.length
+                  : 0,
+    };
+};
+
+export const getAdminWordleGames = async (params?: {
+    skip?: number;
+    limit?: number;
+}): Promise<AdminGamesPage<WordleGame>> => {
+    const response = await axios.get(`${API_URL}/admin/wordle`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+        },
+    });
+    const { rows, total } = normalizeGamesPage<WordleGame>(response.data, 'games');
+    return { games: rows, total, skip: params?.skip ?? 0, limit: params?.limit ?? rows.length };
 };
 
 /** One configured puzzle by id. A malformed id answers 400, an unknown one 404. */
@@ -989,10 +1030,20 @@ export const createAnagramGame = async (payload: AnagramGamePayload): Promise<An
     return response.data;
 };
 
-/** Every configured puzzle, newest day first. */
-export const getAdminAnagramGames = async (): Promise<AnagramGame[]> => {
-    const response = await axios.get(`${API_URL}/admin/anagram`, { headers: getAuthHeaders() });
-    return response.data;
+/** One page of every configured puzzle, newest day first, with the total beside it. */
+export const getAdminAnagramGames = async (params?: {
+    skip?: number;
+    limit?: number;
+}): Promise<AdminGamesPage<AnagramGame>> => {
+    const response = await axios.get(`${API_URL}/admin/anagram`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+        },
+    });
+    const { rows, total } = normalizeGamesPage<AnagramGame>(response.data, 'games');
+    return { games: rows, total, skip: params?.skip ?? 0, limit: params?.limit ?? rows.length };
 };
 
 /** One configured puzzle by id. A malformed id answers 400, an unknown one 404. */
@@ -1862,12 +1913,20 @@ export const createConnectionsGame = async (
     return response.data;
 };
 
-/** Every Connections session, newest first. */
-export const getAdminConnectionsGames = async (): Promise<ConnectionsGame[]> => {
+/** One page of every Connections session, newest first, with the total beside it. */
+export const getAdminConnectionsGames = async (params?: {
+    skip?: number;
+    limit?: number;
+}): Promise<AdminGamesPage<ConnectionsGame>> => {
     const response = await axios.get(`${API_URL}/admin/connections`, {
         headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+        },
     });
-    return response.data;
+    const { rows, total } = normalizeGamesPage<ConnectionsGame>(response.data, 'games');
+    return { games: rows, total, skip: params?.skip ?? 0, limit: params?.limit ?? rows.length };
 };
 
 /** The current Connections session for the admin screen, or 404 when there is none. */
@@ -2090,12 +2149,28 @@ export const createTriviaQuestion = async (
     return response.data;
 };
 
-/** Every Trivia Drop question, newest first. */
-export const getAdminTriviaQuestions = async (): Promise<TriviaQuestion[]> => {
+/**
+ * One page of every Trivia Drop question, newest first, with the total beside it.
+ *
+ * `status` optionally narrows to a lifecycle subset (comma-separated) so the screen
+ * reads its small working set separately from its unbounded history instead of loading
+ * the bank to split it by hand. Legacy bare arrays normalise to a single page.
+ */
+export const getAdminTriviaQuestions = async (params?: {
+    skip?: number;
+    limit?: number;
+    status?: string;
+}): Promise<{ questions: TriviaQuestion[]; total: number; skip: number; limit: number }> => {
     const response = await axios.get(`${API_URL}/admin/trivia-drop`, {
         headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.status ? { status: params.status } : {}),
+        },
     });
-    return response.data;
+    const { rows, total } = normalizeGamesPage<TriviaQuestion>(response.data, 'questions');
+    return { questions: rows, total, skip: params?.skip ?? 0, limit: params?.limit ?? rows.length };
 };
 
 /** The live Trivia Drop question for the admin screen, or 404 when none is live. */

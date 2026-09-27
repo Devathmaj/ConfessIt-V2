@@ -1,7 +1,7 @@
 # app/routers/admin_wordle.py
 
 from datetime import date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
@@ -17,6 +17,7 @@ from ..models import (
 )
 from ..postgres import Database
 from ..services import wordle_service
+from ..services.wordle_service import WORDLE_GAMES_MAX_LIMIT
 from ..services.authorization import require_capability
 from ..services.scheduled_contents import (
     delete_scheduled,
@@ -128,13 +129,15 @@ async def delete_wordle_scheduled(
     return None
 
 
-@router.get("", response_model=List[WordleGame])
+@router.get("", response_model=Dict[str, Any])
 async def list_wordle_games(
+    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    limit: int = Query(50, ge=1, le=WORDLE_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
-) -> List[WordleGame]:
-    """Every configured puzzle, newest day first."""
-    return wordle_service.list_wordle_games(db)
+) -> Dict[str, Any]:
+    """One page of every configured puzzle, newest day first, with the total beside it."""
+    return wordle_service.list_wordle_games(db, skip=skip, limit=limit)
 
 
 @router.get("/{game_id}", response_model=WordleGame)

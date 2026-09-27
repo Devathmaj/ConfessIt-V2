@@ -38,10 +38,10 @@ import hmac
 import random
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..config import settings
@@ -350,13 +350,32 @@ def create_anagram_game(
     )
 
 
-def list_anagram_games(db: Database) -> List[AnagramGame]:
-    """Every session, newest first -- active, pending and ended history alike."""
+# Hard ceiling for one page of the session-history list. The endpoint clamps anything
+# larger, so no client can ask for every session at once and make the backend
+# materialise a whole season in one response.
+ANAGRAM_GAMES_MAX_LIMIT = 100
+
+
+def list_anagram_games(
+    db: Database, *, skip: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """One page of every session, newest first -- active, pending and ended history alike.
+
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT, so the screen loads history
+    downwards without ever holding the sessions it is not showing. ``id`` seconds the
+    order so two sessions stamped in the same instant still page deterministically.
+    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), ANAGRAM_GAMES_MAX_LIMIT))
     with db.sessions() as session:
+        total = session.scalar(select(func.count()).select_from(AnagramGameRecord)) or 0
         rows = session.scalars(
-            select(AnagramGameRecord).order_by(AnagramGameRecord.created_at.desc())
+            select(AnagramGameRecord)
+            .order_by(AnagramGameRecord.created_at.desc(), AnagramGameRecord.id.asc())
+            .offset(skip).limit(limit)
         ).all()
-        return [_as_model(row) for row in rows]
+        games = [_as_model(row) for row in rows]
+    return {"games": games, "total": total, "skip": skip, "limit": limit}
 
 
 def get_current_anagram_session(db: Database) -> Optional[AnagramGame]:

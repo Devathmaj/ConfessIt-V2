@@ -238,7 +238,7 @@ def test_empty_text_and_bad_options_are_rejected(db):
         ).status_code
         == 400
     )
-    assert admin.get("/admin/trivia-drop").json() == []
+    assert admin.get("/admin/trivia-drop").json()["questions"] == []
 
 
 def test_duplicate_options_are_rejected_case_insensitively(db):

@@ -285,7 +285,7 @@ def test_puzzles_are_listed_newest_first_and_readable_by_id(admin_client: TestCl
 
     listing = admin_client.get("/admin/wordle")
     assert listing.status_code == 200
-    body = listing.json()
+    body = listing.json()["games"]
     assert [entry["id"] for entry in body] == [updated.json()["id"], created.json()["id"]]
     # The answer comes back with the row: seeing what will be published is the screen's job.
     assert body[1]["answer"] == solution_words()[0]

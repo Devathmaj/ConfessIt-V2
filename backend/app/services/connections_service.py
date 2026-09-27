@@ -19,10 +19,10 @@ computed against.
 """
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db_models import ConnectionsGameRecord, ConnectionsWordRecord
@@ -267,15 +267,51 @@ def create_connections_game(
     return update_connections_session(db, groups=groups, updated_by=created_by)
 
 
-def list_connections_games(db: Database) -> List[ConnectionsGame]:
-    """Every session, newest first -- active, pending and ended history alike."""
+# Hard ceiling for one page of the session-history list. The endpoint clamps anything
+# larger, so no client can ask for every session at once and make the backend
+# materialise a whole season in one response.
+CONNECTIONS_GAMES_MAX_LIMIT = 100
+
+
+def _words_for_many(session, game_ids: List[str]) -> Dict[str, List]:
+    """Every word row for a page of sessions, grouped by session, in one read.
+
+    The single-row ``_words_for`` stays for the single-row readers; fanning it out per
+    row of a page would turn one bounded read into a query per session.
+    """
+    by_game: Dict[str, List] = {}
+    if not game_ids:
+        return by_game
+    for word in session.scalars(
+        select(ConnectionsWordRecord).where(
+            ConnectionsWordRecord.connections_game_id.in_(game_ids)
+        )
+    ).all():
+        by_game.setdefault(str(word.connections_game_id), []).append(word)
+    return by_game
+
+
+def list_connections_games(
+    db: Database, *, skip: int = 0, limit: int = 50
+) -> Dict[str, Any]:
+    """One page of every session, newest first -- active, pending and ended history alike.
+
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT, so the screen loads history
+    downwards without ever holding the sessions it is not showing. ``id`` seconds the
+    order so two sessions stamped in the same instant still page deterministically.
+    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), CONNECTIONS_GAMES_MAX_LIMIT))
     with db.sessions() as session:
+        total = session.scalar(select(func.count()).select_from(ConnectionsGameRecord)) or 0
         rows = session.scalars(
-            select(ConnectionsGameRecord).order_by(ConnectionsGameRecord.created_at.desc())
+            select(ConnectionsGameRecord)
+            .order_by(ConnectionsGameRecord.created_at.desc(), ConnectionsGameRecord.id.asc())
+            .offset(skip).limit(limit)
         ).all()
-        return [
-            _as_model(row, _words_for(session, str(row.id))) for row in rows
-        ]
+        words = _words_for_many(session, [str(row.id) for row in rows])
+        games = [_as_model(row, words.get(str(row.id), [])) for row in rows]
+    return {"games": games, "total": total, "skip": skip, "limit": limit}
 
 
 def get_current_connections_session(db: Database) -> Optional[ConnectionsGame]:

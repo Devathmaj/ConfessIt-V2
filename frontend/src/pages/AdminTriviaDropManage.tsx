@@ -225,9 +225,24 @@ const QuestionForm = ({
 export const AdminTriviaDropManage = () => {
   const { logActivity } = useGamesConfig();
 
-  const [questions, setQuestions] = useState<TriviaQuestion[]>([]);
+  /**
+   * The small working set: drafts, scheduled and live-as-listed rows. Read whole behind
+   * a LIMIT -- drafts an operator is composing must never hide behind a history page.
+   */
+  const [working, setWorking] = useState<TriviaQuestion[]>([]);
+  /**
+   * The unbounded history (ended, cancelled): always the contiguous window
+   * [0, history.length) of the newest-first server order, so a refresh is one clean
+   * re-read and a "show more" click appends beneath the questions already read.
+   */
+  const [historyItems, setHistoryItems] = useState<TriviaQuestion[]>([]);
+  /** How many history rows the server holds, loaded or not. Legacy bare arrays report none. */
+  const [historyTotal, setHistoryTotal] = useState(0);
+  /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
+  const [pagedHistory, setPagedHistory] = useState(false);
   const [live, setLive] = useState<TriviaQuestion | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
   const [releaseMode, setReleaseMode] = useState<'now' | 'scheduled' | 'draft'>('draft');
@@ -242,9 +257,70 @@ export const AdminTriviaDropManage = () => {
   const [rowBusy, setRowBusy] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
 
+  /**
+   * How many history rows one read returns. Question rows carry their options, so twenty
+   * keeps one read cheap while a "show more" click still grows the list by a visible amount.
+   */
+  const HISTORY_PAGE_SIZE = 20;
+
+  /** The lifecycle split the screen reads on: a small working set, an unbounded history. */
+  const WORKING_STATUSES = 'draft,scheduled,active';
+  const HISTORY_STATUSES = 'ended,cancelled';
+
+  /** Split one read into its rows, total and answer shape. Shared by every read below. */
+  const splitPage = (answer: unknown) => {
+    // A legacy bare array ignores the params and hands back one unfiltered list; an
+    // envelope answers the page that was asked for. Telling them apart keeps the old
+    // servers and the unit-test mocks on the single-list behaviour they were written for.
+    if (Array.isArray(answer)) {
+      const rows = answer as TriviaQuestion[];
+      return { rows, total: rows.length, enveloped: false };
+    }
+    const page = answer as { questions?: TriviaQuestion[]; total?: unknown };
+    const rows = Array.isArray(page.questions) ? page.questions : [];
+    return {
+      rows,
+      total: typeof page.total === 'number' && Number.isFinite(page.total) ? page.total : rows.length,
+      enveloped: true,
+    };
+  };
+
+  /** Grow the history downwards: the next page appends beneath the questions already read. */
+  const loadMoreHistory = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = splitPage(
+        await getAdminTriviaQuestions({
+          status: HISTORY_STATUSES,
+          skip: historyItems.length,
+          limit: HISTORY_PAGE_SIZE,
+        }),
+      );
+      setHistoryItems((prev) => [...prev, ...page.rows]);
+      setHistoryTotal(page.total);
+      setPagedHistory(page.enveloped);
+      setListError(null);
+    } catch (error) {
+      setListError(describeApiError(error, 'Could not load more questions.'));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const refresh = useCallback(async () => {
     try {
-      setQuestions(await getAdminTriviaQuestions());
+      const [workingPage, historyPage] = await Promise.all([
+        getAdminTriviaQuestions({ status: WORKING_STATUSES, limit: 100 }),
+        getAdminTriviaQuestions({ status: HISTORY_STATUSES, skip: 0, limit: HISTORY_PAGE_SIZE }),
+      ]);
+      // Two reads, one question: either both are envelopes or both are legacy lists.
+      const workingSplit = splitPage(workingPage);
+      const historySplit = splitPage(historyPage);
+      setWorking(workingSplit.rows);
+      setHistoryItems(historySplit.rows);
+      setHistoryTotal(historySplit.total);
+      setPagedHistory(historySplit.enveloped);
       setListError(null);
     } catch (error) {
       setListError(describeApiError(error, 'Could not load the questions.'));
@@ -256,6 +332,8 @@ export const AdminTriviaDropManage = () => {
     } catch {
       setLive(null);
     }
+    // `splitPage` is stateless; listing it would refetch on every append.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -333,9 +411,11 @@ export const AdminTriviaDropManage = () => {
     }
   };
 
-  const drafts = questions.filter((question) => question.status === 'draft');
-  const scheduled = questions.filter((question) => question.status === 'scheduled');
-  const history = questions.filter(
+  // Narrowed again on the way out: the server already filtered these reads, so this
+  // is a no-op there -- and it is what splits the one legacy list into its groups.
+  const drafts = working.filter((question) => question.status === 'draft');
+  const scheduled = working.filter((question) => question.status === 'scheduled');
+  const history = historyItems.filter(
     (question) => question.status === 'ended' || question.status === 'cancelled',
   );
 
@@ -677,6 +757,10 @@ export const AdminTriviaDropManage = () => {
             loading={loading}
             listError={listError}
             startCollapsed
+            total={pagedHistory ? historyTotal : history.length}
+            remaining={pagedHistory ? Math.max(historyTotal - history.length, 0) : 0}
+            loadingMore={loadingMore}
+            onShowMore={() => void loadMoreHistory()}
             renderActions={(question) => (
               <span className="text-xs text-muted-foreground">
                 {question.status === 'ended'
@@ -700,6 +784,10 @@ const QuestionGroup = ({
   renderActions,
   renderExpanded,
   startCollapsed = false,
+  total,
+  remaining = 0,
+  loadingMore = false,
+  onShowMore,
 }: {
   title: string;
   empty: string;
@@ -711,6 +799,13 @@ const QuestionGroup = ({
   /** Collapse the list behind a Show/Hide toggle -- for groups like History
    * that grow without bound while the working controls stay above them. */
   startCollapsed?: boolean;
+  /** How many rows the server holds for this group. Defaults to the rows on screen,
+   * which is what the working groups -- always read whole -- report. */
+  total?: number;
+  /** Rows still on the server, when the group pages. Zero hides the pager. */
+  remaining?: number;
+  loadingMore?: boolean;
+  onShowMore?: () => void;
 }) => {
   const [open, setOpen] = useState(!startCollapsed);
   return (
@@ -721,7 +816,7 @@ const QuestionGroup = ({
       </h4>
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">
-          {loading ? 'Loading...' : `${questions.length}`}
+          {loading ? 'Loading...' : `${total ?? questions.length}`}
         </span>
         {startCollapsed && questions.length > 0 && (
           <Button
@@ -777,6 +872,23 @@ const QuestionGroup = ({
           </li>
         ))}
       </ul>
+    )}
+    {/* The list only grows downwards: the next page appends beneath the rows already
+        read, so the reader's place never moves. Shown only while the server holds more
+        than the group is showing. */}
+    {open && onShowMore && remaining > 0 && (
+      <div className="flex justify-center pt-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onShowMore}
+          disabled={loadingMore}
+          aria-label={`Show more ${title.toLowerCase()}`}
+        >
+          {loadingMore ? 'Loading…' : `Show more (${remaining} remaining)`}
+        </Button>
+      </div>
     )}
   </div>
   );

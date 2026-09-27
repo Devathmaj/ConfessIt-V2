@@ -198,7 +198,7 @@ def test_admin_rejects_missing_words_and_bad_group_sizes(db):
     response = admin.post("/admin/connections", json={"groups": bad_group})
     assert response.status_code == 400
     # Nothing was stored.
-    assert admin.get("/admin/connections").json() == []
+    assert admin.get("/admin/connections").json()["games"] == []
 
 
 def test_admin_rejects_case_insensitive_duplicates(db):

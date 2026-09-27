@@ -468,7 +468,7 @@ def test_puzzles_are_listed_newest_first_and_readable_by_id(admin_client: TestCl
 
     listing = admin_client.get("/admin/anagram")
     assert listing.status_code == 200
-    body = listing.json()
+    body = listing.json()["games"]
     assert [entry["id"] for entry in body] == [updated.json()["id"], created.json()["id"]]
     # The answer and the creator come back with the row: seeing what will be published, and
     # by whom, is the screen's job.

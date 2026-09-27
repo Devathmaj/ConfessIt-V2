@@ -1,6 +1,8 @@
 # app/routers/admin_trivia_drop.py
 
-from fastapi import APIRouter, Depends, status
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, Query, status
 
 from ..accounts import Capability
 from ..dependencies import get_db
@@ -14,6 +16,7 @@ from ..models import (
 from ..postgres import Database
 from ..services import trivia_service
 from ..services.authorization import require_capability
+from ..services.trivia_service import TRIVIA_QUESTIONS_MAX_LIMIT
 
 router = APIRouter(prefix="/admin/trivia-drop", tags=["Admin - Trivia Drop"])
 
@@ -135,13 +138,25 @@ async def update_trivia_draft(
     )
 
 
-@router.get("", response_model=list[TriviaDropQuestion])
+@router.get("", response_model=Dict[str, Any])
 async def list_trivia_questions(
+    skip: int = Query(0, ge=0, description="How many questions to skip."),
+    limit: int = Query(50, ge=1, le=TRIVIA_QUESTIONS_MAX_LIMIT, description="How many questions to return. Clamped so one request can never materialise the whole bank at once."),
+    status: Optional[str] = Query(
+        None,
+        description="Comma-separated lifecycle subset to read (draft, scheduled, active, ended, cancelled): the working set and the history are two reads, not one full list.",
+    ),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
-) -> list[TriviaDropQuestion]:
-    """Every question, newest first -- drafts, scheduled, live and history alike."""
-    return trivia_service.list_questions(db)
+) -> Dict[str, Any]:
+    """One page of every question, newest first, with the total beside it.
+
+    ``status`` optionally narrows to a lifecycle subset so the screen reads its small
+    working set (drafts, scheduled, live) separately from its unbounded history
+    (ended, cancelled) instead of loading the bank to split it by hand.
+    """
+    statuses = [part.strip() for part in (status or "").split(",") if part.strip()] or None
+    return trivia_service.list_questions(db, skip=skip, limit=limit, statuses=statuses)
 
 
 @router.get("/{question_id}", response_model=TriviaDropQuestion)

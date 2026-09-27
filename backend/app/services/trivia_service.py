@@ -24,10 +24,10 @@ live, in the same transaction, so the two are never live together.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db_models import (
@@ -527,15 +527,81 @@ def cancel_question(db: Database, question_id: str) -> TriviaDropQuestion:
         return _as_model(row, _options_for(session, str(row.id)))
 
 
-def list_questions(db: Database) -> List[TriviaDropQuestion]:
-    """Every question, newest first -- drafts, scheduled, live and history alike."""
+# Hard ceiling for one page of the question list. The endpoint clamps anything
+# larger, so no client can ask for every question at once and make the backend
+# materialise the whole bank in one response.
+TRIVIA_QUESTIONS_MAX_LIMIT = 100
+
+# Every lifecycle value a question row can hold. The screen reads its working set
+# (drafts, scheduled, live) separately from its history (ended, cancelled), and both
+# reads name the same vocabulary.
+TRIVIA_QUESTION_STATUSES = frozenset({"draft", "scheduled", "active", "ended", "cancelled"})
+
+
+def _options_for_many(session, question_ids: List[str]) -> Dict[str, List]:
+    """Every option row for a page of questions, grouped by question, in one read.
+
+    The single-row ``_options_for`` stays for the single-row readers; fanning it out per
+    row of a page would turn one bounded read into a query per question.
+    """
+    by_question: Dict[str, List] = {}
+    if not question_ids:
+        return by_question
+    for option in session.scalars(
+        select(TriviaDropOptionRecord).where(
+            TriviaDropOptionRecord.question_id.in_(question_ids)
+        )
+    ).all():
+        by_question.setdefault(str(option.question_id), []).append(option)
+    return by_question
+
+
+def list_questions(
+    db: Database,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    statuses: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """One page of every question, newest first -- drafts, scheduled, live and history alike.
+
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter, so the
+    screen loads history downwards without ever holding the questions it is not showing.
+    ``statuses`` optionally narrows to a subset of the lifecycle (comma-separated on the
+    wire); anything outside the vocabulary is a 422 rather than a silent empty page.
+    ``id`` seconds the order so two questions stamped in the same instant still page
+    deterministically.
+    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), TRIVIA_QUESTIONS_MAX_LIMIT))
+    wanted = list(statuses or [])
+    unknown = [status for status in wanted if status not in TRIVIA_QUESTION_STATUSES]
+    if unknown:
+        from fastapi import HTTPException, status as _status
+
+        raise HTTPException(
+            status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid status: {', '.join(sorted(unknown))}",
+        )
     with db.sessions() as session:
+        filters = (
+            [TriviaDropQuestionRecord.status.in_(wanted)] if wanted else []
+        )
+        total = session.scalar(
+            select(func.count()).select_from(TriviaDropQuestionRecord).where(*filters)
+        ) or 0
         rows = session.scalars(
-            select(TriviaDropQuestionRecord).order_by(
-                TriviaDropQuestionRecord.created_at.desc()
+            select(TriviaDropQuestionRecord)
+            .where(*filters)
+            .order_by(
+                TriviaDropQuestionRecord.created_at.desc(),
+                TriviaDropQuestionRecord.id.asc(),
             )
+            .offset(skip).limit(limit)
         ).all()
-        return [_as_model(row, _options_for(session, str(row.id))) for row in rows]
+        options = _options_for_many(session, [str(row.id) for row in rows])
+        questions = [_as_model(row, options.get(str(row.id), [])) for row in rows]
+    return {"questions": questions, "total": total, "skip": skip, "limit": limit}
 
 
 def get_question(db: Database, question_id: str) -> TriviaDropQuestion:

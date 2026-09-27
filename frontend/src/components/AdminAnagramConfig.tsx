@@ -57,8 +57,18 @@ const toFormMode = (content: ContentMode | null): Mode =>
 export const AdminAnagramConfig = () => {
   const { logActivity } = useGamesConfig();
 
+  /**
+   * The sessions on screen: always the contiguous window [0, games.length) of the
+   * newest-first server order, so a refresh is one clean re-read and a "show more"
+   * click appends beneath the sessions already read.
+   */
   const [games, setGames] = useState<AnagramGame[]>([]);
+  /** How many sessions the server holds, loaded or not. Legacy bare arrays report none. */
+  const [gamesTotal, setGamesTotal] = useState(0);
+  /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
+  const [pagedHistory, setPagedHistory] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
   const [current, setCurrent] = useState<AnagramGame | null>(null);
@@ -95,9 +105,48 @@ export const AdminAnagramConfig = () => {
   // push the working controls off the screen.
   const [historyOpen, setHistoryOpen] = useState(false);
 
+  /**
+   * How many sessions one history read returns. Session rows are small, so twenty keeps
+   * one read cheap while a "show more" click still grows the list by a visible amount.
+   */
+  const HISTORY_PAGE_SIZE = 20;
+
+  /** One history read: the next `limit` sessions newest-first, with the total beside it. */
+  const readHistoryPage = async (skip: number, limit: number) => {
+    const page = await getAdminAnagramGames({ skip, limit });
+    // A legacy bare array ignores the params and hands back one unfiltered list; an
+    // envelope answers the page that was asked for. Telling them apart keeps the old
+    // servers and the unit-test mocks on the single-list behaviour they were written for.
+    if (Array.isArray(page as unknown)) {
+      const rows = page as unknown as AnagramGame[];
+      return { rows, total: rows.length, enveloped: false };
+    }
+    return { rows: page.games, total: page.total, enveloped: true };
+  };
+
+  /** Grow the history downwards: the next page appends beneath the sessions already read. */
+  const loadMoreHistory = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const window = await readHistoryPage(games.length, HISTORY_PAGE_SIZE);
+      setGames((prev) => [...prev, ...window.rows]);
+      setGamesTotal(window.total);
+      setPagedHistory(window.enveloped);
+      setListError(null);
+    } catch (error) {
+      setListError(describeApiError(error, 'Could not load more sessions.'));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const refresh = useCallback(async () => {
     try {
-      setGames(await getAdminAnagramGames());
+      const window = await readHistoryPage(0, HISTORY_PAGE_SIZE);
+      setGames(window.rows);
+      setGamesTotal(window.total);
+      setPagedHistory(window.enveloped);
       setListError(null);
     } catch (error) {
       setListError(describeApiError(error, 'Could not load the configured puzzles.'));
@@ -526,7 +575,9 @@ export const AdminAnagramConfig = () => {
             </h4>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">
-                {loading ? 'Loading...' : `${games.length} sessions`}
+                {loading
+                  ? 'Loading...'
+                  : `${pagedHistory ? gamesTotal : games.length} sessions`}
               </span>
               {games.length > 0 && (
                 <Button
@@ -582,6 +633,24 @@ export const AdminAnagramConfig = () => {
                 </li>
               ))}
             </ul>
+          )}
+
+          {/* The list only grows downwards: the next page appends beneath the sessions
+              already read, so the reader's place never moves. Shown only while the server
+              holds more than the list is showing; legacy answers never page. */}
+          {historyOpen && pagedHistory && games.length < gamesTotal && (
+            <div className="flex justify-center pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void loadMoreHistory()}
+                disabled={loadingMore}
+                aria-label="Show more sessions"
+              >
+                {loadingMore ? 'Loading…' : `Show more (${gamesTotal - games.length} remaining)`}
+              </Button>
+            </div>
           )}
 
           {historyOpen && detail && (

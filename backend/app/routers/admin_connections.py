@@ -1,9 +1,9 @@
 # app/routers/admin_connections.py
 
 from datetime import date
-from typing import List
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from ..accounts import Capability
 from ..dependencies import get_db
@@ -17,6 +17,7 @@ from ..models import (
 from ..postgres import Database
 from ..services import connections_service
 from ..services.authorization import require_capability
+from ..services.connections_service import CONNECTIONS_GAMES_MAX_LIMIT
 
 router = APIRouter(prefix="/admin/connections", tags=["Admin - Connections"])
 
@@ -112,13 +113,15 @@ async def delete_connections_scheduled(
     return None
 
 
-@router.get("", response_model=List[ConnectionsGame])
+@router.get("", response_model=Dict[str, Any])
 async def list_connections_games(
+    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    limit: int = Query(50, ge=1, le=CONNECTIONS_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
-) -> List[ConnectionsGame]:
-    """Every configured puzzle, newest day first."""
-    return connections_service.list_connections_games(db)
+) -> Dict[str, Any]:
+    """One page of every configured puzzle, newest day first, with the total beside it."""
+    return connections_service.list_connections_games(db, skip=skip, limit=limit)
 
 
 @router.get("/{game_id}", response_model=ConnectionsGame)
