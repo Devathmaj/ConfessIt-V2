@@ -147,9 +147,9 @@ describe('ModeratorDashboard: the backlog it counts', () => {
     // `pending` is the filter the Reports Review screen opens on, and `1` is the whole point:
     // `total` counts every match regardless of how many came back, so a landing page does not
     // download fifty reported messages to add up a number the query already returned.
-    expect(api.getAdminConfessionReports).toHaveBeenCalledWith('pending', 1);
-    expect(api.getAdminLoveNoteReports).toHaveBeenCalledWith('pending', 1);
-    expect(api.getAdminMessageReports).toHaveBeenCalledWith('pending', 1);
+    expect(api.getAdminConfessionReports).toHaveBeenCalledWith({ status: 'pending', limit: 1 });
+    expect(api.getAdminLoveNoteReports).toHaveBeenCalledWith({ status: 'pending', limit: 1 });
+    expect(api.getAdminMessageReports).toHaveBeenCalledWith({ status: 'pending', limit: 1 });
   });
 
   it('refuses to add up a total when one queue could not be read', async () => {

@@ -571,11 +571,47 @@ def get_admin_confessions_data(
     return {"confessions": items, "total": total, "skip": skip, "limit": limit}
 
 
+def _confession_report_search_filters(query: Optional[str]) -> list:
+    """A case-insensitive substring match on a report and the content it points at.
+
+    Done in SQL rather than in Python so a queue with thousands of reports never loads
+    them all to discard all but twenty. Matches the reason and the reporter's snapshotted
+    name on the report row, plus the reported body through correlated EXISTS subqueries --
+    EXISTS rather than joins, so the COUNT beside the page cannot fan out and the page
+    cannot repeat a row.
+
+    The reported author is deliberately not searchable. For an anonymous confession that
+    identity is withheld from staff everywhere, and a search that matched it would be an
+    oracle for it: asking for the name would surface a row the response itself refuses to
+    name. Commenters are named on screen, but their rows arrive through the reported
+    comment, which the content search already reaches.
+    """
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return []
+    pattern = f"%{cleaned}%"
+    confession_body = select(ConfessionRecord.id).where(
+        ConfessionRecord.id == ReportRecord.confession_id,
+        ConfessionRecord.body.ilike(pattern),
+    ).exists()
+    comment_body = select(ConfessionCommentRecord.id).where(
+        ConfessionCommentRecord.id == ReportRecord.comment_id,
+        ConfessionCommentRecord.body.ilike(pattern),
+    ).exists()
+    return [or_(
+        ReportRecord.reason.ilike(pattern),
+        ReportRecord.reported_by_name.ilike(pattern),
+        confession_body,
+        comment_body,
+    )]
+
+
 def get_confession_reports_data(
     db: Database,
     status_filter: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
+    query: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Every report filed against a confession or a comment, newest first.
 
@@ -595,10 +631,15 @@ def get_confession_reports_data(
     staff, and a report queue is another reader of the same promise. ``author`` comes back
     with its fields null and ``author_hidden`` set, so the client can say so rather than guess
     from the ``anonymous`` flag. Commenters are a different population and are always named.
+
+    ``query`` narrows in SQL to reports whose reason, reporter name or reported content
+    matches, with the total counted under the same filter so the screen pages the question
+    it asked rather than the queue behind it.
     """
     filters = []
     if status_filter:
         filters.append(ReportRecord.status.in_(resolve_status_filter(status_filter)))
+    filters.extend(_confession_report_search_filters(query))
 
     with db.sessions() as session:
         reports = session.execute(

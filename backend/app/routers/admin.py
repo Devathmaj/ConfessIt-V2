@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 
 from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
@@ -191,8 +191,9 @@ async def get_confession_reports(
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    q: Optional[str] = Query(None, description="Case-insensitive substring match on the reason, the reporter name and the reported content."),
     db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW)),
+    _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
     """Every report filed against a confession or one of its comments, newest first.
 
@@ -201,7 +202,7 @@ async def get_confession_reports(
     an anonymous confession is withheld, as it is from the confession review screen: an
     anonymous post stays anonymous to staff through every door.
     """
-    return get_confession_reports_data(db, status_filter=status_filter, skip=skip, limit=limit)
+    return get_confession_reports_data(db, status_filter=status_filter, skip=skip, limit=limit, query=q)
 
 
 @router.patch("/confessions/reports/{report_id}")
@@ -693,6 +694,7 @@ async def get_message_reports(
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    q: Optional[str] = Query(None, description="Case-insensitive substring match on the reason, the message body and both parties' regnos."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
@@ -713,15 +715,34 @@ async def get_message_reports(
     ``dismissed`` is widened to include the older ``reviewed`` by ``resolve_status_filter``, so a
     legacy row closed out before the rename is still returned by the filter whose name matches the
     label the screen prints (section 17.1).
+
+    ``q`` narrows in SQL to reports whose reason, message body or either party's regno
+    matches, with the total counted under the same filter so the screen pages the question
+    it asked. The message join is many-to-one on a unique key, so neither the page nor
+    the COUNT can fan out; the names stay a display concern resolved in bulk below.
     """
     filters = []
     wanted = resolve_status_filter(status_filter)
     if wanted:
         filters.append(MessageReportRecord.status.in_(wanted))
+    cleaned = (q or "").strip()
+    if cleaned:
+        pattern = f"%{cleaned}%"
+        filters.append(or_(
+            MessageReportRecord.reason.ilike(pattern),
+            MessageReportRecord.reporter_regno.ilike(pattern),
+            MessageReportRecord.reported_user_regno.ilike(pattern),
+            MessageRecord.body.ilike(pattern),
+        ))
     with db.sessions() as session:
-        reports = session.scalars(select(MessageReportRecord).where(*filters)
-            .order_by(MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
-        total = session.scalar(select(func.count()).select_from(MessageReportRecord).where(*filters)) or 0
+        base = select(MessageReportRecord).outerjoin(
+            MessageRecord, MessageRecord.id == MessageReportRecord.message_id
+        ).where(*filters)
+        reports = session.scalars(base.order_by(
+            MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
+        total = session.scalar(select(func.count()).select_from(MessageReportRecord).outerjoin(
+            MessageRecord, MessageRecord.id == MessageReportRecord.message_id
+        ).where(*filters)) or 0
 
         # Two bulk reads rather than two per row: a queue grows with every report filed, so
         # the per-row lookup would be a cost paid on every page a moderator opens.

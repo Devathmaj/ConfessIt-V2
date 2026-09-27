@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from ..postgres import Database
 from ..db_models import LoveNoteRecord, LoveNoteReportRecord, UserRecord
 from ..logger import get_logger
@@ -531,6 +531,7 @@ async def get_love_note_reports_for_admin(
     status_filter: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
+    query: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     The staff report queue, newest first, with the reported note joined in.
@@ -544,15 +545,41 @@ async def get_love_note_reports_for_admin(
     The join is an inner join on purpose. The report's foreign key cascades, so a report
     cannot outlive its note; an outer join would only ever render a "[deleted]" row that no
     code path can produce.
+
+    ``query`` narrows in SQL to reports whose reason, note body, reporter regno or sender
+    name/regno matches, with the total counted under the same filter so the screen pages
+    the question it asked. The sender is searchable here -- unlike a confession author --
+    because this queue names them on every row: searching cannot reveal what the response
+    does not already say.
     """
     filters = []
     if status_filter:
         filters.append(LoveNoteReportRecord.status.in_(resolve_status_filter(status_filter)))
+    cleaned = (query or "").strip()
+    search_senders = bool(cleaned)
+    if cleaned:
+        pattern = f"%{cleaned}%"
+        filters.append(or_(
+            LoveNoteReportRecord.reason.ilike(pattern),
+            LoveNoteReportRecord.reporter_regno.ilike(pattern),
+            LoveNoteRecord.body.ilike(pattern),
+            UserRecord.name.ilike(pattern),
+            UserRecord.regno.ilike(pattern),
+        ))
+
+    def _joined(statement):
+        statement = statement.join(
+            LoveNoteRecord, LoveNoteRecord.id == LoveNoteReportRecord.love_note_id
+        )
+        # Many-to-one on unique keys both ways, so neither the page nor the COUNT can fan
+        # out. Joined only when the search needs it, so the unfiltered queue pays nothing.
+        if search_senders:
+            statement = statement.outerjoin(UserRecord, UserRecord.id == LoveNoteRecord.sender_id)
+        return statement
 
     with db.sessions() as session:
         rows = session.execute(
-            select(LoveNoteReportRecord, LoveNoteRecord)
-            .join(LoveNoteRecord, LoveNoteRecord.id == LoveNoteReportRecord.love_note_id)
+            _joined(select(LoveNoteReportRecord, LoveNoteRecord))
             .where(*filters)
             .order_by(LoveNoteReportRecord.reported_at.desc())
             .offset(skip).limit(limit)
@@ -561,9 +588,7 @@ async def get_love_note_reports_for_admin(
         # is the number of rows this endpoint can actually return instead of a number the
         # pager cannot reach.
         total = session.scalar(
-            select(func.count())
-            .select_from(LoveNoteReportRecord)
-            .join(LoveNoteRecord, LoveNoteRecord.id == LoveNoteReportRecord.love_note_id)
+            _joined(select(func.count()).select_from(LoveNoteReportRecord))
             .where(*filters)
         ) or 0
 

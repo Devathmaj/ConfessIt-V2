@@ -596,10 +596,34 @@ export const deleteAdminLoveNote = async (noteId: string) => {
     return response.data;
 };
 
-export const getAdminLoveNoteReports = async (status?: string, limit?: number) => {
+/**
+ * The query shape all three report queues share.
+ *
+ * The status filter is a SQL WHERE, the search a SQL match on the reason, the reported
+ * content and the parties named on the row, and every page a SQL LIMIT/OFFSET -- so a
+ * queue with thousands of reports returns at most one page per request, with the total
+ * counted under the same filter beside it. Each getter below keeps its own literal URL
+ * (rather than sharing one helper) because the route-coverage test reads them out of
+ * this file by pattern.
+ */
+export interface AdminReportQueueQuery {
+    status?: string;
+    limit?: number;
+    skip?: number;
+    q?: string;
+}
+
+const reportQueueParams = (params?: AdminReportQueueQuery) => ({
+    ...(params?.status ? { status: params.status } : {}),
+    ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+    ...(params?.q ? { q: params.q } : {}),
+});
+
+export const getAdminLoveNoteReports = async (params?: AdminReportQueueQuery) => {
     const response = await axios.get(`${API_URL}/admin/love-notes/reports`, {
         headers: getAuthHeaders(),
-        params: { status, limit },
+        params: reportQueueParams(params),
     });
     return response.data;
 };
@@ -636,19 +660,20 @@ export const updateAdminLoveNoteReportStatus = async (
 // endpoints rather than one aggregate call because they answer three different questions --
 // what did someone report a post for, a love note for, or a chat message for -- and a single
 // endpoint over three tables would have to invent one row shape for three payloads that have
-// nothing in common but a reason and a status. Every one of them takes the same `status`
-// filter and answers with the same { reports, total, skip, limit } envelope, so the screen can
-// treat them uniformly without the server pretending they are the same data.
+// nothing in common but a reason and a status. Every one of them takes the same
+// `AdminReportQueueQuery` and answers with the same { reports, total, skip, limit }
+// envelope, so the screen can treat them uniformly without the server pretending they
+// are the same data.
 //
 // `limit` is for a caller that wants `total` and nothing else -- the moderator dashboard's
 // count cards ask for one row and read the envelope's count, rather than downloading fifty
 // reported messages to add up a number the query already returned. It is a server-side filter
 // and not a display length, so `total` still counts every matching row however few came back.
 
-export const getAdminConfessionReports = async (status?: string, limit?: number) => {
+export const getAdminConfessionReports = async (params?: AdminReportQueueQuery) => {
     const response = await axios.get(`${API_URL}/admin/confessions/reports`, {
         headers: getAuthHeaders(),
-        params: { status, limit },
+        params: reportQueueParams(params),
     });
     return response.data;
 };
@@ -665,10 +690,10 @@ export const updateAdminConfessionReportStatus = async (
     return response.data;
 };
 
-export const getAdminMessageReports = async (status?: string, limit?: number) => {
+export const getAdminMessageReports = async (params?: AdminReportQueueQuery) => {
     const response = await axios.get(`${API_URL}/admin/messages/reports`, {
         headers: getAuthHeaders(),
-        params: { status, limit },
+        params: reportQueueParams(params),
     });
     return response.data;
 };

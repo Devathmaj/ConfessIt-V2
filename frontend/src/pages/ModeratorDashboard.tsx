@@ -158,15 +158,15 @@ export const ModeratorDashboard = () => {
     if (canReadReports) {
       tasks.push([
         'confession-reports',
-        readCount('confession report', () => getAdminConfessionReports('pending', 1), envelopeTotal),
+        readCount('confession report', () => getAdminConfessionReports({ status: 'pending', limit: 1 }), envelopeTotal),
       ]);
       tasks.push([
         'love-note-reports',
-        readCount('love note report', () => getAdminLoveNoteReports('pending', 1), envelopeTotal),
+        readCount('love note report', () => getAdminLoveNoteReports({ status: 'pending', limit: 1 }), envelopeTotal),
       ]);
       tasks.push([
         'message-reports',
-        readCount('message report', () => getAdminMessageReports('pending', 1), envelopeTotal),
+        readCount('message report', () => getAdminMessageReports({ status: 'pending', limit: 1 }), envelopeTotal),
       ]);
     }
     if (canReadLoveNotes) {

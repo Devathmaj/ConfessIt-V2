@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getAdminConfessionReports,
   getAdminLoveNoteReports,
@@ -11,6 +11,8 @@ import { AdminNavigation } from '@/components/AdminNavigation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -34,7 +36,7 @@ import { CAPABILITIES } from '@/lib/capabilities';
 import { authorLabel, partyName, partyRef, type Person } from '@/lib/reportAuthors';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { toast } from 'sonner';
-import { ChevronDown, Flag, MessageSquare, MessageCircleHeart, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react';
+import { ChevronDown, Flag, MessageSquare, MessageCircleHeart, Search, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react';
 
 /** Every state a report row can be in, including the one only history produces.
  *
@@ -310,6 +312,35 @@ function ReportCard({
   );
 }
 
+/**
+ * How many reports one queue read returns. The backend clamps to 200; twenty keeps one
+ * read small while a "show more" click still grows the queue by a visible amount.
+ */
+const QUEUE_PAGE_SIZE = 20;
+
+/** The rows inside a queue answer, whether it is the page envelope or a legacy bare array. */
+const reportsOf = <T,>(answer: unknown): T[] => {
+  if (Array.isArray(answer)) return answer as T[];
+  const reports = (answer as { reports?: T[] } | null | undefined)?.reports;
+  return Array.isArray(reports) ? reports : [];
+};
+
+/** The matching-row count beside a queue answer, falling back to the rows at hand. */
+const totalOf = (answer: unknown, fallback: number): number => {
+  if (Array.isArray(answer)) return answer.length;
+  const total = (answer as { total?: unknown } | null | undefined)?.total;
+  return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+};
+
+interface QueueWindow<T> {
+  /** Reports loaded so far: always the contiguous window [0, items.length) of the server order. */
+  items: T[];
+  /** How many reports match the current question on the server, loaded or not. */
+  total: number;
+}
+
+const emptyWindow = <T,>(): QueueWindow<T> => ({ items: [], total: 0 });
+
 export const ReportsReview = () => {
   const { can } = useAuth();
   // Read and close-out are separately grantable on the server, so they are hidden separately
@@ -317,6 +348,17 @@ export const ReportsReview = () => {
   const canModerate = can(CAPABILITIES.REPORTS_MODERATE);
   const [activeTab, setActiveTab] = useState('confessions');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  /** What the search box currently says. Draft only: nothing is fetched until it is submitted. */
+  const [searchTerm, setSearchTerm] = useState('');
+  /**
+   * The search text the server has actually been asked about.
+   *
+   * Set only by the Search button (or Enter), never by typing: each keystroke firing three
+   * queue reads would be a self-inflicted load test, and the half-typed query it answered
+   * would be obsolete before it returned. The box stays a draft until submitted, so the
+   * request that goes out is the question the operator meant.
+   */
+  const [appliedSearch, setAppliedSearch] = useState('');
 
   // The decision awaiting confirmation, or null when no dialog is open. Held as state rather
   // than wired through a per-card `useState` because the copy has to name the actual content
@@ -346,77 +388,246 @@ export const ReportsReview = () => {
   const toggleExpanded = (queue: QueueKey, reportId: string) =>
     setExpandedReport((previous) => (previous === `${queue}:${reportId}` ? null : `${queue}:${reportId}`));
 
-  // One state slot per queue rather than one shared list, because the three payloads have
+  // One window per queue rather than one shared list, because the three payloads have
   // nothing in common but a reason and a status. A single union list would need a cast on
   // every field of every render to read one of the three.
-  const [confessionReports, setConfessionReports] = useState<ConfessionReport[]>([]);
-  const [loveNoteReports, setLoveNoteReports] = useState<LoveNoteReport[]>([]);
-  const [messageReports, setMessageReports] = useState<MessageReport[]>([]);
+  const [confessionQueue, setConfessionQueue] = useState<QueueWindow<ConfessionReport>>(emptyWindow());
+  const [loveNoteQueue, setLoveNoteQueue] = useState<QueueWindow<LoveNoteReport>>(emptyWindow());
+  const [messageQueue, setMessageQueue] = useState<QueueWindow<MessageReport>>(emptyWindow());
+  /**
+   * The three unfiltered lists, only ever set from legacy bare-array answers (older
+   * servers and unit-test mocks), which ignore request params. The real server answers
+   * envelopes and leaves this `null`, which is what switches the screen from client
+   * lists to server pages: three reads that each returned the same full list would
+   * otherwise triple-count every total.
+   */
+  const [legacyQueues, setLegacyQueues] = useState<{
+    confessions: ConfessionReport[];
+    loveNotes: LoveNoteReport[];
+    messages: MessageReport[];
+  } | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({
     confessions: true,
     loveNotes: true,
     messages: true,
   });
+  /** A filter change, search submit or ruling re-reading while the queues stay up. */
+  const [refreshing, setRefreshing] = useState(false);
+  /** Which queue is appending its next page, so only its button reads busy. */
+  const [loadingMore, setLoadingMore] = useState<QueueKey | null>(null);
+  /** Whether the first load is still in flight, which is the only one that takes the loading cards. */
+  const isFirstLoad = useRef(true);
 
   const setQueueLoading = (key: string, value: boolean) =>
     setLoading((previous) => ({ ...previous, [key]: value }));
 
-  const loadConfessions = useCallback(async () => {
-    setQueueLoading('confessions', true);
-    try {
-      const response = await getAdminConfessionReports(
-        statusFilter === 'all' ? undefined : statusFilter
-      );
-      setConfessionReports(Array.isArray(response?.reports) ? response.reports : []);
-    } catch (error) {
-      console.error('Failed to load confession reports', error);
-      toast.error('Unable to load confession reports.');
-    } finally {
-      setQueueLoading('confessions', false);
-    }
-  }, [statusFilter]);
+  /**
+   * Submit the draft search box as the query every queue is read with. Typing alone
+   * fetches nothing; the submitted question re-reads all three queues from the first
+   * page, because the previous offsets may not exist under it.
+   */
+  const submitSearch = () => {
+    setAppliedSearch(searchTerm.trim());
+  };
 
-  const loadLoveNotes = useCallback(async () => {
-    setQueueLoading('loveNotes', true);
-    try {
-      const response = await getAdminLoveNoteReports(
-        statusFilter === 'all' ? undefined : statusFilter
-      );
-      setLoveNoteReports(Array.isArray(response?.reports) ? response.reports : []);
-    } catch (error) {
-      console.error('Failed to load love note reports', error);
-      toast.error('Unable to load love note reports.');
-    } finally {
-      setQueueLoading('loveNotes', false);
-    }
-  }, [statusFilter]);
+  /** Clear the search and the status filter together, back on full first pages. */
+  const clearSearchAndFilter = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    setStatusFilter('all');
+  };
 
-  const loadMessages = useCallback(async () => {
-    setQueueLoading('messages', true);
-    try {
-      const response = await getAdminMessageReports(
-        statusFilter === 'all' ? undefined : statusFilter
-      );
-      setMessageReports(Array.isArray(response?.reports) ? response.reports : []);
-    } catch (error) {
-      console.error('Failed to load message reports', error);
-      toast.error('Unable to load message reports.');
-    } finally {
-      setQueueLoading('messages', false);
-    }
-  }, [statusFilter]);
-
-  // Every queue refetches when the filter changes, because the filter is the server's to
-  // apply: a client-side filter over the first page would show a reviewer "no pending
-  // reports" while pending reports exist on page two.
+  // Every queue refetches when the question changes, because the filter and the search
+  // are the server's to apply: a client-side filter over the first page would show a
+  // reviewer "no pending reports" while pending reports exist on page two.
   useEffect(() => {
-    loadConfessions();
-    loadLoveNotes();
-    loadMessages();
-  }, [loadConfessions, loadLoveNotes, loadMessages]);
+    let cancelled = false;
+    const fetchQueues = async () => {
+      try {
+        if (isFirstLoad.current) {
+          setQueueLoading('confessions', true);
+          setQueueLoading('loveNotes', true);
+          setQueueLoading('messages', true);
+        } else {
+          setRefreshing(true);
+        }
+        const params = {
+          ...(statusFilter === 'all' ? {} : { status: statusFilter }),
+          ...(appliedSearch.trim() ? { q: appliedSearch.trim() } : {}),
+          skip: 0,
+          limit: QUEUE_PAGE_SIZE,
+        };
+        const [confessions, loveNotes, messages] = await Promise.all([
+          getAdminConfessionReports(params),
+          getAdminLoveNoteReports(params),
+          getAdminMessageReports(params),
+        ]);
+        if (cancelled) return;
+        const answers = [confessions, loveNotes, messages];
+        if (answers.every((answer) => Array.isArray(answer))) {
+          // The params went nowhere: one legacy list per queue, split nowhere, paged
+          // never -- exactly the screen as it behaved before pagination existed.
+          setLegacyQueues({
+            confessions: reportsOf<ConfessionReport>(confessions),
+            loveNotes: reportsOf<LoveNoteReport>(loveNotes),
+            messages: reportsOf<MessageReport>(messages),
+          });
+        } else {
+          setLegacyQueues(null);
+          setConfessionQueue({
+            items: reportsOf<ConfessionReport>(confessions),
+            total: totalOf(confessions, 0),
+          });
+          setLoveNoteQueue({
+            items: reportsOf<LoveNoteReport>(loveNotes),
+            total: totalOf(loveNotes, 0),
+          });
+          setMessageQueue({
+            items: reportsOf<MessageReport>(messages),
+            total: totalOf(messages, 0),
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load report queues', error);
+          toast.error('Unable to load reports for review.');
+        }
+      } finally {
+        if (!cancelled) {
+          setQueueLoading('confessions', false);
+          setQueueLoading('loveNotes', false);
+          setQueueLoading('messages', false);
+          setRefreshing(false);
+          isFirstLoad.current = false;
+        }
+      }
+    };
 
-  const pendingCount = (reports: { status: ReportStatus }[]) =>
-    reports.filter((report) => report.status === 'pending').length;
+    fetchQueues();
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedSearch, statusFilter]);
+
+  /** Whether answers arrive as server pages (`null` legacy queues) or one legacy list per queue. */
+  const serverDriven = legacyQueues === null;
+
+  // What each tab renders: the server window in paged mode, the whole legacy list in
+  // legacy mode. Totals beside them are the server counts, or the list lengths where no
+  // server paging exists to count with.
+  const confessionReports: ConfessionReport[] = serverDriven
+    ? confessionQueue.items
+    : (legacyQueues?.confessions ?? []);
+  const loveNoteReports: LoveNoteReport[] = serverDriven
+    ? loveNoteQueue.items
+    : (legacyQueues?.loveNotes ?? []);
+  const messageReports: MessageReport[] = serverDriven
+    ? messageQueue.items
+    : (legacyQueues?.messages ?? []);
+  const queueTotals: Record<QueueKey, number> = serverDriven
+    ? {
+        confessions: confessionQueue.total,
+        loveNotes: loveNoteQueue.total,
+        messages: messageQueue.total,
+      }
+    : {
+        confessions: confessionReports.length,
+        loveNotes: loveNoteReports.length,
+        messages: messageReports.length,
+      };
+
+  /**
+   * Grow one queue downwards: the next page appends beneath the reports already on
+   * screen, so the reader's place never moves. The window stays contiguous from zero,
+   * which is what keeps a later refresh a single clean re-read.
+   */
+  const queueWindows = {
+    confessions: confessionQueue,
+    loveNotes: loveNoteQueue,
+    messages: messageQueue,
+  };
+
+  const loadMore = async (queue: QueueKey) => {
+    if (loadingMore !== null || refreshing) return;
+    const readers = {
+      confessions: getAdminConfessionReports,
+      loveNotes: getAdminLoveNoteReports,
+      messages: getAdminMessageReports,
+    };
+    setLoadingMore(queue);
+    try {
+      const loaded = queueWindows[queue].items.length;
+      const answer = await readers[queue]({
+        ...(statusFilter === 'all' ? {} : { status: statusFilter }),
+        ...(appliedSearch.trim() ? { q: appliedSearch.trim() } : {}),
+        skip: loaded,
+        limit: QUEUE_PAGE_SIZE,
+      });
+      const rows = reportsOf(answer);
+      const total = totalOf(answer, loaded + rows.length);
+      if (queue === 'confessions') {
+        setConfessionQueue((previous) => ({
+          items: [...previous.items, ...(rows as ConfessionReport[])],
+          total,
+        }));
+      } else if (queue === 'loveNotes') {
+        setLoveNoteQueue((previous) => ({
+          items: [...previous.items, ...(rows as LoveNoteReport[])],
+          total,
+        }));
+      } else {
+        setMessageQueue((previous) => ({
+          items: [...previous.items, ...(rows as MessageReport[])],
+          total,
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to load more reports', error);
+      toast.error('Unable to load more reports.');
+    } finally {
+      setLoadingMore(null);
+    }
+  };
+
+  /**
+   * Re-read the queue a ruling touched, across the whole window currently loaded.
+   *
+   * A ruling changes the row's status and possibly its content flags, and may move it
+   * out of the filtered question entirely -- so the window is re-read to fetch the newly
+   * modified rows back in their decided state with true totals beside them, rather than
+   * patching one card and leaving every count stale.
+   */
+  const refreshQueue = async (queue: QueueKey) => {
+    const readers = {
+      confessions: getAdminConfessionReports,
+      loveNotes: getAdminLoveNoteReports,
+      messages: getAdminMessageReports,
+    };
+    setRefreshing(true);
+    try {
+      const loaded = queueWindows[queue].items.length;
+      const answer = await readers[queue]({
+        ...(statusFilter === 'all' ? {} : { status: statusFilter }),
+        ...(appliedSearch.trim() ? { q: appliedSearch.trim() } : {}),
+        skip: 0,
+        limit: Math.max(loaded, QUEUE_PAGE_SIZE),
+      });
+      const rows = reportsOf(answer);
+      const total = totalOf(answer, rows.length);
+      if (queue === 'confessions') {
+        setConfessionQueue({ items: rows as ConfessionReport[], total });
+      } else if (queue === 'loveNotes') {
+        setLoveNoteQueue({ items: rows as LoveNoteReport[], total });
+      } else {
+        setMessageQueue({ items: rows as MessageReport[], total });
+      }
+    } catch (error) {
+      console.error('Failed to refresh the report queue', error);
+      toast.error('Unable to refresh the reports.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleClose = async (
     reportId: string,
@@ -428,34 +639,28 @@ export const ReportsReview = () => {
       loveNotes: updateAdminLoveNoteReportStatus,
       messages: updateAdminMessageReportStatus,
     }[queue];
-    const setReports = {
-      confessions: setConfessionReports,
-      loveNotes: setLoveNoteReports,
-      messages: setMessageReports,
-    }[queue];
 
     try {
-      const result = await close(reportId, status);
-      // Patched locally rather than refetched: the row the reviewer just acted on does not
-      // move, and a refetch would make the list jump under the next click.
-      //
-      // `content_removed` comes from the server rather than from `status === 'removed'` because
-      // they are not the same question. The server re-deciding a report whose content was
-      // already taken down by an earlier report has not removed anything this time, and a
-      // button that claimed otherwise would tell a moderator they removed something when the
-      // content had been gone since before they arrived.
-      setReports((previous) =>
-        previous.map((report) =>
-          report.id === reportId
-            ? {
-                ...report,
-                status,
-                reviewed_at: new Date().toISOString(),
-                content_removed: result?.content_removed ?? report.content_removed,
-              }
-            : report
-        )
-      );
+      await close(reportId, status);
+      if (!serverDriven && legacyQueues) {
+        // Legacy lists: the move is local, exactly as before pagination existed.
+        setLegacyQueues((previous) => {
+          if (!previous) return previous;
+          const move = <T extends { id: string }>(rows: T[]): T[] =>
+            rows.map((report) =>
+              report.id === reportId
+                ? { ...report, status, reviewed_at: new Date().toISOString() }
+                : report,
+            );
+          return {
+            confessions: move(previous.confessions),
+            loveNotes: move(previous.loveNotes),
+            messages: move(previous.messages),
+          };
+        });
+      } else {
+        await refreshQueue(queue);
+      }
       toast.success(RESOLUTION_LABELS[status].toast);
     } catch (error) {
       console.error('Failed to close report', error);
@@ -494,10 +699,40 @@ export const ReportsReview = () => {
     },
   ];
 
-  const counts = {
-    confessions: confessionReports.length,
-    loveNotes: loveNoteReports.length,
-    messages: messageReports.length,
+  // Tab badges read server totals under the current question -- not the loaded
+  // windows -- so a queue of two hundred reads as two hundred with twenty on screen.
+  const counts = queueTotals;
+  const loadedTotal =
+    confessionReports.length + loveNoteReports.length + messageReports.length;
+  const serverTotal = queueTotals.confessions + queueTotals.loveNotes + queueTotals.messages;
+
+  /**
+   * Grow one queue downwards beneath the cards already on screen. Shown only while the
+   * server holds more than the queue is showing; legacy lists never page, so they never
+   * offer it.
+   */
+  const renderShowMore = (queue: QueueKey, label: string) => {
+    const loaded =
+      queue === 'confessions'
+        ? confessionReports.length
+        : queue === 'loveNotes'
+          ? loveNoteReports.length
+          : messageReports.length;
+    const remaining = queueTotals[queue] - loaded;
+    if (!serverDriven || remaining <= 0) return null;
+    return (
+      <div className="flex justify-center pt-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void loadMore(queue)}
+          disabled={loadingMore !== null || refreshing}
+          aria-label={`Show more ${label}`}
+        >
+          {loadingMore === queue ? 'Loading…' : `Show more (${remaining} remaining)`}
+        </Button>
+      </div>
+    );
   };
 
   // A click opens the dialog and nothing else. The request is made from the dialog's confirm
@@ -593,27 +828,73 @@ export const ReportsReview = () => {
           </p>
         </header>
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="uppercase tracking-wide">Filter</span>
-            <Select
-              value={statusFilter}
-              onValueChange={(value) => setStatusFilter(value as StatusFilter)}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All reports</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="dismissed">Dismissed</SelectItem>
-                <SelectItem value="removed">Content removed</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            {/* The box is a draft; the button sends it. Firing three queue reads per
+                keystroke would answer a query the operator had already retyped, so typing
+                only edits the draft and Search (or Enter) issues the one question the
+                database answers -- reason, reported content and who reported it. */}
+            <div className="flex w-full gap-2 sm:max-w-xl">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      submitSearch();
+                    }
+                  }}
+                  placeholder="Search reasons, reported content, or reporter"
+                  className="pl-9"
+                />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={submitSearch}
+                disabled={refreshing}
+                aria-label="Search reports"
+              >
+                <Search className="mr-2 h-4 w-4" />
+                Search
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Label htmlFor="reports-status-filter" className="uppercase tracking-wide">
+                Filter
+              </Label>
+              <Select
+                value={statusFilter}
+                onValueChange={(value) => setStatusFilter(value as StatusFilter)}
+              >
+                <SelectTrigger id="reports-status-filter" className="w-44">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All reports</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="dismissed">Dismissed</SelectItem>
+                  <SelectItem value="removed">Content removed</SelectItem>
+                </SelectContent>
+              </Select>
+              {(appliedSearch.trim() !== '' || statusFilter !== 'all') && (
+                <Button variant="ghost" size="sm" onClick={clearSearchAndFilter}>
+                  Clear
+                </Button>
+              )}
+            </div>
           </div>
-          <Badge variant="secondary">
-            {Object.values(counts).reduce((sum, count) => sum + count, 0)} shown
-          </Badge>
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant="secondary">
+              Showing {loadedTotal} of {serverTotal}
+              {refreshing ? ' · Updating…' : ''}
+            </Badge>
+            <p className="text-[11px] text-muted-foreground">
+              Search matches the reason, the reported content and who reported it, across all
+              three queues at once.
+            </p>
+          </div>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -734,6 +1015,7 @@ export const ReportsReview = () => {
                 );
               })
             )}
+            {renderShowMore('confessions', 'reported confessions')}
           </TabsContent>
 
           <TabsContent value="loveNotes" className="mt-6 space-y-3">
@@ -803,6 +1085,7 @@ export const ReportsReview = () => {
                 </ReportCard>
               ))
             )}
+            {renderShowMore('loveNotes', 'reported love notes')}
           </TabsContent>
 
           <TabsContent value="messages" className="mt-6 space-y-3">
@@ -909,18 +1192,9 @@ export const ReportsReview = () => {
                 );
               })
             )}
+            {renderShowMore('messages', 'reported messages')}
           </TabsContent>
         </Tabs>
-
-        <p className="text-xs text-muted-foreground">
-          {Object.entries({
-            confessions: pendingCount(confessionReports),
-            loveNotes: pendingCount(loveNoteReports),
-            messages: pendingCount(messageReports),
-          })
-            .map(([key, count]) => `${count} pending in ${queues.find((queue) => queue.key === key)?.label}`)
-            .join(' · ')}
-        </p>
       </div>
 
       {/* One dialog for every card. It is rendered from `pendingDecision` rather than living

@@ -112,12 +112,26 @@ async function openCard() {
 describe('ReportsReview: ruling on a report', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getAdminConfessionReports.mockResolvedValue({
-      reports: [confessionReport],
-      total: 1,
+    // A mutable stand-in for the queue table: reads serve its current rows, and ruling
+    // mutates the row the way the endpoint does, so the refresh the screen issues after
+    // every ruling finds the decided report rather than the pending one it replaced.
+    let confessionDb = [{ ...confessionReport }];
+    api.getAdminConfessionReports.mockImplementation(async () => ({
+      reports: confessionDb,
+      total: confessionDb.length,
       skip: 0,
       limit: 50,
-    });
+    }));
+    api.updateAdminConfessionReportStatus.mockImplementation(
+      async (reportId: string, status: string) => {
+        confessionDb = confessionDb.map((report) =>
+          report.id === reportId
+            ? { ...report, status, reviewed_at: new Date().toISOString() }
+            : report,
+        );
+        return { id: reportId, status, content_removed: status === 'removed' };
+      },
+    );
     api.getAdminLoveNoteReports.mockResolvedValue(emptyQueue);
     api.getAdminMessageReports.mockResolvedValue(emptyQueue);
   });
@@ -209,11 +223,10 @@ describe('ReportsReview: ruling on a report', () => {
   });
 
   it('closes the report out so it cannot be ruled on twice', async () => {
-    api.updateAdminConfessionReportStatus.mockResolvedValue({
-      id: confessionReport.id,
-      status: 'removed',
-      content_removed: true,
-    });
+    // No per-test override: the `beforeEach` ruling mutates the queue the way the endpoint
+    // does, which is exactly what the refresh below has to find. A static override here
+    // would answer the ruling while leaving the queue pending, and the re-read would put
+    // the buttons this test asserts away right back.
     renderPage();
     await screen.findByText('hateful content');
     await openCard();
@@ -222,9 +235,11 @@ describe('ReportsReview: ruling on a report', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /remove content/i }));
 
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /remove content/i })).not.toBeInTheDocument();
-    });
+    // The card carries the decided state only once the refresh it triggers lands: the
+    // dialog's own confirm button reads "Working…" meanwhile, so waiting on a button
+    // disappearing would pass on the dialog before the queue has re-read.
+    await screen.findByText('Content removed');
+    expect(screen.queryByRole('button', { name: /remove content/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument();
   });
 });
