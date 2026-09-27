@@ -1,8 +1,9 @@
 # app/routers/notifications.py
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from ..postgres import Database
-from typing import Annotated
+from typing import Annotated, Any, Dict, Optional
+from ..services.notification_service import NOTIFICATIONS_MAX_LIMIT
 
 from ..dependencies import get_db
 from ..models import UserDetails
@@ -21,13 +22,17 @@ router = APIRouter(
 @router.get("")
 def get_notifications(
     current_user: Annotated[UserDetails, Depends(require_participant)],
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
+    skip: int = Query(0, ge=0, description="How many matching notices to skip."),
+    limit: int = Query(50, ge=1, le=NOTIFICATIONS_MAX_LIMIT, description="How many matching notices to return. Clamped so one request can never serialise years of notices at once."),
+    q: Optional[str] = Query(None, description="Case-insensitive substring match on the heading and body."),
 ):
+    """One page of the reader's notifications, newest first, with the total beside it.
+
+    The search is a SQL WHERE and every page a SQL LIMIT/OFFSET, so the inbox loads
+    downwards without ever holding the notices it is not showing.
     """
-    Get all notifications for the current user.
-    """
-    notifications = get_user_notifications_service(current_user.regno, db)
-    return {"notifications": notifications}
+    return get_user_notifications_service(current_user.regno, db, limit, skip=skip, query=q)
 
 @router.put("/{notification_id}/read")
 def mark_notification_read(

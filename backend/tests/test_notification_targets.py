@@ -103,7 +103,7 @@ def _now():
 
 def only_notification(db, regno) -> dict:
     """The reader's view of their notifications, as the API returns them."""
-    rows = get_user_notifications_service(regno, db)
+    rows = get_user_notifications_service(regno, db)["notifications"]
     assert len(rows) == 1, f"expected exactly one notification, got {len(rows)}"
     return rows[0]
 
@@ -156,7 +156,7 @@ def test_half_a_target_is_refused(db):
     with pytest.raises(ValueError):
         create_notification_service("alice", "h", "b", db, target_id="match-123")
 
-    assert get_user_notifications_service("alice", db) == []
+    assert get_user_notifications_service("alice", db)["notifications"] == []
 
 
 def test_an_unknown_kind_is_refused_rather_than_stored(db):
@@ -168,7 +168,7 @@ def test_an_unknown_kind_is_refused_rather_than_stored(db):
             "alice", "h", "b", db, target_kind="report", target_id="r1"
         )
 
-    assert get_user_notifications_service("alice", db) == []
+    assert get_user_notifications_service("alice", db)["notifications"] == []
 
 
 def test_the_two_known_kinds_are_the_two_the_client_can_open(db):
@@ -259,7 +259,7 @@ def test_the_acceptance_notice_points_at_the_match(db):
     # Bob has two notices now: the request he received, and the acceptance he gave. The
     # acceptance is the newer row, and both are checked because the point is that every
     # notice in this family is reachable, not just the first one written.
-    rows = get_user_notifications_service(bob, db)
+    rows = get_user_notifications_service(bob, db)["notifications"]
     assert all(r["target_kind"] == "conversation" for r in rows)
     assert all(r["target_id"] == match_id for r in rows)
 
@@ -277,7 +277,7 @@ def test_the_rejection_notice_points_at_the_match(db):
     conversation_service.reject_conversation_service(as_user(db, bob), match_id, db)
 
     rejection = next(
-        r for r in get_user_notifications_service(alice, db) if "rejected" in r["heading"]
+        r for r in get_user_notifications_service(alice, db)["notifications"] if "rejected" in r["heading"]
     )
     assert rejection["target_kind"] == "conversation"
     assert rejection["target_id"] == match_id

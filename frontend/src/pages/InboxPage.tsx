@@ -95,15 +95,46 @@ const TERMINATION_TITLE = 'Conversation terminated by a moderator';
 const TERMINATION_BODY =
   'This conversation was closed by a moderator. You can still read it, but it can no longer be used.';
 
+/**
+ * How many notices one inbox read returns. Rows are small, so twenty keeps one read
+ * cheap while a "show more" click still grows the list by a visible amount. The
+ * backend clamps anything larger regardless.
+ */
+const INBOX_PAGE_SIZE = 20;
+
 export const InboxPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  /**
+   * The system notices on screen: always the contiguous window [0, length) of the
+   * newest-first server order. Derived conversation cards live beside them, complete
+   * and unpaged -- a handful of matches, not a table -- so only this window pages.
+   */
+  const [systemNotices, setSystemNotices] = useState<NotificationItem[]>([]);
+  /** How many system notices the server holds, loaded or not. */
+  const [systemTotal, setSystemTotal] = useState(0);
+  /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
+  const [pagedInbox, setPagedInbox] = useState(false);
+  /** Conversation cards derived from match state: always complete, never paged. */
+  const [derivedCards, setDerivedCards] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** What the search box currently says. Draft only: nothing is fetched until it is submitted. */
+  const [searchTerm, setSearchTerm] = useState('');
+  /**
+   * The search text the server has actually been asked about.
+   *
+   * Set only by the Search button (or Enter), never by typing: each keystroke firing
+   * the inbox reads would answer a query the reader had already retyped. The derived
+   * conversation cards -- complete in memory -- are narrowed by the same submitted
+   * text on the client.
+   */
+  const [appliedSearch, setAppliedSearch] = useState('');
 
   useEffect(() => {
     fetchData();
+    // Runs once, on mount: later questions go through the handlers below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetches notifications data. The conversation list lives on the Message Box page now,
@@ -111,7 +142,7 @@ export const InboxPage = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      await fetchNotifications();
+      await fetchNotifications(0, INBOX_PAGE_SIZE, appliedSearch);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -119,21 +150,80 @@ export const InboxPage = () => {
     }
   };
 
+  /**
+   * Submit the draft search box as the query the inbox is read with, back on the first
+   * page: the previous offset may not exist under the new question.
+   */
+  const submitSearch = () => {
+    setAppliedSearch(searchTerm.trim());
+    void fetchNotifications(0, INBOX_PAGE_SIZE, searchTerm.trim());
+  };
+
+  /** Clear the search box and its submitted question, back on the full first page. */
+  const clearSearch = () => {
+    setSearchTerm('');
+    setAppliedSearch('');
+    void fetchNotifications(0, INBOX_PAGE_SIZE, '');
+  };
+
+  /**
+   * Grow the system list downwards: the next page appends beneath the notices already
+   * on screen, so the reader's place never moves.
+   */
+  const loadMore = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      await fetchNotifications(systemNotices.length, INBOX_PAGE_SIZE, appliedSearch);
+    } catch (error) {
+      console.error('Failed to load more notifications:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  /**
+   * The rows inside a notifications answer, whether it is the page envelope, an
+   * envelope without a total, or a legacy bare array. A bare array means the params
+   * went nowhere, so the screen falls back to the single-list behaviour it had before
+   * paging existed.
+   */
+  const splitSystemPage = (answer: unknown) => {
+    if (Array.isArray(answer)) {
+      const rows = answer as unknown[];
+      return { rows, total: rows.length, enveloped: false };
+    }
+    const rows = (answer as { notifications?: unknown[] } | null | undefined)?.notifications;
+    const list = Array.isArray(rows) ? rows : [];
+    const total = (answer as { total?: unknown } | null | undefined)?.total;
+    return {
+      rows: list,
+      total: typeof total === 'number' && Number.isFinite(total) ? total : list.length,
+      enveloped: true,
+    };
+  };
+
   // Fetches notifications from PostgreSQL and derives any conversation alerts.
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (skip: number, limit: number, query: string) => {
     try {
-      const [notificationsResponse, conversationResponse, receivedConversationsResponse] = await Promise.all([
-        getNotifications(),
+      const [systemAnswer, conversationResponse, receivedConversationsResponse] = await Promise.all([
+        getNotifications({
+          skip,
+          limit,
+          ...(query.trim() ? { q: query.trim() } : {}),
+        }),
         getCurrentConversation(),
         getReceivedConversations()
       ]);
 
+      const systemPage = splitSystemPage(systemAnswer);
+      const systemRows: NotificationItem[] = [];
       const notifications: NotificationItem[] = [];
 
       // 1. System notifications (match found, love notes, etc.)
-      if (notificationsResponse.notifications) {
-        notificationsResponse.notifications.forEach((notification: any) => {
+      if (systemPage.rows) {
+        systemPage.rows.forEach((notification: any) => {
           // A conversation is represented by the conversation itself, which carries a single
           // status that advances requested -> accepted/rejected and can then be terminated by
           // a moderator. The row written to the notifications table when that happens is a
@@ -148,18 +238,18 @@ export const InboxPage = () => {
           );
 
           if (!isConversationNotification) {
-notifications.push({
-            id: notification.id,
-            type: 'matchmaking',
-            title: notification.heading,
-            body: notification.body,
-            created_at: notification.created_at,
-            // The nulls here are the server's answer, not a placeholder: they mean this
-            // notice has no item to open. They are passed through rather than defaulted,
-            // because a default would invent clickability the server did not offer.
-            target_kind: notification.target_kind ?? null,
-            target_id: notification.target_id ?? null,
-          });
+            systemRows.push({
+              id: notification.id,
+              type: 'matchmaking',
+              title: notification.heading,
+              body: notification.body,
+              created_at: notification.created_at,
+              // The nulls here are the server's answer, not a placeholder: they mean this
+              // notice has no item to open. They are passed through rather than defaulted,
+              // because a default would invent clickability the server did not offer.
+              target_kind: notification.target_kind ?? null,
+              target_id: notification.target_id ?? null,
+            });
           }
         });
       }
@@ -285,10 +375,22 @@ notifications.push({
         });
       }
 
-      setNotifications(notifications);
+      // A first page replaces the window; an appended page grows it. Either way the
+      // derived cards are rebuilt whole -- a handful of matches, always complete.
+      if (skip === 0) {
+        setSystemNotices(systemRows);
+      } else {
+        setSystemNotices((prev) => [...prev, ...systemRows]);
+      }
+      setSystemTotal(systemPage.total);
+      setPagedInbox(systemPage.enveloped);
+      setDerivedCards(notifications);
     } catch (error: any) {
       console.error('Failed to fetch notifications:', error);
-      setNotifications([]);
+      if (skip === 0) {
+        setSystemNotices([]);
+        setDerivedCards([]);
+      }
     }
   };
 
@@ -325,22 +427,39 @@ case 'message_rejected':
     return `${Math.floor(diffInMinutes / 1440)}d ago`;
   };
 
-// Filters notifications based on the current search query.
+// Filters notifications based on the submitted search query.
+//
+// Against the server the system window already arrives narrowed, so only the derived
+// cards -- complete in memory -- are narrowed here. Against legacy bare-array answers
+// the params went nowhere, so the loaded system window is narrowed here too, which is
+// also what keeps narrowing immediate while typing there.
+const matchesQuery = (notification: NotificationItem, query: string) => {
+  if (!query) return true; // Show all if no search query
 
-  const filteredNotifications = notifications.filter(notification => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return true; // Show all if no search query
+  // The sender's name is searched once. It used to be tested twice, in both halves of an
+  // `a || a`, which meant a note whose sender is anonymous fell through to matching on
+  // title and body alone -- fine, except that the duplicate also made it look like the name
+  // was being matched with different logic on the two sides.
+  return (
+    (notification.user_name?.toLowerCase().includes(query) ?? false) ||
+    notification.title.toLowerCase().includes(query) ||
+    notification.body.toLowerCase().includes(query)
+  );
+};
 
-    // The sender's name is searched once. It used to be tested twice, in both halves of an
-    // `a || a`, which meant a note whose sender is anonymous fell through to matching on
-    // title and body alone -- fine, except that the duplicate also made it look like the name
-    // was being matched with different logic on the two sides.
-    return (
-      (notification.user_name?.toLowerCase().includes(query) ?? false) ||
-      notification.title.toLowerCase().includes(query) ||
-      notification.body.toLowerCase().includes(query)
-    );
-  });
+/** The search text currently narrowing the list: submitted against the server, live
+ * against legacy answers whose params go nowhere. */
+const activeSearch = (pagedInbox ? appliedSearch : searchTerm).trim().toLowerCase();
+
+const filteredNotifications = [
+  ...derivedCards.filter((notification) => matchesQuery(notification, activeSearch)),
+  ...(pagedInbox
+    ? systemNotices
+    : systemNotices.filter((notification) => matchesQuery(notification, activeSearch))),
+].sort((a, b) => timestampMs(b.created_at) - timestampMs(a.created_at));
+
+/** Whether the submitted query is narrowing the list, which is what the clear button is for. */
+const filtersNarrowed = activeSearch !== '';
 
   // Handles clicking on a notification by navigating to the item it is about.
   const handleNotificationClick = (notification: NotificationItem) => {
@@ -398,17 +517,35 @@ case 'message_rejected':
       </div>
 
       <div className="max-w-7xl mx-auto">
-        {/* Search Bar */}
+        {/* Search Bar: the box is a draft and Search submits it, so typing alone never
+            refetches the inbox for a query the reader had already retyped. */}
         <div className="mb-6 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <input
               type="text"
               placeholder="Search notifications..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  submitSearch();
+                }
+              }}
               className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
             />
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={submitSearch} aria-label="Search notifications">
+              <Search className="w-4 h-4 mr-2" />
+              Search
+            </Button>
+            {filtersNarrowed && (
+              <Button variant="ghost" size="sm" onClick={clearSearch}>
+                Clear
+              </Button>
+            )}
           </div>
         </div>
 
@@ -418,16 +555,20 @@ case 'message_rejected':
             <Inbox className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-xl font-semibold text-foreground mb-2">No notifications found</h3>
             <p className="text-muted-foreground">
-              {searchQuery 
+              {filtersNarrowed
                 ? "No notifications match your search."
                 : "You don't have any notifications yet."
               }
             </p>
+            {filtersNarrowed && (
+              <Button variant="outline" size="sm" className="mt-4" onClick={clearSearch}>
+                Show all notifications
+              </Button>
+            )}
           </div>
         ) : (
           <div className="grid gap-4">
             {filteredNotifications
-              .sort((a, b) => timestampMs(b.created_at) - timestampMs(a.created_at))
               .map((notification) => {
                 const isClickable = notificationIsClickable(
                   notification.target_kind,
@@ -583,6 +724,25 @@ case 'message_rejected':
               </Card>
                 );
               })}
+          </div>
+        )}
+        {/* The list only grows downwards: the next page appends beneath the notices
+            already on screen, so the reader's place never moves. Shown only while the
+            server holds more system notices than the list is showing; the derived
+            conversation cards are always complete, and legacy answers never page. */}
+        {pagedInbox && systemNotices.length < systemTotal && (
+          <div className="flex justify-center pt-6">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              aria-label="Show more notifications"
+            >
+              {loadingMore
+                ? 'Loading…'
+                : `Show more (${systemTotal - systemNotices.length} remaining)`}
+            </Button>
           </div>
         )}
       </div>

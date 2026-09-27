@@ -1,9 +1,9 @@
 # app/services/notification_service.py
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 from ..postgres import Database
-from sqlalchemy import select
+from sqlalchemy import func, select
 from ..db_models import NotificationRecord
 
 from ..utils import isoformat_datetime
@@ -74,35 +74,68 @@ def create_notification_service(
         session.flush()
         return str(row.id)
 
-def get_user_notifications_service(user_id: str, db: Database, limit: int = 50):
+# Hard ceiling for one inbox page. Notification rows are small, but an account that
+# has been collecting them for years still must not have them all serialised at once.
+NOTIFICATIONS_MAX_LIMIT = 100
+
+
+def _serialise_notification(notification: NotificationRecord) -> Dict[str, Any]:
+    """One notification row as the inbox reads it. Convert str to string and handle serialization."""
+    return {
+        "id": str(notification.id),
+        "recipient_regno": notification.recipient_regno,
+        "heading": notification.heading,
+        "body": notification.body,
+        "created_at": isoformat_datetime(notification.created_at),
+        "is_read": notification.is_read,
+        # Nulls rather than omitted keys, so a client can tell "this notification has no
+        # target" from "this build of the server did not send targets at all".
+        "target_kind": notification.target_kind,
+        "target_id": notification.target_id,
+    }
+
+
+def get_user_notifications_service(
+    user_id: str,
+    db: Database,
+    limit: int = 50,
+    *,
+    skip: int = 0,
+    query: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One page of a reader's notifications, newest first, with the total beside it.
+
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter, so an
+    account with years of notices loads downwards instead of all at once. ``query``
+    narrows in SQL to notices whose heading or body matches; ``id`` seconds the order
+    so two notices stamped in the same instant still page deterministically.
     """
-    Get notifications for a user, ordered by timestamp descending.
-    """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), NOTIFICATIONS_MAX_LIMIT))
+    filters = [NotificationRecord.recipient_regno == user_id]
+    cleaned = (query or "").strip()
+    if cleaned:
+        pattern = f"%{cleaned}%"
+        filters.append(
+            NotificationRecord.heading.ilike(pattern) | NotificationRecord.body.ilike(pattern)
+        )
     with db.sessions() as session:
+        total = session.scalar(
+            select(func.count()).select_from(NotificationRecord).where(*filters)
+        ) or 0
         notifications = session.scalars(
             select(NotificationRecord)
-            .where(NotificationRecord.recipient_regno == user_id)
-            .order_by(NotificationRecord.created_at.desc())
-            .limit(limit)
+            .where(*filters)
+            .order_by(NotificationRecord.created_at.desc(), NotificationRecord.id.asc())
+            .offset(skip).limit(limit)
         ).all()
 
-    # Convert str to string and handle serialization
-    result = []
-    for notification in notifications:
-        result.append({
-            "id": str(notification.id),
-            "recipient_regno": notification.recipient_regno,
-            "heading": notification.heading,
-            "body": notification.body,
-            "created_at": isoformat_datetime(notification.created_at),
-            "is_read": notification.is_read,
-            # Nulls rather than omitted keys, so a client can tell "this notification has no
-            # target" from "this build of the server did not send targets at all".
-            "target_kind": notification.target_kind,
-            "target_id": notification.target_id,
-        })
-
-    return result
+    return {
+        "notifications": [_serialise_notification(notification) for notification in notifications],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
 
 def mark_notification_read_service(notification_id: str, user_id: str, db: Database):
     """
