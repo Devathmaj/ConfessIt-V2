@@ -29,6 +29,7 @@ import {
   getAdminCoupleGames,
   getAdminReactionTimeGames,
   getAdminWordleGames,
+  getAdminCouplesLeaderboard,
   getCurrentAdminAnagramSession,
   getCurrentAdminCoupleSession,
   getCurrentAdminReactionTimeSession,
@@ -37,6 +38,7 @@ import {
   getFeaturedToday,
   getGameConfigs,
   getGameSelection,
+  getAdminIndividualLeaderboard,
   getScheduledAnagramWords,
   getScheduledWordleWords,
   runScheduledResets,
@@ -116,6 +118,10 @@ vi.mock('@/services/api', () => ({
   runScheduledResets: vi.fn(),
   getGameSelection: vi.fn(),
   getFeaturedToday: vi.fn(),
+  getAdminIndividualLeaderboard: vi.fn(),
+  getAdminCouplesLeaderboard: vi.fn(),
+  getGameLeaderboard: vi.fn(),
+  getMyLeagueStanding: vi.fn(),
 }));
 
 type AuthContextValue = ContextType<typeof AuthContext>;
@@ -195,15 +201,24 @@ const chooseOption = async (index: number, option: string) => {
   fireEvent.click(await screen.findByRole('option', { name: option }));
 };
 
-/**
- * Rows in the standings, counted by the action every row carries rather than by a test id.
- *
- * `hidden: true` throughout: an open Radix dialog aria-hides everything behind it, and the
- * board is still there -- the dialog is on top of it, not instead of it.
- */
-const standings = () => screen.getByRole('region', { name: 'Standings', hidden: true });
-const rowActionCount = () =>
-  within(standings()).queryAllByRole('button', { name: /remove score/i, hidden: true }).length;
+/** An empty league board, the state every leaderboard test starts from. */
+const emptyIndividualBoard = () => ({
+  competition_type: 'individual' as const,
+  period: 'weekly',
+  game_id: null,
+  opportunity_count: 0,
+  total: 0,
+  entries: [],
+});
+
+const emptyCoupleBoard = () => ({
+  competition_type: 'couple' as const,
+  period: 'weekly',
+  game_id: null,
+  opportunity_count: 0,
+  total: 0,
+  entries: [],
+});
 
 /** The pick today's seeded schedule resolves to -- the same call the provider makes. */
 const seededFeatured = () => resolveFeaturedGame(initialGamesConfig());
@@ -227,6 +242,8 @@ beforeEach(() => {
   vi.mocked(getFeaturedGames).mockResolvedValue([]);
   vi.mocked(getGameSelection).mockResolvedValue({ games: [], featured_game_id: null, server_date: todayIso() });
   vi.mocked(getFeaturedToday).mockResolvedValue({ game_id: null, game_date: null, server_date: todayIso() });
+  vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue(emptyIndividualBoard());
+  vi.mocked(getAdminCouplesLeaderboard).mockResolvedValue(emptyCoupleBoard());
 });
 
 /** The day the server would default to, which is what the date field starts on. */
@@ -305,8 +322,36 @@ describe('AdminGamesDashboard: the front page', () => {
     expect(
       screen.getByText(`${featured.game.name} set as today's featured game`),
     ).toBeInTheDocument();
-    // Play-derived figures are empty until telemetry exists.
-    expect(screen.getByText('No standings yet. They appear here once a leaderboard backend exists.')).toBeInTheDocument();
+    // Play-derived figures are empty until events close and score.
+    expect(
+      screen.getByText('No standings yet. Events appear here once they close and score.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the weekly leaders once the league board answers', async () => {
+    vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue({
+      competition_type: 'individual',
+      period: 'weekly',
+      game_id: null,
+      opportunity_count: 2,
+      total: 1,
+      entries: [
+        {
+          rank: 1,
+          user_id: 'user-1',
+          display_name: 'Ada',
+          score: 87.5,
+          native: {},
+          is_featured: true,
+          opportunities_played: 2,
+          per_game: { wordle: 87.5 },
+        },
+      ],
+    });
+    renderSection('/admin/games');
+
+    expect(await screen.findByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('2 events this week')).toBeInTheDocument();
   });
 });
 
@@ -422,38 +467,119 @@ describe('AdminGamesManage: the Reaction Time card', () => {
   });
 });
 
-describe('AdminGamesLeaderboard: the board and its destructive actions', () => {
-  it('shows the filters with an empty board until a backend exists', () => {
+describe('AdminGamesLeaderboard: the server-backed board', () => {
+  it('shows the filters with an empty board until events score', async () => {
     renderSection('/admin/games/leaderboard');
 
     expect(screen.getByRole('heading', { name: 'Leaderboard' })).toBeInTheDocument();
     expect(screen.getByText('Players ranked')).toBeInTheDocument();
-    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    expect(screen.getByText('Events scored')).toBeInTheDocument();
     expect(screen.getByText('Top score')).toBeInTheDocument();
-    expect(screen.getByText('Incomplete')).toBeInTheDocument();
-    expect(screen.getAllByRole('combobox')).toHaveLength(3);
-    expect(screen.getAllByText(/Every game on one board/)[0]).toBeInTheDocument();
-    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
+    expect(screen.getByText('Featured rows')).toBeInTheDocument();
+    expect(await screen.findByText('No standings match these filters.')).toBeInTheDocument();
   });
 
-  it('keeps the single-title scope without any rows to narrow', async () => {
+  it('renders the standings the league board answers', async () => {
+    vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue({
+      competition_type: 'individual',
+      period: 'weekly',
+      game_id: null,
+      opportunity_count: 2,
+      total: 2,
+      entries: [
+        {
+          rank: 1,
+          user_id: 'user-1',
+          display_name: 'Ada',
+          score: 150,
+          native: {},
+          is_featured: true,
+          opportunities_played: 2,
+          per_game: { wordle: 100, anagram: 50 },
+        },
+        {
+          rank: 2,
+          user_id: 'user-2',
+          display_name: 'Bo',
+          score: 25,
+          native: {},
+          is_featured: false,
+          opportunities_played: 1,
+        },
+      ],
+    });
     renderSection('/admin/games/leaderboard');
 
-    await chooseOption(0, 'Game');
+    expect(await screen.findByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('Bo')).toBeInTheDocument();
+    expect(screen.getByText('2×')).toBeInTheDocument();
+    expect(screen.getByText(/wordle 100/)).toBeInTheDocument();
+    expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
+      expect.objectContaining({ period: 'weekly', skip: 0 }),
+    );
+  });
+
+  it('switches to the couples board and narrows to a couple title', async () => {
+    vi.mocked(getAdminCouplesLeaderboard).mockResolvedValue({
+      competition_type: 'couple',
+      period: 'weekly',
+      game_id: null,
+      opportunity_count: 1,
+      total: 1,
+      entries: [
+        {
+          rank: 1,
+          member_a_id: 'a',
+          member_b_id: 'b',
+          member_a_name: 'Al',
+          member_b_name: 'Bo',
+          score: 100,
+          native: {},
+          is_featured: false,
+          opportunities_played: 1,
+        },
+      ],
+    });
+    renderSection('/admin/games/leaderboard');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Couples' }));
+
+    expect(await screen.findByText('Al & Bo')).toBeInTheDocument();
+    expect(screen.getByText('Couples ranked')).toBeInTheDocument();
+    expect(getAdminCouplesLeaderboard).toHaveBeenCalledWith(
+      expect.objectContaining({ period: 'weekly' }),
+    );
+    // Only couple titles are offered once switched: narrowing picks one.
+    await chooseOption(1, 'Couple Questionnaire');
+    await waitFor(() => {
+      expect(getAdminCouplesLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ gameId: 'couple-questionnaire' }),
+      );
+    });
+  });
+
+  it('narrows to one game through the game selector', async () => {
+    renderSection('/admin/games/leaderboard');
+
+    await chooseOption(1, 'Wordle');
 
     await waitFor(() => {
-      expect(screen.getAllByText(/Standings for a single title/)[0]).toBeInTheDocument();
+      expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ gameId: 'wordle' }),
+      );
     });
-    expect(screen.queryByText('Game type')).not.toBeInTheDocument();
-    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
   });
 
-  it('leaves reset unavailable on an empty board', () => {
+  it('keeps the failed fetch on screen with a retry', async () => {
+    vi.mocked(getAdminIndividualLeaderboard).mockRejectedValue(new Error('network'));
     renderSection('/admin/games/leaderboard');
 
-    expect(screen.getByRole('button', { name: /reset leaderboard/i })).toBeDisabled();
-    expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(await screen.findByText('Standings are unavailable')).toBeInTheDocument();
+    vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue(emptyIndividualBoard());
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+    await waitFor(() => {
+      expect(screen.getByText('No standings match these filters.')).toBeInTheDocument();
+    });
   });
 });
 

@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
-import { Inbox, Minus, TrendingDown, TrendingUp } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Inbox, Minus, Zap } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -10,88 +12,208 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
-import { useGamesConfig } from '@/contexts/GamesConfigContext';
-import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
 import {
   ALL_GAMES_FILTER,
-  getLeaderboardEntries,
-  LEADERBOARD_SCOPES,
-  summarizeCurrentUser,
-  type LeaderboardEntry,
-  type LeaderboardScope,
+  LEAGUE_COMPETITIONS,
+  LEAGUE_PERIODS,
+  entryDisplayName,
+  gamesForCompetition,
+  todayAnchor,
+  type LeagueCompetitionType,
+  type LeagueCoupleEntry,
+  type LeagueIndividualEntry,
+  type LeaguePeriod,
 } from '@/lib/gamesLeaderboard';
+import {
+  getCouplesLeaderboard,
+  getIndividualLeaderboard,
+  getMyLeagueStanding,
+  type LeagueMyStanding,
+} from '@/services/api';
+import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
 /**
- * Leaderboards.
+ * League leaderboards, served by the backend award ledger.
  *
- * Scope and game filters select from the leaderboard query; with no
- * leaderboard backend the boards are empty and the page shows its empty
- * state.
+ * Three dimensions -- competition (individual vs couples), period (daily /
+ * weekly / monthly / all-time, UTC) and scope (overall vs one game) -- all
+ * answered by `GET /leaderboards/...`. Scores are server-calculated league
+ * points; the page renders them, never computes them. A game that cannot
+ * feed the selected competition is never offered as a filter.
  */
 
 const RANK_ACCENTS = ['bg-gradient-hero', 'bg-gradient-romantic', 'bg-gradient-passion'];
+const PAGE_SIZE = 25;
 
-const TrendIndicator = ({ delta }: { delta: number }) => {
-  if (delta === 0) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-        <Minus className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">No change</span>
-      </span>
-    );
+type BoardEntry = LeagueIndividualEntry | LeagueCoupleEntry;
+
+const isCoupleEntry = (entry: BoardEntry): entry is LeagueCoupleEntry =>
+  !('display_name' in entry);
+
+/** One-line native context for a game board row, where the game is known. */
+const nativeSummary = (gameId: string | null, entry: BoardEntry): string | null => {
+  const native = entry.native ?? {};
+  const num = (value: unknown): number | null =>
+    typeof value === 'number' ? value : null;
+  switch (gameId) {
+    case 'wordle':
+    case 'anagram': {
+      const attempts = num(native.attempts);
+      if (native.solved === true) return attempts !== null ? `${attempts} ${attempts === 1 ? 'try' : 'tries'}` : 'Solved';
+      if (native.solved === false) return 'Unsolved';
+      return null;
+    }
+    case 'connections': {
+      const groups = num(native.correct_groups);
+      return groups !== null ? `${groups}/4 groups` : null;
+    }
+    case 'trivia-drop': {
+      const ms = num(native.response_time_ms);
+      if (native.is_correct === true) return ms !== null ? `${ms} ms` : 'Correct';
+      if (native.is_correct === false) return 'Missed';
+      return null;
+    }
+    case 'reaction-time': {
+      const best = num(native.best_ms);
+      return best !== null ? `${best} ms best` : null;
+    }
+    case 'couple-questionnaire': {
+      const correct = num(native.correct_predictions);
+      return correct !== null ? `${correct} correct` : null;
+    }
+    case 'two-key-escape': {
+      const elapsed = num(native.elapsed_seconds);
+      return elapsed !== null ? `${elapsed}s escape` : null;
+    }
+    default:
+      return null;
   }
-
-  const isUp = delta > 0;
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 text-xs font-semibold',
-        isUp ? 'text-emerald-500' : 'text-red-500',
-      )}
-    >
-      {isUp ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-      {Math.abs(delta)}
-    </span>
-  );
 };
 
-export const GamesLeaderboardPage = () => {
-  const [scope, setScope] = useState<LeaderboardScope>('global');
-  const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
-  // Only live titles are offered as filters; a switched-off game still has history, it just
-  // is not somewhere a player would go looking for it.
-  const { isEnabled } = useGamesConfig();
+const formatScore = (score: number): string =>
+  score.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-  const entries = useMemo(() => getLeaderboardEntries({ scope, gameId }), [scope, gameId]);
-  const summary = useMemo(() => summarizeCurrentUser(entries), [entries]);
-  const activeScope = LEADERBOARD_SCOPES.find((option) => option.id === scope);
-  const topThree = entries.slice(0, 3);
-  const remainingRows = entries.slice(3);
+export const GamesLeaderboardPage = () => {
+  const [competition, setCompetition] = useState<LeagueCompetitionType>('individual');
+  const [period, setPeriod] = useState<LeaguePeriod>('weekly');
+  const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
+  const [anchor, setAnchor] = useState<string>(todayAnchor());
+  const [entries, setEntries] = useState<BoardEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [opportunityCount, setOpportunityCount] = useState<number | null>(null);
+  const [standing, setStanding] = useState<LeagueMyStanding | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // A game filter only makes sense for its own competition: switching sides
+  // resets to the combined board rather than keeping a stale title.
+  const onCompetitionChange = (next: LeagueCompetitionType) => {
+    setCompetition(next);
+    setGameId(ALL_GAMES_FILTER);
+  };
+
+  const scopeGames = useMemo(() => gamesForCompetition(competition), [competition]);
+  const activePeriod = LEAGUE_PERIODS.find((option) => option.id === period);
   const selectedGameName =
     gameId === ALL_GAMES_FILTER
       ? 'All games'
-      : AVAILABLE_GAMES.find((game) => game.id === gameId)?.name ?? 'All games';
+      : scopeGames.find((game) => game.id === gameId)?.name ?? 'All games';
+
+  const fetchBoard = useCallback(
+    async (offset: number, append: boolean) => {
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
+      try {
+        const query = {
+          period,
+          ...(period === 'all_time' ? {} : { anchor }),
+          ...(gameId === ALL_GAMES_FILTER ? {} : { gameId }),
+          skip: offset,
+          limit: PAGE_SIZE,
+        };
+        const board =
+          competition === 'couple'
+            ? await getCouplesLeaderboard(query)
+            : await getIndividualLeaderboard(query);
+        setEntries((prev) => (append ? [...prev, ...board.entries] : [...board.entries]));
+        setTotal(board.total);
+        setOpportunityCount(board.opportunity_count ?? null);
+        if (!append) {
+          setStanding(
+            await getMyLeagueStanding(competition, {
+              period,
+              ...(period === 'all_time' ? {} : { anchor }),
+            }),
+          );
+        }
+      } catch (fetchError) {
+        if (!append) setEntries([]);
+        setError(describeApiError(fetchError, 'Could not load the standings.'));
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [competition, period, gameId, anchor],
+  );
+
+  useEffect(() => {
+    void fetchBoard(0, false);
+  }, [fetchBoard]);
+
+  const summary = standing?.entries[0] ?? null;
+  const topThree = entries.slice(0, 3);
+  const remainingRows = entries.slice(3);
+  const canLoadMore = entries.length < total;
 
   return (
     <div>
       <GamesPageHeader
         eyebrow="Leaderboards"
         title="Leaderboards"
-        description="Rankings across every game — switch the timeframe or focus on a single title."
+        description="League standings across every game — switch the competition, timeframe or title."
       />
 
-      {/* Filter controls */}
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* Competition switch */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {LEAGUE_COMPETITIONS.map((option) => {
+          const isActive = competition === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() => onCompetitionChange(option.id)}
+              className={cn(
+                'inline-flex shrink-0 items-center rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
+                isActive
+                  ? 'border-transparent bg-gradient-romantic text-white shadow-romantic'
+                  : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Period + scope controls */}
+      <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="no-scrollbar -mx-3 flex gap-2 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:px-0 sm:pb-0">
-          {LEADERBOARD_SCOPES.map((option) => {
-            const isActive = scope === option.id;
+          {LEAGUE_PERIODS.map((option) => {
+            const isActive = period === option.id;
             return (
               <button
                 key={option.id}
                 type="button"
                 aria-pressed={isActive}
-                onClick={() => setScope(option.id)}
+                onClick={() => setPeriod(option.id)}
                 className={cn(
                   'inline-flex shrink-0 items-center rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
                   isActive
@@ -105,25 +227,49 @@ export const GamesLeaderboardPage = () => {
           })}
         </div>
 
-        <Select value={gameId} onValueChange={setGameId}>
-          <SelectTrigger className="w-full rounded-full sm:w-56" aria-label="Filter by game">
-            <SelectValue placeholder="All games" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_GAMES_FILTER}>All games</SelectItem>
-            {AVAILABLE_GAMES.filter(
-              (game) => game.status === 'available' && isEnabled(game.id),
-            ).map((game) => (
-              <SelectItem key={game.id} value={game.id}>
-                {game.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {period !== 'all_time' && (
+            <Input
+              type="date"
+              value={anchor}
+              max={todayAnchor()}
+              onChange={(event) => {
+                if (event.target.value) setAnchor(event.target.value);
+              }}
+              aria-label={
+                period === 'daily'
+                  ? 'Leaderboard day (UTC)'
+                  : period === 'weekly'
+                    ? 'A day inside the leaderboard week (UTC)'
+                    : 'A day inside the leaderboard month (UTC)'
+              }
+              className="w-full rounded-full sm:w-44"
+            />
+          )}
+          <Select
+            value={gameId}
+            onValueChange={setGameId}
+          >
+            <SelectTrigger className="w-full rounded-full sm:w-56" aria-label="Filter by game">
+              <SelectValue placeholder="All games" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_GAMES_FILTER}>All games</SelectItem>
+              {scopeGames.map((game) => (
+                <SelectItem key={game.id} value={game.id}>
+                  {game.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <p className="mb-5 text-xs text-muted-foreground">
-        {activeScope?.hint} · showing {selectedGameName.toLowerCase()}
+        {activePeriod?.hint} · showing {selectedGameName.toLowerCase()}
+        {opportunityCount !== null && opportunityCount > 0
+          ? ` · ${opportunityCount} ${opportunityCount === 1 ? 'event' : 'events'} scored`
+          : ''}
       </p>
 
       {/* Your rank */}
@@ -142,30 +288,49 @@ export const GamesLeaderboardPage = () => {
               Points
             </p>
             <p className="mt-1 text-3xl font-extrabold tabular-nums">
-              {summary ? summary.score.toLocaleString() : '—'}
+              {summary ? formatScore(summary.score) : '—'}
             </p>
           </div>
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-              Standing
+              Events played
             </p>
             <p className="mt-1 text-3xl font-extrabold tabular-nums">
-              {summary ? `Top ${summary.topPercent}%` : '—'}
+              {summary ? summary.opportunities_played : '—'}
             </p>
           </div>
           <p className="ml-auto hidden max-w-[16rem] text-xs text-muted-foreground sm:block">
-            Scores update as you play. Your standing here follows the filters selected above.
+            {summary
+              ? 'Your standing here follows the filters selected above.'
+              : 'Scores update once each event closes. Play to take a rank.'}
           </p>
         </CardContent>
       </Card>
 
-      {entries.length === 0 ? (
+      {loading ? (
+        <p className="py-14 text-center text-sm text-muted-foreground">Loading standings…</p>
+      ) : error ? (
+        <div className="rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
+          <p className="text-base font-bold">Standings are unavailable</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{error}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-5 rounded-full"
+            onClick={() => void fetchBoard(0, false)}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : entries.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
           <Inbox className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="mt-3 text-base font-bold">No standings yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-            This board has no scores for the selected filters. Be the first to play and claim
-            the top spot.
+            This board has no finalized scores for the selected filters. Events
+            are scored once they close — be the first to play and claim the top
+            spot.
           </p>
         </div>
       ) : (
@@ -174,13 +339,12 @@ export const GamesLeaderboardPage = () => {
           <div className="grid grid-cols-3 gap-2 sm:gap-4">
             {topThree.map((entry, index) => (
               <Card
-                key={entry.playerId}
+                key={isCoupleEntry(entry) ? `${entry.member_a_id}:${entry.member_b_id}` : entry.user_id}
                 className={cn(
                   'rounded-2xl border p-3 text-center sm:p-5',
                   entry.rank === 1
                     ? 'border-romantic/60 bg-romantic/10 shadow-romantic'
                     : 'border-border/60 bg-card/70 backdrop-blur',
-                  entry.isCurrentUser && 'ring-2 ring-romantic/60',
                 )}
               >
                 <span
@@ -189,11 +353,16 @@ export const GamesLeaderboardPage = () => {
                     RANK_ACCENTS[index],
                   )}
                 >
-                  {entry.monogram}
+                  {entryDisplayName(entry)
+                    .replace(/[^a-zA-Z]/g, '')
+                    .slice(0, 2)
+                    .toUpperCase() || '??'}
                 </span>
-                <p className="mt-2 truncate text-xs font-bold sm:text-sm">{entry.displayName}</p>
+                <p className="mt-2 truncate text-xs font-bold sm:text-sm">
+                  {entryDisplayName(entry)}
+                </p>
                 <p className="truncate text-sm font-extrabold tabular-nums text-romantic sm:text-lg">
-                  {entry.score.toLocaleString()}
+                  {formatScore(entry.score)}
                 </p>
                 <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground sm:text-xs">
                   Rank #{entry.rank}
@@ -210,54 +379,83 @@ export const GamesLeaderboardPage = () => {
               </CardHeader>
               <CardContent className="space-y-2">
                 {remainingRows.map((entry) => (
-                  <LeaderboardRow key={entry.playerId} entry={entry} />
+                  <LeaderboardRow
+                    key={isCoupleEntry(entry) ? `${entry.member_a_id}:${entry.member_b_id}` : entry.user_id}
+                    entry={entry}
+                    gameId={gameId === ALL_GAMES_FILTER ? null : gameId}
+                  />
                 ))}
               </CardContent>
             </Card>
+          )}
+
+          {canLoadMore && (
+            <div className="mt-4 text-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                disabled={loadingMore}
+                onClick={() => void fetchBoard(entries.length, true)}
+              >
+                {loadingMore ? 'Loading…' : `Show more (${total - entries.length} left)`}
+              </Button>
+            </div>
           )}
         </>
       )}
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
-        Standings go live with the games leaderboard backend.
+        League points, averaged per game so frequent releases cannot dominate. A
+        featured event awards double.
       </p>
     </div>
   );
 };
 
-const LeaderboardRow = ({ entry }: { entry: LeaderboardEntry }) => (
-  <div
-    className={cn(
-      'flex items-center gap-3 rounded-xl border p-3 transition-colors',
-      entry.isCurrentUser
-        ? 'border-romantic/50 bg-romantic/10'
-        : 'border-border/50 bg-background/40 hover:border-romantic/30',
-    )}
-  >
-    <span className="w-6 text-center text-sm font-extrabold tabular-nums text-muted-foreground">
-      {entry.rank}
-    </span>
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
-      {entry.monogram}
-    </span>
-    <div className="min-w-0 flex-1">
-      {/* A div, not a p: the Badge below is a div, and <div> inside <p> is invalid DOM. */}
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <span className="truncate">{entry.isCurrentUser ? 'You' : entry.displayName}</span>
-        {entry.isCurrentUser && (
-          <Badge variant="secondary" className="hidden shrink-0 sm:inline-flex">
-            Your rank
-          </Badge>
-        )}
-      </div>
-      <div className="mt-0.5">
-        <TrendIndicator delta={entry.trendDelta} />
-      </div>
-    </div>
-    <span className="text-sm font-extrabold tabular-nums sm:text-base">
-      {entry.score.toLocaleString()}
-    </span>
-  </div>
+const TrendPlaceholder = () => (
+  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+    <Minus className="h-3.5 w-3.5" />
+    <span className="hidden sm:inline">League points</span>
+  </span>
 );
+
+const LeaderboardRow = ({ entry, gameId }: { entry: BoardEntry; gameId: string | null }) => {
+  const summary = nativeSummary(gameId, entry);
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/40 p-3 transition-colors hover:border-romantic/30">
+      <span className="w-6 text-center text-sm font-extrabold tabular-nums text-muted-foreground">
+        {entry.rank}
+      </span>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
+        {entryDisplayName(entry)
+          .replace(/[^a-zA-Z]/g, '')
+          .slice(0, 2)
+          .toUpperCase() || '??'}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <span className="truncate">{entryDisplayName(entry)}</span>
+          {entry.is_featured && (
+            <Badge variant="secondary" className="hidden shrink-0 items-center gap-1 sm:inline-flex">
+              <Zap className="h-3 w-3" />
+              2× featured
+            </Badge>
+          )}
+        </div>
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          {summary ?? <TrendPlaceholder />}
+          {entry.opportunities_played > 0 && summary
+            ? ` · ${entry.opportunities_played} ${entry.opportunities_played === 1 ? 'event' : 'events'}`
+            : ''}
+        </div>
+      </div>
+      <span className="text-sm font-extrabold tabular-nums sm:text-base">
+        {formatScore(entry.score)}
+      </span>
+    </div>
+  );
+};
 
 export default GamesLeaderboardPage;

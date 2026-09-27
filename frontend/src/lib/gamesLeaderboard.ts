@@ -1,158 +1,71 @@
 /**
- * Leaderboard query shapes for the Games section.
+ * League leaderboard vocabulary shared by the Games section.
  *
- * There is no global leaderboard backend, so every query below answers
- * empty until one exists: the pages render their empty states rather than
- * synthesised rosters or scores. Per-game leaderboards that do exist on the
- * server (Two-Key Escape, Trivia Drop history) are read from their own game
- * endpoints, not from here.
+ * Standings themselves live on the server (`GET /leaderboards/...`), which
+ * reads the persisted award ledger: this module only names the competition
+ * types, periods and game mapping the filters and the API client speak.
+ * Individual games rank users; couple games rank canonical pairs; the two
+ * never mix.
  */
 
-import type { GameTypeId } from './gamesCatalog';
+import { AVAILABLE_GAMES } from './gamesCatalog';
+import type {
+  LeagueCompetitionType,
+  LeagueCoupleEntry,
+  LeagueIndividualEntry,
+  LeaguePeriod,
+} from '@/services/api';
 
-export type LeaderboardScope = 'global' | 'daily' | 'weekly' | 'monthly';
+export type { LeagueCompetitionType, LeagueCoupleEntry, LeagueIndividualEntry, LeaguePeriod };
 
-export interface LeaderboardScopeOption {
-  id: LeaderboardScope;
+/** The combined board across every game of one competition type. */
+export const ALL_GAMES_FILTER = 'all';
+
+export interface LeaguePeriodOption {
+  id: LeaguePeriod;
   label: string;
   /** Short hint shown under the scope title or in a tooltip-style subtitle. */
   hint: string;
 }
 
-export interface LeaderboardEntry {
-  /** 1-based position after sorting by score. */
-  rank: number;
-  playerId: string;
-  displayName: string;
-  /** Two-letter monogram for the avatar circle. */
-  monogram: string;
-  score: number;
-  /** Positions gained/lost since the previous update; 0 renders as "no change". */
-  trendDelta: number;
-  isCurrentUser: boolean;
-}
-
-export interface LeaderboardQuery {
-  scope: LeaderboardScope;
-  /** A catalogue game id, or 'all' for the combined board. */
-  gameId: string;
-}
-
-export const ALL_GAMES_FILTER = 'all';
-
-export const LEADERBOARD_SCOPES: LeaderboardScopeOption[] = [
-  { id: 'global', label: 'Global', hint: 'All-time standings' },
-  { id: 'daily', label: 'Daily', hint: 'Resets every midnight' },
-  { id: 'weekly', label: 'Weekly', hint: 'Resets every Monday' },
-  { id: 'monthly', label: 'Monthly', hint: 'Resets on the 1st' },
+export const LEAGUE_PERIODS: LeaguePeriodOption[] = [
+  { id: 'daily', label: 'Daily', hint: 'One UTC day' },
+  { id: 'weekly', label: 'Weekly', hint: 'Monday to Sunday, UTC' },
+  { id: 'monthly', label: 'Monthly', hint: 'One UTC month' },
+  { id: 'all_time', label: 'All time', hint: 'Accumulated weekly scores' },
 ];
 
-/**
- * The board for one scope + game combination. Empty until a leaderboard
- * endpoint exists.
- */
-export const getLeaderboardEntries = (_query: LeaderboardQuery): LeaderboardEntry[] => [];
-
-/** Ranked population the boards represent. Zero while boards are empty. */
-export const MOCK_RANKED_PLAYERS = 0;
-
-export interface LeaderboardUserSummary {
-  rank: number;
-  score: number;
-  /** Percentage of the ranked population the player outranks, e.g. 8 for "Top 8%". */
-  topPercent: number;
-  totalPlayers: number;
-}
-
-/** The current user's position on a board. Null while boards are empty. */
-export const summarizeCurrentUser = (
-  _entries: LeaderboardEntry[],
-): LeaderboardUserSummary | null => null;
-
-// ---------------------------------------------------------------------------
-// The administrative board
-// ---------------------------------------------------------------------------
-
-export type AdminBoardScope = 'global' | 'game';
-export type AdminBoardPeriod = 'daily' | 'weekly' | 'all_time';
-/** Single/Couple narrows the global board; a single game already knows which it is. */
-export type AdminBoardGameTypeFilter = 'all' | GameTypeId;
-
-export interface AdminBoardOption {
-  id: string;
+export interface LeagueCompetitionOption {
+  id: LeagueCompetitionType;
   label: string;
   hint: string;
 }
 
-export const ADMIN_BOARD_SCOPES: AdminBoardOption[] = [
-  { id: 'global', label: 'Global', hint: 'Every game on one board' },
-  { id: 'game', label: 'Game', hint: 'Standings for a single title' },
+export const LEAGUE_COMPETITIONS: LeagueCompetitionOption[] = [
+  { id: 'individual', label: 'Individual', hint: 'One user per entry' },
+  { id: 'couple', label: 'Couples', hint: 'One pair per entry' },
 ];
 
-export const ADMIN_BOARD_PERIODS: AdminBoardOption[] = [
-  { id: 'daily', label: 'Daily', hint: 'Since midnight' },
-  { id: 'weekly', label: 'Weekly', hint: 'Since Monday' },
-  { id: 'all_time', label: 'All time', hint: 'Everything on record' },
-];
+/** Which leaderboard a game feeds, or null for an uncatalogued id. */
+export const gameCompetitionType = (gameId: string): LeagueCompetitionType | null => {
+  const game = AVAILABLE_GAMES.find((entry) => entry.id === gameId);
+  if (!game) return null;
+  return game.type === 'couple' ? 'couple' : 'individual';
+};
 
-export interface AdminLeaderboardQuery {
-  scope: AdminBoardScope;
-  period: AdminBoardPeriod;
-  /** A catalogue game id. Meaningful only when `scope` is `game`. */
-  gameId: string;
-  /** Meaningful only when `scope` is `global`; ignored for a single game. */
-  gameType: AdminBoardGameTypeFilter;
-}
+/** Catalogue games feeding one competition type's boards. */
+export const gamesForCompetition = (
+  competitionType: LeagueCompetitionType,
+): typeof AVAILABLE_GAMES =>
+  AVAILABLE_GAMES.filter(
+    (game) => game.status === 'available' && gameCompetitionType(game.id) === competitionType,
+  );
 
-export type AdminLeaderboardResult = 'completed' | 'forfeited' | 'abandoned';
+/** Display names for one board entry, whatever its subject type. */
+export const entryDisplayName = (
+  entry: LeagueIndividualEntry | LeagueCoupleEntry,
+): string =>
+  'display_name' in entry ? entry.display_name : `${entry.member_a_name} & ${entry.member_b_name}`;
 
-export const ADMIN_LEADERBOARD_RESULTS: Array<{ id: AdminLeaderboardResult; label: string }> = [
-  { id: 'completed', label: 'Completed' },
-  { id: 'forfeited', label: 'Forfeited' },
-  { id: 'abandoned', label: 'Abandoned' },
-];
-
-export const adminResultLabel = (result: AdminLeaderboardResult): string =>
-  ADMIN_LEADERBOARD_RESULTS.find((entry) => entry.id === result)?.label ?? result;
-
-export interface AdminLeaderboardRow {
-  rank: number;
-  playerId: string;
-  displayName: string;
-  monogram: string;
-  /** The title this standing belongs to: the selected game, or the player's leading title. */
-  gameId: string;
-  gameType: GameTypeId;
-  score: number;
-  plays: number;
-  result: AdminLeaderboardResult;
-  /** Epoch milliseconds of the most recent session inside the selected period. */
-  lastPlayedAt: number;
-  trendDelta: number;
-}
-
-/**
- * The admin board for one filter combination. Empty until a leaderboard
- * endpoint exists.
- */
-export const getAdminLeaderboardRows = (
-  _query: AdminLeaderboardQuery,
-  _now: number = Date.now(),
-): AdminLeaderboardRow[] => [];
-
-export interface AdminBoardSummary {
-  rows: number;
-  totalPlays: number;
-  topScore: number;
-  averageScore: number;
-  /** Sessions that did not complete, across every row on the board. */
-  incompleteSessions: number;
-}
-
-export const summarizeAdminBoard = (_rows: AdminLeaderboardRow[]): AdminBoardSummary => ({
-  rows: 0,
-  totalPlays: 0,
-  topScore: 0,
-  averageScore: 0,
-  incompleteSessions: 0,
-});
+/** Today as UTC `YYYY-MM-DD`, the only calendar the boards speak. */
+export const todayAnchor = (): string => new Date().toISOString().slice(0, 10);

@@ -2166,3 +2166,89 @@ class TwoKeyEscapeLeaderboardEntry(BaseModel):
     total_moves: int
     total_keys: int
     elapsed_seconds: Optional[float] = None
+
+
+# --- League leaderboards ------------------------------------------------------
+#
+# The unified scoring layer across all games. Individual boards rank users;
+# couple boards rank canonical pairs; per-game boards rank one game's
+# normalized contribution. Scores are server-calculated league points read
+# from the persisted award ledger -- the frontend never computes them.
+# ``native`` carries performance numbers only (attempts, times, correctness):
+# answers, words, prompts and selections never travel through these models.
+
+LeaguePeriod = Literal["daily", "weekly", "monthly", "all_time"]
+LeagueCompetitionType = Literal["individual", "couple"]
+
+
+class LeagueIndividualEntry(BaseModel):
+    """One user's standing: rank, normalized score and native context."""
+
+    rank: int
+    user_id: str
+    display_name: str
+    score: float
+    native: Dict[str, Any] = {}
+    is_featured: bool = False
+    opportunities_played: int = 0
+    per_game: Optional[Dict[str, float]] = None
+
+
+class LeagueCoupleEntry(BaseModel):
+    """One canonical couple's standing: rank, normalized score and context."""
+
+    rank: int
+    member_a_id: str
+    member_b_id: str
+    member_a_name: str
+    member_b_name: str
+    score: float
+    native: Dict[str, Any] = {}
+    is_featured: bool = False
+    opportunities_played: int = 0
+    per_game: Optional[Dict[str, float]] = None
+
+
+class LeagueIndividualBoard(BaseModel):
+    """A ranked individual board with pagination totals."""
+
+    competition_type: Literal["individual"] = "individual"
+    period: str
+    game_id: Optional[str] = None
+    opportunity_count: Optional[int] = None
+    total: int
+    entries: List[LeagueIndividualEntry]
+
+
+class LeagueCoupleBoard(BaseModel):
+    """A ranked couple board with pagination totals."""
+
+    competition_type: Literal["couple"] = "couple"
+    period: str
+    game_id: Optional[str] = None
+    opportunity_count: Optional[int] = None
+    total: int
+    entries: List[LeagueCoupleEntry]
+
+
+class LeagueMyStanding(BaseModel):
+    """The caller's own entries on one board (their couples included)."""
+
+    competition_type: str
+    period: str
+    entries: List[Any]
+
+
+class LeagueFinalizeRequest(BaseModel):
+    """Finalize one closed event's league awards (idempotent repair path)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    opportunity_id: str
+
+
+class LeagueSummary(BaseModel):
+    """Finalized opportunities and live awards per game, for operators."""
+
+    games: Dict[str, Dict[str, int]]

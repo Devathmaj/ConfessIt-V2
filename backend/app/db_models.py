@@ -9,8 +9,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, SmallInteger,
-    ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
+    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric,
+    SmallInteger, ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -2400,6 +2400,139 @@ class ScheduledGameContentRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("game_id", "target_date"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# League scoring ledger
+# ---------------------------------------------------------------------------
+# Native game results stay where they are, in each game's own tables. These
+# two tables are the common layer that converts finalized native results into
+# comparable league points without touching gameplay:
+#
+# * ``game_score_opportunities`` records each official scoring opportunity
+#   (one session, one question, one period) once, snapshotting whether it was
+#   featured when it became active. Featured status is read from
+#   ``featured_games`` at activation time, never re-derived later, so a later
+#   admin change cannot silently rewrite history.
+# * ``game_score_awards`` records one immutable row per ranked subject per
+#   opportunity, carrying base points, the featured multiplier and the final
+#   awarded points separately. Corrections never overwrite: the original row
+#   is marked superseded and a replacement row is issued, so the ledger stays
+#   auditable.
+
+class GameScoreOpportunityRecord(Base):
+    """One official scoring opportunity, snapshotted at activation.
+
+    ``opportunity_id`` is the native event identifier -- a session id for the
+    period games, a question id for Trivia Drop. ``activation_date`` is the UTC
+    day the featured lookup ran against (the period start for sessions, the
+    release day for questions); ``competition_at`` is the canonical UTC instant
+    period boundaries are attributed to (period-start midnight for sessions,
+    the release instant for questions).
+    """
+
+    __tablename__ = "game_score_opportunities"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    opportunity_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    competition_type: Mapped[str] = mapped_column(String(16), index=True)
+    activation_date: Mapped[date] = mapped_column(Date, index=True)
+    competition_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_featured_snapshot: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    scoring_version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    # Set when the opportunity has been through finalization, even when it
+    # had no eligible results: the due scan skips processed rows instead of
+    # re-examining empty events on every run.
+    finalized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "opportunity_id", name="uq_score_opportunity_game_event"),
+        CheckConstraint(
+            "competition_type IN ('individual', 'couple')",
+            name="ck_score_opportunity_competition_type",
+        ),
+    )
+
+
+class GameScoreAwardRecord(Base):
+    """One subject's league award for one opportunity -- the immutable ledger.
+
+    Individual awards carry ``user_id``; couple awards carry the canonical
+    ordered pair (``member_a_id`` <= ``member_b_id``). Points use NUMERIC so
+    persisted values are exact decimals, never floats. ``superseded_at`` is
+    NULL on live awards; a correction marks the original row and issues a
+    replacement, and leaderboard queries read live rows only.
+    """
+
+    __tablename__ = "game_score_awards"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    opportunity_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    competition_type: Mapped[str] = mapped_column(String(16), index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
+    member_a_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
+    member_b_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), index=True)
+    raw_metrics: Mapped[Optional[Any]] = mapped_column(JSONB)
+    rank: Mapped[int] = mapped_column(Integer)
+    participant_count: Mapped[int] = mapped_column(Integer)
+    base_points: Mapped[Any] = mapped_column(Numeric(8, 2))
+    featured_multiplier: Mapped[int] = mapped_column(SmallInteger, default=1, server_default=text("1"))
+    awarded_points: Mapped[Any] = mapped_column(Numeric(8, 2))
+    is_featured_snapshot: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    competition_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    scoring_version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    finalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "competition_type IN ('individual', 'couple')",
+            name="ck_score_award_competition_type",
+        ),
+        CheckConstraint(
+            "featured_multiplier IN (1, 2)",
+            name="ck_score_award_multiplier",
+        ),
+        CheckConstraint(
+            "(competition_type = 'individual' AND user_id IS NOT NULL "
+            "AND member_a_id IS NULL AND member_b_id IS NULL) "
+            "OR (competition_type = 'couple' AND user_id IS NULL "
+            "AND member_a_id IS NOT NULL AND member_b_id IS NOT NULL)",
+            name="ck_score_award_subject_shape",
+        ),
+        CheckConstraint(
+            "member_a_id IS NULL OR member_b_id IS NULL OR member_a_id <= member_b_id",
+            name="ck_score_award_couple_order",
+        ),
+        Index(
+            "uq_score_award_individual",
+            "game_id", "opportunity_id", "user_id",
+            unique=True,
+            postgresql_where=text(
+                "competition_type = 'individual' AND superseded_at IS NULL"
+            ),
+        ),
+        Index(
+            "uq_score_award_couple",
+            "game_id", "opportunity_id", "member_a_id", "member_b_id",
+            unique=True,
+            postgresql_where=text(
+                "competition_type = 'couple' AND superseded_at IS NULL"
+            ),
+        ),
+        Index("ix_score_award_game_competition", "game_id", "competition_at"),
+        Index("ix_score_award_type_competition", "competition_type", "competition_at"),
     )
 
 

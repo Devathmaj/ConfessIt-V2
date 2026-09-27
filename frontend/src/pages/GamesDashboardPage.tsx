@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -20,18 +21,20 @@ import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { StatCard } from '@/components/games/StatCard';
 import { AVAILABLE_GAMES, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
 import {
-  getLeaderboardEntries,
-  summarizeCurrentUser,
-  ALL_GAMES_FILTER,
-} from '@/lib/gamesLeaderboard';
+  getIndividualLeaderboard,
+  getMyLeagueStanding,
+  type LeagueIndividualEntry,
+  type LeagueMyStanding,
+} from '@/services/api';
 import { MOCK_RECENTLY_PLAYED } from '@/lib/gamesStats';
 
 /**
  * The Games dashboard: the landing screen of the section.
  *
  * Quick access and the featured spotlight read the real catalogue and the
- * shared configuration. Stats, streaks, challenges and leaderboard teasers
- * stay empty until their backends exist.
+ * shared configuration. Points, rank and the top-players teaser read the
+ * weekly individual league board; streaks, challenges and recent plays stay
+ * empty until their backends exist.
  */
 
 /** Plays a game: every catalogued game has a real screen behind its route. */
@@ -46,8 +49,31 @@ export const GamesDashboardPage = () => {
   const { user } = useAuth();
   const notifyPlay = useLaunchPlay();
 
-  const globalBoard = getLeaderboardEntries({ scope: 'global', gameId: ALL_GAMES_FILTER });
-  const summary = summarizeCurrentUser(globalBoard);
+  const [topPlayers, setTopPlayers] = useState<LeagueIndividualEntry[]>([]);
+  const [standing, setStanding] = useState<LeagueMyStanding | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getIndividualLeaderboard({ period: 'weekly', limit: 3 })
+      .then((board) => {
+        if (!cancelled) setTopPlayers(board.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setTopPlayers([]);
+      });
+    getMyLeagueStanding('individual', { period: 'weekly' })
+      .then((mine) => {
+        if (!cancelled) setStanding(mine);
+      })
+      .catch(() => {
+        if (!cancelled) setStanding(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const summary = standing?.entries[0] ?? null;
   // The administrator's pick, resolved through the shared configuration -- the same source the
   // featured page and the manage screen read, so all three can never disagree.
   const { featured, isEnabled } = useGamesConfig();
@@ -82,19 +108,19 @@ export const GamesDashboardPage = () => {
         }
       />
 
-      {/* Stat strip: leaderboard-backed figures only; the rest is empty until telemetry exists. */}
+      {/* Stat strip: weekly league figures; the rest is empty until telemetry exists. */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard
           label="Points"
-          value={summary ? summary.score.toLocaleString() : '—'}
-          hint={summary ? 'All-time standings' : 'No standings yet'}
+          value={summary ? summary.score.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}
+          hint={summary ? 'Weekly league points' : 'No standings yet'}
           icon={Star}
           accent="bg-gradient-romantic"
         />
         <StatCard
-          label="Global rank"
+          label="Weekly rank"
           value={summary ? `#${summary.rank}` : '—'}
-          hint={summary ? `Top ${summary.topPercent}% of players` : 'Unranked'}
+          hint={summary ? `${summary.opportunities_played} ${summary.opportunities_played === 1 ? 'event' : 'events'} played` : 'Unranked'}
           icon={Trophy}
           accent="bg-gradient-hero"
         />
@@ -266,34 +292,33 @@ export const GamesDashboardPage = () => {
                   View all
                 </NavLink>
               </div>
-              <CardDescription>Global all-time standings.</CardDescription>
+              <CardDescription>Weekly individual standings.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {globalBoard.length === 0 ? (
+              {topPlayers.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">
                   No standings yet. Be the first to play.
                 </p>
               ) : (
-                globalBoard.slice(0, 3).map((entry) => (
+                topPlayers.map((entry) => (
                   <div
-                    key={entry.playerId}
-                    className={`flex items-center gap-3 rounded-xl border p-2.5 ${
-                      entry.isCurrentUser
-                        ? 'border-romantic/50 bg-romantic/10'
-                        : 'border-border/50 bg-background/40'
-                    }`}
+                    key={entry.user_id}
+                    className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/40 p-2.5"
                   >
                     <span className="w-5 text-center text-xs font-extrabold tabular-nums text-muted-foreground">
                       {entry.rank}
                     </span>
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
-                      {entry.monogram}
+                      {entry.display_name
+                        .replace(/[^a-zA-Z]/g, '')
+                        .slice(0, 2)
+                        .toUpperCase() || '??'}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                      {entry.displayName}
+                      {entry.display_name}
                     </span>
                     <span className="text-sm font-bold tabular-nums">
-                      {entry.score.toLocaleString()}
+                      {entry.score.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </span>
                   </div>
                 ))

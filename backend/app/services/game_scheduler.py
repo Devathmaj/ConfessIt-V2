@@ -90,6 +90,25 @@ def _end_row(row, now: datetime) -> None:
     row.ended_at = now
 
 
+def _snapshot_league_opportunity(session, game_id: str, outcome: dict) -> None:
+    """Snapshot a freshly opened session's league opportunity, same transaction.
+
+    Opening the session and recording its featured designation commit
+    together, so the multiplier later awards reflect the spotlight in force
+    when play opened -- never a designation changed afterwards. Best-effort
+    by design: league bookkeeping must never break the session lifecycle,
+    and the due scan backfills any snapshot this misses.
+    """
+    session_id = outcome.get("session_id") if isinstance(outcome, dict) else None
+    if not session_id:
+        return
+    from . import league_finalization
+
+    league_finalization.snapshot_opened_safely(
+        session, game_id=game_id, opportunity_id=str(session_id)
+    )
+
+
 def _random_wordle_answer() -> str:
     from .wordle_service import solution_words
 
@@ -313,6 +332,7 @@ def ensure_single_game(
                     session, game_id, model, config, current, moment
                 )
                 if resolved is not None:
+                    _snapshot_league_opportunity(session, game_id, resolved)
                     return resolved
                 return {
                     "game_id": game_id,
@@ -327,6 +347,7 @@ def ensure_single_game(
                 session, game_id, model, config, cadence, today, moment,
                 previous_global_id=previous_global_id,
             )
+            _snapshot_league_opportunity(session, game_id, outcome)
             return outcome
     except IntegrityError as exc:
         # Only a duplicate-active race is benign: a concurrent run or an admin
@@ -537,8 +558,23 @@ def _open_period(
 def ensure_game_sessions(
     db: Database, now: Optional[datetime] = None
 ) -> dict[str, dict]:
-    """Evaluate every game's boundary; the 00:01 UTC reset entry point."""
-    return {game_id: ensure_single_game(db, game_id, now) for game_id in GAME_IDS}
+    """Evaluate every game's boundary; the 00:01 UTC reset entry point.
+
+    After rolling sessions, closed events still missing league awards are
+    finalized as a side effect (best-effort, logged, never reflected in the
+    returned summary): awards belong to ended opportunities only, so the
+    boundary run is the existing closure signal rather than a new timer.
+    """
+    summary = {game_id: ensure_single_game(db, game_id, now) for game_id in GAME_IDS}
+    try:
+        from . import league_finalization
+
+        league_finalization.finalize_due_opportunities(db)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("League due scan failed after reset run")
+    return summary
 
 
 def active_session_counts(db: Database) -> dict[str, int]:

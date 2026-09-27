@@ -253,6 +253,15 @@ def _activate(session, row: TriviaDropQuestionRecord, moment: datetime) -> None:
     row.released_at = moment
     row.ended_at = None
     session.flush()
+    # Snapshot the released question's league opportunity in the same
+    # transaction: the featured designation awards multiply later is the one
+    # in force at release. Best-effort -- publishing must never fail on
+    # league bookkeeping, and the due scan backfills any miss.
+    from . import league_finalization
+
+    league_finalization.snapshot_opened_safely(
+        session, game_id="trivia-drop", opportunity_id=str(row.id)
+    )
 
 
 def _check_schedule_conflict(session, scheduled_for: datetime, exclude_id: Optional[str] = None) -> None:
@@ -340,7 +349,14 @@ def create_question(
             _attach_options(session, str(row.id), cleaned_options, cleaned_correct)
             if release_mode == "now":
                 _activate(session, row, moment)
-            return _as_model(row, _options_for(session, str(row.id)))
+            result = _as_model(row, _options_for(session, str(row.id)))
+        # Deploying now deliberately ends the live question, so its awards
+        # finalize now rather than waiting for the next reset run.
+        if release_mode == "now":
+            from . import league_finalization
+
+            league_finalization.finalize_game_safely(db, "trivia-drop")
+        return result
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -430,7 +446,13 @@ def deploy_question(db: Database, question_id: str, now: Optional[datetime] = No
                     detail="Only a draft or scheduled question can be deployed.",
                 )
             _activate(session, row, moment)
-            return _as_model(row, _options_for(session, str(row.id)))
+            result = _as_model(row, _options_for(session, str(row.id)))
+        # Deploying deliberately ends the live question, so its awards
+        # finalize now rather than waiting for the next reset run.
+        from . import league_finalization
+
+        league_finalization.finalize_game_safely(db, "trivia-drop")
+        return result
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

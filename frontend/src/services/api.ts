@@ -2216,3 +2216,195 @@ export const getTwoKeyEscapeLeaderboard = async (): Promise<TwoKeyEscapeLeaderbo
     return response.data;
 };
 
+// --- League leaderboards ---
+//
+// Server-calculated league standings across all games. Individual boards
+// rank users; couple boards rank canonical pairs; per-game boards rank one
+// game's normalized contribution. Scores are never computed client-side:
+// finalization writes awards first and these endpoints only query them.
+
+/** The leaderboard subject type: one user, or one canonical pair. */
+export type LeagueCompetitionType = 'individual' | 'couple';
+
+/** Daily, weekly, monthly (UTC) or cumulative all-time. */
+export type LeaguePeriod = 'daily' | 'weekly' | 'monthly' | 'all_time';
+
+/** One user's standing: rank, normalized league points and native context. */
+export interface LeagueIndividualEntry {
+    rank: number;
+    user_id: string;
+    display_name: string;
+    score: number;
+    native: Record<string, number | boolean | null>;
+    is_featured: boolean;
+    opportunities_played: number;
+    per_game?: Record<string, number>;
+}
+
+/** One canonical couple's standing. Member order never duplicates a couple. */
+export interface LeagueCoupleEntry {
+    rank: number;
+    member_a_id: string;
+    member_b_id: string;
+    member_a_name: string;
+    member_b_name: string;
+    score: number;
+    native: Record<string, number | boolean | null>;
+    is_featured: boolean;
+    opportunities_played: number;
+    per_game?: Record<string, number>;
+}
+
+export interface LeagueIndividualBoard {
+    competition_type: 'individual';
+    period: string;
+    game_id?: string | null;
+    opportunity_count?: number | null;
+    total: number;
+    entries: LeagueIndividualEntry[];
+}
+
+export interface LeagueCoupleBoard {
+    competition_type: 'couple';
+    period: string;
+    game_id?: string | null;
+    opportunity_count?: number | null;
+    total: number;
+    entries: LeagueCoupleEntry[];
+}
+
+export interface LeagueMyStanding {
+    competition_type: string;
+    period: string;
+    entries: Array<LeagueIndividualEntry | LeagueCoupleEntry>;
+}
+
+export interface LeagueBoardQuery {
+    period?: LeaguePeriod;
+    /** YYYY-MM-DD selecting the day/week/month (default: today UTC). */
+    anchor?: string;
+    /** A game id to narrow to one game's board. */
+    gameId?: string;
+    skip?: number;
+    limit?: number;
+}
+
+const leagueParams = (query: LeagueBoardQuery): Record<string, string | number> => {
+    const params: Record<string, string | number> = {};
+    if (query.period) params.period = query.period;
+    if (query.anchor) params.anchor = query.anchor;
+    if (query.gameId) params.game_id = query.gameId;
+    if (query.skip !== undefined) params.skip = query.skip;
+    if (query.limit !== undefined) params.limit = query.limit;
+    return params;
+};
+
+/** Ranked individual standings: global, or one individual game's board. */
+export const getIndividualLeaderboard = async (
+    query: LeagueBoardQuery = {}
+): Promise<LeagueIndividualBoard> => {
+    const response = await axios.get(`${API_URL}/leaderboards/individual`, {
+        headers: getAuthHeaders(),
+        params: leagueParams(query),
+    });
+    return response.data;
+};
+
+/** Ranked couple standings: global, or one couple game's board. */
+export const getCouplesLeaderboard = async (
+    query: LeagueBoardQuery = {}
+): Promise<LeagueCoupleBoard> => {
+    const response = await axios.get(`${API_URL}/leaderboards/couples`, {
+        headers: getAuthHeaders(),
+        params: leagueParams(query),
+    });
+    return response.data;
+};
+
+/** One game's normalized leaderboard for one period and subject type. */
+export const getGameLeaderboard = async (
+    gameId: string,
+    query: LeagueBoardQuery & { competitionType?: LeagueCompetitionType } = {}
+): Promise<LeagueIndividualBoard | LeagueCoupleBoard> => {
+    const { competitionType, ...rest } = query;
+    const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...leagueParams(rest),
+            ...(competitionType ? { competition_type: competitionType } : {}),
+        },
+    });
+    return response.data;
+};
+
+/** The caller's own entries on one board, with ranks. */
+export const getMyLeagueStanding = async (
+    competitionType: LeagueCompetitionType = 'individual',
+    query: Omit<LeagueBoardQuery, 'gameId'> = {}
+): Promise<LeagueMyStanding> => {
+    const response = await axios.get(`${API_URL}/leaderboards/me`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...leagueParams(query),
+            competition_type: competitionType,
+        },
+    });
+    return response.data;
+};
+
+/**
+ * Ranked individual standings for the games console.
+ *
+ * The admin mirror of the player-facing board: staff hold no participant
+ * row, so the console reads here rather than through `/leaderboards`.
+ */
+export const getAdminIndividualLeaderboard = async (
+    query: LeagueBoardQuery = {}
+): Promise<LeagueIndividualBoard> => {
+    const response = await axios.get(`${API_URL}/admin/leaderboards/individual`, {
+        headers: getAuthHeaders(),
+        params: leagueParams(query),
+    });
+    return response.data;
+};
+
+/** Ranked couple standings for the games console. */
+export const getAdminCouplesLeaderboard = async (
+    query: LeagueBoardQuery = {}
+): Promise<LeagueCoupleBoard> => {
+    const response = await axios.get(`${API_URL}/admin/leaderboards/couples`, {
+        headers: getAuthHeaders(),
+        params: leagueParams(query),
+    });
+    return response.data;
+};
+
+/** Finalized opportunities and live awards per game, for operators. */
+export const getLeagueSummary = async (): Promise<{
+    games: Record<string, { opportunities: number; awards: number }>;
+}> => {
+    const response = await axios.get(`${API_URL}/admin/leaderboards/summary`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Finalize one closed event's league awards (idempotent repair path). */
+export const finalizeLeagueOpportunity = async (
+    gameId: string,
+    opportunityId: string
+): Promise<{
+    game_id: string;
+    opportunity_id: string;
+    action: string;
+    awards?: number;
+    is_featured?: boolean;
+}> => {
+    const response = await axios.post(
+        `${API_URL}/admin/leaderboards/finalize`,
+        { game_id: gameId, opportunity_id: opportunityId },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+

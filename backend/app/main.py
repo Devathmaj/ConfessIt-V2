@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import settings, validate_cloudinary_settings
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -546,6 +546,7 @@ app.include_router(couple_questionnaire.router)
 app.include_router(reaction_time.router)
 app.include_router(two_key_escape.router)
 app.include_router(games.router)
+app.include_router(leaderboards.router)
 
 # The hook drops the query string from the span's URL attributes before the span is
 # exported, because the middleware's http.url otherwise carries the raw query string

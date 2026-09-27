@@ -1,9 +1,9 @@
 # app/routers/admin_games.py
 
 from datetime import date
-from typing import List
+from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..accounts import Capability
 from ..dependencies import get_db
@@ -13,10 +13,15 @@ from ..models import (
     FeaturedGameCreate,
     GameConfig,
     GameConfigUpdate,
+    LeagueCoupleBoard,
+    LeagueFinalizeRequest,
+    LeagueIndividualBoard,
+    LeagueSummary,
 )
 from ..postgres import Database
-from ..services import featured_games, game_configs
+from ..services import featured_games, game_configs, league_boards, league_finalization
 from ..services.authorization import require_capability
+from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
 
 router = APIRouter(prefix="/admin", tags=["Admin - Games"])
 
@@ -115,3 +120,137 @@ async def run_scheduled_resets(
 
     summary = game_scheduler.ensure_game_sessions(db)
     return {"resets": summary, "active": game_scheduler.active_session_counts(db)}
+
+
+@router.post("/leaderboards/finalize")
+async def finalize_league_opportunity(
+    payload: LeagueFinalizeRequest,
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> dict:
+    """Finalize one closed event's league awards (idempotent repair path).
+
+    The scheduler finalizes ended events on its own runs; this endpoint is
+    the explicit path for backfilling history or retrying an event the loop
+    has not reached. Ranking an event that is still open is refused, and a
+    repeated call settles on the same rows.
+    """
+    return league_finalization.finalize_opportunity(
+        db, payload.game_id, payload.opportunity_id
+    )
+
+
+@router.post("/leaderboards/reprocess")
+async def reprocess_league_opportunity(
+    payload: LeagueFinalizeRequest,
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> dict:
+    """Supersede one event's live awards and issue auditable replacements.
+
+    The deliberate correction path for a wrong snapshot or result: original
+    rows stay in the ledger marked superseded, replacements carry a fresh
+    finalization instant, and boards read live rows only. Changing the
+    featured schedule never triggers this silently.
+    """
+    return league_finalization.reprocess_opportunity(
+        db, payload.game_id, payload.opportunity_id
+    )
+
+
+@router.get("/leaderboards/summary", response_model=LeagueSummary)
+async def league_summary(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> LeagueSummary:
+    """Finalized opportunities and live awards per game, for operators."""
+    return LeagueSummary(games=league_boards.leaderboard_summary(db))
+
+
+_DEFAULT_BOARD_LIMIT = 50
+_MAX_BOARD_LIMIT = 200
+
+
+@router.get("/leaderboards/individual", response_model=LeagueIndividualBoard)
+async def admin_individual_board(
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    game_id: Optional[str] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> LeagueIndividualBoard:
+    """Ranked individual standings for the games console.
+
+    The admin mirror of the player-facing board: staff hold no participant
+    row, so they read standings here rather than through ``/leaderboards``.
+    ``game_id`` narrows an individual game to its own board.
+    """
+    if game_id is not None:
+        board = league_boards.game_board(
+            db, game_id=game_id, competition_type=COMPETITION_INDIVIDUAL,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        )
+        return LeagueIndividualBoard(**board)
+    board = league_boards.global_board(
+        db, competition_type=COMPETITION_INDIVIDUAL,
+        period=period, anchor=anchor, skip=skip, limit=limit,
+    )
+    return LeagueIndividualBoard(**board)
+
+
+@router.get("/leaderboards/couples", response_model=LeagueCoupleBoard)
+async def admin_couples_board(
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    game_id: Optional[str] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> LeagueCoupleBoard:
+    """Ranked couple standings for the games console.
+
+    Each canonical pair is one entry; member order never duplicates a
+    couple. ``game_id`` narrows a couple game to its own board.
+    """
+    if game_id is not None:
+        board = league_boards.game_board(
+            db, game_id=game_id, competition_type=COMPETITION_COUPLE,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        )
+        return LeagueCoupleBoard(**board)
+    board = league_boards.global_board(
+        db, competition_type=COMPETITION_COUPLE,
+        period=period, anchor=anchor, skip=skip, limit=limit,
+    )
+    return LeagueCoupleBoard(**board)
+
+
+@router.get(
+    "/leaderboards/games/{game_id}",
+    response_model=Union[LeagueIndividualBoard, LeagueCoupleBoard],
+)
+async def admin_game_board(
+    game_id: str,
+    competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+):
+    """One game's normalized leaderboard for the games console.
+
+    Unavailable combinations are refused: individual games have no couple
+    board and couple games have no individual board.
+    """
+    board = league_boards.game_board(
+        db, game_id=game_id, competition_type=competition_type,
+        period=period, anchor=anchor, skip=skip, limit=limit,
+    )
+    if competition_type == COMPETITION_COUPLE:
+        return LeagueCoupleBoard(**board)
+    return LeagueIndividualBoard(**board)

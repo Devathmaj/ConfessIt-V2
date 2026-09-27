@@ -267,7 +267,16 @@ def update_anagram_session(
             )
             session.add(row)
             session.flush()
-            return _as_model(row)
+            from . import league_finalization
+
+            league_finalization.snapshot_opened_safely(
+                session, game_id="anagram", opportunity_id=str(row.id)
+            )
+            result = _as_model(row)
+        # The Update deliberately closes the previous session, so its awards
+        # finalize now rather than waiting for the next reset run.
+        league_finalization.finalize_game_safely(db, "anagram")
+        return result
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

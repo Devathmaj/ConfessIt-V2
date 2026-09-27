@@ -216,8 +216,16 @@ def update_connections_session(
             session.add(row)
             session.flush()
             _attach_words(session, str(row.id), normalized)
-            words = _words_for(session, str(row.id))
-            return _as_model(row, words)
+            from . import league_finalization
+
+            league_finalization.snapshot_opened_safely(
+                session, game_id="connections", opportunity_id=str(row.id)
+            )
+            result = _as_model(row, _words_for(session, str(row.id)))
+        # The Update deliberately closes the previous session, so its awards
+        # finalize now rather than waiting for the next reset run.
+        league_finalization.finalize_game_safely(db, "connections")
+        return result
     except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

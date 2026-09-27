@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Activity, ArrowRight, CalendarClock, Gamepad2, SlidersHorizontal, Star, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -12,8 +12,8 @@ import {
   gamesAnalytics,
   type GamesActivityKind,
 } from '@/lib/adminGamesAnalytics';
-import { AVAILABLE_GAMES, getGameById } from '@/lib/gamesCatalog';
-import { ALL_GAMES_FILTER, getAdminLeaderboardRows } from '@/lib/gamesLeaderboard';
+import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
+import { getAdminIndividualLeaderboard, type LeagueIndividualEntry } from '@/services/api';
 import { featuredDateLongLabel } from '@/lib/gamesFeaturedSchedule';
 import { cn } from '@/lib/utils';
 
@@ -39,18 +39,22 @@ export const AdminGamesDashboard = () => {
 
   const analytics = useMemo(() => gamesAnalytics(config), [config]);
 
-  // The full board, top of the list only: enough to tell whether play is happening and who is
-  // leading, without previewing the screen the link opens.
-  const snapshot = useMemo(
-    () =>
-      getAdminLeaderboardRows({
-        scope: 'global',
-        period: 'all_time',
-        gameId: ALL_GAMES_FILTER,
-        gameType: 'all',
-      }).slice(0, 5),
-    [],
-  );
+  // The weekly individual board, top of the list only: enough to tell
+  // whether play is happening and who is leading.
+  const [snapshot, setSnapshot] = useState<LeagueIndividualEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getAdminIndividualLeaderboard({ period: 'weekly', limit: 5 })
+      .then((board) => {
+        if (!cancelled) setSnapshot(board.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshot([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const FeaturedIcon = featured?.game.icon;
 
@@ -282,7 +286,7 @@ export const AdminGamesDashboard = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <CardTitle className="text-xl">Leaderboard snapshot</CardTitle>
-              <CardDescription>Top standings across every game, all time.</CardDescription>
+              <CardDescription>Weekly individual standings across every game.</CardDescription>
             </div>
             <Button asChild variant="outline" size="sm">
               <NavLink to="/admin/games/leaderboard">
@@ -295,25 +299,28 @@ export const AdminGamesDashboard = () => {
         <CardContent className="space-y-3">
           {snapshot.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              No standings yet. They appear here once a leaderboard backend exists.
+              No standings yet. Events appear here once they close and score.
             </p>
           ) : (
             snapshot.map((row) => (
-            <div key={row.playerId} className="flex items-center gap-3">
+            <div key={row.user_id} className="flex items-center gap-3">
               <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums">
                 {row.rank}
               </span>
               <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold">
-                {row.monogram}
+                {row.display_name
+                  .replace(/[^a-zA-Z]/g, '')
+                  .slice(0, 2)
+                  .toUpperCase() || '??'}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{row.displayName}</p>
+                <p className="truncate text-sm font-semibold">{row.display_name}</p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {getGameById(row.gameId)?.name ?? row.gameId} · {row.plays} plays
+                  {row.opportunities_played} {row.opportunities_played === 1 ? 'event' : 'events'} this week
                 </p>
               </div>
               <span className="shrink-0 text-sm font-bold tabular-nums">
-                {row.score.toLocaleString()}
+                {row.score.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </span>
             </div>
             ))
