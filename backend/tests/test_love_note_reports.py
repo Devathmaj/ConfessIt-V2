@@ -602,7 +602,7 @@ def test_a_removed_note_leaves_the_recipients_inbox(client, moderator_client, db
     with login_as(RECIPIENT):
         inbox = client.get("/love-notes/inbox").json()
 
-    assert [note["id"] for note in inbox] == []
+    assert [note["id"] for note in inbox["notes"]] == []
 
 
 def test_a_removed_note_is_still_listed_for_staff(moderator_client, client, login_as, db):

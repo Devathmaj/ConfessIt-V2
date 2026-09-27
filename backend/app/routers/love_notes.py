@@ -1,7 +1,7 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from ..db_models import LoveNoteRecord, UserRecord
 from ..postgres import Database
 from typing import Annotated, Any, Dict, List, Optional
@@ -119,29 +119,43 @@ async def send_love_note(
     return await send_love_note_service(note_data, current_user, db)
 
 
-@router.get("/inbox", response_model=List[Dict[str, Any]])
+@router.get("/inbox", response_model=Dict[str, Any])
 async def get_received_love_notes(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
-    response: Response = None
+    response: Response = None,
+    skip: int = Query(0, ge=0, description="How many of the reader's notes to skip."),
+    limit: int = Query(50, ge=1, le=100, description="How many of the reader's notes to return. Clamped so one request can never mint delivery URLs for the whole inbox at once."),
 ):
     """
-    Used to fetch all accepted love notes sent to the current user.
+    Used to fetch one page of accepted love notes sent to the current user.
+
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter, so a
+    much-loved reader loads downwards instead of all at once -- which matters doubly
+    here, because every row carries a freshly minted image URL.
     """
     # Same reasoning as the send response: the signed URLs in this body do not expire, so
     # nothing downstream may cache them. The inbox is also exactly where the URLs *cluster*,
     # which is why the header matters as much here as on the response that first issued one.
     response.headers["Cache-Control"] = "no-store"
     # Find all love notes sent to current user with status 'approved'
+    filters = [
+        LoveNoteRecord.recipient_id == current_user.id,
+        LoveNoteRecord.status == "approved",
+        # A note taken down for a report leaves the inbox. ``status == "approved"`` is
+        # not enough on its own: the removal is a separate decision from approval, and a
+        # note can be approved and then removed later, which is the case this catches.
+        LoveNoteRecord.removed_at.is_(None),
+    ]
     with db.sessions() as session:
+        total = session.scalar(
+            select(func.count()).select_from(LoveNoteRecord).where(*filters)
+        ) or 0
         love_notes = session.scalars(select(LoveNoteRecord).where(
-            LoveNoteRecord.recipient_id == current_user.id,
-            LoveNoteRecord.status == "approved",
-            # A note taken down for a report leaves the inbox. ``status == "approved"`` is
-            # not enough on its own: the removal is a separate decision from approval, and a
-            # note can be approved and then removed later, which is the case this catches.
-            LoveNoteRecord.removed_at.is_(None),
-        ).order_by(LoveNoteRecord.created_at.desc())).all()
+            *filters,
+            # ``id`` seconds the order so two notes stamped in the same instant still
+            # page without repeating or skipping one.
+        ).order_by(LoveNoteRecord.created_at.desc(), LoveNoteRecord.id.asc()).offset(skip).limit(limit)).all()
         sender_ids = {note.sender_id for note in love_notes if note.sender_id}
         senders = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.id.in_(sender_ids))).all()} if sender_ids else {}
         result = []
@@ -165,8 +179,8 @@ async def get_received_love_notes(
                 "created_at": isoformat_datetime(note.created_at),
                 "read_at": isoformat_datetime(note.read_at),
             })
-    
-    return result
+
+    return {"notes": result, "total": total, "skip": skip, "limit": limit}
 
 
 @router.post("/inbox/{note_id}/mark-read", status_code=status.HTTP_200_OK)

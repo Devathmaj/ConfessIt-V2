@@ -149,6 +149,27 @@ const LOVE_NOTE_BODY_MAX = 1000;
 /** Code points in `value`, which is what the server's cap counts. */
 const characterCount = (value: string): number => [...value].length;
 
+/**
+ * How many notes one inbox read returns. Cards carry images, so twelve keeps one read
+ * cheap while a "show more" click still grows the grid by visible rows. The backend
+ * clamps anything larger regardless.
+ */
+const INBOX_PAGE_SIZE = 12;
+
+/** The rows inside an inbox answer, whether it is the page envelope or a legacy bare array. */
+const inboxRowsOf = (answer: unknown): LoveNote[] => {
+  if (Array.isArray(answer)) return answer as LoveNote[];
+  const notes = (answer as { notes?: LoveNote[] } | null | undefined)?.notes;
+  return Array.isArray(notes) ? notes : [];
+};
+
+/** The matching-row count beside an inbox answer, falling back to the rows at hand. */
+const inboxTotalOf = (answer: unknown, fallback: number): number => {
+  if (Array.isArray(answer)) return (answer as unknown[]).length;
+  const total = (answer as { total?: unknown } | null | undefined)?.total;
+  return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+};
+
 export const LoveNotesPage = () => {
 const { user, fetchAndSetUser, token } = useAuth();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -166,8 +187,18 @@ const { user, fetchAndSetUser, token } = useAuth();
     // the first template's colour is what lets it follow the card when the sender switches.
     const [colorOverride, setColorOverride] = useState<string | null>(null);
 const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
+    /**
+     * The inbox on screen: always the contiguous window [0, length) of the
+     * newest-first server order, so a refresh is one clean re-read and a "show more"
+     * click appends beneath the notes already read.
+     */
     const [receivedNotes, setReceivedNotes] = useState<LoveNote[]>([]);
+    /** How many notes the inbox holds, loaded or not. */
+    const [inboxTotal, setInboxTotal] = useState(0);
+    /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
+    const [pagedInbox, setPagedInbox] = useState(false);
     const [loadingNotes, setLoadingNotes] = useState(false);
+    const [loadingMoreNotes, setLoadingMoreNotes] = useState(false);
     const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -203,10 +234,51 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
     const [isUnavailableConfirmOpen, setIsUnavailableConfirmOpen] = useState(false);
     const [isSending, setIsSending] = useState(false);
 
+    /**
+     * One inbox read into state: the rows replace or extend the window, and the total
+     * travels with them. A legacy bare array hands back one unfiltered list, which lands
+     * whole with no pager to grow it.
+     */
+    const applyInboxPage = (answer: unknown, append: boolean) => {
+        const rows = inboxRowsOf(answer);
+        const enveloped = !Array.isArray(answer);
+        if (append) {
+            setReceivedNotes((prev) => [...prev, ...rows]);
+        } else {
+            setReceivedNotes(rows);
+        }
+        setInboxTotal(inboxTotalOf(answer, rows.length));
+        setPagedInbox(enveloped);
+    };
+
+    /** One inbox page from the server: the next `limit` notes newest-first. */
+    const readInboxPage = (skip: number, limit: number) =>
+        getReceivedLoveNotes({ skip, limit });
+
+    /**
+     * Grow the inbox downwards: the next page appends beneath the notes already on
+     * screen, so the reader's place never moves.
+     */
+    const loadMoreInbox = async () => {
+        if (loadingMoreNotes) return;
+        setLoadingMoreNotes(true);
+        try {
+            applyInboxPage(await readInboxPage(receivedNotes.length, INBOX_PAGE_SIZE), true);
+        } catch (error) {
+            console.error("Failed to load more love notes:", error);
+            toast.error("Could not load more love notes.");
+        } finally {
+            setLoadingMoreNotes(false);
+        }
+    };
+
 
 // Used to fetch templates, users, cohorts, and inbox count
     useEffect(() => {
         const fetchInitialData = async () => {
+            // Claimed before anything awaits, so the tab effect below can tell "not
+            // loaded yet" from "loaded empty" and never re-reads the first page.
+            setLoadingNotes(true);
             try {
                 // Fetch templates
                 const templatePromises = Array.from({ length: 6 }, (_, i) =>
@@ -216,33 +288,38 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 setTemplates(loadedTemplates);
                 setSelectedTemplate(loadedTemplates[0]);
 
-                // Fetch users, cohorts, and received notes count in parallel
-                const [usersData, cohortsData, notesData] = await Promise.all([
+                // Fetch users, cohorts, and the first inbox page in parallel. Only
+                // the first page travels here: the inbox grows through "show more",
+                // not by loading every note behind a card grid.
+                const [usersData, cohortsData, notesPage] = await Promise.all([
                     getAllUsers(),
                     getCohorts(),
-                    getReceivedLoveNotes()
+                    getReceivedLoveNotes({ skip: 0, limit: INBOX_PAGE_SIZE })
                 ]);
                 setAllUsers(usersData);
                 setCohorts(cohortsData);
-                setReceivedNotes(notesData);
+                applyInboxPage(notesPage, false);
 
             } catch (error) {
                 console.error("Failed to load initial data:", error);
                 toast.error("Could not load necessary data. Please try again later.");
+            } finally {
+                setLoadingNotes(false);
             }
         };
 
         fetchInitialData();
     }, []);
 
-    // Used to refresh received love notes when inbox tab becomes active
+    // Used to refresh received love notes when inbox tab becomes active. Skipped while
+    // the mount fetch is still in flight: without the guard the two reads race and the
+    // first page travels twice.
     useEffect(() => {
-        if (activeTab === 'inbox' && receivedNotes.length === 0) {
+        if (activeTab === 'inbox' && receivedNotes.length === 0 && !loadingNotes) {
             const fetchReceivedNotes = async () => {
                 try {
                     setLoadingNotes(true);
-                    const notes = await getReceivedLoveNotes();
-                    setReceivedNotes(notes);
+                    applyInboxPage(await readInboxPage(0, INBOX_PAGE_SIZE), false);
                 } catch (error) {
                     console.error("Failed to load received notes:", error);
                     toast.error("Could not load your love notes.");
@@ -253,7 +330,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
 
             fetchReceivedNotes();
         }
-    }, [activeTab, receivedNotes.length]);
+    }, [activeTab, receivedNotes.length, loadingNotes]);
 
     // A notification about a received love note arrives here as
     // /love-notes?tab=inbox&note=<note_id>. The reader clicked it to read the note, so
@@ -262,8 +339,10 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
     //
     // The open is keyed off `receivedNotes` rather than done inside the fetch above, so it
     // works whether the list was already loaded from a previous visit or arrives now. If the
-    // id is not in the list -- the note was taken down since the notification was written --
-    // nothing opens and the list renders as usual, which is the honest outcome.
+    // id is not in the window yet, further pages are read until it turns up or the inbox
+    // runs out -- bounded by the total, so a note taken down since the notification was
+    // written ends with nothing opening and the list rendering as usual, which is the
+    // honest outcome.
     useEffect(() => {
         const noteId = searchParams.get('note');
         if (!noteId) return;
@@ -282,7 +361,12 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         // list; clearing them after means closing the image does not close the tab.
         if (loadingNotes || receivedNotes.length === 0) return;
         const note = receivedNotes.find((n) => n.id === noteId);
-        if (!note) return;
+        if (!note) {
+            if (pagedInbox && receivedNotes.length < inboxTotal && !loadingMoreNotes) {
+                void loadMoreInbox();
+            }
+            return;
+        }
 
         setViewingImageUrl(note.image_url);
 
@@ -290,7 +374,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         next.delete('note');
         next.delete('tab');
         setSearchParams(next, { replace: true });
-    }, [searchParams, setSearchParams, loadingNotes, receivedNotes]);
+    }, [searchParams, setSearchParams, loadingNotes, receivedNotes, pagedInbox, inboxTotal, loadingMoreNotes]);
 
     // Used to open the tab named by ?tab= on a plain link with no note id, e.g. a plain
     // "go to my inbox" link. Only applied when it is a tab this page actually has, so a
@@ -689,7 +773,7 @@ setSearchTerm('');
                             className="font-dancing text-sm sm:text-lg px-4 sm:px-8 h-9 sm:h-10"
                         >
                             <Mail className="w-4 h-4 sm:w-5 sm:h-5 mr-1 sm:mr-2" />
-                            Inbox ({receivedNotes.length})
+                            Inbox ({pagedInbox ? inboxTotal : receivedNotes.length})
                         </Button>
                     </div>
                 </div>
@@ -982,6 +1066,25 @@ setSearchTerm('');
                                             </CardContent>
                                         </Card>
                                     ))}
+                                </div>
+                            )}
+                            {/* The grid only grows downwards: the next page appends beneath the
+                                notes already on screen, so the reader's place never moves. Shown
+                                only while the inbox holds more than the grid is showing; legacy
+                                answers never page. */}
+                            {pagedInbox && receivedNotes.length < inboxTotal && (
+                                <div className="flex justify-center pt-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => void loadMoreInbox()}
+                                        disabled={loadingMoreNotes}
+                                        aria-label="Show more love notes"
+                                    >
+                                        {loadingMoreNotes
+                                            ? 'Loading…'
+                                            : `Show more (${inboxTotal - receivedNotes.length} remaining)`}
+                                    </Button>
                                 </div>
                             )}
                         </div>

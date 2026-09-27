@@ -333,7 +333,7 @@ describe('the renderer paints what the fit and the sender asked for', () => {
         });
         vi.mocked(getAllUsers).mockResolvedValue([]);
         vi.mocked(getCohorts).mockResolvedValue([]);
-        vi.mocked(getReceivedLoveNotes).mockResolvedValue([]);
+        vi.mocked(getReceivedLoveNotes).mockResolvedValue({ notes: [], total: 0, skip: 0, limit: 0 });
 
         render(
             <AuthContext.Provider value={authValue}>

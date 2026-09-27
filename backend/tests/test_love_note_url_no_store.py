@@ -145,8 +145,8 @@ def test_the_inbox_response_is_not_cached(client, login_as, db):
 
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
-    assert len(response.json()) == 1
-    assert "/s--" in response.json()[0]["image_url"]
+    assert len(response.json()["notes"]) == 1
+    assert "/s--" in response.json()["notes"][0]["image_url"]
 
 
 def test_the_report_queue_response_is_not_cached(client, admin_client, login_as, db):

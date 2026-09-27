@@ -471,10 +471,43 @@ export const sendLoveNote = async (noteData: {
     return response.data;
 }
 
-// Used to get received love notes (accepted)
-export const getReceivedLoveNotes = async () => {
-    const response = await axios.get(`${API_URL}/love-notes/inbox`, { headers: getAuthHeaders() });
-    return response.data;
+// One page of received love notes (accepted), newest first, with the total beside it.
+//
+// The page is a SQL LIMIT/OFFSET and the total a COUNT on the server, so a much-loved
+// reader loads downwards instead of all at once -- which matters doubly here, because
+// every row carries a freshly minted image URL. Accepts both the new
+// `{notes, total, skip, limit}` envelope and a legacy bare array (older servers and
+// unit-test mocks), normalising the latter to a single page whose total is the array
+// length.
+export interface ReceivedLoveNotesPage {
+    notes: any[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+export const getReceivedLoveNotes = async (params?: {
+    skip?: number;
+    limit?: number;
+}): Promise<ReceivedLoveNotesPage> => {
+    const response = await axios.get(`${API_URL}/love-notes/inbox`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { notes: data, total: data.length, skip: 0, limit: data.length };
+    }
+    const rows = data?.notes ?? [];
+    return {
+        notes: Array.isArray(rows) ? rows : [],
+        total: data?.total ?? (Array.isArray(rows) ? rows.length : 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (Array.isArray(rows) ? rows.length : 0),
+    };
 }
 
 // Used to mark a love note as read
