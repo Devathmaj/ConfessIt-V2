@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { Cohort } from '@/lib/accountFields';
 import { cohortDragPayload, cohortFromDragPayload, cohortKey, cohortLabel, isSameCohort } from '@/lib/accountFields';
 import { expandSlotBoxes, newSlotGroupKey, reconstructSlotBoxes } from '@/lib/matchmakingSlots';
+import { getAuthHeaders } from '@/services/api';
 import type { SlotBox } from '@/lib/matchmakingSlots';
 
 // Base URL for backend API
@@ -44,7 +45,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
         setIsLoading(true);
         const response = await fetch(`${API_BASE_URL}/admin/config`, {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+            ...getAuthHeaders(),
           },
         });
         if (!response.ok) throw new Error('Failed to load configuration');
@@ -193,7 +194,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
       // First, get existing slots from backend to know what to delete
       const existingResponse = await fetch(`${API_BASE_URL}/admin/config`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+          ...getAuthHeaders(),
         },
       });
       
@@ -211,7 +212,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
           await fetch(`${API_BASE_URL}/admin/config/matchmaking-slot`, {
             method: 'DELETE',
             headers: {
-              Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+              ...getAuthHeaders(),
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ slot_id: existingSlot.id }),
@@ -235,7 +236,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
           await fetch(`${API_BASE_URL}/admin/config/matchmaking-slot`, {
             method: 'POST',
             headers: {
-              Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+              ...getAuthHeaders(),
               'Content-Type': 'application/json',
             },
             body: JSON.stringify(pair),

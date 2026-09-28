@@ -5,6 +5,7 @@ import { ProtectedRoute, CapabilityRoute } from '@/App';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { CAPABILITIES } from '@/lib/capabilities';
 import { AUTH_EXPIRED_EVENT } from '@/lib/authEvents';
+import { clearAccessToken } from '@/lib/tokenStore';
 
 /**
  * Where a session sends you when it ends.
@@ -71,6 +72,9 @@ const renderSession = (startPath: string) =>
  */
 const authMe = vi.hoisted(() => ({
   current: null as null | Record<string, unknown>,
+  // The refresh cookie the provider's silent sign-in reads through: set while a session
+  // should exist, cleared when the browser should stay signed out.
+  token: null as null | string,
   // `src/services/api.ts` registers a response interceptor at import time, so the stub has to
   // be shaped like the object that registration expects or the module throws on import.
   interceptors: { response: { use: () => {} } },
@@ -82,15 +86,22 @@ vi.mock('axios', () => ({
     defaults: {},
     interceptors: authMe.interceptors,
     get: async () => ({ data: authMe.current }),
+    // Silent refresh during provider initialisation: a held cookie comes back with a fresh
+    // bearer, while an anonymous browser answers without one and stays signed out.
     // Server-side logout (`serverLogout`) posts and never awaits success; answer a boring
     // success so signing out exercises the local part, not a real network call.
-    post: async () => ({ data: {} }),
+    post: async (url?: string) => {
+      if (typeof url === 'string' && url.endsWith('/auth/refresh')) {
+        return { data: authMe.token ? { access_token: authMe.token } : {} };
+      }
+      return { data: {} };
+    },
   },
 }));
 
-/** Signs an account in by seeding the token and answering `/auth/me`. */
+/** Signs an account in by holding a refresh cookie and answering `/auth/me`. */
 const signIn = (accountType: 'users' | 'admin' | 'moderator') => {
-  localStorage.setItem('accessToken', `token-for-${accountType}`);
+  authMe.token = `token-for-${accountType}`;
   authMe.current = {
     id: 'a-uuid',
     name: 'Someone',
@@ -106,7 +117,7 @@ const signIn = (accountType: 'users' | 'admin' | 'moderator') => {
 /** Dispatches the expiry event the API layer fires, inside `act` because it updates state. */
 const expireSession = async () => {
   const { act } = await import('@testing-library/react');
-  localStorage.removeItem('accessToken');
+  clearAccessToken();
   await act(async () => {
     window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
   });
@@ -119,6 +130,9 @@ const clickLogout = async () => {
 
 beforeEach(() => {
   localStorage.clear();
+  clearAccessToken();
+  authMe.current = null;
+  authMe.token = null;
   vi.unstubAllGlobals();
 });
 

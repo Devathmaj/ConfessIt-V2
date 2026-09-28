@@ -3,7 +3,8 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import { toast } from 'sonner';
-import { getCurrentUser, serverLogout } from '../services/api';
+import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken } from '../services/api';
+import { purgeLegacyPersistedToken } from '../lib/tokenStore';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
@@ -122,7 +123,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     void serverLogout();
     setUser(null);
     setToken(null);
-    localStorage.removeItem('accessToken');
+    clearInMemoryToken();
   }, []);
 
   const fetchAndSetUser = useCallback(async (currentToken: string) => {
@@ -164,10 +165,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const initializeAuth = async () => {
-      const storedToken = localStorage.getItem('accessToken');
-      if (storedToken) {
-        setToken(storedToken);
-        await fetchAndSetUser(storedToken);
+      // A token an older build persisted is wiped rather than trusted: the bearer is
+      // never read back from JS-readable storage, only minted fresh below.
+      purgeLegacyPersistedToken();
+      // The in-memory token does not survive a reload by design, so the session is
+      // restored with one silent refresh through the HttpOnly cookie. A valid cookie
+      // comes back with a fresh bearer; anything else answers null and the browser
+      // simply stays signed out.
+      const restoredToken = await refreshAccessToken();
+      if (restoredToken) {
+        setToken(restoredToken);
+        await fetchAndSetUser(restoredToken);
       }
       setIsLoading(false);
     };
@@ -228,7 +236,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         return { success: false };
       }
 
-      localStorage.setItem('accessToken', accessToken);
+      setInMemoryToken(accessToken);
       setToken(accessToken);
       await fetchAndSetUser(accessToken);
       

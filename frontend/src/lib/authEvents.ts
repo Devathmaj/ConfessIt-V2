@@ -1,5 +1,7 @@
 // src/lib/authEvents.ts
 
+import { clearAccessToken, getAccessToken } from './tokenStore';
+
 /**
  * Shared handling for the moment the API stops accepting the access token.
  *
@@ -50,7 +52,7 @@ export const isSessionSupersededError = (error?: {
 /**
  * End the session if a rejected request failed *because of* the access token.
  *
- * The stored token is what decides, not the status alone: a 401 from a request that never
+ * The in-memory token is what decides, not the status alone: a 401 from a request that never
  * carried one -- a failed login, a stale magic link -- is not a logout, and treating it as
  * one would clear a perfectly good session.
  *
@@ -71,10 +73,10 @@ export const endSessionIfTokenWasRejected = (error?: {
 }) => {
   if (error?.response?.status !== 401) return;
   if (typeof window === 'undefined') return;
-  if (!localStorage.getItem('accessToken')) return;
+  if (!getAccessToken()) return;
 
   const superseded = isSessionSupersededError(error);
-  localStorage.removeItem('accessToken');
+  clearAccessToken();
 
   if (superseded) {
     const detail = error?.response?.data?.detail;

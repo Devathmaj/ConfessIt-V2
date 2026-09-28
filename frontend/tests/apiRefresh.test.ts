@@ -35,7 +35,7 @@ vi.mock('axios', async () => {
 });
 
 import axios from 'axios';
-import { handleResponseError, refreshAccessToken } from '@/services/api';
+import { clearInMemoryToken, handleResponseError, refreshAccessToken, setInMemoryToken, getInMemoryToken } from '@/services/api';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '@/lib/authEvents';
 
 const mockedAxios = vi.mocked(axios);
@@ -62,7 +62,7 @@ describe('handleResponseError (access-token refresh)', () => {
   });
 
   beforeEach(() => {
-    localStorage.clear();
+    clearInMemoryToken();
     expired = 0;
     superseded = 0;
     vi.clearAllMocks();
@@ -84,7 +84,7 @@ describe('handleResponseError (access-token refresh)', () => {
     mockedAxios.post.mockRejectedValue({ response: { status: 401 } } as never);
 
   it('replays a 401 once with the fresh token after a successful refresh', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
     refreshSucceeds();
 
     const originalError = rejected401('/confessions');
@@ -100,7 +100,7 @@ describe('handleResponseError (access-token refresh)', () => {
   });
 
   it('adds an Authorization header when the original request never sent one', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
     refreshSucceeds();
 
     await handleResponseError({ response: { status: 401 }, config: { url: '/profile/update' } });
@@ -110,7 +110,7 @@ describe('handleResponseError (access-token refresh)', () => {
   });
 
   it('shares one refresh across simultaneous failures', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
 
     let resolvePost!: (value: { data: { access_token: string } }) => void;
     mockedAxios.post.mockReturnValueOnce(
@@ -138,29 +138,43 @@ describe('handleResponseError (access-token refresh)', () => {
   });
 
   it('ends the session when the refresh itself fails', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
     refreshFails();
 
     await expect(handleResponseError(rejected401('/confessions'))).rejects.toMatchObject({
       response: { status: 401 },
     });
 
-    expect(localStorage.getItem('accessToken')).toBeNull();
+    expect(getInMemoryToken()).toBeNull();
     expect(expired).toBe(1);
     expect(mockedAxios).not.toHaveBeenCalled();
   });
 
   it('stores the fresh token where the rest of the app reads it', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
     refreshSucceeds('rotated-access');
 
     await handleResponseError(rejected401('/confessions'));
 
-    expect(localStorage.getItem('accessToken')).toBe('rotated-access');
+    expect(getInMemoryToken()).toBe('rotated-access');
+  });
+
+  it('never persists the bearer to JS-readable storage', async () => {
+    // Regression guard for the XSS finding: a rotated or freshly minted token must not
+    // land in localStorage (or anywhere else page scripts of another origin path could
+    // read), only in the in-memory store.
+    setInMemoryToken('old-token');
+    refreshSucceeds('rotated-access');
+
+    await handleResponseError(rejected401('/confessions'));
+    expect(await refreshAccessToken()).toBe('rotated-access');
+
+    expect(localStorage.getItem('accessToken')).toBeNull();
+    expect(getInMemoryToken()).toBe('rotated-access');
   });
 
   it('does not refresh a request that already rode a fresh token, and ends the session', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
     refreshSucceeds();
 
     const originalError = rejected401('/confessions');
@@ -173,12 +187,12 @@ describe('handleResponseError (access-token refresh)', () => {
     });
 
     expect(mockedAxios.post).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem('accessToken')).toBeNull();
+    expect(getInMemoryToken()).toBeNull();
     expect(expired).toBe(1);
   });
 
   it('ends the session with the superseded event instead of refreshing', async () => {
-    localStorage.setItem('accessToken', 'replaced-token');
+    setInMemoryToken('replaced-token');
 
     await expect(
       handleResponseError(
@@ -188,14 +202,14 @@ describe('handleResponseError (access-token refresh)', () => {
       )
     ).rejects.toMatchObject({ response: { status: 401 } });
 
-    expect(localStorage.getItem('accessToken')).toBeNull();
+    expect(getInMemoryToken()).toBeNull();
     expect(superseded).toBe(1);
     expect(expired).toBe(0);
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
   it('leaves auth-route 401s alone, even with a token in storage', async () => {
-    localStorage.setItem('accessToken', 'old-token');
+    setInMemoryToken('old-token');
 
     for (const url of [
       'http://localhost:8001/auth/login/magic/verify?token=abc',
@@ -208,7 +222,7 @@ describe('handleResponseError (access-token refresh)', () => {
     }
 
     expect(mockedAxios.post).not.toHaveBeenCalled();
-    expect(localStorage.getItem('accessToken')).toBe('old-token');
+    expect(getInMemoryToken()).toBe('old-token');
     expect(expired).toBe(0);
   });
 
@@ -222,7 +236,7 @@ describe('handleResponseError (access-token refresh)', () => {
   });
 
   it('passes through anything that is not a 401', async () => {
-    localStorage.setItem('accessToken', 'valid-token');
+    setInMemoryToken('valid-token');
 
     await expect(handleResponseError({ response: { status: 403 }, config: {} })).rejects.toMatchObject({
       response: { status: 403 },
@@ -230,7 +244,7 @@ describe('handleResponseError (access-token refresh)', () => {
     await expect(handleResponseError(undefined)).rejects.toBeUndefined();
 
     expect(mockedAxios.post).not.toHaveBeenCalled();
-    expect(localStorage.getItem('accessToken')).toBe('valid-token');
+    expect(getInMemoryToken()).toBe('valid-token');
   });
 
   it('refreshAccessToken answers null when the refresh is refused', async () => {

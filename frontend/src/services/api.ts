@@ -2,6 +2,11 @@
 
 import axios from 'axios';
 import { endSessionIfTokenWasRejected, isSessionSupersededError } from '@/lib/authEvents';
+import {
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+} from '@/lib/tokenStore';
 import type { AccountType } from '@/lib/capabilities';
 import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
@@ -13,9 +18,18 @@ const API_URL = 'http://localhost:8001';
 // and /auth/refresh would find no session to extend.
 axios.defaults.withCredentials = true;
 
-// Used to get authentication headers from local storage
-const getAuthHeaders = () => {
-  const token = localStorage.getItem('accessToken');
+// In-memory bearer store. The access token is deliberately NOT persisted to localStorage
+// (or any other JS-readable storage): any XSS could read it from there and exfiltrate
+// the session. It lives only in module state (see `@/lib/tokenStore`), mirrors into the
+// auth context's React state for consumers, and is restored after a reload by a silent
+// refresh through the HttpOnly cookie rather than by re-reading persistence.
+export const setInMemoryToken = setAccessToken;
+export const getInMemoryToken = getAccessToken;
+export const clearInMemoryToken = clearAccessToken;
+
+// Used to get authentication headers from the in-memory token
+export const getAuthHeaders = () => {
+  const token = getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
@@ -24,7 +38,7 @@ const getAuthHeaders = () => {
  *
  * The cookie itself stays out of sight in page scripts; the server rotates it on every use,
  * so the proven holder of a cookie comes back with a new cookie and a short-lived access
- * token, which is stored where the rest of the app reads it. Any failure — a lapsed or
+ * token, which is kept in memory where the rest of the app reads it. Any failure — a lapsed or
  * revoked cookie, a superseded session, a network gap — answers null so the caller can end
  * the session instead of looping.
  */
@@ -33,7 +47,7 @@ export const refreshAccessToken = async (): Promise<string | null> => {
     const response = await axios.post(`${API_URL}/auth/refresh`);
     const accessToken = response.data?.access_token;
     if (typeof accessToken !== 'string') return null;
-    localStorage.setItem('accessToken', accessToken);
+    setAccessToken(accessToken);
     return accessToken;
   } catch {
     return null;
@@ -97,7 +111,7 @@ export const handleResponseError = async (error: any): Promise<any> => {
   }
 
   // A 401 from a request that never carried an access token is not a sign-out.
-  if (!localStorage.getItem('accessToken')) {
+  if (!getAccessToken()) {
     return Promise.reject(error);
   }
 
@@ -1424,7 +1438,7 @@ export const pauseAnagram = async (gameId: string): Promise<AnagramParticipation
  */
 export const pauseAnagramBeacon = (gameId: string): void => {
     try {
-        const token = localStorage.getItem('accessToken');
+        const token = getAccessToken();
         if (!token) return;
         void fetch(`${API_URL}/games/anagram/pause`, {
             method: 'POST',
