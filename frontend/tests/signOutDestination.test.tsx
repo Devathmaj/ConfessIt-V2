@@ -82,7 +82,8 @@ const authMe = vi.hoisted(() => ({
 
 vi.mock('axios', () => ({
   default: {
-    // The API layer sets `defaults.withCredentials` once at import time.
+    // Plain stub: the API layer sends credentials per-request, never via a global
+    // default, so the mock needs no `defaults` behaviour at all.
     defaults: {},
     interceptors: authMe.interceptors,
     get: async () => ({ data: authMe.current }),

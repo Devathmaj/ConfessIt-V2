@@ -13,11 +13,13 @@ import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
 // The API origin lives in `@/lib/apiBase` -- one variable for the whole app.
 
-// The refresh cookie is an HttpOnly cookie scoped to `Path=/auth`, so the browser only
-// attaches it to /auth requests. That is the whole point, but it means the attachment is
-// opt-in: every request must send credentials cross-origin or the cookie never travels,
-// and /auth/refresh would find no session to extend.
-axios.defaults.withCredentials = true;
+// Credentials (the HttpOnly refresh cookie, scoped to `Path=/auth`) travel only on the
+// requests that need them, never globally. A global `withCredentials` would attach the
+// refresh and client cookies to every cross-origin call -- including all the Bearer-only
+// API requests -- widening both CSRF reach and what an XSS on an allowed origin could do
+// with the session. The two `fetch` calls that open a session (magic-link request and
+// redemption) already opt in per-request with `credentials: 'include'`; the two axios
+// calls below are the only other ones that carry cookies.
 
 // In-memory bearer store. The access token is deliberately NOT persisted to localStorage
 // (or any other JS-readable storage): any XSS could read it from there and exfiltrate
@@ -45,7 +47,9 @@ export const getAuthHeaders = () => {
  */
 export const refreshAccessToken = async (): Promise<string | null> => {
   try {
-    const response = await axios.post(`${API_URL}/auth/refresh`);
+    // Carries the refresh cookie: without credentials the cookie never travels and
+    // there is no session to extend.
+    const response = await axios.post(`${API_URL}/auth/refresh`, {}, { withCredentials: true });
     const accessToken = response.data?.access_token;
     if (typeof accessToken !== 'string') return null;
     setAccessToken(accessToken);
@@ -64,7 +68,9 @@ export const refreshAccessToken = async (): Promise<string | null> => {
  */
 export const serverLogout = async (): Promise<void> => {
   try {
-    await axios.post(`${API_URL}/auth/logout`);
+    // Carries the refresh cookie so the server can revoke this session's row now;
+    // without it the cookie simply lapses at its deadline instead.
+    await axios.post(`${API_URL}/auth/logout`, {}, { withCredentials: true });
   } catch {
     // The browser has already forgotten the session; a stale cookie is refused later.
   }

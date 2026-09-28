@@ -504,14 +504,35 @@ app.add_exception_handler(_GameUnavailable, _game_unavailable_response)
 # ----------------------
 # CORS Middleware
 # ----------------------
-origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+def _cors_allow_origins() -> list[str]:
+    """Parse ``CORS_ORIGINS`` into the exact origins browsers may call with cookies.
+
+    Entries are stripped and de-slashed so `https://app.example.com/` and the same
+    origin without the slash are one entry, not two answers. A bare ``*`` is refused
+    outright: combined with ``allow_credentials=True`` it would turn every website
+    into a credentialed caller of this API.
+    """
+    origins = [o.strip().rstrip("/") for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError(
+            'CORS_ORIGINS must not contain "*": wildcard origins with credentials '
+            "enabled would let any site call this API with the user's cookies."
+        )
+    return list(dict.fromkeys(origins))
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=_cors_allow_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Exactly what the frontend sends: credentialed JSON reads and writes. No HEAD,
+    # TRACE or anything else exists on any router, so the preflight answer does not
+    # offer them. `OPTIONS` is the preflight itself.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # Exactly what the frontend sends: the bearer scheme, the JSON content type (and
+    # its multipart form on uploads), and the default Accept. Anything else fails
+    # preflight instead of reaching a handler.
+    allow_headers=["Authorization", "Content-Type", "Accept"],
     # `Retry-After` is a plain response header, so a cross-origin fetch cannot read it
     # unless it is named here: the browser withholds non-safelisted response headers
     # from JS unless the server publicly lists them. The login page turns the value it
@@ -520,6 +541,9 @@ app.add_middleware(
     # the `*` value is not honoured with credentials, and this is the one header the
     # client actually reads.
     expose_headers=["Retry-After"],
+    # Cache a successful preflight for ten minutes so browsers do not re-ask on every
+    # call. The answer only changes on redeploy, which restarts the process anyway.
+    max_age=600,
 )
 
 # ----------------------

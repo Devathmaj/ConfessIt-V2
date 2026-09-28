@@ -218,6 +218,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setIsLoading(true);
     try {
       const response = await fetch(`${API_URL}/auth/login/magic/verify?token=${magicToken}`, {
+        // Per-request, like every credentialed call: the response sets the HttpOnly refresh
+        // cookie, which a cross-origin fetch drops unless it opts in. Nothing else sends cookies.
         credentials: 'include',
       });
 

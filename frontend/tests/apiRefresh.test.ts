@@ -35,7 +35,7 @@ vi.mock('axios', async () => {
 });
 
 import axios from 'axios';
-import { clearInMemoryToken, handleResponseError, refreshAccessToken, setInMemoryToken, getInMemoryToken } from '@/services/api';
+import { clearInMemoryToken, getCurrentUser, handleResponseError, refreshAccessToken, serverLogout, setInMemoryToken, getInMemoryToken } from '@/services/api';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '@/lib/authEvents';
 
 const mockedAxios = vi.mocked(axios);
@@ -90,11 +90,18 @@ describe('handleResponseError (access-token refresh)', () => {
     const originalError = rejected401('/confessions');
     const result = await handleResponseError(originalError);
 
-    expect(mockedAxios.post).toHaveBeenCalledWith('http://localhost:8001/auth/refresh');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      'http://localhost:8001/auth/refresh',
+      {},
+      { withCredentials: true },
+    );
     expect(mockedAxios).toHaveBeenCalledTimes(1);
     const retryConfig = mockedAxios.mock.calls[0][0];
     expect(retryConfig).toBe(originalError.config);
     expect(retryConfig.headers.Authorization).toBe('Bearer fresh-access');
+    // The retry is a Bearer-only API call: the refresh must not smuggle cookie
+    // credentials onto it by mutating the config it was given.
+    expect(retryConfig).not.toHaveProperty('withCredentials');
     expect(result.data).toEqual({});
     expect(expired).toBe(0);
   });
@@ -255,5 +262,43 @@ describe('handleResponseError (access-token refresh)', () => {
   it('refreshAccessToken answers null when the reply has no access token', async () => {
     mockedAxios.post.mockResolvedValue({ data: { detail: 'rate limited' } } as never);
     expect(await refreshAccessToken()).toBeNull();
+  });
+
+  it('sends cookies only on the refresh call, not on retried API calls', async () => {
+    // The refresh cookie is what the rotation is for; the replayed Bearer call must
+    // not carry it. Assert both halves of that contract in one place.
+    setInMemoryToken('old-token');
+    refreshSucceeds();
+
+    await handleResponseError(rejected401('/confessions'));
+
+    const [refreshUrl, refreshBody, refreshConfig] = mockedAxios.post.mock.calls[0];
+    expect(refreshUrl).toBe('http://localhost:8001/auth/refresh');
+    expect(refreshBody).toEqual({});
+    expect(refreshConfig).toEqual({ withCredentials: true });
+
+    const [retryConfig] = mockedAxios.mock.calls[0];
+    expect(retryConfig).not.toHaveProperty('withCredentials');
+  });
+
+  it('serverLogout carries cookies so the server can revoke the session', async () => {
+    await serverLogout();
+
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      'http://localhost:8001/auth/logout',
+      {},
+      { withCredentials: true },
+    );
+  });
+
+  it('ordinary API calls send no cookies', async () => {
+    // /auth/me is Bearer-only on the server: attaching the refresh cookie to it would
+    // be pure CSRF surface, so the client must not opt in.
+    await getCurrentUser('valid-token');
+
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      'http://localhost:8001/auth/me',
+      { headers: { Authorization: 'Bearer valid-token' } },
+    );
   });
 });
