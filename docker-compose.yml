@@ -66,9 +66,9 @@ services:
       # via python-dotenv, which keeps the root .env the only file the credential is written
       # in. REDIS_URL itself stays out of this file; setting it in the environment overrides.
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
-      DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt"
+      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt"
 
-      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt_Test"
+      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt_Test"
       # The HMAC/JWT signing key, identical in every worker and replica. There is no
       # default: a random-per-process key meant restarts invalidated all sessions and
       # workers 401'd each other's tokens. Generate once with
@@ -125,7 +125,7 @@ services:
       - postgres
     environment:
       TZ: UTC
-      DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt"
+      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt"
       # Same image and settings as the API, so the same signing key: the scheduler
       # imports the app and must verify (and mint, via game HMACs) with the key the
       # API uses, or its resets disagree with live traffic.
@@ -150,7 +150,10 @@ services:
       - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: confessit
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}
+      # The image's own init variable keeps its name: DB_PASSWORD is mapped onto it.
+      # Only read on first initialisation of an empty data volume -- rotating the
+      # password later means ALTER USER inside the database, not just this line.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
       POSTGRES_DB: ConfessIt
     volumes:
       - postgres_data:/var/lib/postgresql/data

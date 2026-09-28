@@ -8,7 +8,6 @@ venv
 .env
 */.env
 **/.env
-db_password.txt
 my_app.log*
 archives/
 **/__pycache__/

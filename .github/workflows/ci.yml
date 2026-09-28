@@ -35,8 +35,11 @@ jobs:
     env:
       # One credential block, so the service, the CREATE DATABASE step and the suite
       # cannot drift apart the way a duplicated literal in three places would.
+      # Named DB_PASSWORD to match the root .env the stack reads locally; the stock
+      # postgres image still wants its own POSTGRES_PASSWORD variable below, so the
+      # same value is mapped onto that name for the service container.
       POSTGRES_USER: confessit
-      POSTGRES_PASSWORD: ConfessItLocalPassword
+      DB_PASSWORD: ConfessItLocalPassword
       DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt"
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt_Test"
       # Required and validated by app.config: the suite mints and verifies real JWTs
@@ -77,7 +80,7 @@ jobs:
         # tests/conftest.py refuses to start unless TEST_DATABASE_URL names a database
         # other than DATABASE_URL, because its clear_db fixture truncates every table.
         run: |
-          PGPASSWORD="$POSTGRES_PASSWORD" psql \
+          PGPASSWORD="$DB_PASSWORD" psql \
             -h localhost -U "$POSTGRES_USER" -d ConfessIt \
             -c 'CREATE DATABASE "ConfessIt_Test";'
       - name: Run tests
@@ -91,7 +94,7 @@ jobs:
     # compose file interpolates these at start-up and fails fast when they are missing, so
     # the build needs them from here. Dev-only values, matching the local .env.
     env:
-      POSTGRES_PASSWORD: ConfessItLocalPassword
+      DB_PASSWORD: ConfessItLocalPassword
       REDIS_PASSWORD: ConfessItLocalRedisPassword
       GRAFANA_ADMIN_PASSWORD: ConfessItLocalGrafanaPassword
       # Parsed, not run, by `docker compose build`: the `:?` interpolation fails closed
