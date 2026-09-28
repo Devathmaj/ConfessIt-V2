@@ -11,7 +11,7 @@ from sqlalchemy import case, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..accounts import normalize_account_type
-from ..config import settings
+from ..config import cookie_secure, settings
 from ..db_models import LoginRateLimitRecord
 from ..postgres import Database
 
@@ -77,16 +77,18 @@ def client_cookie_options(request: Any) -> Dict[str, Any]:
 
     ``HttpOnly`` keeps the id out of page scripts, ``SameSite=Lax`` keeps it away from
     cross-site requests while still sending it to the API from a sibling port of the
-    same site, and ``Secure`` follows the scheme the request actually arrived on: the
-    cookie must work on a local http deployment and be strict behind TLS, so the flag
-    cannot be a constant chosen at start-up.
+    same site, and ``Secure`` follows the client-facing scheme -- behind a TLS proxy
+    that is the scheme the proxy reported (see ``TRUSTED_PROXY_HOSTS``), not the
+    proxy-to-app hop -- or the explicit ``COOKIE_SECURE`` override. A local http
+    deployment keeps working because the flag stays off there; it cannot be left off
+    behind TLS by accident.
     """
     return {
         "key": settings.LOGIN_CLIENT_COOKIE_NAME,
         "max_age": settings.LOGIN_CLIENT_COOKIE_MAX_AGE,
         "httponly": True,
         "samesite": "lax",
-        "secure": request.url.scheme == "https",
+        "secure": cookie_secure(request.url.scheme),
         "path": "/",
     }
 

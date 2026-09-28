@@ -59,6 +59,13 @@ from app.models import AccountDetails, UserDetails
 from app.services.auth_service import get_current_user
 from app.services.redis_service import redis_service
 
+# The out-of-band refresh-token body flow is gated behind ENABLE_DEBUG_ENDPOINTS in
+# production, but the rotation mechanics tests drive it directly (they hold raw tokens
+# the way a non-browser client would). The flag is read per request, so enabling it
+# here changes no routes -- /db-test stays unregistered -- while the gate itself is
+# pinned by dedicated tests that switch the flag off.
+settings.ENABLE_DEBUG_ENDPOINTS = True
+
 test_db = get_postgres_client()
 test_db.initialize()
 

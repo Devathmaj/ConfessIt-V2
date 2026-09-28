@@ -13,8 +13,7 @@ real preflights (no auth needed -- the middleware answers before routing):
 
 import pytest
 
-from app import main as main_module
-from app.config import settings
+from app.config import cors_allow_origins, settings
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 DISALLOWED_ORIGIN = "https://evil.example.com"
@@ -90,10 +89,10 @@ def test_origins_are_de_duplicated_by_trailing_slash(monkeypatch):
     monkeypatch.setattr(
         settings, "CORS_ORIGINS", "http://localhost:5173,http://localhost:5173/"
     )
-    assert main_module._cors_allow_origins() == ["http://localhost:5173"]
+    assert cors_allow_origins() == ["http://localhost:5173"]
 
 
 def test_wildcard_origin_refuses_to_boot(monkeypatch):
     monkeypatch.setattr(settings, "CORS_ORIGINS", "http://localhost:5173, *")
     with pytest.raises(RuntimeError):
-        main_module._cors_allow_origins()
+        cors_allow_origins()

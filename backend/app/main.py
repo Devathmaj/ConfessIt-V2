@@ -8,12 +8,18 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
-from .config import settings, validate_cloudinary_settings, validate_public_base_url
+from .config import (
+    settings,
+    cors_allow_origins,
+    validate_cloudinary_settings,
+    validate_public_base_url,
+)
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
@@ -504,26 +510,9 @@ app.add_exception_handler(_GameUnavailable, _game_unavailable_response)
 # ----------------------
 # CORS Middleware
 # ----------------------
-def _cors_allow_origins() -> list[str]:
-    """Parse ``CORS_ORIGINS`` into the exact origins browsers may call with cookies.
-
-    Entries are stripped and de-slashed so `https://app.example.com/` and the same
-    origin without the slash are one entry, not two answers. A bare ``*`` is refused
-    outright: combined with ``allow_credentials=True`` it would turn every website
-    into a credentialed caller of this API.
-    """
-    origins = [o.strip().rstrip("/") for o in settings.CORS_ORIGINS.split(",") if o.strip()]
-    if "*" in origins:
-        raise RuntimeError(
-            'CORS_ORIGINS must not contain "*": wildcard origins with credentials '
-            "enabled would let any site call this API with the user's cookies."
-        )
-    return list(dict.fromkeys(origins))
-
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_allow_origins(),
+    allow_origins=cors_allow_origins(),
     allow_credentials=True,
     # Exactly what the frontend sends: credentialed JSON reads and writes. No HEAD,
     # TRACE or anything else exists on any router, so the preflight answer does not
@@ -545,6 +534,16 @@ app.add_middleware(
     # call. The answer only changes on redeploy, which restarts the process anyway.
     max_age=600,
 )
+
+# Added last so it runs outermost: every middleware and handler below sees the
+# client-facing scheme and host the proxy reported, not the proxy-to-app hop. Only
+# added when TRUSTED_PROXY_HOSTS names the proxies -- trusting X-Forwarded-* from
+# anyone would let a direct client declare its own scheme as https (upgrading its own
+# cookies to Secure) or spoof its address. With no proxies configured the app is
+# reached directly and the socket already tells the truth, so nothing is added.
+_proxy_hosts = [h.strip() for h in settings.TRUSTED_PROXY_HOSTS.split(",") if h.strip()]
+if _proxy_hosts:
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_proxy_hosts)
 
 # ----------------------
 # Routers

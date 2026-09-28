@@ -156,6 +156,22 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379"
     CLOUD: bool = False
 
+    # --- Reverse proxy and cookie transport ---
+    #
+    # Comma-separated IPs or CIDRs of proxies allowed to set X-Forwarded-* on the way in
+    # (e.g. "10.0.0.0/8" for a VPC load balancer). Empty means the app is reached
+    # directly and no forwarded header is trusted: trusting them from anyone would let a
+    # direct client declare its own scheme as https and upgrade its own cookies. When
+    # non-empty, ProxyHeadersMiddleware runs outermost so every downstream reader sees
+    # the client-facing scheme and host the proxy reported.
+    TRUSTED_PROXY_HOSTS: str = ""
+    # Whether auth cookies are minted with the Secure flag. None (the default) follows
+    # the proxy-corrected request scheme -- http locally, https behind a TLS proxy --
+    # which is correct in both postures without a second knob. True forces the flag on
+    # (public deployments that never serve plain HTTP); False forces it off, which no
+    # deployment reachable over a network should ever set.
+    COOKIE_SECURE: bool | None = None
+
     # --- Passwordless login: magic-link token lifetime ---
     #
     # One login link is good for one redemption inside this window and then it is gone
@@ -317,6 +333,37 @@ def validate_public_base_url() -> None:
             f"PUBLIC_BASE_URL must not point at loopback when CLOUD is true (got {base!r}): "
             "magic links minted for it would be unusable in production."
         )
+
+
+def cors_allow_origins() -> list[str]:
+    """Parse ``CORS_ORIGINS`` into the exact origins browsers may call with cookies.
+
+    Entries are stripped and de-slashed so `https://app.example.com/` and the same
+    origin without the slash are one entry, not two answers. A bare ``*`` is refused
+    outright: combined with ``allow_credentials=True`` it would turn every website
+    into a credentialed caller of this API. Shared by the CORS middleware and the
+    cookie-flow CSRF check so the two can never disagree about who is allowed.
+    """
+    origins = [o.strip().rstrip("/") for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError(
+            'CORS_ORIGINS must not contain "*": wildcard origins with credentials '
+            "enabled would let any site call this API with the user's cookies."
+        )
+    return list(dict.fromkeys(origins))
+
+
+def cookie_secure(scheme: str) -> bool:
+    """Whether auth cookies are minted with the Secure flag for this request.
+
+    Follows the explicit override when set, otherwise the request scheme -- which is
+    the client-facing one when the proxy middleware is on, and the direct one when the
+    app is reached directly. Either way plain-HTTP responses never mint Secure cookies
+    that browsers would then refuse to send back, and HTTPS responses always do.
+    """
+    if settings.COOKIE_SECURE is not None:
+        return settings.COOKIE_SECURE
+    return scheme == "https"
 
 
 def validate_cloudinary_settings() -> None:

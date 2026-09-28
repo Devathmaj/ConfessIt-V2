@@ -10,7 +10,7 @@ from ..postgres import Database
 from typing import Annotated
 
 # Corrected: Use direct imports from the project root
-from ..config import settings
+from ..config import cookie_secure, cors_allow_origins, settings
 from ..dependencies import get_db
 from ..accounts import AccountType
 from ..models import AccountDetails, UserDetails
@@ -35,11 +35,57 @@ class Token(BaseModel):
     redirect_url: str
 
 class RefreshRequest(BaseModel):
-    """An alternative to the refresh cookie: a caller (test, API client) can hand the
-    raw refresh token in the body instead. The cookie path stays the primary one; the
-    body exists so a client that captured the token out of band can use it without
-    cookie plumbing."""
+    """An alternative to the refresh cookie, for non-browser callers only.
+
+    A caller (test, API client) that captured the token out of band can hand the raw
+    refresh token in the body instead of doing cookie plumbing. Honoured only when
+    ``ENABLE_DEBUG_ENDPOINTS`` is on: in any real deployment the cookie is the one
+    credential these endpoints read, and a body that worked there would be a second,
+    unguarded way to drive rotation and revocation. With the flag off a body is
+    silently ignored and the cookie flow below applies.
+    """
     refresh_token: str
+
+
+def _request_origin(value: str) -> Optional[str]:
+    """Reduce an Origin or Referer header to its ``scheme://authority`` for comparison.
+
+    Returns None when the value is not shaped like an origin at all, which the caller
+    treats as a refusal: a present-but-unparseable attestation is worse than none.
+    """
+    if "://" not in value:
+        return None
+    scheme, rest = value.split("://", 1)
+    authority = rest.split("/", 1)[0]
+    if not scheme or not authority:
+        return None
+    return f"{scheme.lower()}://{authority.lower()}"
+
+
+def _enforce_cookie_origin(request: Request) -> None:
+    """Refuse a cookie-authenticated refresh/logout that arrived cross-site.
+
+    ``SameSite=Lax`` already keeps modern browsers from attaching the cookie to a
+    cross-site POST, but 307 redirect chains and old browsers bypass that layer -- and
+    when they do, this is the layer that has to say no. A browser-driven POST always
+    carries ``Origin`` (fetch/XHR) or ``Referer`` (navigation); either one must name an
+    origin from the CORS allowlist, which is exactly the set permitted to call with
+    credentials. A request carrying neither is not browser-driven (curl, tests, service
+    clients) and is let through: there is no ambient authority to steal outside a
+    browser. A 403 here reveals nothing -- no account state is involved.
+    """
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    candidate = origin or referer
+    if candidate is None:
+        return
+    parsed = _request_origin(candidate)
+    allowed = {o.lower() for o in cors_allow_origins()}
+    if parsed is None or parsed not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-site request refused",
+        )
 
 
 def _refresh_cookie_options(request: Request) -> Dict[str, object]:
@@ -47,24 +93,36 @@ def _refresh_cookie_options(request: Request) -> Dict[str, object]:
 
     ``HttpOnly`` keeps the raw token out of page scripts, ``SameSite=Lax`` keeps it off
     cross-site requests while still delivering it to the API from a sibling port of the
-    same site, and ``Secure`` follows the scheme the request actually arrived on -- the
-    same trade-off the client-id cookie makes in login_rate_limit. ``Path=/auth`` means
-    the browser only ever attaches it to authentication endpoints, never to the rest of
-    the API, so even an XSS cannot send it along with an ordinary request.
+    same site, and ``Secure`` follows the client-facing scheme -- behind a TLS proxy
+    that is the scheme the proxy reported (see ``TRUSTED_PROXY_HOSTS``), not the
+    proxy-to-app hop -- or the explicit ``COOKIE_SECURE`` override. ``Path=/auth``
+    means the browser only ever attaches it to authentication endpoints, never to the
+    rest of the API, so even an XSS cannot send it along with an ordinary request.
     """
     return {
         "key": settings.REFRESH_COOKIE_NAME,
         "max_age": settings.LOGIN_SESSION_EXPIRE_HOURS * 60 * 60,
         "httponly": True,
         "samesite": "lax",
-        "secure": request.url.scheme == "https",
+        "secure": cookie_secure(request.url.scheme),
         "path": settings.REFRESH_COOKIE_PATH,
     }
 
 
-def _clear_refresh_cookie(response: Response) -> None:
-    """Drop the refresh cookie, matching the path it was set with."""
-    response.delete_cookie(settings.REFRESH_COOKIE_NAME, path=settings.REFRESH_COOKIE_PATH)
+def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
+    """Drop the refresh cookie, matching the path it was set with.
+
+    The ``secure`` flag must match how the cookie was set: browsers ignore a deletion
+    for a Secure cookie that arrives without the flag, which would leave a stale
+    session cookie behind on exactly the deployments that need it gone. Callers pass
+    ``cookie_secure(request.url.scheme)`` from the request being answered.
+    """
+    response.delete_cookie(
+        settings.REFRESH_COOKIE_NAME,
+        path=settings.REFRESH_COOKIE_PATH,
+        secure=secure,
+        samesite="lax",
+    )
 
 @router.post("/login/{account_type}/magic")
 async def generate_magic_link(
@@ -146,23 +204,34 @@ async def refresh_access_token(
     Rotate the session's refresh token and mint a fresh access token.
 
     The refresh token is read from the HttpOnly cookie set at login; a body carrying
-    ``refresh_token`` is accepted as an alternative for callers that captured the value
-    out of band. The response sets a new cookie holding the rotated refresh token -- the
-    old one is dead the moment this succeeds -- and answers with a fresh access token.
-    The rotation inherits the session's original absolute deadline: refreshing extends
-    the access token, never the session.
+    ``refresh_token`` is accepted as an alternative only when ``ENABLE_DEBUG_ENDPOINTS``
+    is on, for non-browser callers without cookie plumbing. The response sets a new
+    cookie holding the rotated refresh token -- the old one is dead the moment this
+    succeeds -- and answers with a fresh access token. The rotation inherits the
+    session's original absolute deadline: refreshing extends the access token, never
+    the session.
+
+    A cookie-authenticated call must also pass the Origin/Referer check: the cookie is
+    ambient authority, and a cross-site POST that somehow carries it (a 307 chain, an
+    old browser past SameSite) is refused here. Body-authenticated calls carry no
+    ambient authority and skip the check.
 
     Every refusal is a generic 401 except the superseded case, which keeps the dedicated
     ``session_superseded`` wording so the client can say the person was signed in
     elsewhere. A failed refresh also clears the cookie, so a dead token is not re-sent.
     """
-    raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
-    if body is not None and body.refresh_token:
+    cookie_raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    raw = cookie_raw
+    using_cookie = raw is not None
+    if body is not None and body.refresh_token and settings.ENABLE_DEBUG_ENDPOINTS:
         raw = body.refresh_token
+        using_cookie = False
+    if using_cookie:
+        _enforce_cookie_origin(request)
     try:
         result = rotate_refresh_token_service(raw, db)
     except HTTPException:
-        _clear_refresh_cookie(response)
+        _clear_refresh_cookie(response, secure=cookie_secure(request.url.scheme))
         raise
     response.set_cookie(value=result["refresh_token"], **_refresh_cookie_options(request))
     return {"access_token": result["access_token"], "token_type": result["token_type"]}
@@ -182,14 +251,20 @@ async def logout(
     the refresh cookie rather than the access token -- which is what makes "log out after
     the access token expired" possible. Revocation is silent about whether the token was
     ever live, so a logout cannot probe a refresh token; the client clears its own
-    access-token copy regardless.
+    access-token copy regardless. Like refresh, a cookie-authenticated call must pass the
+    Origin/Referer check, and the body alternative is debug-only.
     """
-    raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
-    if body is not None and body.refresh_token:
+    cookie_raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    raw = cookie_raw
+    using_cookie = raw is not None
+    if body is not None and body.refresh_token and settings.ENABLE_DEBUG_ENDPOINTS:
         raw = body.refresh_token
+        using_cookie = False
+    if using_cookie:
+        _enforce_cookie_origin(request)
     if raw:
         revoke_refresh_token_service(raw, db)
-    _clear_refresh_cookie(response)
+    _clear_refresh_cookie(response, secure=cookie_secure(request.url.scheme))
     return {"message": "Signed out"}
 
 # Deliberately not a response_model. The response is a ``UserDetails`` for a participant and
