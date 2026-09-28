@@ -161,8 +161,24 @@ describe('LoveNotesPage: paged inbox', () => {
     expect(screen.getByText('love note n12')).toBeInTheDocument();
   });
 
-  it('still renders legacy bare-array answers with no pager', async () => {
-    api.getReceivedLoveNotes.mockResolvedValue([note('n1', 1), note('n2', 2)]);
+  it('renders every love-note image with no referrer', async () => {
+    // Signed image URLs are non-expiring bearer capabilities: loading one must not
+    // send the page as a referrer to the CDN. Every inbox `<img>` therefore carries
+    // referrerpolicy="no-referrer".
+    db = Array.from({ length: 3 }, (_, index) => note(`n${index}`, index + 1));
+    await renderAt('/love-notes?tab=inbox');
+    await screen.findByText('love note n2');
+
+    const images = document.querySelectorAll<HTMLImageElement>('img[src^="http://example.test/"]');
+    expect(images.length).toBeGreaterThan(0);
+    for (const image of images) {
+      // Read the content attribute rather than the IDL: what matters is what React
+      // renders into the markup the browser enforces.
+      expect(image.getAttribute('referrerpolicy')).toBe('no-referrer');
+    }
+  });
+
+  it('still renders legacy bare-array answers with no pager', async () => {    api.getReceivedLoveNotes.mockResolvedValue([note('n1', 1), note('n2', 2)]);
 
     await renderAt('/love-notes?tab=inbox');
     await screen.findByText('love note n1');

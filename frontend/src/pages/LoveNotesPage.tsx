@@ -1007,6 +1007,9 @@ setSearchTerm('');
                                                     <img 
                                                         src={note.image_url} 
                                                         alt="Love note" 
+                                                        // The URL is a non-expiring signed bearer: never send it
+                                                        // as a referrer to the CDN or anywhere else.
+                                                        referrerPolicy="no-referrer"
                                                         className="w-full h-48 object-cover cursor-pointer"
                                                         onClick={() => setViewingImageUrl(note.image_url)}
                                                     />
@@ -1044,6 +1047,8 @@ setSearchTerm('');
                                                                 link.href = note.image_url;
                                                                 link.download = `love-note-${note.id}.png`;
                                                                 link.target = '_blank';
+                                                                // Navigating to a bearer URL must not send a referrer.
+                                                                link.rel = 'noreferrer';
                                                                 document.body.appendChild(link);
                                                                 link.click();
                                                                 document.body.removeChild(link);
@@ -1249,6 +1254,8 @@ setSearchTerm('');
                         <img 
                             src={viewingImageUrl} 
                             alt="Love note" 
+                            // Non-expiring signed bearer URL: no referrer, as above.
+                            referrerPolicy="no-referrer"
                             className="w-full h-auto rounded-lg shadow-2xl"
                             onClick={(e) => e.stopPropagation()}
                         />
@@ -1260,6 +1267,8 @@ setSearchTerm('');
                                     link.href = viewingImageUrl;
                                     link.download = `love-note.png`;
                                     link.target = '_blank';
+                                    // Navigating to a bearer URL must not send a referrer.
+                                    link.rel = 'noreferrer';
                                     document.body.appendChild(link);
                                     link.click();
                                     document.body.removeChild(link);
@@ -1296,6 +1305,8 @@ setSearchTerm('');
                                         <img 
                                             src={selectedNote.image_url} 
                                             alt="Love note" 
+                                            // Non-expiring signed bearer URL: no referrer, as above.
+                                            referrerPolicy="no-referrer"
                                             className="w-full h-auto rounded-t-lg"
                                         />
                                     </div>
@@ -1326,9 +1337,11 @@ setSearchTerm('');
                                             <Button
                                                 onClick={() => {
                                                     const link = document.createElement('a');
-                                                    link.href = selectedNote.image_url;
-                                                    link.download = `love-note-${selectedNote.id}.png`;
-                                                    link.target = '_blank';
+                                                link.href = selectedNote.image_url;
+                                                link.download = `love-note-${selectedNote.id}.png`;
+                                                link.target = '_blank';
+                                                // Navigating to a bearer URL must not send a referrer.
+                                                link.rel = 'noreferrer';
                                                     document.body.appendChild(link);
                                                     link.click();
                                                     document.body.removeChild(link);

@@ -16,6 +16,8 @@ from ..accounts import (
 )
 from ..services.authorization import require_capability
 from .. import limits as app_limits
+from ..logger import get_logger
+from ..services.love_note_service import rotate_sender_love_note_images
 from ..services.message_archival_service import ARCHIVED_MESSAGES_MAX_LIMIT
 from ..services.storage_service import storage_service
 from ..services.admin_service import (
@@ -39,6 +41,8 @@ from ..services.report_resolution_service import hide_confession as hide_confess
 from ..services.report_resolution_service import hide_comment as hide_comment_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+logger = get_logger(__name__)
 
 # Every account the list can hold, newest-looking first. Ordered explicitly so the response
 # is stable across calls: three unordered SELECTs concatenated would otherwise reshuffle the
@@ -492,6 +496,12 @@ async def set_user_block_state(
 
     Unblocking is unaffected and still allowed: the constraint permits any value that is not
     true, so this only ever refuses ``blocked=true`` on an admin.
+
+    Blocking rotates the account's live love note images after the commit: the notes stay
+    (blocking takes away sign-in, not content), but every signed delivery URL minted while
+    the account was live would otherwise keep resolving forever. Rotation replaces each
+    object under the same name, so old signatures stop verifying while entitled viewers
+    keep working. It is best-effort and never fails the block itself.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
@@ -499,6 +509,8 @@ async def set_user_block_state(
     if str(current_admin.id) == user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot change your own block status")
 
+    became_blocked = False
+    blocked_type: Optional[str] = None
     with db.sessions.begin() as session:
         found = resolve_account_by_id(session, user_id)
         if found:
@@ -508,9 +520,21 @@ async def set_user_block_state(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="An admin account cannot be blocked.",
                 )
+            became_blocked = blocked and not row.is_blocked
+            blocked_type = normalize_account_type(target_type)
             row.is_blocked = blocked
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if became_blocked and blocked_type == AccountType.USERS.value:
+        # Only participants send love notes, so only their rows can own images. After the
+        # commit, so a rotation failure can never roll back (or block) the flag flip.
+        try:
+            rotate_sender_love_note_images(db, user_id)
+        except Exception as exc:
+            logger.error(
+                "Love note image rotation failed for newly blocked account %s: %s",
+                user_id, exc, exc_info=True,
+            )
     return {"id": user_id, "is_blocked": blocked}
 
 

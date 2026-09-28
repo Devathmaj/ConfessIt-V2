@@ -94,8 +94,10 @@ async def get_love_note_reports(
 ) -> Dict[str, Any]:
     """Every love note report, newest first, with the reported note and its sender."""
     # The reported note's signed URL does not expire; keep it out of every cache that would
-    # outlive the moderation session that requested it.
+    # outlive the moderation session that requested it, and out of every referrer that would
+    # carry it sideways into a third party's logs.
     response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
     return await get_love_note_reports_for_admin(
         db,
         AccountRef.of(admin),

@@ -702,3 +702,60 @@ async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]
         if love_note:
             session.delete(love_note)
     return {"deleted": note_id}
+
+
+def rotate_sender_love_note_images(db: Database, sender_id: str) -> Dict[str, int]:
+    """Rotate every live image of one sender's love notes, killing old signed URLs.
+
+    Called when the sender's account is blocked: the notes themselves stay (blocking
+    takes away sign-in, not content), but every bearer URL minted while the account
+    was live must stop resolving. Rotation -- destroy plus re-upload of the same bytes
+    under the same public_id -- bumps the object version, so old signatures no longer
+    verify while entitled viewers keep working through freshly minted URLs.
+
+    Only notes that are still visible are rotated: a removed note's image was already
+    destroyed when it came down, and a note with no image has nothing to rotate. Each
+    asset is best-effort -- rotation never raises -- and the returned counts say how
+    many were replaced and how many need manual cleanup.
+
+    Returns ``{"rotated": <n>, "failed": <m>}``.
+    """
+    with db.sessions() as session:
+        rows = session.execute(
+            select(
+                LoveNoteRecord.image_public_id, LoveNoteRecord.image_format
+            ).where(
+                LoveNoteRecord.sender_id == str(sender_id),
+                LoveNoteRecord.removed_at.is_(None),
+                LoveNoteRecord.image_public_id.is_not(None),
+            )
+        ).all()
+    targets = [(public_id, image_format) for public_id, image_format in rows]
+
+    rotated = 0
+    failed = 0
+    for public_id, image_format in targets:
+        try:
+            ok = storage_service.rotate_love_note_asset(public_id, image_format)
+        except Exception as exc:
+            logger.error(
+                "Love note asset rotation raised for %s during sender rotation: %s",
+                public_id, exc, exc_info=True,
+            )
+            ok = False
+        if ok:
+            rotated += 1
+        else:
+            failed += 1
+            logger.error(
+                "Love note asset rotation failed for %s; previously minted URLs for "
+                "sender %s may still resolve",
+                public_id, sender_id,
+            )
+
+    if targets:
+        logger.info(
+            "Rotated %d of %d love note images for sender %s",
+            rotated, len(targets), sender_id,
+        )
+    return {"rotated": rotated, "failed": failed}

@@ -1072,6 +1072,8 @@ export const ReportsReview = () => {
                       <img
                         src={report.image_url}
                         alt="Reported love note illustration"
+                        // Non-expiring signed bearer URL: never send it as a referrer.
+                        referrerPolicy="no-referrer"
                         className="mt-3 max-h-64 w-full rounded-xl object-cover"
                       />
                     )}

@@ -43,6 +43,7 @@ import warnings
 from typing import Any, Dict, Optional, Tuple
 
 import cloudinary
+import httpx
 from cloudinary.uploader import destroy as cloudinary_destroy, upload as cloudinary_upload
 from cloudinary.utils import cloudinary_url
 from fastapi import HTTPException, UploadFile, status
@@ -76,6 +77,31 @@ _PUBLIC_ID_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # where it can be reported, not in a browser as a permanently broken image. Deliberately does
 # not match ``__cld_token__``, which is the *other* mechanism and is not used here.
 SIGNED_URL_PATTERN = re.compile(r"/image/authenticated/s--[A-Za-z0-9_-]+--/")
+
+# Ceiling on the bytes fetched back from the CDN during a rotation. Rotated objects were
+# within the upload limit when stored, so anything past this is corruption or a changed
+# object, and the rotation is refused rather than buffered without bound.
+ROTATE_DOWNLOAD_MAX_BYTES = 16 * 1024 * 1024
+_ROTATE_DOWNLOAD_CHUNK_BYTES = 64 * 1024
+_ROTATE_DOWNLOAD_TIMEOUT_SECONDS = 30.0
+
+
+def _fetch_url_bytes(url: str, cap_bytes: int) -> bytes:
+    """Fetch one URL's body, bounded, raising on anything unexpected.
+
+    Factored out (rather than inlined in the rotation below) so tests can replace the
+    network without touching the SDK calls the rotation also makes.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    with httpx.stream("GET", url, timeout=_ROTATE_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        response.raise_for_status()
+        for chunk in response.iter_bytes(_ROTATE_DOWNLOAD_CHUNK_BYTES):
+            total += len(chunk)
+            if total > cap_bytes:
+                raise ValueError(f"download exceeded {cap_bytes} bytes")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _slug_segment(value: str, *, limit: int = 64) -> str:
@@ -884,6 +910,80 @@ class CloudinaryStorageService:
         outcome = (result or {}).get("result")
         logger.info("Deleted love note asset %s (result=%s)", public_id, outcome)
         return outcome in {"ok", "not found"}
+
+    def rotate_love_note_asset(
+        self, public_id: Optional[str], image_format: Optional[str]
+    ) -> bool:
+        """Destroy and re-upload one love note image, killing previously minted URLs.
+
+        A signed URL cannot be revoked: its signature covers the object's path and
+        version, and stays valid as long as that version exists. Re-uploading the same
+        bytes under the same public_id mints a new version, so every URL signed for the
+        old one stops verifying while entitled viewers keep working -- their next view
+        mints a fresh URL for the new version. The object is fetched back with a
+        server-minted signature (this side holds the API secret), so rotation needs no
+        bytes the database does not already describe.
+
+        Best-effort by contract: returns True when the object was replaced, False on any
+        failure, and never raises. Callers rotate on events (like an account block) that
+        must go through whether or not the object store cooperates; a False is logged
+        with the public_id so the orphan can be found and cleaned up later.
+        """
+        self._ensure_enabled()
+        if not public_id or self.love_note_id_segment(public_id) is None:
+            logger.error(
+                "Refused love note asset rotation: %s is not a love note public_id",
+                public_id,
+            )
+            return False
+
+        try:
+            download_url = self.love_note_delivery_url(public_id, image_format)
+            if not download_url:
+                logger.error("Refused love note asset rotation: no delivery URL for %s", public_id)
+                return False
+            content = _fetch_url_bytes(download_url, ROTATE_DOWNLOAD_MAX_BYTES)
+        except Exception as exc:
+            logger.error("Love note asset rotation download failed for %s: %s", public_id, exc)
+            return False
+
+        try:
+            result = cloudinary_upload(
+                io.BytesIO(content),
+                public_id=public_id,
+                resource_type="image",
+                type="authenticated",
+                overwrite=True,
+                # The CDN caches by URL, and the old signed URLs are distinct cache keys
+                # that must stop resolving -- same reasoning as :meth:`_destroy`.
+                invalidate=True,
+                filename=f"love-note.{(image_format or 'png').lower()}",
+                tags=self._asset_tags(settings.CLOUDINARY_LOVE_NOTE_ASSET_TAG),
+            )
+        except Exception as exc:
+            logger.error("Love note asset rotation upload failed for %s: %s", public_id, exc)
+            return False
+
+        stored_type = ((result or {}).get("type") or "").lower()
+        if stored_type != "authenticated":
+            # A replaced object that came back servable without a signature is worse
+            # than the leak rotation was meant to close: destroy it rather than leave a
+            # public object behind, and report failure.
+            logger.error(
+                "Love note asset rotation stored %s as %s; destroying it",
+                public_id, stored_type,
+            )
+            try:
+                self._destroy(public_id, delivery_type=stored_type or "authenticated")
+            except Exception as exc:
+                logger.error(
+                    "Love note asset rotation cleanup destroy failed for %s: %s",
+                    public_id, exc, exc_info=True,
+                )
+            return False
+
+        logger.info("Rotated love note asset %s", public_id)
+        return True
 
 
 # Create a global instance for use across the application

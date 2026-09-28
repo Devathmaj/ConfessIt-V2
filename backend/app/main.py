@@ -585,12 +585,26 @@ FastAPIInstrumentor.instrument_app(
 # There are no image routes here, and that is the design rather than a gap.
 #
 # Profile pictures are served straight from Cloudinary's CDN as ordinary public HTTPS URLs, and
-# love note images are served from the same CDN as ``authenticated`` objects behind a
-# short-lived Cloudinary authentication token that this application mints only after deciding the
-# viewer is entitled. In both cases the bytes never pass through this process: there is no origin
-# fetch, no per-request entitlement re-check on an image GET, no ``<img>``-friendly query token
-# leaking into access logs and referrers, and no second copy of every picture in this process's
+# love note images are served from the same CDN as ``authenticated`` objects behind a signed
+# delivery URL that this application mints only after deciding the viewer is entitled. In both
+# cases the bytes never pass through this process: there is no origin fetch, no per-request
+# entitlement re-check on an image GET, and no second copy of every picture in this process's
 # memory.
+#
+# The signature is *not* short-lived: Cloudinary's expiring mechanism is the authentication
+# token, which needs an account-wide Auth token key that is not available on this plan (see
+# ``config``). An issued love note URL is therefore a durable bearer capability, and the
+# mitigations live around that fact rather than pretending otherwise:
+#
+# * the responses that mint URLs carry ``Cache-Control: no-store`` plus
+#   ``Referrer-Policy: no-referrer``, and the frontend renders them through ``<img>``
+#   with ``referrerpolicy="no-referrer"``, so the capability is neither cached nor
+#   leaked sideways into referrers;
+# * taking a note down destroys its image at the store (report removal and permanent
+#   delete alike), so previously minted URLs stop resolving;
+# * blocking an account rotates its live notes' images (destroy plus re-upload under the
+#   same name), which bumps the object version old signatures were minted against, so
+#   those URLs stop verifying while entitled viewers keep working through fresh ones.
 #
 # What moved here instead of out of the codebase is the *authorisation*, and it moved to the point
 # where a URL is minted -- inside the services that build these responses. That is the only place

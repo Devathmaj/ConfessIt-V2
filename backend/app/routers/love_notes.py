@@ -90,6 +90,11 @@ async def send_love_note(
     # closed the page. ``no-store`` is the point, not ``no-cache`` -- revalidation only helps
     # if the revalidation is against a server that can *retract* the URL, and this one cannot.
     response.headers["Cache-Control"] = "no-store"
+    # The URL is also a bearer credential that must not leak sideways: a ``Referer`` header
+    # sent with a later navigation would deposit it in a third party's logs, so responses
+    # that mint one ask for no referrer (the ``referrerpolicy`` attributes on the love-note
+    # images themselves are what enforce this on the actual image fetches).
+    response.headers["Referrer-Policy"] = "no-referrer"
     # Used to check if the user has already sent a love note
     if current_user.love_notes_send_enabled:
         raise HTTPException(
@@ -138,6 +143,7 @@ async def get_received_love_notes(
     # nothing downstream may cache them. The inbox is also exactly where the URLs *cluster*,
     # which is why the header matters as much here as on the response that first issued one.
     response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
     # Find all love notes sent to current user with status 'approved'
     filters = [
         LoveNoteRecord.recipient_id == current_user.id,

@@ -7,14 +7,18 @@ revalidation (``no-cache``) could fall back on, because no server here can revok
 ``no-store`` actually keeps the URL out of the cache, which is why the header is asserted as
 exactly that rather than as any kind of cache-control.
 
-Every response that mints one of these URLs has to carry the header, or it becomes the hole in
+The same responses also carry ``Referrer-Policy: no-referrer``: a ``Referer`` header sent with
+a later navigation would deposit the bearer URL in a third party's logs, and the love-note
+images themselves render with ``referrerpolicy="no-referrer"`` for the same reason.
+
+Every response that mints one of these URLs has to carry both headers, or it becomes the hole in
 the design. There are three such responses today:
 
 * ``POST /love-notes/send`` -- hands the URL to the sender;
 * ``GET /love-notes/inbox`` -- hands a whole list of them to the recipient;
 * ``GET /admin/love-notes/reports`` -- hands the reported note's URL to a reviewer.
 
-Each has a test below, and each test asserts the header on a response that genuinely carries a
+Each has a test below, and each test asserts the headers on a response that genuinely carries a
 URL, so a future change that stops minting the URL cannot make the assertion pass vacuously.
 """
 
@@ -130,6 +134,7 @@ def test_the_send_response_is_not_cached(monkeypatch, client, login_as, db):
 
     assert response.status_code == 201, response.text
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
     url = response.json()["image_url"]
     assert "/s--" in url, "the header under test must be on a response that carries a URL"
 
@@ -145,6 +150,7 @@ def test_the_inbox_response_is_not_cached(client, login_as, db):
 
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
     assert len(response.json()["notes"]) == 1
     assert "/s--" in response.json()["notes"][0]["image_url"]
 
@@ -165,6 +171,7 @@ def test_the_report_queue_response_is_not_cached(client, admin_client, login_as,
 
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
     reports = response.json()["reports"]
     assert len(reports) == 1
     assert "/s--" in reports[0]["image_url"]

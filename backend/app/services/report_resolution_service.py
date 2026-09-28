@@ -58,6 +58,7 @@ from ..logger import get_logger
 from ..postgres import Database, is_valid_id
 from ..utils import isoformat_datetime
 from .notification_service import create_notification_service
+from .storage_service import storage_service
 from .report_counters import (
     CONFESSION,
     LOVE_NOTE,
@@ -426,6 +427,7 @@ def resolve_love_note_report(
     reporter_regno: Optional[str] = None
     author_regno: Optional[str] = None
     removed_content = False
+    image_to_destroy: Optional[str] = None
 
     with db.sessions.begin() as session:
         report = session.get(LoveNoteReportRecord, str(report_id))
@@ -443,10 +445,28 @@ def resolve_love_note_report(
                     # second takedown, and the sender's removal count has to say how many times
                     # their content actually came down.
                     record_removal(session, kind=LOVE_NOTE, author_user_id=note.sender_id)
+                    # The note is invisible from here on, but its signed delivery URLs are
+                    # not: they carry no expiry and Cloudinary keeps serving them. The
+                    # object is destroyed after the commit below so a minted URL stops
+                    # resolving instead of serving a picture of something taken down.
+                    image_to_destroy = note.image_public_id
 
         report.status = status_value
         report.reviewed_at = datetime.now(timezone.utc)
         report.reviewed_by_regno = reviewer.regno
+
+    if image_to_destroy:
+        try:
+            storage_service.delete_love_note_asset(image_to_destroy)
+        except HTTPException:
+            # The ruling stands -- the row is stamped removed either way. What failed is
+            # the URL kill, and swallowing it would leave a live bearer nobody knows
+            # about; log it with the note so the orphan can be found and destroyed later.
+            logger.error(
+                "Love note report %s removed its note but the image %s could not be "
+                "destroyed; previously minted URLs may still resolve",
+                report_id, image_to_destroy, exc_info=True,
+            )
 
     if status_value == REMOVAL_STATUS:
         _notify_removal(
