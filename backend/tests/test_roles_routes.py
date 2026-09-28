@@ -105,6 +105,29 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/anagram/scheduled"),
     ("DELETE", "/admin/anagram/scheduled/{target_date}"),
     ("GET", "/admin/anagram/{game_id}"),
+    # Connections sessions. The same surface as Wordle's minus the preview: the
+    # static paths are declared ahead of ``/{game_id}`` so none is read as an id,
+    # and all are gated on ``games:manage`` for the same reason Wordle's are.
+    ("GET", "/admin/connections"),
+    ("POST", "/admin/connections"),
+    ("GET", "/admin/connections/current"),
+    ("POST", "/admin/connections/schedule"),
+    ("GET", "/admin/connections/scheduled"),
+    ("DELETE", "/admin/connections/scheduled/{target_date}"),
+    ("GET", "/admin/connections/{game_id}"),
+    # Trivia Drop questions. Publishing a question is not a moderation action:
+    # creating, editing, deploying, scheduling, rescheduling and cancelling are
+    # all gated on ``games:manage``, and the static paths are declared ahead of
+    # ``/{question_id}`` so none is read as an id.
+    ("POST", "/admin/trivia-drop"),
+    ("GET", "/admin/trivia-drop"),
+    ("GET", "/admin/trivia-drop/current"),
+    ("GET", "/admin/trivia-drop/{question_id}"),
+    ("PUT", "/admin/trivia-drop/{question_id}"),
+    ("POST", "/admin/trivia-drop/{question_id}/deploy"),
+    ("POST", "/admin/trivia-drop/{question_id}/schedule"),
+    ("POST", "/admin/trivia-drop/{question_id}/reschedule"),
+    ("POST", "/admin/trivia-drop/{question_id}/cancel"),
     # Couple Prediction. Featuring a day only pins the spotlight (the sessions
     # roll on their own cadence with no Update action), and ``/session`` reads
     # the live global session. All are gated on ``games:manage`` for the same
@@ -121,6 +144,17 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/reaction-time"),
     ("GET", "/admin/reaction-time/session"),
     ("GET", "/admin/reaction-time/{game_id}"),
+    # League leaderboards for the games console. Reads of the individual, couple
+    # and per-game boards plus the summary, and the finalize/reprocess repair
+    # paths the scheduler does not run on its own -- all gated on
+    # ``games:manage``, since awarding and correcting league results is not a
+    # moderation action.
+    ("GET", "/admin/leaderboards/summary"),
+    ("GET", "/admin/leaderboards/individual"),
+    ("GET", "/admin/leaderboards/couples"),
+    ("GET", "/admin/leaderboards/games/{game_id}"),
+    ("POST", "/admin/leaderboards/finalize"),
+    ("POST", "/admin/leaderboards/reprocess"),
     # Game configuration, the featured spotlight, and the manual reset trigger.
     # Configuration owns per-game availability and cadence, the featured
     # schedule pins at most one game per UTC date without touching sessions,
