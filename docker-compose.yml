@@ -77,6 +77,11 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      # The bundled collector serves plaintext gRPC on the Compose network only, so the
+      # local stack opts back into insecure explicitly. Anything beyond this network --
+      # and every production collector -- must use TLS, which is now the default when
+      # this variable is unset.
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: "confessit-backend"
       # Report only the current (1.21+) HTTP semantic conventions. Unset, or set to
       # "http/dup", the instrumentation also emits the pre-1.20 names; "http" is the
@@ -126,10 +131,18 @@ services:
     environment:
       TZ: UTC
       DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt"
+      # Unused by the scheduler, but Settings builds (and validates) as a whole, so a
+      # required field must resolve in every process that imports the app.
+      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt_Test"
       # Same image and settings as the API, so the same signing key: the scheduler
       # imports the app and must verify (and mint, via game HMACs) with the key the
       # API uses, or its resets disagree with live traffic.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
+      # The scheduler builds the same Settings object, whose connection strings are
+      # required: REDIS_URL resolves from backend/.env off this password, exactly as
+      # on the API. Telemetry rides the plaintext local collector like the API does.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
     restart: unless-stopped
 
   postgres:

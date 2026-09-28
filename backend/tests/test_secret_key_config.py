@@ -17,21 +17,30 @@ VALID_KEY = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 # Exactly the 32-character minimum, with enough distinct characters to pass.
 BOUNDARY_KEY = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 
+# Connection strings are required settings too; every construction below supplies
+# them so the tests fail (or pass) on the key alone, never on a missing database URL.
+_DB_KWARGS = {
+    "DATABASE_URL": "postgresql+psycopg://u:p@db:5432/ConfessIt",
+    "TEST_DATABASE_URL": "postgresql+psycopg://u:p@db:5432/ConfessIt_Test",
+    "REDIS_URL": "redis://db:6379",
+}
+
 
 def test_missing_secret_key_refuses_to_start(monkeypatch, tmp_path):
     # Both sources gone: nothing in the process environment and no .env file to read,
-    # so the required field has nowhere to come from.
+    # so the required field has nowhere to come from. The connection strings ride
+    # along as arguments, so the refusal is about the key and nothing else.
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(**_DB_KWARGS)
 
 
 def test_short_secret_key_is_refused():
     with pytest.raises(ValidationError):
-        Settings(SECRET_KEY="short")
+        Settings(SECRET_KEY="short", **_DB_KWARGS)
     with pytest.raises(ValidationError):
-        Settings(SECRET_KEY="a" * 31)
+        Settings(SECRET_KEY="a" * 31, **_DB_KWARGS)
 
 
 @pytest.mark.parametrize(
@@ -50,18 +59,22 @@ def test_placeholder_or_low_entropy_key_is_refused(weak):
     # must still refuse placeholder words and repeated patterns.
     assert len(weak) >= 32
     with pytest.raises(ValidationError):
-        Settings(SECRET_KEY=weak)
+        Settings(SECRET_KEY=weak, **_DB_KWARGS)
 
 
 def test_valid_key_is_accepted_verbatim():
-    assert Settings(SECRET_KEY=VALID_KEY).SECRET_KEY == VALID_KEY
-    assert Settings(SECRET_KEY=BOUNDARY_KEY).SECRET_KEY == BOUNDARY_KEY
+    assert Settings(SECRET_KEY=VALID_KEY, **_DB_KWARGS).SECRET_KEY == VALID_KEY
+    assert Settings(SECRET_KEY=BOUNDARY_KEY, **_DB_KWARGS).SECRET_KEY == BOUNDARY_KEY
 
 
-def test_same_environment_yields_same_key_across_instances():
+def test_same_environment_yields_same_key_across_instances(monkeypatch):
     # The multi-worker regression in one assertion: the key comes from shared
     # configuration, never from per-process randomness, so two instances built from
-    # the same environment agree exactly.
+    # the same environment agree exactly. Pinned through the environment (not
+    # arguments) so the assertion is about the lookup path workers actually use.
+    monkeypatch.setenv("SECRET_KEY", VALID_KEY)
+    for name, value in _DB_KWARGS.items():
+        monkeypatch.setenv(name, value)
     assert Settings().SECRET_KEY == Settings().SECRET_KEY
 
 
@@ -69,3 +82,15 @@ def test_configured_suite_key_passes_validation():
     # Guards the pinned test key itself: if someone replaces it with a placeholder,
     # this fails before any session test can pass on a weak key.
     assert len(settings.SECRET_KEY) >= 32
+
+
+def test_missing_connection_strings_refuse_to_start(monkeypatch, tmp_path):
+    """The connection strings have no defaults: without them there is nothing to boot
+    against, and guessing (localhost, baked dev credentials) is how misconfigured
+    deployments silently point at whatever answers. The key rides along as an
+    argument, so the refusal is about the URLs and nothing else."""
+    for name in ("DATABASE_URL", "TEST_DATABASE_URL", "REDIS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValidationError):
+        Settings(SECRET_KEY=VALID_KEY)

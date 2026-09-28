@@ -46,6 +46,11 @@ jobs:
       # against it, so CI pins the same fixed test-only key tests/conftest.py falls
       # back to. Never a production key.
       SECRET_KEY: "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491"
+      # Required by app.config with no default. Nothing here speaks Redis (pub/sub is
+      # stubbed and the flood brake is disabled in tests), so this only has to exist
+      # for settings to build -- it must never point at a real store the suite could
+      # dirty.
+      REDIS_URL: "redis://localhost:6379"
     services:
       postgres:
         image: postgres:16-alpine

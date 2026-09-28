@@ -4,8 +4,13 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+psycopg://confessit:confessit@postgres:5432/ConfessIt"
-    TEST_DATABASE_URL: str = "postgresql+psycopg://confessit:confessit@postgres:5432/ConfessIt_Test"
+    # Connection strings have no defaults on purpose. A baked-in
+    # ``confessit:confessit@...`` fallback would ship in the image and its history, and
+    # silently point any misconfigured deployment at whatever answers that address.
+    # Compose injects DATABASE_URL/TEST_DATABASE_URL and the REDIS_URL template resolves
+    # from backend/.env; anything else must set them explicitly and fails fast otherwise.
+    DATABASE_URL: str = Field(...)
+    TEST_DATABASE_URL: str = Field(...)
     DATABASE_NAME: str = "ConfessIt"
 
     # There is exactly one engine per process (see app.postgres), so the worst-case
@@ -153,7 +158,11 @@ class Settings(BaseSettings):
         return key
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REDIS_URL: str = "redis://redis:6379"
+    # Required like the database URLs: the template in backend/.env resolves the password
+    # from the container environment, and anything without it fails fast instead of
+    # connecting somewhere unintended. A `rediss://` URL opts into TLS (see redis_service,
+    # which requires a valid certificate for it); anything crossing a network must use one.
+    REDIS_URL: str = Field(...)
     CLOUD: bool = False
 
     # --- Reverse proxy and cookie transport ---
@@ -262,13 +271,35 @@ class Settings(BaseSettings):
     MAX_MODERATOR_COUNT: int = 25
 
     # --- Observability / Telemetry ---
-    OTEL_EXPORTER_OTLP_INSECURE: bool = True
+    # Secure transport is the default because spans, logs and metrics carry registration
+    # numbers, IPs and session identifiers. The local Compose collector serves plaintext,
+    # so local runs set this back to true explicitly (see the backend service in
+    # docker-compose.yml) -- a remote collector must present TLS instead.
+    OTEL_EXPORTER_OTLP_INSECURE: bool = False
     OTEL_EXPORTER_OTLP_CERTIFICATE: str | None = None
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
     OTEL_SERVICE_NAME: str = "confessit-backend"
 
     # --- Feature flags ---
     ENABLE_DEBUG_ENDPOINTS: bool = False
+
+    # --- Host allowlist ---
+    #
+    # Comma-separated hostnames the app answers for, checked per request before routing.
+    # DNS rebinding and Host-header poisoning both aim at making this process serve a name
+    # it was never meant to, so anything not listed gets a 400. Loopback entries cover
+    # local runs; production adds its public names here. (`testserver` is Starlette
+    # TestClient's default host -- it cannot resolve publicly, and the suite appends it.)
+    ALLOWED_HOSTS: str = "localhost,127.0.0.1,[::1]"
+
+    # --- Global flood brake ---
+    #
+    # Requests per minute per client IP across all paths, enforced in Redis so every
+    # worker shares one counter. Deliberately generous: shared campus NATs put many
+    # legitimate users behind one address, so this is a brake on floods, not a ban --
+    # the login endpoints keep their own stricter, layered limits. Zero or negative
+    # disables it (the test suite does this; Redis is unreachable from it).
+    GLOBAL_RATE_LIMIT_PER_MINUTE: int = 600
 
     # --- CORS / server ---
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"

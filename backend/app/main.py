@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.responses import JSONResponse, Response
-from starlette.datastructures import Headers
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
@@ -25,6 +25,7 @@ from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
+from .services.redis_service import redis_service
 from .services.matchmaking_service import MatchmakingRefusal
 from .models import AccountDetails
 import uvicorn
@@ -426,9 +427,166 @@ async def _game_unavailable_response(request: Request, exc) -> Response:
     )
 
 
+class SecurityHeadersMiddleware:
+    """Stamp every HTTP response with the baseline security headers.
+
+    Pure ASGI with no dependencies, so it cannot fail a request: header-setting is
+    infallible, and anything raised downstream travels through `send` untouched.
+
+    * ``X-Content-Type-Options: nosniff`` -- a JSON body must never be sniffed into an
+      executable type, which is what turns a stored string into someone else's script.
+    * ``X-Frame-Options: DENY`` plus ``frame-ancestors 'none'`` -- nothing here is
+      framed, so nothing may be (belt and suspenders across old and new browsers).
+    * ``Referrer-Policy: no-referrer`` -- responses carry bearer URLs (signed images,
+      magic-link deadlines); a later navigation must not deposit them in a third
+      party's logs. The SPA's own document carries the same policy in ``index.html``.
+    * ``Permissions-Policy`` -- this API uses no camera, microphone or geolocation, so
+      none is granted, including to any document that somehow embeds it.
+    * ``Cross-Origin-Opener-Policy: same-origin`` -- our window cannot be adopted by a
+      cross-origin one. Safe: no flow here opens popups.
+    * ``Cross-Origin-Resource-Policy: same-site`` -- no-cors cross-site reads (an
+      ``<img>`` or ``<script>`` pointed at the API) are refused. Safe for the same
+      reason ``SameSite=Lax`` cookies work here at all: every supported deployment is
+      same-site, and a cross-site one would already be broken for auth. CORS remains
+      the access control for fetch-mode callers.
+    * ``Content-Security-Policy`` -- tight because the API serves no HTML, images or
+      scripts of its own: scripts, objects and frames have nowhere legitimate to come
+      from. (The SPA document's own, broader policy lives in the Nginx example: it
+      has fonts, images and sockets to allow.)
+    * ``Strict-Transport-Security`` -- only on HTTPS responses. Emitting it on plain
+      HTTP would be ignored by browsers, and gating it here (rather than trusting the
+      socket) keeps it correct behind the TLS proxy too.
+    """
+
+    _POLICY = (
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+    )
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message.setdefault("headers", []))
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["X-Frame-Options"] = "DENY"
+                headers["Referrer-Policy"] = "no-referrer"
+                headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+                headers["Cross-Origin-Opener-Policy"] = "same-origin"
+                headers["Cross-Origin-Resource-Policy"] = "same-site"
+                headers["Content-Security-Policy"] = self._POLICY
+                if scope.get("scheme") == "https":
+                    headers["Strict-Transport-Security"] = (
+                        "max-age=31536000; includeSubDomains"
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+class TrustedHostMiddleware:
+    """Refuse requests for hostnames this deployment does not serve.
+
+    DNS rebinding and Host-header poisoning both aim at making this process answer for
+    a name it was never meant to -- password-reset links, cache keys and absolute
+    redirects built from ``Host`` then go somewhere hostile. The allowlist is read
+    per request from ``ALLOWED_HOSTS`` so tests and operators change it without a
+    restart. Runs inside the proxy middleware, so the name checked is the
+    client-facing one the proxy reported, not the proxy-to-app hop.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            raw_host = Headers(scope=scope).get("host", "")
+            if raw_host.startswith("["):
+                bare = raw_host[1:].split("]", 1)[0]
+            else:
+                bare = raw_host.split(":")[0]
+            allowed = {
+                h.strip().lower()
+                for h in settings.ALLOWED_HOSTS.split(",")
+                if h.strip()
+            }
+            if bare.lower() not in allowed:
+                response = PlainTextResponse("Invalid host", status_code=400)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def _limiter_redis():
+    """The Redis client for the flood brake, factored out so tests can replace it."""
+    return redis_service.client
+
+
+class GlobalRateLimitMiddleware:
+    """A per-IP flood brake across all paths, counted in Redis.
+
+    One fixed window per minute per client IP, shared by every worker through a single
+    ``INCR``/``EXPIRE`` pair. Deliberately generous (see
+    ``GLOBAL_RATE_LIMIT_PER_MINUTE``): shared campus NATs put many legitimate users
+    behind one address, and the login endpoints keep their own stricter, layered
+    limits -- this catches floods, not people. Zero or negative disables it. A Redis
+    outage fails open with a warning: the brake must not become the outage, and the
+    per-endpoint limits still hold.
+
+    Runs inside the proxy middleware so the IP is the client-facing one the proxy
+    reported (leftmost ``X-Forwarded-For`` entry when proxies are configured,
+    otherwise the socket peer).
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = settings.GLOBAL_RATE_LIMIT_PER_MINUTE
+        if limit <= 0:
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client")
+        ip = client[0] if client else "unknown"
+        if settings.TRUSTED_PROXY_HOSTS.strip():
+            forwarded = Headers(scope=scope).get("x-forwarded-for")
+            if forwarded and forwarded.split(",")[0].strip():
+                ip = forwarded.split(",")[0].strip()
+
+        window = int(time.time() // 60)
+        try:
+            store = _limiter_redis()
+            count = int(store.incr(f"rl:global:{ip}:{window}"))
+            if count == 1:
+                store.expire(f"rl:global:{ip}:{window}", 70)
+        except Exception as exc:
+            logger.warning("Global rate limiter unavailable, allowing request: %s", exc)
+            await self.app(scope, receive, send)
+            return
+
+        if count > limit:
+            retry_after = 60 - int(time.time() % 60)
+            response = JSONResponse(
+                {"detail": "Too many requests. Please try again shortly."},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 class RequestBodyLimitMiddleware:
     """Reject a request whose body exceeds the configured ceiling, declared or not."""
-
     def __init__(self, app, max_bytes: int):
         self.app = app
         self.max_bytes = max_bytes
@@ -535,6 +693,13 @@ app.add_middleware(
     max_age=600,
 )
 
+# Added here so both run inside the proxy middleware below: the rate limiter must count
+# the client-facing IP the proxy reported, and the host check must see the
+# client-facing name. Both read their settings per request, so operators change them
+# without a restart.
+app.add_middleware(GlobalRateLimitMiddleware)
+app.add_middleware(TrustedHostMiddleware)
+
 # Added last so it runs outermost: every middleware and handler below sees the
 # client-facing scheme and host the proxy reported, not the proxy-to-app hop. Only
 # added when TRUSTED_PROXY_HOSTS names the proxies -- trusting X-Forwarded-* from
@@ -544,6 +709,10 @@ app.add_middleware(
 _proxy_hosts = [h.strip() for h in settings.TRUSTED_PROXY_HOSTS.split(",") if h.strip()]
 if _proxy_hosts:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_proxy_hosts)
+
+# Added last so it runs outermost: every response -- routed, refused, or errored --
+# leaves with the baseline headers, including preflights and rate-limit refusals.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # ----------------------
 # Routers

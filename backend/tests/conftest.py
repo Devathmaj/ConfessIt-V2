@@ -66,6 +66,16 @@ from app.services.redis_service import redis_service
 # pinned by dedicated tests that switch the flag off.
 settings.ENABLE_DEBUG_ENDPOINTS = True
 
+# The host allowlist is read per request: Starlette's TestClient answers as
+# "testserver", which can never resolve publicly and is not a production name, so the
+# suite admits it here rather than baking a test-only hostname into the default.
+if "testserver" not in settings.ALLOWED_HOSTS:
+    settings.ALLOWED_HOSTS += ",testserver"
+
+# The global flood brake counts in Redis, which the suite cannot reach (and must not
+# need): disabled here, pinned by dedicated tests with a stubbed store.
+settings.GLOBAL_RATE_LIMIT_PER_MINUTE = 0
+
 test_db = get_postgres_client()
 test_db.initialize()
 

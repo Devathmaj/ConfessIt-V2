@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The page fetches bearer URLs (signed images, auth calls): no navigation or
+         subresource fetch from it may send the page as a referrer. A meta policy travels
+         with the document in every deployment, including static hosts with no header
+         control; the dev server and prod Nginx repeat it as a header. (No CSP meta here:
+         the full policy needs fonts, images and socket hosts that differ per deployment
+         and lives in nginx.prod.conf.example; a meta copy would silently combine with it.) -->
+    <meta name="referrer" content="no-referrer" />
     <title>ConfessIt - Valentine's Day Anonymous Confessions</title>
     <meta name="description" content="Share your heart anonymously this Valentine's Day. Express your feelings, find love, and connect with others in our one-day Valentine's event." />
     <meta name="author" content="ConfessIt Team" />

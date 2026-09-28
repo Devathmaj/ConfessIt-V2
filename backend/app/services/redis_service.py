@@ -13,20 +13,30 @@ class RedisService:
     """Service for handling Redis Pub/Sub operations"""
     
     def __init__(self):
-        self.redis_url = getattr(settings, 'REDIS_URL', 'redis://localhost:6379')
+        self.redis_url = settings.REDIS_URL
         self._client: Optional[redis.Redis] = None
         self._pubsub: Optional[redis.client.PubSub] = None
     
     def _get_client(self) -> redis.Redis:
         """Get or create Redis client"""
         if self._client is None:
+            extra: dict[str, Any] = {}
+            if self.redis_url.lower().startswith("rediss://"):
+                # TLS is the point of the scheme, so it is enforced rather than
+                # negotiated: the server must present a valid certificate for its
+                # hostname, and a handshake that cannot prove that fails instead of
+                # falling back to cleartext. Anything that must cross a network --
+                # chat traffic included -- belongs on a rediss:// URL.
+                extra["ssl_cert_reqs"] = "required"
+                extra["ssl_check_hostname"] = True
             self._client = redis.from_url(
                 self.redis_url,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
                 retry_on_timeout=True,
-                health_check_interval=30
+                health_check_interval=30,
+                **extra,
             )
             logger.info("Redis client initialized")
         return self._client

@@ -38,11 +38,13 @@ def get_console_handler():
 def otlp_transport():
     """Resolve OTLP transport security from the environment.
 
-    Returns (insecure, credentials) for the gRPC exporters. Plaintext is the default
-    because the local Compose collector presents no certificate; a collector on another
-    host requires OTEL_EXPORTER_OTLP_INSECURE=false, and the CA named by
-    OTEL_EXPORTER_OTLP_CERTIFICATE is loaded to verify it, so telemetry is never
-    exported over TLS while trusting an unverified collector.
+    Returns (insecure, credentials) for the gRPC exporters. Secure is the default:
+    telemetry carries registration numbers, IPs and session identifiers, so a remote
+    collector must present TLS and the CA named by OTEL_EXPORTER_OTLP_CERTIFICATE is
+    loaded to verify it -- telemetry is never exported over TLS while trusting an
+    unverified collector, and never plaintext unless OTEL_EXPORTER_OTLP_INSECURE is
+    set back to true explicitly (which is what the local Compose collector, serving
+    plaintext on its own network, does).
     """
     insecure = str(settings.OTEL_EXPORTER_OTLP_INSECURE).lower() in {"1", "true", "yes"}
     if insecure:
