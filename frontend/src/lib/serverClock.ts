@@ -18,7 +18,7 @@
  * rather than breaking the page.
  */
 
-const API_URL = 'http://localhost:8001';
+import { API_URL } from './apiBase';
 
 let offsetMs = 0;
 let synced = false;

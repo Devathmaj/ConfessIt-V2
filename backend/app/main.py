@@ -13,7 +13,7 @@ from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
-from .config import settings, validate_cloudinary_settings
+from .config import settings, validate_cloudinary_settings, validate_public_base_url
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
@@ -277,6 +277,10 @@ async def on_startup():
         "authentication tokens and the account-wide Auth token key that is not available on "
         "this plan. Entitlement is therefore re-checked on every response that mints a URL."
     )
+
+    # Before any login can be minted: a cloud deployment without PUBLIC_BASE_URL would print
+    # localhost magic links for every prod sign-in. Same fail-fast shape as the check above.
+    validate_public_base_url()
 
     postgres.initialize()
     # No accounts are created here. Booting the application used to seed a test participant

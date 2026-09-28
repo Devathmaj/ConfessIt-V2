@@ -7,6 +7,7 @@
 // These three helpers talk to the API with fetch rather than the shared axios instance, so
 // they would otherwise miss the response interceptor that ends an expired session.
 import { endSessionIfTokenWasRejected } from './authEvents';
+import { API_URL, apiWsBase } from './apiBase';
 import { CONVERSATION_MESSAGE_MAX } from './limits';
 import type { MessageQuota } from './messageQuota';
 
@@ -80,13 +81,9 @@ class MessagingClient {
       this.conversationId = conversationId;
       this.token = token;
 
-      // Get WebSocket URL (use wss:// in production)
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsHost = import.meta.env.VITE_API_URL 
-        ? import.meta.env.VITE_API_URL.replace(/^https?:\/\//, '')
-        : window.location.host.replace(':5173', ':8001');
-      
-      const wsUrl = `${wsProtocol}//${wsHost}/messages/ws/${conversationId}?token=${token}`;
+      // The socket hangs off the same API origin as every REST call, so one variable
+      // fixes both transports. `https` becomes `wss` and `http` becomes `ws`.
+      const wsUrl = `${apiWsBase()}/messages/ws/${conversationId}?token=${token}`;
 
       console.log('🔌 Connecting to WebSocket:', wsUrl.replace(token, 'TOKEN'));
 
@@ -231,9 +228,9 @@ export const messagingClient = new MessagingClient();
 
 /**
  * API functions for message operations
+ *
+ * The REST origin is the shared one -- see `./apiBase`.
  */
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
 /**
  * Send a message via REST API

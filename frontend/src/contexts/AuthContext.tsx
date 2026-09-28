@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, ReactNode, useEffect, useCa
 import { jwtDecode } from 'jwt-decode';
 import { toast } from 'sonner';
 import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken } from '../services/api';
+import { API_URL } from '../lib/apiBase';
 import { purgeLegacyPersistedToken } from '../lib/tokenStore';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
@@ -216,7 +217,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const verifyMagicToken = async (magicToken: string): Promise<VerifyTokenResult> => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8001/auth/login/magic/verify?token=${magicToken}`, {
+      const response = await fetch(`${API_URL}/auth/login/magic/verify?token=${magicToken}`, {
         credentials: 'include',
       });
 

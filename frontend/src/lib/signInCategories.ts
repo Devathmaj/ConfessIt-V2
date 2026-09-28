@@ -21,8 +21,7 @@
  */
 
 import { ACCOUNT_TYPES, type AccountType } from './capabilities';
-
-const API_URL = 'http://localhost:8001';
+import { API_URL } from './apiBase';
 
 export interface SignInCategory {
   /** The account table this door signs in to. Also the path segment the API takes. */

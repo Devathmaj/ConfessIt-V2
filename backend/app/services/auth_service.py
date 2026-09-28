@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ..postgres import Database, is_valid_id
 
-from ..config import settings
+from ..config import public_frontend_origin, settings
 from ..dependencies import get_db
 from ..limits import USER_REGNO_MAX
 from ..models import AccountDetails, UserDetails
@@ -578,7 +578,7 @@ async def generate_magic_link_service(
     from ..create_token import create_and_store_magic_token
     token, expires_at = create_and_store_magic_token(db, str(account.id), resolved_type, request)
 
-    magic_link = f"http://localhost:5173/verify-login?token={token}"
+    magic_link = f"{public_frontend_origin()}/verify-login?token={token}"
     magic_link_logger.info(f"Magic Link for {account.name}: {magic_link}")
     logger.info(f"Login request accepted: magic link minted for {category} account {regno!r}")
 

@@ -268,6 +268,57 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def public_frontend_origin() -> str:
+    """The public origin magic links point at, without a trailing slash.
+
+    ``PUBLIC_BASE_URL`` when set (any deployment users reach by name), plain local
+    HTTP otherwise. Centralised so the login link, and anything else naming the
+    frontend, cannot drift back to a hardcoded localhost one call site at a time.
+    """
+    return (
+        (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+        or "http://localhost:5173"
+    )
+
+
+def validate_public_base_url() -> None:
+    """Refuse to boot a cloud deployment whose links would point at localhost.
+
+    A magic link is a bearer credential printed for a human to click: if
+    ``PUBLIC_BASE_URL`` is unset or names localhost while ``CLOUD`` is on, every prod
+    login mints a link to nowhere (a login DoS) and teaches users to copy tokens onto
+    the wrong host (a phishing template). Local runs keep the localhost default and are
+    unaffected.
+    """
+    if not settings.CLOUD:
+        return
+    base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError(
+            "PUBLIC_BASE_URL must be set when CLOUD is true: magic links are minted "
+            "from it, and the localhost default would break every production login."
+        )
+    lowered = base.lower()
+    # Exact host matching, not substring: "mylocalhost.example.com" is a real (if odd)
+    # domain, while "localhost", "*.localhost", "127.*/[::1]" never leave the machine.
+    host = lowered.split("://", 1)[-1].split("/")[0]
+    if host.startswith("["):
+        is_loopback = host.split("]")[0] + "]" == "[::1]"
+    else:
+        bare = host.split(":")[0]
+        is_loopback = (
+            bare == "localhost"
+            or bare.endswith(".localhost")
+            or bare.startswith("127.")
+            or bare == "::1"
+        )
+    if is_loopback:
+        raise RuntimeError(
+            f"PUBLIC_BASE_URL must not point at loopback when CLOUD is true (got {base!r}): "
+            "magic links minted for it would be unusable in production."
+        )
+
+
 def validate_cloudinary_settings() -> None:
     """Refuse to start if the image store cannot actually serve images.
 

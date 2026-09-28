@@ -1,6 +1,7 @@
 // src/services/api.ts
 
 import axios from 'axios';
+import { API_URL } from '@/lib/apiBase';
 import { endSessionIfTokenWasRejected, isSessionSupersededError } from '@/lib/authEvents';
 import {
   clearAccessToken,
@@ -10,7 +11,7 @@ import {
 import type { AccountType } from '@/lib/capabilities';
 import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
-const API_URL = 'http://localhost:8001';
+// The API origin lives in `@/lib/apiBase` -- one variable for the whole app.
 
 // The refresh cookie is an HttpOnly cookie scoped to `Path=/auth`, so the browser only
 // attaches it to /auth requests. That is the whole point, but it means the attachment is

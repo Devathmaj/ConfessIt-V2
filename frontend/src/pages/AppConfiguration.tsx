@@ -7,10 +7,10 @@ import type { Cohort } from '@/lib/accountFields';
 import { cohortDragPayload, cohortFromDragPayload, cohortKey, cohortLabel, isSameCohort } from '@/lib/accountFields';
 import { expandSlotBoxes, newSlotGroupKey, reconstructSlotBoxes } from '@/lib/matchmakingSlots';
 import { getAuthHeaders } from '@/services/api';
+import { API_URL as API_BASE_URL } from '@/lib/apiBase';
 import type { SlotBox } from '@/lib/matchmakingSlots';
 
-// Base URL for backend API
-const API_BASE_URL = 'http://localhost:8001';
+// The API origin lives in `@/lib/apiBase` -- one variable for the whole app.
 
 type Slot = SlotBox;
 
