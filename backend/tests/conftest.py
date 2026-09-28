@@ -1,5 +1,16 @@
 import contextlib
+import os
 import threading
+
+# The signing key is required and validated (see app.config), so the suite pins a
+# fixed test-only key before anything imports the settings object below. Tests mint
+# and verify real JWTs against it in-process; no test depends on its value, only on
+# it being stable within the run. `setdefault` keeps an explicitly exported key
+# (e.g. CI) authoritative.
+os.environ.setdefault(
+    "SECRET_KEY",
+    "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491",
+)
 
 import pytest
 from anyio.from_thread import start_blocking_portal

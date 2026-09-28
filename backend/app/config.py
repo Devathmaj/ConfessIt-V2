@@ -1,6 +1,5 @@
 import os
-import secrets
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -99,7 +98,59 @@ class Settings(BaseSettings):
     #
     # See ``storage_service.love_note_delivery_url``.
 
-    SECRET_KEY: str = secrets.token_hex(32)
+    # --- Signing key for JWTs and game HMACs ---
+    #
+    # REQUIRED, with no default, and identical in every process serving this
+    # deployment. There used to be a `secrets.token_hex(32)` default here, evaluated
+    # once per import: every worker, restart and container minted its own key, so a
+    # restart invalidated all outstanding JWTs and with WEB_WORKERS > 1 (or replicas)
+    # each worker 401'd the tokens the others had minted. A random-per-process key is
+    # an availability bug dressed as a secure default.
+    #
+    # Set it once per deployment, from the environment (docker-compose injects it from
+    # the gitignored root .env; local runs read backend/.env), a vault, or any other
+    # channel that is the same for every process and never committed to git. It must
+    # be at least 32 characters and must not be a placeholder; the validator below
+    # refuses to start on anything weaker, loudly, rather than running half-signed.
+    #
+    # Generate with:  python -c "import secrets; print(secrets.token_hex(32))"
+    #
+    # Rotation is a deliberate, coordinated act: every outstanding access token and
+    # every game HMAC stops verifying the moment the key changes, so all processes
+    # switch together or sessions flap.
+    SECRET_KEY: str = Field(..., min_length=32)
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def _validate_secret_key(cls, value: str) -> str:
+        """Refuse to start on a missing, short or placeholder signing key.
+
+        Length alone is not strength: 32 repeats of one character, or the word
+        "test" eight times, both pass a length check and both sign with ~nothing.
+        The checks below are deliberately fail-closed -- a rejected start is
+        always safer than a fleet signing with a guessable key -- and the error
+        tells the operator exactly how to mint a real one.
+        """
+        key = value.strip()
+        hint = (
+            "Set SECRET_KEY to a random value with at least 32 characters, identical "
+            "in every worker/replica, e.g. python -c "
+            '"import secrets; print(secrets.token_hex(32))"'
+        )
+        if len(key) < 32:
+            raise ValueError(f"SECRET_KEY must be at least 32 characters. {hint}")
+        lowered = key.lower()
+        # Substrings no hex key can contain, but every placeholder does. A urlsafe/base64
+        # key could match one by astronomical coincidence; if it does, mint another -- a
+        # rejected start is always safer than running with a guessable key.
+        if any(marker in lowered for marker in ("changeme", "change-me", "change_me", "test", "secret", "password")):
+            raise ValueError(f"SECRET_KEY must not be a placeholder or dictionary word. {hint}")
+        # A key with almost no distinct characters (aaaa..., ababab...) has almost no
+        # entropy no matter how long it is. A random 32-character hex key carries ~14
+        # distinct characters, so this threshold cannot trip on a real key.
+        if len(set(key)) < 8:
+            raise ValueError(f"SECRET_KEY must not be a repeated pattern. {hint}")
+        return key
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REDIS_URL: str = "redis://redis:6379"

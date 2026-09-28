@@ -39,6 +39,10 @@ jobs:
       POSTGRES_PASSWORD: ConfessItLocalPassword
       DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt"
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:ConfessItLocalPassword@localhost:5432/ConfessIt_Test"
+      # Required and validated by app.config: the suite mints and verifies real JWTs
+      # against it, so CI pins the same fixed test-only key tests/conftest.py falls
+      # back to. Never a production key.
+      SECRET_KEY: "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491"
     services:
       postgres:
         image: postgres:16-alpine
@@ -90,6 +94,10 @@ jobs:
       POSTGRES_PASSWORD: ConfessItLocalPassword
       REDIS_PASSWORD: ConfessItLocalRedisPassword
       GRAFANA_ADMIN_PASSWORD: ConfessItLocalGrafanaPassword
+      # Parsed, not run, by `docker compose build`: the `:?` interpolation fails closed
+      # when a variable is missing, so the build carries the same names a real start
+      # needs. The value is irrelevant at build time -- nothing bakes it into the image.
+      SECRET_KEY: compose-build-placeholder-not-a-real-key-00000000
     steps:
       - uses: actions/checkout@v4
       - name: Verify Docker Compose Build

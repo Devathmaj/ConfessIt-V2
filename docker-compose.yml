@@ -69,6 +69,12 @@ services:
       DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt"
 
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt_Test"
+      # The HMAC/JWT signing key, identical in every worker and replica. There is no
+      # default: a random-per-process key meant restarts invalidated all sessions and
+      # workers 401'd each other's tokens. Generate once with
+      # python -c "import secrets; print(secrets.token_hex(32))", keep it out of git,
+      # and rotate knowingly -- rotation invalidates all outstanding JWTs at once.
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "confessit-backend"
@@ -120,6 +126,10 @@ services:
     environment:
       TZ: UTC
       DATABASE_URL: "postgresql+psycopg://confessit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the root .env}@postgres:5432/ConfessIt"
+      # Same image and settings as the API, so the same signing key: the scheduler
+      # imports the app and must verify (and mint, via game HMACs) with the key the
+      # API uses, or its resets disagree with live traffic.
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
     restart: unless-stopped
 
   postgres:
