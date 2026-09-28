@@ -1,27 +1,24 @@
 """Tests for magic-link requests made by accounts an admin has blocked.
 
 The block used to be enforced only when the link was redeemed, so a blocked account was
-still handed a live, logged magic link on every request. These tests pin the refusal to
-the point where the link would have been minted.
+still handed a live, logged magic link on every request. The refusal lives at the point
+where the link would have been minted: nothing is ever stored for a blocked account.
 
-The sign-in form now answers plainly rather than uniformly: a blocked account is told it
-is blocked (403), an unregistered registration number is told it does not exist (404),
-and a real, unblocked account is told a link was generated. What these tests hold onto
-is the part that matters for abuse -- no token is ever minted for either refused outcome,
-and the account-scoped rate counter still runs for both.
+The sign-in form answers uniformly rather than naming the outcome: a blocked account, an
+unregistered registration number and a real, unblocked account all get the same 200 and
+the same body, so the endpoint cannot be swept to learn existence or blocked state. What
+these tests hold onto is the part that matters for abuse -- no token is ever minted for
+either ineligible outcome -- and that the three answers are indistinguishable.
 """
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from fastapi import HTTPException
 
 from app import create_token as create_token_module
 from app.accounts import AccountType
 from app.db_models import UserRecord
 from app.services import auth_service as auth_service_module
 from app.services.auth_service import (
-    ACCOUNT_BLOCKED_DETAIL,
-    ACCOUNT_NOT_FOUND_DETAIL,
     LOGIN_LINK_SENT_MESSAGE,
     generate_magic_link_service,
 )
@@ -133,32 +130,56 @@ def minted_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_blocked_account_gets_no_link_and_is_refused_by_name(minted_tokens):
+async def test_blocked_account_gets_no_link_but_the_uniform_answer(minted_tokens):
     db = _FakeDatabase({"blocked": make_user_row("blocked", is_blocked=True)})
 
-    with pytest.raises(HTTPException) as exc:
-        await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
+    result = await generate_magic_link_service(_FakeRequest("blocked"), db, AccountType.USERS.value)
 
-    assert exc.value.status_code == 403
-    assert exc.value.detail == ACCOUNT_BLOCKED_DETAIL
+    assert result["message"] == LOGIN_LINK_SENT_MESSAGE
+    assert datetime.fromisoformat(result["expires_at"]) > datetime.now(timezone.utc)
     assert minted_tokens == []
     assert db.added == []
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_registration_number_is_refused_by_name(minted_tokens):
-    """No row, nothing minted, and the reason named instead of a cheerful non-answer."""
+async def test_an_unknown_registration_number_gets_no_link_but_the_uniform_answer(minted_tokens):
+    """No row, nothing minted, and the same answer a real account gets."""
     db = _FakeDatabase({})
 
-    with pytest.raises(HTTPException) as exc:
-        await generate_magic_link_service(
-            _FakeRequest("never-registered"), db, AccountType.USERS.value
-        )
+    result = await generate_magic_link_service(
+        _FakeRequest("never-registered"), db, AccountType.USERS.value
+    )
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == ACCOUNT_NOT_FOUND_DETAIL
+    assert result["message"] == LOGIN_LINK_SENT_MESSAGE
+    assert datetime.fromisoformat(result["expires_at"]) > datetime.now(timezone.utc)
     assert minted_tokens == []
     assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_ineligible_answers_are_indistinguishable_from_a_mint(minted_tokens):
+    """The oracle test: status-free at this layer, so the bodies must match exactly
+    in shape -- same keys, same message, same deadline shape -- whether eligible or not."""
+    unknown = await generate_magic_link_service(
+        _FakeRequest("never-registered"), _FakeDatabase({}), AccountType.USERS.value
+    )
+    blocked = await generate_magic_link_service(
+        _FakeRequest("blocked"),
+        _FakeDatabase({"blocked": make_user_row("blocked", is_blocked=True)}),
+        AccountType.USERS.value,
+    )
+    active = await generate_magic_link_service(
+        _FakeRequest("active"),
+        _FakeDatabase({"active": make_user_row("active")}),
+        AccountType.USERS.value,
+    )
+
+    assert set(unknown) == set(blocked) == set(active) == {"message", "expires_at"}
+    assert unknown["message"] == blocked["message"] == active["message"] == LOGIN_LINK_SENT_MESSAGE
+    for body in (unknown, blocked, active):
+        deadline = datetime.fromisoformat(body["expires_at"])
+        assert deadline > datetime.now(timezone.utc)
+    assert minted_tokens == [(OWNER_ID, "users")]
 
 
 @pytest.mark.asyncio

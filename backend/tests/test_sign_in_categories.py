@@ -28,7 +28,7 @@ from app.config import settings
 from app.db_models import (AdminRecord, LoginTokenRecord, ModeratorRecord,
                            UserRecord, find_account_in_table)
 from app.main import app
-from app.services.auth_service import ACCOUNT_NOT_FOUND_DETAIL, create_access_token, get_current_user
+from app.services.auth_service import LOGIN_LINK_SENT_MESSAGE, create_access_token, get_current_user
 
 # Deliberately the same regno in every table seeded below. That is the state the old design
 # had to refuse and this one has to resolve correctly.
@@ -148,13 +148,13 @@ def test_each_sign_in_page_mints_a_link_for_its_own_account(client_with_no_auth_
     }
 
 
-def test_a_page_refuses_a_regno_that_only_exists_in_another_table(client_with_no_auth_override, db):
-    """A moderator's regno typed on the participant page is not a participant.
+def test_a_page_answers_a_regno_from_another_table_exactly_like_an_unknown_one(client_with_no_auth_override, db):
+    """A moderator's regno typed on the participant page mints nothing there -- but the
+    answer gives that away no more than it does for a regno nobody ever registered.
 
-    The participant door answers "no account" for it and for a regno nobody ever
-    registered: same 404, same detail, and no token minted either way. The door names
-    the outcome now -- no account exists on this door -- and nothing more: it echoes
-    neither the typed regno nor the table the regno actually lives in.
+    Same 200, same body shape, same message, no token minted either way. The door never
+    names the outcome, echoes neither the typed regno nor the table the regno actually
+    lives in, so sweeping one door cannot map the other tables.
     """
     with db.sessions.begin() as session:
         session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com"))
@@ -166,12 +166,14 @@ def test_a_page_refuses_a_regno_that_only_exists_in_another_table(client_with_no
         f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": "never-registered"}
     )
 
-    assert wrong_door.status_code == never_registered.status_code == 404
-    assert wrong_door.json() == never_registered.json() == {"detail": ACCOUNT_NOT_FOUND_DETAIL}
+    assert wrong_door.status_code == never_registered.status_code == 200
+    assert set(wrong_door.json()) == set(never_registered.json()) == {"message", "expires_at"}
+    assert wrong_door.json()["message"] == LOGIN_LINK_SENT_MESSAGE
+    assert STAFF_ONLY not in wrong_door.text
     assert _minted_tokens(db) == []
 
 
-def test_a_refused_page_mints_nothing(client_with_no_auth_override, db):
+def test_an_unanswerable_page_mints_nothing(client_with_no_auth_override, db):
     with db.sessions.begin() as session:
         session.add(ModeratorRecord(regno=STAFF_ONLY, name="Mod", email="staff-only@example.com"))
 
@@ -179,7 +181,7 @@ def test_a_refused_page_mints_nothing(client_with_no_auth_override, db):
         f"/auth/login/{AccountType.USERS.value}/magic", json={"regno": STAFF_ONLY}
     )
 
-    assert refused.status_code == 404
+    assert refused.status_code == 200
     assert _minted_tokens(db) == []
 
 

@@ -204,17 +204,17 @@ def test_the_gate_applies_to_the_staff_doors_too(db):
 
 
 # ----------------------------------------------------------------------
-# Unknown registration numbers are refused plainly -- and still timed out
+# Unknown registration numbers get the uniform answer -- and still timed out
 # ----------------------------------------------------------------------
 
 
-def test_an_unknown_registration_number_is_plainly_refused(db):
+def test_an_unknown_registration_number_gets_the_uniform_answer(db):
     response = _browser().post(LOGIN_ENDPOINT, json={"regno": "never-registered"})
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 def test_hammering_with_an_unknown_registration_number_hits_the_cooldown(db):
-    """Unknown is a result of the lookup, not an excuse to skip the budget.
+    """Unknown is answered uniformly, not excused from the budget.
 
     The rate limiter runs before the account lookup, so a registration number that does
     not exist pays the same per-account cooldown as one that does: a second request for
@@ -222,7 +222,7 @@ def test_hammering_with_an_unknown_registration_number_hits_the_cooldown(db):
     """
     browser = _browser()
 
-    assert browser.post(LOGIN_ENDPOINT, json={"regno": "never-registered"}).status_code == 404
+    assert browser.post(LOGIN_ENDPOINT, json={"regno": "never-registered"}).status_code == 200
     cooled = browser.post(LOGIN_ENDPOINT, json={"regno": "never-registered"})
 
     assert cooled.status_code == 429
@@ -239,7 +239,7 @@ def test_walking_sequential_unknown_registration_numbers_hits_the_browser_budget
     browser = _browser()
 
     for index in range(5):
-        assert browser.post(LOGIN_ENDPOINT, json={"regno": f"ghost-{index}"}).status_code == 404
+        assert browser.post(LOGIN_ENDPOINT, json={"regno": f"ghost-{index}"}).status_code == 200
     throttled = browser.post(LOGIN_ENDPOINT, json={"regno": "ghost-5"})
 
     assert throttled.status_code == 429

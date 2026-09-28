@@ -71,15 +71,38 @@ SESSION_SUPERSEDED_DETAIL = (
 )
 _SESSION_SUPERSEDED_WWW_AUTHENTICATE = 'Bearer error="session_superseded"'
 
-# The sign-in form answers plainly. A real, unblocked account is told a link went out;
-# a registration number with no account is named as such; a blocked account is refused
-# by name. None of these answers echoes the submitted registration number or any account
-# field -- the only variation a caller can observe is the outcome itself. A request the
-# rate limiter refuses gets its own 429 instead of any of them, and a request the
-# validation gate refuses gets a 400.
-LOGIN_LINK_SENT_MESSAGE = "A login link has been generated. Check the backend console."
-ACCOUNT_NOT_FOUND_DETAIL = "No account is registered with that registration number."
-ACCOUNT_BLOCKED_DETAIL = "This account is blocked and cannot sign in."
+# The sign-in form answers uniformly. Every answered request -- a real, unblocked
+# account, a registration number with no account, a blocked account -- gets the same
+# 200 and the same body shape, so sweeping registration numbers across the three doors
+# learns nothing: not existence, not blocked state, not which table holds the number.
+# A link is minted (and the mint logged) only for a real, unblocked account; the other
+# outcomes mint nothing and answer a synthetic deadline computed by the same formula
+# as a real mint, so even the body is indistinguishable. None of these answers echoes
+# the submitted registration number or any account field -- the only thing a caller
+# can observe is timing noise. A request the rate limiter refuses gets its own 429
+# instead of any of them, and a request the validation gate refuses gets a 400;
+# neither of those varies with account state either.
+LOGIN_LINK_SENT_MESSAGE = (
+    "If this registration number is registered, a login link has been generated. "
+    "Check the backend console -- and double-check the number for typos."
+)
+
+
+def _uniform_link_response() -> Dict[str, Any]:
+    """The body every answered sign-in request gets, eligible or not.
+
+    `expires_at` is synthesized by the same `now + LOGIN_TOKEN_EXPIRE_MINUTES` formula
+    `create_and_store_magic_token` stores on a real row, so a refused caller sees the
+    same keys, the same message and a same-shaped deadline as a minted one. The sign-in
+    page counts this down exactly as it would a real mint.
+    """
+    return {
+        "message": LOGIN_LINK_SENT_MESSAGE,
+        "expires_at": (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES)
+        ).isoformat(),
+    }
 
 _RATE_LIMIT_DETAILS: Dict[str, str] = {
     SCOPE_CLIENT: "Too many login requests from this browser. Please try again in a few minutes.",
@@ -93,12 +116,10 @@ _RATE_LIMIT_DETAILS: Dict[str, str] = {
     ),
 }
 
-# What each sign-in page calls the kind of account it is for. Used in the one message a
-# person sees when their regno is not in that category, so that "no account for that
-# registration number here" names the page they are actually on instead of leaving them to
-# guess which of the three they used. It deliberately does not say whether the regno exists
-# in another table -- that would turn the sign-in form into a probe for whether a given
-# staff account exists.
+# What each sign-in page calls the kind of account it is for. Used only in
+# server-side log lines: the caller is never told which category a regno belongs to --
+# or whether it belongs to one at all -- so the sign-in form cannot be used as a probe
+# for whether a given staff account exists.
 ACCOUNT_CATEGORY_LABELS: Dict[str, str] = {
     AccountType.USERS.value: "participant",
     AccountType.ADMIN.value: "admin",
@@ -484,11 +505,12 @@ async def generate_magic_link_service(
     The table is recorded on the token as well, so redemption reads the same one table
     rather than searching for the regno again.
 
-    The answer names the outcome: a link for a real, unblocked account, a 404 naming the
-    unknown registration number for it, and a 403 naming the block. The rate limits run
-    before the lookup for a reason: they are keyed on the submitted registration number,
-    so being cooled down -- and paying the cooldown down -- happens for an invented
-    registration number exactly as it does for a real one.
+    The answer is uniform by design: a link for a real, unblocked account and the
+    identical 200 body for an unknown registration number or a blocked one. The rate
+    limits run before the lookup for a reason: they are keyed on the submitted
+    registration number, so being cooled down -- and paying the cooldown down --
+    happens for an invented registration number exactly as it does for a real one,
+    and the 429s never vary with account state either.
 
     ``client_id`` is the caller's browser identity for the client-scoped limit. The
     router resolves it from the request cookie and passes it in so the same value can be
@@ -533,27 +555,25 @@ async def generate_magic_link_service(
     with db.sessions() as session:
         found = find_account_in_table(session, account_type, regno)
     if not found:
+        # Answered, not refused: the caller gets the same body as a mint, and no
+        # token is stored. The log names what happened; the response does not.
         logger.info(
-            f"Login request refused: no {category} account holds registration number {regno!r}"
+            f"Login request for unknown {category} registration number {regno!r}: "
+            "answering as if a link was sent"
         )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=ACCOUNT_NOT_FOUND_DETAIL,
-        )
+        return _uniform_link_response()
 
     resolved_type, account = found
 
-    # A blocked account is refused by name, and the block bites here -- nothing is
-    # minted -- while redemption re-checks it for a link that was issued before the
-    # block was set.
+    # A blocked account mints nothing -- while redemption re-checks the block for a
+    # link issued before the block was set -- and is answered exactly like an
+    # unknown number, so blocked state is not learnable from this endpoint.
     if account.is_blocked:
         logger.warning(
-            f"Login request refused: {category} account {regno!r} is blocked"
+            f"Login request for blocked {category} account {regno!r}: "
+            "answering as if a link was sent"
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ACCOUNT_BLOCKED_DETAIL,
-        )
+        return _uniform_link_response()
 
     from ..create_token import create_and_store_magic_token
     token, expires_at = create_and_store_magic_token(db, str(account.id), resolved_type, request)

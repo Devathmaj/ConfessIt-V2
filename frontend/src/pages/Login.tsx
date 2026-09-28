@@ -24,15 +24,18 @@ import type { AccountType } from '@/lib/capabilities';
  * called, so editing this component cannot make one door serve another's accounts.
  *
  * Signing in is two steps, and only the server's answer moves you between them. The first
- * screen asks for a registration number and sends it to the door's endpoint. When the answer
- * is a minted link (200) a verification-pending screen takes over: it shows the validated
- * registration number, counts the token's remaining life down from the deadline the server
- * stored with it, holds the resend button until the account cooldown that answer charged has
- * passed, and can then send the link again or start over with a different number. A 404,
- * 403, 429 or 400 never leaves the first screen -- whoever answered, nothing was minted, so
- * there is no token to verify. The pending state is kept under a localStorage key that is
- * this door's alone, so refreshing the page keeps both countdowns running instead of
- * restarting them, and an expired token shows as expired rather than silently dying.
+ * screen asks for a registration number and sends it to the door's endpoint. The server
+ * answers every well-formed request identically (200) whether the number is registered,
+ * blocked or unknown -- telling those apart would turn the form into an oracle for
+ * account existence -- so a 200 always opens the verification-pending screen: it shows
+ * the submitted registration number, counts the deadline the answer carried down, holds
+ * the resend button until the account cooldown that answer charged has passed, and can
+ * then send the link again or start over with a different number. A 429 or 400 never
+ * leaves the first screen -- neither mints anything, and neither varies with account
+ * state, so there is no token to verify and nothing to learn. The pending state is kept
+ * under a localStorage key that is this door's alone, so refreshing the page keeps both
+ * countdowns running instead of restarting them, and an expired token shows as expired
+ * rather than silently dying.
  */
 
 /**
@@ -197,18 +200,18 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
     try {
       const { response, body } = await requestLink(trimmedRegno);
       if (response.ok) {
-        // The server's message, not a hand-written one. A real account is told a link
-        // was generated; a 404/403 explains the refusal in the error toast below, and the
-        // page stays on the input screen with nothing minted.
+        // The server answers every well-formed request identically, whether the number
+        // is registered or not, so there is nothing to branch on here: a 200 always
+        // opens the pending screen, and only a real mint produces a working link.
         const message =
-          typeof body?.message === 'string' ? body.message : 'Magic link sent! Check your backend console.';
+          typeof body?.message === 'string' ? body.message : 'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
         toast.success(message);
         const next: PendingVerification = {
           authenticationState: 'verification_pending',
           validatedRegno: trimmedRegno,
           tokenExpiresAt: parseExpiry(body?.expires_at),
-          // The mint answered this registration number, which charged the account
-          // cooldown that locks the resend button for the next five minutes.
+          // The answer charged this registration number's account cooldown, so the
+          // resend button is locked for the next five minutes.
           resendAvailableAt: Date.now() + LOGIN_ACCOUNT_COOLDOWN_SECONDS * 1000,
         };
         setPending(next);
@@ -216,8 +219,8 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         setRegno('');
       } else {
         const detail = typeof body?.detail === 'string' ? body.detail : null;
-        // A refusal mints nothing, so there is no verification to wait on. The number
-        // stays on the first screen and the reason is told.
+        // A 429 or 400 mints nothing and varies with nothing about the account, so the
+        // number stays on the first screen and the reason is told.
         toast.error(detail ?? 'Failed to generate magic link. Please try again.');
       }
     } catch (error) {
@@ -234,7 +237,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       const { response, body } = await requestLink(pending.validatedRegno);
       if (response.ok) {
         const message =
-          typeof body?.message === 'string' ? body.message : 'Magic link sent! Check your backend console.';
+          typeof body?.message === 'string' ? body.message : 'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
         toast.success(message);
         const next = {
           ...pending,
@@ -244,22 +247,12 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         };
         setPending(next);
         persistPendingVerification(category.accountType, next);
-      } else if (response.status === 404 || response.status === 403) {
-        // The registration number is not sign-in-able any more, so the pending state's
-        // premise is gone. Back to the input screen, where the person can choose again.
-        toast.error(
-          typeof body?.detail === 'string' && body.detail
-            ? body.detail
-            : 'That registration number can no longer sign in. Please try again.',
-        );
-        clearPendingVerification(category.accountType);
-        setPending(null);
-        setRegno('');
       } else {
         // Most likely 429: the cooldown is running. When the server names the exact wait
         // on its window, the countdown adopts it so the button stays in step with the
-        // authority that enforces the window. Either way the existing token is still
-        // counting down, so the pending screen stays and the reason is told.
+        // authority that enforces the window. Either way the pending screen stays -- the
+        // server never reports a number as un-sign-in-able, so there is no outcome that
+        // ends the wait -- and the reason is told.
         const retryAfter = Number(response.headers.get('Retry-After'));
         if (Number.isFinite(retryAfter) && retryAfter > 0) {
           const next = { ...pending, resendAvailableAt: Date.now() + retryAfter * 1000 };

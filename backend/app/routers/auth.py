@@ -96,11 +96,12 @@ async def generate_magic_link(
     except HTTPException as exc:
         # FastAPI's own handler would build the error response from scratch and drop a
         # client id this request just issued, so the refusal is built here, where the
-        # id is known. A request refused by the lookup or the rate limiter has already
-        # counted against this client, and unless the browser is given the id back it
-        # will be treated as a brand-new client -- handed a fresh budget -- on the very
-        # next request. That is what lets repeated sweeps of unknown registration
-        # numbers dodge the per-browser limit.
+        # id is known. Only the rate limiter and the input gate refuse here -- the
+        # lookup itself always answers 200 -- and a request refused by either has
+        # already counted against this client, so unless the browser is given the id
+        # back it will be treated as a brand-new client -- handed a fresh budget -- on
+        # the very next request. That is what lets repeated sweeps of unknown
+        # registration numbers dodge the per-browser limit.
         refusal = JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},

@@ -33,7 +33,7 @@ from app.db_models import LoginTokenRecord, UserRecord, find_account_in_table
 from app.main import app
 from app.services import auth_service as auth_service_module
 from app.services import login_rate_limit as login_rate_limit_module
-from app.services.auth_service import ACCOUNT_NOT_FOUND_DETAIL, LOGIN_LINK_SENT_MESSAGE, hash_token
+from app.services.auth_service import LOGIN_LINK_SENT_MESSAGE, hash_token
 
 LOGIN_ENDPOINT = f"/auth/login/{AccountType.USERS.value}/magic"
 VERIFY_ENDPOINT = "/auth/login/magic/verify"
@@ -292,18 +292,19 @@ def test_an_unrecognised_token_is_refused(db, auth_log):
 
 
 # ----------------------------------------------------------------------
-# The answer varies with whether the account exists -- plainly
+# The answer never varies with whether the account exists -- uniformly
 # ----------------------------------------------------------------------
 
 
-def test_an_invented_registration_number_is_plainly_refused_and_still_rate_limited(
+def test_an_invented_registration_number_gets_the_uniform_answer_and_still_rate_limited(
     db, clock
 ):
-    """A typo is told it is a typo, and the refusal still costs the next cooldown.
+    """A typo gets the same 200 and the same body as a real account, and the answer
+    still costs the next cooldown.
 
     The account-scoped limit keys on the submitted registration number and runs before
     the lookup, so hammering a registration number that does not exist burns the same
-    per-account budget as one that does: the refusal spends the window, and the follow-up
+    per-account budget as one that does: the answer spends the window, and the follow-up
     is refused with a 429 exactly like a real account's repeat request.
     """
     _seed_user(db, "real-user")
@@ -327,9 +328,17 @@ def test_an_invented_registration_number_is_plainly_refused_and_still_rate_limit
     assert "real-user@example.com" not in real.text
     assert "Real User" not in real.text
 
-    # The invented one is plainly told it does not exist.
-    assert invented.status_code == 404
-    assert invented.json() == {"detail": ACCOUNT_NOT_FOUND_DETAIL}
+    # The invented one gets the indistinguishable answer: same status, same keys, same
+    # message, a same-shaped deadline -- and no account details either.
+    assert invented.status_code == 200
+    invented_data = invented.json()
+    assert set(invented_data) == set(data) == {"message", "expires_at"}
+    assert invented_data["message"] == LOGIN_LINK_SENT_MESSAGE
+    invented_now = datetime.now(timezone.utc)
+    assert invented_now < datetime.fromisoformat(invented_data["expires_at"]) <= (
+        invented_now + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES)
+    )
+    assert "never-registered" not in invented.text
 
     # Both answers spent the account cooldown for that registration number.
     cooled_real = real_browser.post(LOGIN_ENDPOINT, json={"regno": "real-user"})

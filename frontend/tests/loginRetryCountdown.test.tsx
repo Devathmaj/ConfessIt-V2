@@ -7,20 +7,21 @@ import { Login } from '@/pages/Login';
 /**
  * Signing in is two steps and only a minted link moves between them.
  *
- * The first screen asks for a registration number and submits it. A 200 opens the
- * verification-pending screen: the validated number is shown, a live "Token expires in"
- * countdown runs off the exact deadline the server stored with the token, and the resend
- * button is held until the account cooldown that answer charged has passed -- a second live
- * "Resend available in" countdown shows how long. A refusal -- 404, 403, 429, 400 -- never
- * leaves the first screen, because nothing was minted and there is no token to verify. Both
- * countdowns are stored as timestamps under the door's own localStorage key, so a refresh
- * restores them running instead of restarting them, and an expired token shows as expired
- * rather than silently dying.
+ * The first screen asks for a registration number and submits it. The server answers
+ * every well-formed request identically (200) whether the number is registered or not,
+ * so a 200 always opens the verification-pending screen: the submitted number is shown,
+ * a live "Token expires in" countdown runs off the deadline the answer carried, and the
+ * resend button is held until the account cooldown that answer charged has passed -- a
+ * second live "Resend available in" countdown shows how long. A refusal -- 429, 400 --
+ * never leaves the first screen, because nothing was minted and there is no token to
+ * verify. Both countdowns are stored as timestamps under the door's own localStorage
+ * key, so a refresh restores them running instead of restarting them, and an expired
+ * token shows as expired rather than silently dying.
  *
  * These tests drive the real component against a scripted fetch.
  */
 
-const LOGIN_SENT = 'A login link has been generated. Check the backend console.';
+const LOGIN_SENT = 'If this registration number is registered, a login link has been generated. Check the backend console -- and double-check the number for typos.';
 const PENDING_KEY = 'login:pending:users';
 
 interface StubResponse {
@@ -154,19 +155,23 @@ describe('verification-pending sign-in', () => {
     expect(screen.queryByText(/Token expires in|Resend available in/)).not.toBeInTheDocument();
   });
 
-  it('keeps an unknown-number 404 on the input screen', async () => {
-    stubFetch([
-      { ok: false, status: 404, body: refusalBody('No account is registered with that registration number.') },
-    ]);
+  it('opens the same pending screen for an unregistered number -- no oracle', async () => {
+    // The server answers every well-formed request identically, so the page must not
+    // branch either: an unknown number opens the same verification screen with the same
+    // timers as a real one. Only a working link distinguishes them, and that arrives
+    // out of band.
+    stubFetch([{ ok: true, status: 200, body: successBody() }]);
     renderPage();
 
     await typeAndSubmit('never-registered');
 
     await waitFor(() => {
-      expect(screen.getByText(/No account is registered/)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
-    expect(screen.queryByRole('heading', { name: 'Verification Pending' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Token expires in|Resend available in/)).not.toBeInTheDocument();
+    expect(screen.getByText('never-registered')).toBeInTheDocument();
+    expect(screen.getByText(/Token expires in: \d{2}:\d{2}/)).toBeInTheDocument();
+    expect(resendButton()).toBeDisabled();
+    expect(window.localStorage.getItem(PENDING_KEY)).not.toBeNull();
   });
 
   it('restores a pending sign-in after refresh, keeping both countdowns running', async () => {
