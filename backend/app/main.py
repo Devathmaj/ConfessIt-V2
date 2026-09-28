@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import PlainTextResponse
 from sqlalchemy import text
 from .config import (
@@ -351,14 +351,14 @@ async def on_shutdown():
 # actually arrives, which is the only bound a chunked request -- which declares no
 # length at all -- can be caught by. Counting also bounds the multipart spool, which
 # otherwise writes an unbounded body to a temp file before any handler sees it.
-
-
-class RequestBodyTooLarge(Exception):
-    """Raised from the receive channel once more than the cap has actually arrived."""
-
-
-async def _body_too_large_response(request: Request, exc: RequestBodyTooLarge) -> Response:
-    return PlainTextResponse("Request body too large", status_code=413)
+#
+# The counted path answers 413 itself, as pure ASGI, rather than raising for a handler
+# to translate: the raise happens inside `receive`, which downstream body parsers call
+# outside the endpoint's own call -- an exception handler registered for it is never
+# reliably reached there, and the client gets a 500 for a request the server had
+# already correctly refused. Answering inline also keeps the status honest under every
+# server, and the disconnect returned to the parser makes it stop pulling instead of
+# failing halfway through a form it will never finish.
 
 
 # ----------------------
@@ -618,21 +618,41 @@ class RequestBodyLimitMiddleware:
                     return
 
         received = 0
+        answered_413 = False
 
         async def counted_receive():
-            nonlocal received
+            nonlocal received, answered_413
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > self.max_bytes and not answered_413:
+                    answered_413 = True
                     logger.warning(
                         "Refused undeclared body past %s bytes for %s %s",
                         self.max_bytes, scope.get("method"), scope.get("path"),
                     )
-                    raise RequestBodyTooLarge
+                    # Answered here, not raised for a handler: the 413 goes out on `send`
+                    # directly, and the disconnect below tells the downstream parser the
+                    # request is over so it stops pulling instead of failing mid-form.
+                    # It travels back out through every outer middleware, so CORS and
+                    # security headers still apply to it exactly as to any refusal.
+                    response = PlainTextResponse(
+                        "Request body too large", status_code=413
+                    )
+                    await response(scope, receive, send)
+                    return {"type": "http.disconnect"}
             return message
 
-        await self.app(scope, counted_receive, send)
+        try:
+            await self.app(scope, counted_receive, send)
+        except ClientDisconnect:
+            # Our own doing: the parser saw the disconnect above and aborted, and the
+            # 413 already went out on this connection. Swallowing only this case keeps
+            # an abuse attempt from becoming an error traceback in the logs; a
+            # disconnect the client caused itself still propagates.
+            if answered_413:
+                return
+            raise
 
 
 def request_body_limit() -> int:
@@ -652,11 +672,10 @@ def request_body_limit() -> int:
     return largest_payload + 256 * 1024
 
 
-# Registered before CORS so that CORS ends up outermost: a 413 raised here still has to
+# Registered before CORS so that CORS ends up outermost: a 413 answered here still has to
 # be readable by the browser, and a response without the CORS headers surfaces as an
 # opaque network error instead of the status the client needs to see.
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=request_body_limit())
-app.add_exception_handler(RequestBodyTooLarge, _body_too_large_response)
 app.add_exception_handler(RequestValidationError, _request_validation_response)
 # Registered for the subclass, so it does not shadow the ordinary HTTPException handler: FastAPI
 # walks the exception's bases, so a plain HTTPException still gets the default body.

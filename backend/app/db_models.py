@@ -633,7 +633,11 @@ class LoginTokenRecord(Base):
     request_user_agent: Mapped[str] = mapped_column(String(512))
     consume_ip: Mapped[Optional[str]] = mapped_column(INET)
     consume_user_agent: Mapped[Optional[str]] = mapped_column(String(512))
-    attempt_count: Mapped[int] = mapped_column(SmallInteger, default=0, server_default=text("0"))
+    # Plain Integer, not SmallInteger: the counter is incremented on every redemption
+    # from an unrelated network and only bounded in SQL (see auth_service), so a
+    # 16-bit column would overflow into a 500 under sustained probing. Existing
+    # databases are widened at boot by PostgresClient.apply_widened_columns.
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     session_status: Mapped[str] = mapped_column(String(16), default="issued", server_default=text("'issued'"), index=True)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     device: Mapped[Optional[str]] = mapped_column(String(512))

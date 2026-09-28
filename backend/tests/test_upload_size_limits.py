@@ -15,12 +15,12 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 from starlette.responses import PlainTextResponse
 
 from app.config import settings
 from app.main import (
     RequestBodyLimitMiddleware,
-    RequestBodyTooLarge,
     app,
     request_body_limit,
 )
@@ -245,17 +245,26 @@ class _Downstream:
 
 
 class _BodyReadingDownstream(_Downstream):
-    """An app that actually drains the body, like a route that parses a form."""
+    """An app that actually drains the body, like a route that parses a form.
+
+    Aborts the way Starlette's own body parsers do when the channel reports a
+    disconnect: raising ``ClientDisconnect``, which the middleware swallows iff it was
+    the one that answered 413 on this connection.
+    """
 
     def __init__(self, total):
         super().__init__()
         self.total = total
         self.seen = 0
+        self.aborted = False
 
     async def __call__(self, scope, receive, send):
         self.calls += 1
         while True:
             message = await receive()
+            if message["type"] == "http.disconnect":
+                self.aborted = True
+                raise ClientDisconnect()
             self.seen += len(message.get("body", b""))
             if not message.get("more_body"):
                 break
@@ -289,7 +298,13 @@ def _feed(total, chunk=65536):
 
 
 async def drive_middleware(scope, *, max_bytes=1024, total=0, drain=False):
-    """Run the middleware and report whether the body was read or the app reached."""
+    """Run the middleware and report what the client would have seen.
+
+    The over-cap answer is sent by the middleware itself, so there is no exception to
+    catch: ``refused`` says whether a 413 went out, ``sent`` holds every message the
+    client received (exactly one response on refusal -- the downstream never answers),
+    and any exception escaping here is a genuine bug, not the bound working.
+    """
     downstream = _BodyReadingDownstream(total) if drain else _Downstream()
     receive = _feed(total)
     sent = []
@@ -302,19 +317,18 @@ async def drive_middleware(scope, *, max_bytes=1024, total=0, drain=False):
     app_logger = logging.getLogger("app.main")
     was_disabled = app_logger.disabled
     app_logger.disabled = True
-    raised = None
     try:
         await RequestBodyLimitMiddleware(downstream, max_bytes=max_bytes)(scope, receive, send)
-    except RequestBodyTooLarge as exc:
-        raised = exc
     finally:
         app_logger.disabled = was_disabled
 
+    statuses = [m.get("status") for m in sent if m["type"] == "http.response.start"]
     return SimpleNamespace(
         reached=downstream.calls,
         bytes_pulled=receive.state["read"],
         sent=sent,
-        raised=raised,
+        refused=statuses == [413],
+        statuses=statuses,
     )
 
 
@@ -334,7 +348,7 @@ async def test_oversize_content_length_is_refused_without_reading_the_body():
 async def test_content_length_exactly_at_the_cap_is_allowed():
     result = await drive_middleware(http_scope(1024), total=1024, drain=True)
     assert result.reached == 1
-    assert result.raised is None
+    assert result.refused is False
     assert result.bytes_pulled == 1024
 
 
@@ -342,7 +356,7 @@ async def test_content_length_exactly_at_the_cap_is_allowed():
 async def test_content_length_under_the_cap_is_allowed():
     result = await drive_middleware(http_scope(10), total=10, drain=True)
     assert result.reached == 1
-    assert result.raised is None
+    assert result.refused is False
 
 
 # ----------------------------------------------------------------------
@@ -355,7 +369,7 @@ async def test_undeclared_body_under_the_cap_still_reaches_the_app():
     result = await drive_middleware(http_scope(None), max_bytes=1024, total=1000, drain=True)
 
     assert result.reached == 1
-    assert result.raised is None
+    assert result.refused is False
     assert result.bytes_pulled == 1000
 
 
@@ -371,7 +385,12 @@ async def test_undeclared_body_past_the_cap_is_cut_off():
         http_scope(None), max_bytes=1024, total=5_000_000, drain=True
     )
 
-    assert result.raised is not None
+    assert result.refused is True
+    # The refusal is one complete 413 from the middleware itself -- the downstream
+    # parser aborted on the disconnect and never sent a second response, and no
+    # exception escaped for a handler to translate (there is none any more).
+    assert result.statuses == [413]
+    assert b"".join(m.get("body", b"") for m in result.sent) == b"Request body too large"
     # Stopped within one chunk of the cap, not after the whole body.
     assert result.bytes_pulled <= 1024 + 65536
 
@@ -379,7 +398,7 @@ async def test_undeclared_body_past_the_cap_is_cut_off():
 @pytest.mark.asyncio
 async def test_undeclared_body_at_exactly_the_cap_is_allowed():
     result = await drive_middleware(http_scope(None), max_bytes=1024, total=1024, drain=True)
-    assert result.raised is None
+    assert result.refused is False
     assert result.bytes_pulled == 1024
 
 
@@ -389,18 +408,9 @@ async def test_understated_content_length_is_still_bounded_by_the_count():
     result = await drive_middleware(
         http_scope(10), max_bytes=1024, total=5_000_000, drain=True
     )
-    assert result.raised is not None
+    assert result.refused is True
+    assert result.statuses == [413]
     assert result.bytes_pulled <= 1024 + 65536
-
-
-@pytest.mark.asyncio
-async def test_the_raised_overflow_becomes_a_413_response():
-    """The exception is a plain class, so it needs a handler to be a client error."""
-    handler = app.exception_handlers[RequestBodyTooLarge]
-
-    response = await handler(None, RequestBodyTooLarge())
-    assert response.status_code == 413
-    assert response.body == b"Request body too large"
 
 
 @pytest.mark.asyncio
@@ -410,7 +420,7 @@ async def test_malformed_content_length_is_left_to_the_server_parser():
         total=10, drain=True,
     )
     assert result.reached == 1
-    assert result.raised is None
+    assert result.refused is False
 
 
 @pytest.mark.asyncio
@@ -418,7 +428,7 @@ async def test_websocket_scopes_pass_through_untouched():
     """Websocket routes carry no request body; the limit must not apply to them."""
     result = await drive_middleware({"type": "websocket", "path": "/ws"})
     assert result.reached == 1
-    assert result.raised is None
+    assert result.refused is False
     assert result.sent == []
 
 

@@ -107,6 +107,17 @@ RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Columns whose type widened after deployment, which ``create_all`` cannot apply:
+# it only creates tables that do not exist. Each entry maps (table, column) to the
+# SQL type the models now declare. Widening is always safe to apply (every stored
+# value still fits), and narrowing never appears here -- that would need a decision
+# about values that no longer fit, not a boot step.
+WIDENED_COLUMNS: dict[tuple[str, str], str] = {
+    # Mismatched-network redemptions increment this on every refusal while SQL bounds
+    # it at 2^31-1; a 16-bit column would overflow into a 500 under sustained probing.
+    ("login_tokens", "attempt_count"): "integer",
+}
+
 
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
@@ -163,6 +174,9 @@ class PostgresClient:
         # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
         # unlike the others it may have to *rewrite rows* before it can be applied.
         self.apply_not_null_constraints()
+        # After the columns exist and their nullability is settled: a type change needs
+        # the column present, and widening never invalidates rows.
+        self.apply_widened_columns()
         # After the columns exist, so it can name session_expires_at.
         self.backfill_session_deadlines()
         # After every additive step, so the session lifecycle converges on old databases.
@@ -493,6 +507,39 @@ class PostgresClient:
                     logger.info(
                         "Tightened %s.%s to NOT NULL", table_name, column_name
                     )
+
+    def apply_widened_columns(self) -> None:
+        """Widen a column whose model type outgrew the deployed one.
+
+        The same gap as :meth:`apply_missing_columns`, one level deeper: ``create_all``
+        skips tables that exist, so a column declared ``SmallInteger`` at deploy time
+        stays 16-bit forever while the models claim ``Integer``. Each entry in
+        :data:`WIDENED_COLUMNS` is checked against the catalogue and altered only when
+        it differs, so an already-converged database costs one lookup and changes
+        nothing. Only widenings are listed -- every stored value still fits, so no
+        decision about data is involved.
+        """
+        with self.engine.begin() as connection:
+            for (table_name, column_name), target in WIDENED_COLUMNS.items():
+                current = connection.execute(
+                    text(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :table "
+                        "AND column_name = :column"
+                    ),
+                    {"table": table_name, "column": column_name},
+                ).scalar()
+                if current is None or current == target:
+                    continue
+                connection.execute(
+                    text(
+                        f'ALTER TABLE "{table_name}" '
+                        f'ALTER COLUMN "{column_name}" TYPE {target}'
+                    )
+                )
+                logger.info(
+                    "Widened %s.%s from %s to %s", table_name, column_name, current, target
+                )
 
     @staticmethod
     def _superseded_constraints(

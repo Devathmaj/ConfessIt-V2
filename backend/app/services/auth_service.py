@@ -1,6 +1,7 @@
 # app/services/auth_service.py
 
 import hashlib
+import ipaddress
 import logging
 import re
 import secrets
@@ -8,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, find_account_in_table,
                          resolve_account)
 from fastapi import Depends, HTTPException, Request, status
@@ -585,6 +586,49 @@ async def generate_magic_link_service(
     return {"message": LOGIN_LINK_SENT_MESSAGE, "expires_at": expires_at.isoformat()}
 
 
+def _normalize_client_ip(value: Any) -> Optional[Any]:
+    """Parse an address for comparison, or None when it is not an address at all.
+
+    IPv4-mapped IPv6 (``::ffff:127.0.0.1``, what a dual-stack proxy reports for an IPv4
+    client) unwraps to its IPv4 self, so the same client seen through different stacks
+    still compares equal. Anything unparseable -- a hostname, garbage -- compares as
+    nothing, which can only refuse, never admit.
+    """
+    try:
+        parsed = ipaddress.ip_address(str(value).strip())
+    except ValueError:
+        return None
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+        return parsed.ipv4_mapped
+    return parsed
+
+
+def _redemption_continuity(
+    *,
+    minted_ip: Any,
+    minted_user_agent: Optional[str],
+    remote_ip: Any,
+    remote_user_agent: str,
+) -> bool:
+    """Whether a redemption plausibly continues the session its mint started.
+
+    True when both addresses parse to the same /24 (IPv4) or /64 (IPv6) network, or
+    when the User-Agent matches the one recorded at mint. Either signal is weak on its
+    own -- NAT pools share subnets and User-Agents repeat -- but the token is a
+    256-bit secret and remains the actual authentication; these only decide whether a
+    roam looks legitimate enough to let through versus count and refuse.
+    """
+    minted = _normalize_client_ip(minted_ip)
+    remote = _normalize_client_ip(remote_ip)
+    if minted is not None and remote is not None and type(minted) is type(remote):
+        width = 24 if isinstance(minted, ipaddress.IPv4Address) else 64
+        if remote in ipaddress.ip_network(f"{minted}/{width}", strict=False):
+            return True
+    if minted_user_agent and minted_user_agent == remote_user_agent:
+        return True
+    return False
+
+
 def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):
     """
     Redeem a magic link and return an access token plus the landing path for the account.
@@ -643,14 +687,34 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     account_type = str(login_token.account_type)
     request_user_agent = login_token.request_user_agent
 
-    if str(login_token.request_ip) != request.client.host:
+    # The redemption is expected from the same neighbourhood as the mint, not the
+    # same address: carrier NAT, campus egress pools and IPv6-to-IPv4 transitions move
+    # legitimate users between addresses constantly, and a strict equality check turns
+    # every such move into a failed login. What still has to hold is *some* continuity
+    # -- the same /24 (IPv4) or /64 (IPv6) subnet, or the same User-Agent the mint saw.
+    # Either is enough to proceed; the unguessable token itself remains the real gate.
+    # Anything else is counted (bounded, so spam cannot overflow the counter) and
+    # refused, and the log keeps the exact addresses for abuse review.
+    if not _redemption_continuity(
+        minted_ip=login_token.request_ip,
+        minted_user_agent=request_user_agent,
+        remote_ip=request.client.host,
+        remote_user_agent=request.headers.get("user-agent", "unknown"),
+    ):
+        logger.warning(
+            f"Magic link token {login_token_id} redeemed from an unrelated network "
+            f"(minted at {login_token.request_ip}, redeemed from {request.client.host})"
+        )
         with db.sessions.begin() as session:
             session.execute(
                 update(LoginTokenRecord)
                 .where(LoginTokenRecord.id == login_token_id)
-                .values(attempt_count=LoginTokenRecord.attempt_count + 1)
+                # The bound goes on the operand, not the sum: LEAST(x + 1, MAX) still
+                # evaluates x + 1, which overflows on a maxed row before LEAST ever sees
+                # it. LEAST(x, MAX - 1) + 1 saturates at MAX with no overflow possible.
+                .values(attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1)
             )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same IP address")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same network or device")
 
     consume_ip = request.client.host
     consume_user_agent = request.headers.get("user-agent", "unknown")
@@ -689,7 +753,9 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 consumed_at=now,
                 consume_ip=consume_ip,
                 consume_user_agent=consume_user_agent,
-                attempt_count=LoginTokenRecord.attempt_count + 1,
+                # Bounded like the refusal counter below: a consume runs once per token,
+                # but the shape is kept identical so no increment path can overflow.
+                attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1,
                 session_status="active",
                 last_seen_at=now,
                 device=consume_user_agent or request_user_agent or "unknown",
