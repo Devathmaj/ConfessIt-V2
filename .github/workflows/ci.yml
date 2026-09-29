@@ -17,7 +17,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Vite 7 requires ^20.19.0 || >=22.12.0; pin the newer line.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: './frontend/package-lock.json'
       - name: Install dependencies
@@ -26,6 +27,11 @@ jobs:
         run: npm run lint
       - name: Run tests
         run: npm run test
+      - name: Audit shipped dependencies
+        # Production attack surface only (--omit=dev): build/lint tooling carries
+        # transitive highs with no patched versions, which Dependabot (below) keeps
+        # pressure on instead. Anything critical in what ships to browsers fails here.
+        run: npm audit --omit=dev --audit-level=critical
 
   backend-tests:
     runs-on: ubuntu-latest
@@ -81,6 +87,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Audit Python dependencies
+        # Fail-closed on known vulnerabilities in the pinned tree. setuptools is
+        # build-time only (kept <81 for pkg_resources) and ignored with reason;
+        # everything else must be clean.
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --ignore-vuln PYSEC-2026-3447
       - name: Create the test database
         # tests/conftest.py refuses to start unless TEST_DATABASE_URL names a database
         # other than DATABASE_URL, because its clear_db fixture truncates every table.
@@ -110,3 +123,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify Docker Compose Build
         run: docker compose build
+      - name: Verify production compose file parses
+        # No build: validates names, structure and required variables against dev-only
+        # stand-ins. A missing `:?` variable or bad YAML fails here, not at 3am.
+        env:
+          SERVER_NAME: ci.example.com
+          API_ORIGIN: api.ci.example.com
+          VITE_API_URL: https://ci.example.com
+          DB_PASSWORD: ConfessItLocalPassword
+          REDIS_PASSWORD: ConfessItLocalRedisPassword
+          SECRET_KEY: compose-prod-placeholder-not-a-real-key-00000000
+          PUBLIC_BASE_URL: https://ci.example.com
+          CORS_ORIGINS: https://ci.example.com
+          ALLOWED_HOSTS: ci.example.com
+        run: docker compose -f docker-compose.prod.yml config --quiet

@@ -51,7 +51,16 @@ import { ReportsReview } from "./pages/ReportsReview";
 import { ProfileReview } from "./pages/ProfileReview";
 import { AppConfiguration } from "./pages/AppConfiguration";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000,
+      gcTime: 5 * 60 * 1000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 /**
  * Used to keep a signed-in user out of the login screen.
@@ -454,7 +463,7 @@ const App = () => (
             the URL, and both the player-facing Games pages and the admin console read the one
             instance it owns. */}
         <GamesConfigProvider>
-          <BrowserRouter future={{ v7_relativeSplatPath: true }}>
+          <BrowserRouter>
             <AppRoutes />
           </BrowserRouter>
         </GamesConfigProvider>

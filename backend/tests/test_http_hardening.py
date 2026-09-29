@@ -112,7 +112,9 @@ def test_rediss_url_requires_certificate_verification(monkeypatch):
 
     RedisService()._get_client()
 
-    assert seen.get("ssl_cert_reqs") == "required"
+    import ssl
+
+    assert seen.get("ssl_cert_reqs") in ("required", ssl.CERT_REQUIRED)
     assert seen.get("ssl_check_hostname") is True
 
 

@@ -22,6 +22,8 @@ spelling would have needed a second column to serve the other.
 
 import pytest
 
+from sqlalchemy import select
+
 from app.db_models import MatchmakingSlotRecord, UserRecord
 from app.limits import USER_YEAR_MAX, USER_YEAR_MIN
 from app.services.matchmaking_slot_service import (
@@ -119,7 +121,7 @@ def test_a_matchmaking_slot_keeps_the_four_halves_apart(db):
         )
 
     with db.sessions() as session:
-        stored = session.query(MatchmakingSlotRecord).one()
+        stored = session.scalars(select(MatchmakingSlotRecord)).one()
         assert (stored.year_a, stored.department_a) == (2, "CSE")
         assert (stored.year_b, stored.department_b) == (2, "ECE")
 
@@ -256,7 +258,7 @@ async def test_a_boot_does_not_invent_a_placeholder_slot(db):
     assert result["slots_count"] == 0
     assert result["configured"] is False
     with db.sessions() as session:
-        assert session.query(MatchmakingSlotRecord).count() == 0
+        assert len(session.scalars(select(MatchmakingSlotRecord)).all()) == 0
 
 
 @pytest.mark.asyncio
@@ -269,7 +271,7 @@ async def test_a_boot_leaves_a_real_configuration_alone(db):
     assert result["slots_count"] == 1
     assert result["configured"] is True
     with db.sessions() as session:
-        assert session.query(MatchmakingSlotRecord).count() == 1
+        assert len(session.scalars(select(MatchmakingSlotRecord)).all()) == 1
 
 
 def test_the_delete_endpoint_takes_the_id_in_an_object(db, admin_client):

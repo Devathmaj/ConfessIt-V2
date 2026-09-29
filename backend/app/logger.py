@@ -13,7 +13,7 @@ FORMATTER = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(messag
 
 _OTEL_LOG_HANDLER = None
 
-# SDK 1.45.0 deprecates its own LoggingHandler in favour of the handler from
+# SDK 1.45.x deprecates its own LoggingHandler in favour of the handler from
 # opentelemetry-instrumentation-logging, and warns on import. The SDK handler is kept
 # anyway: instrumentation-logging is deliberately not a dependency here, and the SDK
 # handler is what puts trace_id and span_id on every exported LogRecord, which is the

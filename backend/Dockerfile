@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # crashes with `WatchfilesRustInternalError: Input/output error (os error 5)` on
 # this development host's bind-mounted filesystem -- WATCHFILES_FORCE_POLLING does
 # not help because that only switches to watchfiles' own Rust-backed poller, which
-# hits the same error. With watchfiles absent, uvicorn 0.23.2 falls back to its
+# hits the same error. With watchfiles absent, uvicorn falls back to its
 # pure-Python StatReload (mtime polling), which watches bind mounts reliably. Nothing
 # else in this app imports watchfiles, so uninstalling it is safe here.
 RUN pip uninstall -y watchfiles

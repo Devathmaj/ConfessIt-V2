@@ -27,7 +27,7 @@ import uuid
 from itertools import combinations
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import delete, inspect, select
 
 from app.db_models import MatchmakingSlotRecord
 from app.services.matchmaking_slot_service import (
@@ -66,11 +66,13 @@ def stored_pairs(db):
     configurations through it a statement about matchmaking rather than about bookkeeping.
     """
     with db.sessions() as session:
-        rows = session.query(
-            MatchmakingSlotRecord.year_a,
-            MatchmakingSlotRecord.department_a,
-            MatchmakingSlotRecord.year_b,
-            MatchmakingSlotRecord.department_b,
+        rows = session.execute(
+            select(
+                MatchmakingSlotRecord.year_a,
+                MatchmakingSlotRecord.department_a,
+                MatchmakingSlotRecord.year_b,
+                MatchmakingSlotRecord.department_b,
+            )
         ).all()
     return sorted(
         tuple(sorted(((year_a, f"{department_a}"), (year_b, f"{department_b}"))))
@@ -196,7 +198,7 @@ async def test_two_boxes_naming_the_same_pair_are_both_stored(db):
     await save_box(db, [COHORT_A, COHORT_B, COHORT_C], second)
 
     with db.sessions() as session:
-        rows = session.query(MatchmakingSlotRecord).all()
+        rows = session.scalars(select(MatchmakingSlotRecord)).all()
     # Four rows: A-B twice, once per box, plus A-C and B-C.
     assert len(rows) == 4
     assert {row.group_key for row in rows} == {first, second}
@@ -319,7 +321,7 @@ async def test_pairing_does_not_depend_on_the_group_key(db):
     pairs_in_one_box = stored_pairs(db)
 
     with db.sessions.begin() as session:
-        session.query(MatchmakingSlotRecord).delete()
+        session.execute(delete(MatchmakingSlotRecord))
 
     for pair_box in ([COHORT_A, COHORT_B], [COHORT_A, COHORT_C], [COHORT_B, COHORT_C]):
         await save_box(db, pair_box, str(uuid.uuid4()))

@@ -46,7 +46,7 @@ REDACTED = "[REDACTED]"
 
 # The pre-1.20 names, written out rather than imported.
 #
-# opentelemetry-semantic-conventions 0.66b0 does export HTTP_URL and HTTP_TARGET, but
+# opentelemetry-semantic-conventions 0.66b1 does export HTTP_URL and HTTP_TARGET, but
 # only from opentelemetry.semconv._incubating.attributes.http_attributes -- an
 # underscore-prefixed private path whose contents are explicitly not covered by the
 # package's compatibility guarantees. The current names come from the public

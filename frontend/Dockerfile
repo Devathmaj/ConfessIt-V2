@@ -1,5 +1,5 @@
-# Use an official Node.js runtime as a parent image
-FROM node:20-slim
+# Use an official Node.js runtime as a parent image (22: the minimum line Vite 7 supports)
+FROM node:22-slim
 
 # Set the working directory in the container
 WORKDIR /app

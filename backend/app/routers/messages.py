@@ -13,7 +13,7 @@ from ..services.authorization import require_participant
 from ..services.message_service import message_service
 from ..services.redis_service import redis_service
 from ..logger import get_logger
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from ..limits import (
     CONVERSATION_MESSAGE_MAX,
@@ -34,7 +34,8 @@ class MessageCreate(BaseModel):
     conversation_id: str = Field(max_length=USER_REGNO_MAX)
     body: str = Field(max_length=MESSAGE_BODY_MAX)
 
-    @validator("body")
+    @field_validator("body", mode="after")
+    @classmethod
     def _validate_body_characters(cls, value: str) -> str:
         from ..models import _reject_unchangeable_characters
 

@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.accounts import AccountType
 from app.config import settings
@@ -423,9 +423,9 @@ def test_a_deleted_account_cannot_refresh(db, no_auth_override):
     _redeem_token(browser, _mint_token_for(db, "deleted-refresh-user"))
 
     with db.sessions.begin() as session:
-        session.query(UserRecord).filter(
-            UserRecord.regno == "deleted-refresh-user"
-        ).delete()
+        session.execute(
+            delete(UserRecord).where(UserRecord.regno == "deleted-refresh-user")
+        )
 
     refused = browser.post(REFRESH_ENDPOINT)
     assert refused.status_code == 401

@@ -2,7 +2,10 @@
 
 import redis
 import json
+import ssl
 from typing import Optional, Callable, Any
+from redis.backoff import ExponentialBackoff
+from redis.retry import Retry
 from ..config import settings
 from ..logger import get_logger
 
@@ -27,14 +30,15 @@ class RedisService:
                 # hostname, and a handshake that cannot prove that fails instead of
                 # falling back to cleartext. Anything that must cross a network --
                 # chat traffic included -- belongs on a rediss:// URL.
-                extra["ssl_cert_reqs"] = "required"
+                extra["ssl_cert_reqs"] = ssl.CERT_REQUIRED
                 extra["ssl_check_hostname"] = True
             self._client = redis.from_url(
                 self.redis_url,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
-                retry_on_timeout=True,
+                retry=Retry(ExponentialBackoff(), 3),
+                retry_on_error=[ConnectionError, TimeoutError],
                 health_check_interval=30,
                 **extra,
             )

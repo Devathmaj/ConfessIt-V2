@@ -1,13 +1,17 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
+import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   server: {
-    host: "::",
+    // Loopback only: the dev server (with HMR control over the page) must never be
+    // reachable from the LAN. Published ports stay loopback-bound in compose for the
+    // same reason; production serves built assets behind Nginx instead.
+    host: "127.0.0.1",
     port: 8080,
     // Document-level hardening for local dev. Deliberately no `Content-Security-Policy`
     // here: Vite's dev server needs inline scripts and eval for HMR, so any dev CSP is
@@ -23,6 +27,7 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
+    tailwindcss(),
     mode === 'development' &&
     componentTagger(),
   ].filter(Boolean),

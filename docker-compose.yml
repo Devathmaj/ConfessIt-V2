@@ -5,7 +5,10 @@ services:
       context: ./frontend
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
     ports:
-      - "5173:8080"
+      # Loopback only: the dev server (with HMR) must never be reachable from the LAN.
+      # The container still binds 0.0.0.0 internally -- a published port cannot forward
+      # into a loopback-bound socket -- so the boundary is enforced here, at publish.
+      - "127.0.0.1:5173:8080"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -34,7 +37,10 @@ services:
       "16384"
     ]
     ports:
-      - "8001:8001"
+      # Loopback only, same reasoning as the frontend above: direct Uvicorn access is
+      # for host debugging, never for the LAN. Production serves through the edge
+      # (see docker-compose.prod.yml) with no published app ports at all.
+      - "127.0.0.1:8001:8001"
     volumes:
       - ./backend:/app
       - ./archives:/app/archives
@@ -83,6 +89,12 @@ services:
       # this variable is unset.
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: "confessit-backend"
+      # Hostnames this deployment answers for, on top of the loopback default. `backend`
+      # is the Compose-network DNS name Prometheus scrapes for liveness
+      # (`up{job="confessit-backend"}` feeds the ConfessItBackendDown rule): without it
+      # the host allowlist 400s every scrape and the backend reads as down while
+      # serving. Production adds its public names here the same way.
+      ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],backend"
       # Report only the current (1.21+) HTTP semantic conventions. Unset, or set to
       # "http/dup", the instrumentation also emits the pre-1.20 names; "http" is the
       # mode that retires them outright.

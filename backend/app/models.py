@@ -1,6 +1,6 @@
 # app/models.py
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator
 from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import date, datetime, timezone
 from .postgres import new_id
@@ -183,7 +183,8 @@ class ConfessionCreate(BaseModel):
     comments_enabled: bool
     recipient_name: Optional[str] = Field(default=None, max_length=RECIPIENT_NAME_MAX)
 
-    @validator("recipient_name")
+    @field_validator("recipient_name", mode="after")
+    @classmethod
     def _validate_recipient_name(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
@@ -193,7 +194,8 @@ class ConfessionCreate(BaseModel):
         normalized = value.strip()
         return normalized or None
 
-    @validator("body")
+    @field_validator("body", mode="after")
+    @classmethod
     def _validate_body_characters(cls, value: str) -> str:
         return _reject_unchangeable_characters(value, "body")
 
@@ -249,10 +251,7 @@ class ConfessionComment(BaseModel):
     reported_by: List[str] = Field(default_factory=list)
 
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 
 class Confession(BaseModel):
@@ -282,10 +281,7 @@ class Confession(BaseModel):
     
     user_reaction: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class AdminUserCreate(BaseModel):
     """Payload for creating an account in any of the three account tables.
@@ -488,10 +484,7 @@ class AccountDetails(BaseModel):
     # privilege answer is ``capabilities`` below, derived from it.
     account_type: str = AccountType.USERS.value
 
-    class Config:
-        arbitrary_types_allowed = True
-
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
     @field_validator("account_type", mode="before")
     @classmethod
@@ -604,10 +597,7 @@ class LoginToken(BaseModel):
     superseded_at: Optional[datetime] = None
     superseded_by: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class LoveNoteTemplate(BaseModel):
     """
@@ -619,10 +609,7 @@ class LoveNoteTemplate(BaseModel):
     description: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class LoveNoteImageIdentity(BaseModel):
     """The durable identity of a love note's image, and nothing derived from it.
@@ -657,10 +644,7 @@ class LoveNote(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     read_at: Optional[datetime] = None
 
-    class Config:
-        arbitrary_types_allowed = True
-            
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 
 class Match(BaseModel):
@@ -673,10 +657,7 @@ class Match(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class Conversation(BaseModel):
     """
@@ -691,10 +672,7 @@ class Conversation(BaseModel):
     accepted_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class Message(BaseModel):
     """
@@ -708,10 +686,7 @@ class Message(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_read: bool = False
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class ConversationCreate(BaseModel):
     """
@@ -731,14 +706,11 @@ class Notification(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_read: bool = False
 
-    class Config:
-        arbitrary_types_allowed = True
-        
-        populate_by_name = True
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 
 # Update forward references to allow nested Pydantic models
-Confession.update_forward_refs()
+Confession.model_rebuild()
 
 
 # --- Wordle configuration ------------------------------------------------------

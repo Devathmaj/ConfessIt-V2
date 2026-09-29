@@ -1,6 +1,10 @@
-# Example production Nginx front for the ConfessIt SPA. Copy, fill the three
-# placeholders (SERVER_NAME, API_ORIGIN, certificate paths), and serve the
-# `vite build` output from it -- do NOT serve production from `vite dev`.
+# Production Nginx front for the ConfessIt SPA.
+#
+# Used two ways: read it as the documented production edge, and used verbatim by
+# frontend/Dockerfile.prod, which copies it as the container's Nginx template --
+# nginx:alpine renders `${...}` from the environment at container start, so
+# SERVER_NAME/API_ORIGIN arrive as container env (see docker-compose.prod.yml), not
+# edits. Do NOT serve production from `vite dev`.
 #
 # What this enforces that the dev server cannot: TLS with HSTS, the full
 # Content-Security-Policy (dev Vite needs inline scripts and eval for HMR, so a dev
@@ -15,27 +19,38 @@
 # * media: self plus Cloudinary (delivery URLs can serve video renditions);
 # * connect: self plus the API origin over https and wss (REST + chat socket).
 # Everything else -- objects, frames, form targets, base URIs -- has no legitimate
-# source and is closed outright.
+# source and is closed outright. TLS certificates arrive as a mounted directory
+# (/etc/nginx/tls); without them Nginx fails to start, loudly, rather than serving
+# plain HTTP by accident. Rate limiting sits beside the proxy: abusive volume never
+# reaches the app. A WAF (e.g. ModSecurity) is deliberately not bundled -- add one
+# here if the threat model needs it.
 #
-# If the API lives on its own host instead of under /api/, point API_ORIGIN at it in
-# VITE_API_URL at build time AND in the connect-src below, keep the same CSP, and
-# delete the /api/ location. Either way the API origin must be https: the frontend
-# refuses a non-https VITE_API_URL at build time (see scripts/check-prod-env.mjs).
+# If the API lives on its own host instead of under /api/, set API_ORIGIN to that
+# host (and build with https://API_ORIGIN as VITE_API_URL), keep the same CSP, and
+# delete the /api/ location. With the /api/ layout below, API_ORIGIN is this same
+# host. Either way the API origin must be https: the frontend refuses a non-https
+# VITE_API_URL at build time (see scripts/check-prod-env.mjs).
 
-# If the API lives on its own host instead of under /api/, replace every API_ORIGIN
-# below with that https origin (and build with it as VITE_API_URL), keep the same CSP,
-# and delete the /api/ location. Either way the API origin must be https: the frontend
-# refuses a non-https VITE_API_URL at build time (see scripts/check-prod-env.mjs).
+# Access log with latency and status for every request the edge serves or proxies.
+log_format confessit '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                      'rt=$request_time uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+# One shared abuse budget per client address before requests reach any location.
+limit_req_zone $binary_remote_addr zone=edge:10m rate=30r/s;
+limit_req_status 429;
 
 server {
-    listen 443 ssl http2;
-    server_name SERVER_NAME;
+    listen 443 ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
 
     ssl_certificate /etc/nginx/tls/fullchain.pem;
     ssl_certificate_key /etc/nginx/tls/privkey.pem;
 
     root /usr/share/nginx/html;
     index index.html;
+    access_log /var/log/nginx/access.log confessit;
 
     # TLS is the only way in: HSTS (the backend also sends it, this covers statics).
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
@@ -44,10 +59,11 @@ server {
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://res.cloudinary.com https://placehold.co; media-src 'self' https://res.cloudinary.com; connect-src 'self' https://API_ORIGIN wss://API_ORIGIN; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://res.cloudinary.com https://placehold.co; media-src 'self' https://res.cloudinary.com; connect-src 'self' https://${API_ORIGIN} wss://${API_ORIGIN}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
 
     # The SPA is one document: deep links fall back to it, hashed assets cache forever.
     location / {
+        limit_req zone=edge burst=60 nodelay;
         try_files $uri $uri/ /index.html;
     }
     location ~* \.(js|css|png|jpg|jpeg|gif|webp|svg|woff2?)$ {
@@ -56,11 +72,12 @@ server {
     }
 
     # Same-origin API under /api/: with this layout build with
-    # VITE_API_URL=https://SERVER_NAME/api so calls land here. Forward the client
+    # VITE_API_URL=https://${SERVER_NAME}/api so calls land here. Forward the client
     # address and proto so the backend's proxy-aware pieces (Secure
     # cookies, rate-limit IP, TrustedHost check) see the browser, not this proxy --
     # and list this host in the backend's TRUSTED_PROXY_HOSTS.
     location /api/ {
+        limit_req zone=edge burst=100 nodelay;
         proxy_pass http://backend:8001/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -72,6 +89,6 @@ server {
 # Plain HTTP exists only to leave it: every request moves to https without being served.
 server {
     listen 80;
-    server_name SERVER_NAME;
+    server_name ${SERVER_NAME};
     return 301 https://$host$request_uri;
 }

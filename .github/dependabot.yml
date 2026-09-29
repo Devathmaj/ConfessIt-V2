@@ -1,0 +1,30 @@
+# Keep dependencies moving: weekly PRs for both ecosystems, grouped so one merge
+# updates the world instead of one PR per package.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      backend-deps:
+        patterns:
+          - "*"
+    # The audit gate in CI (pip-audit on requirements.txt) decides whether an
+    # update PR is safe to merge: minors that introduce advisories fail there.
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      frontend-deps:
+        patterns:
+          - "*"
+    # Same story on this side: `npm audit --omit=dev --audit-level=critical` in CI
+    # is the merge gate for what ships to browsers.
+    commit-message:
+      prefix: "chore(deps)"

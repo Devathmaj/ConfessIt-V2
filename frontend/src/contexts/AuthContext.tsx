@@ -1,7 +1,6 @@
 // src/contexts/AuthContext.tsx
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
-import { jwtDecode } from 'jwt-decode';
 import { toast } from 'sonner';
 import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken } from '../services/api';
 import { API_URL } from '../lib/apiBase';

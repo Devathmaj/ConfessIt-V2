@@ -1,0 +1,168 @@
+# Production overlay: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# How this differs from the dev stack, and why each difference exists:
+#
+# * The edge (Nginx) terminates TLS and is the only thing publishing ports. Nothing
+#   else is reachable from outside the Compose network -- no direct Uvicorn, no dev
+#   servers, no database sockets.
+# * No source bind mounts and no `--reload`: images run what was built, with multiple
+#   API workers sharing one signing key (single-session/rotation semantics already
+#   assume this; see app.config SECRET_KEY).
+# * `read_only` filesystems with tmpfs where the runtime needs scratch space, resource
+#   ceilings, and `restart: unless-stopped` everywhere.
+# * Data persists in NAMED volumes (never bind mounts, never ephemeral overlay): the
+#   database, Redis snapshots and message archives must survive a container replace.
+#   Back these volumes up; losing them loses accounts, sessions and archives.
+#
+# Required environment (all fail closed with `:?`; keep them in a gitignored file --
+# never in this tracked one):
+#   SERVER_NAME, API_ORIGIN  -- public names; API_ORIGIN is the bare API hostname
+#   VITE_API_URL             -- https origin the frontend bundle is built against
+#   DB_PASSWORD, REDIS_PASSWORD, SECRET_KEY, PUBLIC_BASE_URL, CORS_ORIGINS,
+#   ALLOWED_HOSTS, TRUSTED_PROXY_HOSTS
+# TLS certificates go in ./tls/ (gitignored): fullchain.pem + privkey.pem, as expected
+# by frontend/nginx.prod.conf.example. Without them Nginx fails to start rather than
+# serving plain HTTP -- place real certificates (e.g. certbot) before first boot.
+# Telemetry is intentionally unwired here: point OTEL_EXPORTER_OTLP_ENDPOINT at a TLS
+# collector (with OTEL_EXPORTER_OTLP_CERTIFICATE) when one exists; with no endpoint
+# the app simply does not export.
+
+services:
+  edge:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL to the public https API origin}
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME to the public site name}
+      API_ORIGIN: ${API_ORIGIN:?set API_ORIGIN to the bare public API hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./tls:/etc/nginx/tls:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
+  backend:
+    build:
+      context: ./backend
+    # No --reload, no source mounts: what was built is what serves, on shared workers.
+    command: [
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8001",
+      "--workers",
+      "${WEB_WORKERS:-2}",
+      "--limit-concurrency",
+      "100",
+      "--h11-max-incomplete-event-size",
+      "16384"
+    ]
+    # No ports: reachable only through the edge and the Compose network.
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
+      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      CLOUD: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public site origin}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the public frontend origin(s)}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS to the public names this deployment serves}
+      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+    # Read-only root means bytecode caches cannot be written back; disable them so
+    # imports never try (the image ships compiled-clean and runs identically).
+    volumes:
+      - archives_prod_data:/app/archives
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+
+  game-scheduler:
+    build:
+      context: ./backend
+    command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    environment:
+      TZ: UTC
+      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
+      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: confessit
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      POSTGRES_DB: ConfessIt
+    # No ports: reachable only over the Compose network. Operator access is
+    # `docker compose exec postgres psql`, never a published socket.
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    command: >
+      sh -c 'exec redis-server
+      --maxmemory 128mb
+      --save 900 1
+      --save 300 10
+      --requirepass "$$REDIS_PASSWORD"'
+    volumes:
+      - redis_prod_data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:
+  archives_prod_data:
