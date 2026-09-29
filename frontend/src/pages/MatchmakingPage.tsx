@@ -440,6 +440,42 @@ export type ConversationStatus =
   | 'terminated';
 
 /**
+ * A component to display a user's profile card.
+ *
+ * Declared at module scope like its siblings: created inside the page it would
+ * remount on every parent render, discarding DOM state (image loads, transitions)
+ * for no reason. It reads nothing but its props, so hoisting changes nothing it shows.
+ */
+const UserCard = ({ profile }: { profile: User }) => (
+  <Card className="confession-card">
+    <CardHeader className="items-center text-center">
+      <ProfileAvatar
+        src={profile.profile_picture_url}
+        name={profile.name}
+        className="w-24 h-24 border-4 border-background shadow-lg"
+      />
+      <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.name}</CardTitle>
+      <CardDescription>{cohortLabel(profile.year, profile.department)}</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <div className="space-y-3">
+        <div className="text-sm">
+          <span className="font-semibold text-romantic">Interests:</span>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {profile.interests?.map((interest) => (
+              <span key={interest} className="px-2 py-1 bg-gradient-love rounded-full text-xs text-romantic-dark">
+                {interest}
+              </span>
+            ))}
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">"{profile.bio || 'No bio yet!'}"</p>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+/**
  * The main component for the matchmaking page.
  * Handles matchmaking logic, UI state, and chat functionality.
  * @returns {JSX.Element} The MatchmakingPage component.
@@ -838,40 +874,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
   };
 
   /**
-   * A component to display a user's profile card.
-   * @param {object} props - The component props.
-   * @param {User} props.profile - The user profile data to display.
-   * @returns {JSX.Element} The UserCard component.
+   * The main component for the matchmaking page.
+   * Handles matchmaking logic, UI state, and chat functionality.
+   * @returns {JSX.Element} The MatchmakingPage component.
    */
-  const UserCard = ({ profile }: { profile: User }) => (
-    <Card className="confession-card">
-      <CardHeader className="items-center text-center">
-        <ProfileAvatar
-            src={profile.profile_picture_url}
-            name={profile.name}
-            className="w-24 h-24 border-4 border-background shadow-lg"
-        />
-        <CardTitle className="text-2xl font-dancing text-romantic pt-2">{profile.name}</CardTitle>
-        <CardDescription>{cohortLabel(profile.year, profile.department)}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          <div className="text-sm">
-            <span className="font-semibold text-romantic">Interests:</span>
-            <div className="flex flex-wrap gap-2 mt-1">
-              {profile.interests?.map((interest) => (
-                <span key={interest} className="px-2 py-1 bg-gradient-love rounded-full text-xs text-romantic-dark">
-                  {interest}
-                </span>
-              ))}
-            </div>
-          </div>
-          <p className="text-sm text-muted-foreground">"{profile.bio || 'No bio yet!'}"</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-
   return (
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />

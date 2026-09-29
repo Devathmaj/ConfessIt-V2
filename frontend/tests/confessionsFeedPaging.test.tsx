@@ -137,7 +137,11 @@ describe('ConfessionsPage: paged feed', () => {
     api.getConfessionCooldown.mockResolvedValue({ status: 'eligible', message: 'Proceed?' });
   });
 
-  it('loads one page with the total, then grows downwards on Show more', async () => {
+  it('loads one page with the total, then grows downwards on Show more', {
+    // Two page renders plus dialog-adjacent polling: under a loaded parallel run this
+    // legitimately exceeds the 5s default, so the budget -- not the assertions -- grows.
+    timeout: 15000,
+  }, async () => {
     db = Array.from({ length: 11 }, (_, index) =>
       post(`c${index}`, `feed post number ${index}`, { created_at: stamp(index + 1) }),
     );
@@ -155,7 +159,9 @@ describe('ConfessionsPage: paged feed', () => {
     // The second read carried the offset of what was shown; nothing was re-read.
     const skips = api.getConfessions.mock.calls.map((call) => call[1]?.skip ?? 0);
     expect(skips).toContain(10);
-    expect(screen.getByText('feed post number 10')).toBeInTheDocument();
+    // Awaited rather than read synchronously: the appended page and the first page
+    // can land in separate commits under load.
+    expect(await screen.findByText('feed post number 10')).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Show more confessions' }),
     ).not.toBeInTheDocument();

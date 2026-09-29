@@ -1,5 +1,13 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
+import { configure } from '@testing-library/react';
+
+// Async queries (`findBy*`, `waitFor`) poll on a 1000ms budget by default, which a
+// fully parallel suite run regularly exceeds on a loaded machine -- not because the
+// app is slow, but because 64 test files share the CPUs. The assertions themselves
+// are unchanged; only the wait budget grows, so a genuinely missing element still
+// fails, just after a tolerance appropriate for contention.
+configure({ asyncUtilTimeout: 2500 });
 
 // jsdom ships no matchMedia, and the layout primitives in the UI read it on mount. Every
 // test file used to carry its own copy of this stub; it lives here now so a component

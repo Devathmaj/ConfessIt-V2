@@ -96,7 +96,8 @@ describe('ProfileReview: report history', () => {
 
     // All three kinds are listed even at zero, so the shape of a person's history is the same
     // for everybody rather than appearing only once they have been complained about.
-    expect(screen.getByText('Report history')).toBeInTheDocument();
+    // Awaited: the panel paints after the list shell the helper waited on.
+    expect(await screen.findByText('Report history')).toBeInTheDocument();
     expect(screen.getByText('Confessions & comments')).toBeInTheDocument();
     expect(screen.getByText('Love notes')).toBeInTheDocument();
     expect(screen.getByText('Chat messages')).toBeInTheDocument();
@@ -117,8 +118,8 @@ describe('ProfileReview: report history', () => {
 
     // Two upheld out of four complained about. These are different claims about the person,
     // and collapsing them into "4 reports" would overstate the case by the two that were
-    // dismissed as unfounded.
-    expect(screen.getByText('4 reported')).toBeInTheDocument();
+    // dismissed as unfounded. Awaited like its siblings: panel content follows the shell.
+    expect(await screen.findByText('4 reported')).toBeInTheDocument();
     expect(screen.getByText('1 reported')).toBeInTheDocument();
     expect(screen.getByText('0 reported')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
@@ -136,7 +137,8 @@ describe('ProfileReview: report history', () => {
       }),
     ]);
 
-    expect(screen.getByText('3 removed')).toBeInTheDocument();
+    // Awaited: the badge paints after the list shell the helper waited on.
+    expect(await screen.findByText('3 removed')).toBeInTheDocument();
   });
 
   it('does not mark a participant whose reports were all dismissed', async () => {
@@ -152,8 +154,8 @@ describe('ProfileReview: report history', () => {
 
     // Six complaints and nothing upheld is a person who was reported six times and cleared six
     // times. Putting the headline badge on that would tell an operator the opposite of the
-    // truth, so the headline tracks removals and only removals.
-    expect(screen.getByText('6 reported')).toBeInTheDocument();
+    // truth, so the headline tracks removals and only removals. Awaited like its siblings.
+    expect(await screen.findByText('6 reported')).toBeInTheDocument();
     expect(screen.queryByText(/^\d+ removed$/)).not.toBeInTheDocument();
   });
 

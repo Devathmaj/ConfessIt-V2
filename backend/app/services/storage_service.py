@@ -600,6 +600,12 @@ class CloudinaryStorageService:
         already renders these through ``<img>`` with its own CSS sizing. What is left out is
         exactly what a URL could otherwise be used for -- re-encoding the stored object into
         whatever shape a caller liked.
+
+        The host is asserted, not assumed: the SDK builds this URL from configuration, and a
+        misconfigured cloud name must fail closed here rather than hand the frontend an
+        address on a host the avatar allowlist does not know (which it would refuse to
+        render, turning misconfiguration into silently missing pictures -- or worse, into
+        whatever a tampered value points at).
         """
         if not public_id:
             return None
@@ -611,6 +617,11 @@ class CloudinaryStorageService:
             format=image_format or None,
             secure=True,
         )
+        if not url or not url.startswith("https://res.cloudinary.com/"):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Profile picture delivery is not configured",
+            )
         return url
 
     def love_note_delivery_url(

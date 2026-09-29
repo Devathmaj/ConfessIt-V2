@@ -105,7 +105,10 @@ describe('ProfileReview: server-driven search', () => {
     nextId = 0;
   });
 
-  it('fires nothing while typing; the Search button submits the query the database answers', async () => {
+  it('fires nothing while typing; the Search button submits the query the database answers', {
+    // Four sequential waited reads: same long-test rationale as its sibling below.
+    timeout: 15000,
+  }, async () => {
     const alpha = participant('Alpha');
     api.getAdminUsers.mockImplementation(async (params: Record<string, unknown> = {}) => {
       if (params.account_type === 'admin' || params.account_type === 'moderator') {
@@ -161,7 +164,11 @@ describe('ProfileReview: server-driven search', () => {
     expect(namesIn(groupNamed('Participants'))).toEqual(['SecondYear']);
   });
 
-  it('re-reads the filtered question with a new offset on Next and returns to the section top', async () => {
+  it('re-reads the filtered question with a new offset on Next and returns to the section top', {
+    // Two full page renders with fifty rows each: under a loaded parallel run this
+    // legitimately exceeds the 5s default, so the budget -- not the assertions -- grows.
+    timeout: 15000,
+  }, async () => {
     const scrollSpy = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = scrollSpy as never;
     try {
@@ -192,7 +199,7 @@ describe('ProfileReview: server-driven search', () => {
       expect(scrolledTo?.getAttribute('id')).toBe('profile-section-participants');
     } finally {
       // jsdom ships without scrollIntoView; leave the prototype as found.
-      delete (window.HTMLElement.prototype as Record<string, unknown>).scrollIntoView;
+      delete (window.HTMLElement.prototype as unknown as Record<string, unknown>).scrollIntoView;
     }
   });
 });

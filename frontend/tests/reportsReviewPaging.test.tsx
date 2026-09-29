@@ -233,10 +233,13 @@ describe('ReportsReview: server-driven search, filter and paging', () => {
     const skips = api.getAdminConfessionReports.mock.calls.map((call) => call[0]?.skip ?? 0);
     expect(skips).toContain(20);
     expect(api.getAdminLoveNoteReports).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('complaint number 20')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Show more reported confessions' }),
-    ).not.toBeInTheDocument();
+    // The count and the appended row land in separate commits under load: await each.
+    expect(await screen.findByText('complaint number 20')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Show more reported confessions' }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('refetches the love-note queue after dismissing so the decided row comes back closed', async () => {

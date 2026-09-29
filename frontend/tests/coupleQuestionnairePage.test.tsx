@@ -203,7 +203,9 @@ describe('partner selection', () => {
     renderGame('male');
 
     expect(await screen.findByText('Sam')).toBeInTheDocument();
-    expect(screen.getByText('Your pick')).toBeInTheDocument();
+    // The pick banner rides a separate read from the candidate list: await it on its
+    // own rather than assuming both commits landed together.
+    expect(await screen.findByText('Your pick')).toBeInTheDocument();
   });
 });
 
@@ -357,6 +359,8 @@ describe('prediction and results', () => {
     renderGame('male');
 
     expect(await screen.findByText('No featured day yet')).toBeInTheDocument();
-    expect(screen.getByText('Sam')).toBeInTheDocument();
+    // The candidate list loads independently of the banner above: await the name
+    // itself instead of assuming it arrived in the same commit.
+    expect(await screen.findByText('Sam')).toBeInTheDocument();
   });
 });

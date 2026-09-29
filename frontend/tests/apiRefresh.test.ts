@@ -83,6 +83,12 @@ describe('handleResponseError (access-token refresh)', () => {
   const refreshFails = () =>
     mockedAxios.post.mockRejectedValue({ response: { status: 401 } } as never);
 
+  // The axios mock is untyped at the call boundary, so what a replayed call carried is
+  // recovered here: the request config, with the headers these tests assert on. The
+  // runtime value is untouched -- only the reading is typed.
+  const retriedConfigOf = (call: readonly unknown[]) =>
+    call[0] as { headers: Record<string, string | undefined> } & Record<string, unknown>;
+
   it('replays a 401 once with the fresh token after a successful refresh', async () => {
     setInMemoryToken('old-token');
     refreshSucceeds();
@@ -96,7 +102,7 @@ describe('handleResponseError (access-token refresh)', () => {
       { withCredentials: true },
     );
     expect(mockedAxios).toHaveBeenCalledTimes(1);
-    const retryConfig = mockedAxios.mock.calls[0][0];
+    const retryConfig = retriedConfigOf(mockedAxios.mock.calls[0]);
     expect(retryConfig).toBe(originalError.config);
     expect(retryConfig.headers.Authorization).toBe('Bearer fresh-access');
     // The retry is a Bearer-only API call: the refresh must not smuggle cookie
@@ -112,7 +118,7 @@ describe('handleResponseError (access-token refresh)', () => {
 
     await handleResponseError({ response: { status: 401 }, config: { url: '/profile/update' } });
 
-    const retryConfig = mockedAxios.mock.calls[0][0];
+    const retryConfig = retriedConfigOf(mockedAxios.mock.calls[0]);
     expect(retryConfig.headers).toEqual({ Authorization: 'Bearer fresh-access' });
   });
 
@@ -139,7 +145,9 @@ describe('handleResponseError (access-token refresh)', () => {
 
     // Both original requests were replayed, each with the fresh token.
     expect(mockedAxios).toHaveBeenCalledTimes(2);
-    const [a, b] = mockedAxios.mock.calls.map(([cfg]) => cfg.headers.Authorization);
+    const [a, b] = mockedAxios.mock.calls.map(
+      (call) => retriedConfigOf(call).headers.Authorization
+    );
     expect(a).toBe('Bearer fresh-access');
     expect(b).toBe('Bearer fresh-access');
   });

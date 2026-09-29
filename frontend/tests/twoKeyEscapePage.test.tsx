@@ -319,7 +319,12 @@ describe('partner choice', () => {
 
     renderPage();
     await screen.findByText('Choose your partner');
-    expect(getTwoKeyEscapePartners).toHaveBeenCalledTimes(1);
+    // The partners fetch fires from an effect on the loaded stage, not from the same
+    // commit that paints the heading: await the call itself rather than assuming it has
+    // already happened when the text lands.
+    await waitFor(() =>
+      expect(getTwoKeyEscapePartners).toHaveBeenCalledTimes(1),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose Sam as partner' }));
 

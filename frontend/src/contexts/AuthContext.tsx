@@ -67,7 +67,7 @@ export interface User {
   last_profile_picture_at?: string | null;
 }
 
-interface VerifyTokenResult {
+export interface VerifyTokenResult {
   success: boolean;
   redirectUrl?: string;
 }

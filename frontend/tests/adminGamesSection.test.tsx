@@ -55,10 +55,19 @@ import {
   setFeaturedGame,
   setFeaturedRange,
   updateGameConfig,
+  type AdminGamesPage,
   type AnagramGame,
   type GameConfig,
   type WordleGame,
 } from '@/services/api';
+
+/**
+ * A legacy bare-array answer through a mock typed for pages. The screens accept both
+ * shapes (the API normalises either), and these tests deliberately feed the legacy one;
+ * the helper keeps the runtime value byte-identical while satisfying the mock type.
+ */
+const pageOf = <T,>(rows: T[]): AdminGamesPage<T> =>
+  rows as unknown as AdminGamesPage<T>;
 
 /**
  * The Games console as one system: the three admin screens plus the two player screens they
@@ -246,8 +255,8 @@ beforeEach(() => {
   // The manage screen fetches sessions, schedules and configuration as it mounts; an empty
   // list is the state every test below starts from, so the tests that care about rows state
   // their own. The current-session reads reject, which the cards render as "no session".
-  vi.mocked(getAdminWordleGames).mockResolvedValue([]);
-  vi.mocked(getAdminAnagramGames).mockResolvedValue([]);
+  vi.mocked(getAdminWordleGames).mockResolvedValue(pageOf([]));
+  vi.mocked(getAdminAnagramGames).mockResolvedValue(pageOf([]));
   vi.mocked(getAdminCoupleGames).mockResolvedValue([]);
   vi.mocked(getAdminReactionTimeGames).mockResolvedValue([]);
   vi.mocked(getCurrentAdminWordleSession).mockRejectedValue({ response: { status: 404 } });
@@ -849,7 +858,7 @@ describe('AdminWordleManage: the Wordle editor page', () => {
     vi.mocked(drawWordleAnswer).mockResolvedValue({ word: 'cigar', token: 'signed-for-the-day' });
     const saved = aPuzzle({ answer: 'cigar', mode: 'random' });
     vi.mocked(createWordleGame).mockResolvedValue(saved);
-    vi.mocked(getAdminWordleGames).mockResolvedValue([saved]);
+    vi.mocked(getAdminWordleGames).mockResolvedValue(pageOf([saved]));
 
     fireEvent.click(within(card).getByRole('button', { name: /draw for me/i }));
     fireEvent.click(within(card).getByRole('button', { name: /draw an answer/i }));
@@ -1052,7 +1061,7 @@ describe('AdminAnagramManage: the Anagram editor page', () => {
     expect(await within(card).findByText(/No sessions yet/)).toBeInTheDocument();
 
     vi.mocked(createAnagramGame).mockResolvedValue(anPuzzle());
-    vi.mocked(getAdminAnagramGames).mockResolvedValue([anPuzzle()]);
+    vi.mocked(getAdminAnagramGames).mockResolvedValue(pageOf([anPuzzle()]));
 
     fireEvent.change(within(card).getByLabelText('Word'), { target: { value: '  garden  ' } });
     fireEvent.click(within(card).getByRole('button', { name: /update session/i }));
@@ -1086,7 +1095,7 @@ describe('AdminAnagramManage: the Anagram editor page', () => {
     vi.mocked(drawAnagramAnswer).mockResolvedValue({ word: 'GARDEN', token: 'signed-for-the-day' });
     const saved = anPuzzle({ answer: 'GARDEN', mode: 'random' });
     vi.mocked(createAnagramGame).mockResolvedValue(saved);
-    vi.mocked(getAdminAnagramGames).mockResolvedValue([saved]);
+    vi.mocked(getAdminAnagramGames).mockResolvedValue(pageOf([saved]));
 
     fireEvent.click(within(card).getByRole('button', { name: /draw for me/i }));
     fireEvent.click(within(card).getByRole('button', { name: /draw a word/i }));
@@ -1190,7 +1199,7 @@ describe('Per-game editors: status and collapsed history', () => {
 
   it('keeps session history collapsed until the admin expands it', async () => {
     const saved = aPuzzle({ answer: 'cigar', mode: 'random' });
-    vi.mocked(getAdminWordleGames).mockResolvedValue([saved]);
+    vi.mocked(getAdminWordleGames).mockResolvedValue(pageOf([saved]));
     renderSection('/admin/games/manage/wordle');
     const card = wordleCard();
 

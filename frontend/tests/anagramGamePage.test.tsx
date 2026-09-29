@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router-dom';
-import type { ContextType } from 'react';
+import { useEffect, type ContextType } from 'react';
 import { toast } from 'sonner';
 
 import { AnagramGamePage } from '@/pages/AnagramGamePage';
@@ -118,10 +118,16 @@ const renderGame = (isAuthenticated = true) =>
   );
 
 /** Set by `NavProbe` on every render, so a test can leave the page the way a link does. */
-let navigateTo: NavigateFunction | null = null;
+const navProbeState: { navigateTo: NavigateFunction | null } = { navigateTo: null };
 
 const NavProbe = () => {
-  navigateTo = useNavigate();
+  const navigate = useNavigate();
+  // Written from an effect, not the render body: the probe only observes, and the
+  // render itself stays pure. RTL flushes effects before `render` returns, so the
+  // value is in place for every test below without awaiting.
+  useEffect(() => {
+    navProbeState.navigateTo = navigate;
+  }, [navigate]);
   return null;
 };
 
@@ -271,6 +277,11 @@ describe('rearranging and guessing', () => {
     await renderStarted();
     vi.mocked(submitAnagramGuess).mockResolvedValue({
       ...makeParticipation({ attempt_count: 1, guesses: ['EHPLTANE'] }),
+      // A real guess response carries the scored guess and its verdict alongside the
+      // participation; the tests below never assert past the submit call, and `false`
+      // keeps the verdict on the path the UI was already showing.
+      guess: 'EHPLTANE',
+      correct: false,
     });
 
     const cells = within(screen.getByRole('grid', { name: 'Anagram tiles' })).getAllByRole(
@@ -299,6 +310,8 @@ describe('rearranging and guessing', () => {
 
     vi.mocked(submitAnagramGuess).mockResolvedValue({
       ...makeParticipation({ attempt_count: 1, guesses: ['EPHLTANE'] }),
+      guess: 'EPHLTANE',
+      correct: false,
     });
     fireEvent.click(screen.getByRole('button', { name: /^submit$/i }));
     await waitFor(() =>
@@ -506,8 +519,11 @@ describe('the clock', () => {
       }),
     );
     const { rerender } = renderGame(true);
-    // 87 banked plus 65 on the open segment.
-    expect(await screen.findByText('02:32')).toBeInTheDocument();
+    // 87 banked plus 65 on the open segment. The tick fires on a one-second interval
+    // from mount, so the wait must comfortably exceed one period: the default 1000ms
+    // budget expires in the same instant as the first tick and flakes (or fails) on
+    // mount overhead alone.
+    expect(await screen.findByText('02:32', undefined, { timeout: 3000 })).toBeInTheDocument();
 
     rerender(
       <AuthContext.Provider value={authValue(false)}>
@@ -686,13 +702,13 @@ describe('navigating away and back', () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     setVisibility('visible');
-    navigateTo = null;
+    navProbeState.navigateTo = null;
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    navigateTo = null;
+    navProbeState.navigateTo = null;
     if (realVisibilityState) {
       Object.defineProperty(document, 'visibilityState', realVisibilityState);
     }
@@ -716,7 +732,7 @@ describe('navigating away and back', () => {
 
   const goTo = async (path: string) => {
     await act(async () => {
-      navigateTo?.(path);
+      navProbeState.navigateTo?.(path);
     });
   };
 

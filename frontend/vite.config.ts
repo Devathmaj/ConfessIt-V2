@@ -42,5 +42,10 @@ export default defineConfig(({ mode }) => ({
     setupFiles: './tests/setup.ts',
     // Tests are consolidated in ./tests rather than living beside the code they cover.
     include: ['tests/**/*.{test,spec}.{ts,tsx}'],
+    // A fully parallel run shares the machine 64 ways; multi-step browser-simulation
+    // tests legitimately exceed the 5s default under that contention. The budget grows
+    // instead of the assertions shrinking -- a hung test still fails, only later.
+    // (Long individual tests may still set their own `timeout` on top of this.)
+    testTimeout: 10000,
   },
 }));

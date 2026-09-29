@@ -123,9 +123,16 @@ describe('ModeratorDashboard: the backlog it counts', () => {
     });
     // The headline is a total of the three, so each of them is shown beside it rather than
     // hidden inside the sum: a moderator who is sent to one queue needs to know which one.
-    expect(screen.getByRole('button', { name: /post & comment reports/i })).toHaveTextContent('3');
-    expect(screen.getByRole('button', { name: /love note reports/i })).toHaveTextContent('1');
-    expect(screen.getByRole('button', { name: /chat message reports/i })).toHaveTextContent('2');
+    // Each awaited on its own -- the three counts can land in separate commits under load.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /post & comment reports/i })).toHaveTextContent('3');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /love note reports/i })).toHaveTextContent('1');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /chat message reports/i })).toHaveTextContent('2');
+    });
   });
 
   it('counts the love notes still waiting on a decision', async () => {

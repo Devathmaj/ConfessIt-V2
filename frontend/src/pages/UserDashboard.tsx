@@ -76,6 +76,26 @@ const navigationItems: NavigationItem[] = [
   }
 ];
 
+/**
+ * A reusable card component with a refined glassmorphism style.
+ * Features a subtle hover effect with a glowing radial gradient.
+ *
+ * Declared at module scope: created inside the page it would remount on every
+ * parent render. It reads nothing but its props, so hoisting changes nothing it
+ * shows -- only stops the churn.
+ */
+const GlassCard = ({ children, className, ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
+  <div
+    className={`group relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg transition-all duration-300 overflow-hidden hover:bg-white/10 hover:border-white/20 ${className}`}
+    {...props}
+  >
+    <div className="absolute -inset-1 bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+    <div className="relative z-10 h-full">
+      {children}
+    </div>
+  </div>
+);
+
 export const UserDashboard = () => {
   const { user, logout } = useAuth();
   const [selectedPage, setSelectedPage] = useState<string | null>(null);
@@ -197,22 +217,6 @@ export const UserDashboard = () => {
     logout();
     toast.success('Goodbye! Come back soon ❤️');
   };
-
-  /**
-   * A reusable card component with a refined glassmorphism style.
-   * Features a subtle hover effect with a glowing radial gradient.
-   */
-  const GlassCard = ({ children, className, ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
-    <div 
-      className={`group relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg transition-all duration-300 overflow-hidden hover:bg-white/10 hover:border-white/20 ${className}`}
-      {...props}
-    >
-      <div className="absolute -inset-1 bg-gradient-to-r from-pink-600/10 to-purple-600/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-      <div className="relative z-10 h-full">
-        {children}
-      </div>
-    </div>
-  );
 
   return (
     <div className="min-h-screen w-full text-white font-sans overflow-hidden">

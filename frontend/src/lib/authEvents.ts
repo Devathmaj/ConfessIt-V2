@@ -63,6 +63,12 @@ export const isSessionSupersededError = (error?: {
  * A 401 whose `WWW-Authenticate` header carries the `session_superseded` error is a
  * different kind of end: the token is valid but its session was replaced by a newer login,
  * so the caller is told exactly that instead of a bare "expired".
+ *
+ * The parameter also accepts a bare status number: the `fetch`-based messaging helpers
+ * pass `response.status` straight in, and a number simply has no `.response` to read, so
+ * it falls through the first check untouched. Widening the type documents that no-op
+ * rather than changing it -- routing messaging 401s into session teardown would log the
+ * person out on errors the interceptor deliberately leaves alone.
  */
 export const endSessionIfTokenWasRejected = (error?: {
   response?: {
@@ -70,7 +76,10 @@ export const endSessionIfTokenWasRejected = (error?: {
     headers?: Record<string, string | undefined>;
     data?: { detail?: unknown };
   };
-}) => {
+} | number) => {
+  // A bare status has no response envelope to inspect; it was always a no-op, and the
+  // guard below narrows the rest back to the object shape.
+  if (typeof error === 'number') return;
   if (error?.response?.status !== 401) return;
   if (typeof window === 'undefined') return;
   if (!getAccessToken()) return;

@@ -5,16 +5,36 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * A profile-picture value the API handed over, reduced to something an `<img>` may load.
+ *
+ * The API derives these URLs from stored Cloudinary identities, so a well-formed one is
+ * always ours -- but `<img src>` is a script-capable sink for SVG, and `data:` URLs in
+ * particular execute (`data:image/svg+xml,<svg onload=...>` runs on load). So this is a
+ * strict allowlist, not a scheme check:
+ *
+ * * `https://*.cloudinary.com` -- the delivery host every legitimate picture uses;
+ * * `data:image/(png|jpeg|gif|webp);base64,` -- raster inline images only, never SVG or
+ *   anything the browser could sniff into script (note the mandatory `;base64`);
+ * * site-relative `/...` paths -- same-origin static art like the placeholder itself.
+ *
+ * Anything else -- `http:` (cleartext), `javascript:`, `data:` SVG/HTML, remote hosts --
+ * falls back to the placeholder. A broken or hostile value therefore degrades to a grey
+ * tile, never to code.
+ */
+const CLOUDINARY_DELIVERY_RE = /^https:\/\/[a-z0-9-]+\.cloudinary\.com\//i;
+const SAFE_INLINE_IMAGE_RE = /^data:image\/(png|jpeg|jpg|gif|webp);base64,/i;
+
 export function resolveProfilePictureUrl(value?: string | null) {
   if (!value) {
     return '/placeholder.svg'
   }
 
-  if (/^https?:\/\//i.test(value)) {
+  if (CLOUDINARY_DELIVERY_RE.test(value)) {
     return value
   }
 
-  if (value.startsWith('data:')) {
+  if (SAFE_INLINE_IMAGE_RE.test(value)) {
     return value
   }
 

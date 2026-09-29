@@ -74,18 +74,43 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
+  // Every interpolated value is validated before it reaches the stylesheet: `key`
+  // becomes a CSS custom-property name and `color` a declaration value, so an
+  // unvalidated pair like `evil]; attack: yes` / `red; } .x { ...` would break out of
+  // the rule and turn config data into arbitrary CSS. Keys are identifier-safe names,
+  // colours are hex literals; anything else is dropped, degrading to unstyled rather
+  // than executing. The element id comes from `useId` or a caller prop, so it is
+  // reduced to identifier characters for the same reason.
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "")
+  const safeKeys = new Set(
+    colorConfig.map(([key]) => key).filter((key) => /^[a-z0-9_-]+$/i.test(key))
+  )
+  if (!safeKeys.size) {
+    return null
+  }
+  const safeColor = (
+    itemConfig: (typeof colorConfig)[number][1],
+    theme: string
+  ): string | null => {
+    const raw =
+      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ??
+      itemConfig.color
+    return typeof raw === "string" && /^#[0-9a-f]{3,8}$/i.test(raw.trim())
+      ? raw.trim()
+      : null
+  }
+
   return (
     <style
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(
             ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart=${safeId}] {
 ${colorConfig
+  .filter(([key]) => safeKeys.has(key))
   .map(([key, itemConfig]) => {
-    const color =
-      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
-      itemConfig.color
+    const color = safeColor(itemConfig, theme)
     return color ? `  --color-${key}: ${color};` : null
   })
   .join("\n")}
@@ -100,6 +125,15 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
+// The props recharts injects at render time (`active`, `payload`, `label`).
+// `Tooltip`'s own prop type deliberately omits them (they are read from context, not
+// passed), so without this the destructuring below names props the type does not
+// have. Partial to keep them optional: a directly-rendered content element may omit
+// any of them.
+type InjectedTooltipProps = Partial<
+  Pick<RechartsPrimitive.TooltipContentProps, "active" | "payload" | "label">
+>
+
 const ChartTooltipContent = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
@@ -109,7 +143,7 @@ const ChartTooltipContent = React.forwardRef<
       indicator?: "line" | "dot" | "dashed"
       nameKey?: string
       labelKey?: string
-    }
+    } & InjectedTooltipProps
 >(
   (
     {
@@ -190,7 +224,10 @@ const ChartTooltipContent = React.forwardRef<
 
             return (
               <div
-                key={item.dataKey}
+                // The identical value as before: recharts fills this with the
+                // series key (a string or number in practice); the cast only
+                // satisfies React's `Key` type for the function member of the union.
+                key={item.dataKey as string | number}
                 className={cn(
                   "flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-muted-foreground",
                   indicator === "dot" && "items-center"
@@ -259,7 +296,10 @@ const ChartLegend = RechartsPrimitive.Legend
 const ChartLegendContent = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div"> &
-    Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
+    // `Legend`'s own prop type deliberately omits `payload` (it reads it from
+    // context, like `Tooltip` does), so the content shape comes from
+    // `DefaultLegendContentProps`, which declares exactly these two.
+    Pick<RechartsPrimitive.DefaultLegendContentProps, "payload" | "verticalAlign"> & {
       hideIcon?: boolean
       nameKey?: string
     }
