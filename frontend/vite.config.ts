@@ -36,6 +36,25 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // Production bundles carry no console output: verbose request/response dumps
+  // (tokens, match ids, message bodies) must never reach a user's devtools,
+  // while development keeps them for debugging. Done with `define` rather than
+  // `esbuild.drop`: this repo builds on Vite 8's oxc pipeline, which ignores
+  // `esbuild.drop` (verified: console calls survived a production bundle with
+  // it set). Substitution covers both calls and bare references such as
+  // `.catch(console.error)`, which `drop` cannot remove either. There are no
+  // `window.console`, destructured or computed console uses in src, and no
+  // `debugger` statements, so the six methods below are the complete surface.
+  define: mode === 'production'
+    ? {
+        'console.log': '(()=>{})',
+        'console.info': '(()=>{})',
+        'console.warn': '(()=>{})',
+        'console.error': '(()=>{})',
+        'console.debug': '(()=>{})',
+        'console.trace': '(()=>{})',
+      }
+    : {},
   test: {
     environment: 'jsdom',
     globals: true,

@@ -132,6 +132,8 @@ describe('verification-pending sign-in', () => {
 
   it('keeps a 429 refusal on the input screen, with no token to verify', async () => {
     // A refusal mints nothing, so it must not open the verification screen or start any timer.
+    // The toast is a fixed sentence, never the server's detail: rendering that verbatim
+    // would let callers distinguish refusal causes per registration number.
     stubFetch([
       {
         ok: false,
@@ -148,8 +150,9 @@ describe('verification-pending sign-in', () => {
     await typeAndSubmit('shared-reg');
 
     await waitFor(() => {
-      expect(screen.getByText(/only once every few minutes/i)).toBeInTheDocument();
+      expect(screen.getByText(/Failed to generate magic link/i)).toBeInTheDocument();
     });
+    expect(screen.queryByText(/only once every few minutes/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'ConfessIt' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Verification Pending' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Token expires in|Resend available in/)).not.toBeInTheDocument();

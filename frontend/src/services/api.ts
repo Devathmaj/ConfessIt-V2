@@ -355,10 +355,12 @@ export const uploadProfilePicture = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
 
+    // No manual Content-Type: axios sets multipart/form-data with the generated
+    // boundary from the FormData. Naming the type ourselves sends the parts
+    // without a boundary, which the server answers with a 400.
     const response = await axios.post(`${API_URL}/profile/upload-picture`, formData, {
         headers: {
             ...getAuthHeaders(),
-            'Content-Type': 'multipart/form-data',
         },
     });
     return response.data;

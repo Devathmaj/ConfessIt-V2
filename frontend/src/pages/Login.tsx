@@ -124,6 +124,12 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   // own language.
   const REGNO_PATTERN = /^[\p{L}\p{N}_.\-/]{1,100}$/u;
 
+  // The one sentence a mint answers with, fixed in the client: the server's message
+  // never varies either, but rendering it verbatim would let any future wording
+  // change distinguish outcomes per registration number. Fixed here, it cannot.
+  const LINK_SENT_MESSAGE =
+    'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
+
   // The verification-pending state, restored when this door is refreshed. Absent means the
   // input screen. It changes only on a server answer: a 200 puts it here, a refusal keeps it
   // null, and "change number" deliberately clears it.
@@ -209,10 +215,10 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       if (response.ok) {
         // The server answers every well-formed request identically, whether the number
         // is registered or not, so there is nothing to branch on here: a 200 always
-        // opens the pending screen, and only a real mint produces a working link.
-        const message =
-          typeof body?.message === 'string' ? body.message : 'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
-        toast.success(message);
+        // opens the pending screen, and only a real mint produces a working link. The
+        // sentence is fixed rather than the server's `message`: rendering it verbatim
+        // would let any future wording change distinguish outcomes per account.
+        toast.success(LINK_SENT_MESSAGE);
         const next: PendingVerification = {
           authenticationState: 'verification_pending',
           validatedRegno: trimmedRegno,
@@ -225,10 +231,10 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         persistPendingVerification(category.accountType, next);
         setRegno('');
       } else {
-        const detail = typeof body?.detail === 'string' ? body.detail : null;
-        // A 429 or 400 mints nothing and varies with nothing about the account, so the
-        // number stays on the first screen and the reason is told.
-        toast.error(detail ?? 'Failed to generate magic link. Please try again.');
+        // Fixed sentence for every refusal (429, 400, anything else): the server's
+        // `detail` varies by cause, and rendering it would let callers distinguish
+        // outcomes -- including cooldown states -- per registration number.
+        toast.error('Failed to generate magic link. Please try again.');
       }
     } catch (error) {
       toast.error('An error occurred. Please try again.');
@@ -243,9 +249,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
     try {
       const { response, body } = await requestLink(pending.validatedRegno);
       if (response.ok) {
-        const message =
-          typeof body?.message === 'string' ? body.message : 'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
-        toast.success(message);
+        toast.success(LINK_SENT_MESSAGE);
         const next = {
           ...pending,
           tokenExpiresAt: parseExpiry(body?.expires_at),
@@ -259,18 +263,15 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
         // on its window, the countdown adopts it so the button stays in step with the
         // authority that enforces the window. Either way the pending screen stays -- the
         // server never reports a number as un-sign-in-able, so there is no outcome that
-        // ends the wait -- and the reason is told.
+        // ends the wait -- and the toast stays fixed: the server's sentence varies by
+        // cause and must not become per-number recon.
         const retryAfter = Number(response.headers.get('Retry-After'));
         if (Number.isFinite(retryAfter) && retryAfter > 0) {
           const next = { ...pending, resendAvailableAt: Date.now() + retryAfter * 1000 };
           setPending(next);
           persistPendingVerification(category.accountType, next);
         }
-        toast.error(
-          typeof body?.detail === 'string' && body.detail
-            ? body.detail
-            : 'Too many requests. Please wait, then try again.',
-        );
+        toast.error('Too many requests. Please wait, then try again.');
       }
     } catch (error) {
       toast.error('An error occurred. Please try again.');

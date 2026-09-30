@@ -142,7 +142,12 @@ class MessagingClient {
             
             setTimeout(() => {
               if (this.conversationId && this.token) {
-                this.connect(this.conversationId, this.token).catch(console.error);
+                // Explicit call form, not `.catch(console.error)`: the production
+                // build strips console.* calls via esbuild `drop`, which cannot
+                // remove a bare function reference.
+                this.connect(this.conversationId, this.token).catch((error) => {
+                  console.error('WebSocket reconnect failed:', error);
+                });
               }
             }, this.reconnectDelay * this.reconnectAttempts);
           }
@@ -296,9 +301,11 @@ export async function fetchMessages(
 
     if (!response.ok) {
       endSessionIfTokenWasRejected(response.status);
-      const error = await response.json();
-      console.error('❌ Fetch error response:', error);
-      throw new Error(error.detail || 'Failed to fetch messages');
+      // Fixed string, never the server's `detail`: this endpoint answers 404
+      // for an unknown conversation and 403 for someone else's, and rendering
+      // the distinction would turn the toast into an existence oracle for
+      // conversation ids. Callers already toast this same sentence.
+      throw new Error('Failed to fetch messages');
     }
 
     const data = await response.json();

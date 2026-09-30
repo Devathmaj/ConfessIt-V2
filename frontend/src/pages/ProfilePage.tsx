@@ -25,6 +25,7 @@ import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
 import { describeApiError } from '@/lib/apiError';
+import { ACCEPT_ATTRIBUTE, validateImageFile } from '@/lib/imageFile';
 import {
   PICTURE_COOLDOWN_DAYS,
   formatPictureCooldownRemaining,
@@ -129,8 +130,12 @@ export const ProfilePage = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) { // 2MB limit
-      toast.error('File is too large. Maximum size is 2MB.');
+    // Type, size and decodability are checked before anything is uploaded: the
+    // `accept` attribute below is a picker hint the browser lets any file past,
+    // and the server is the real gate. A refusal here saves the upload, not the rule.
+    const problem = await validateImageFile(file);
+    if (problem) {
+      toast.error(problem);
       return;
     }
 
@@ -239,7 +244,7 @@ export const ProfilePage = () => {
                         type="file" 
                         ref={fileInputRef} 
                         className="hidden" 
-                        accept="image/png, image/jpeg, image/gif"
+                        accept={ACCEPT_ATTRIBUTE}
                         onChange={handleProfilePictureUpload}
                     />
                 </div>

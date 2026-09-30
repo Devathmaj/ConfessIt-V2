@@ -25,6 +25,11 @@ export default tseslint.config(
       ],
       "@typescript-eslint/no-unused-vars": "off",
       "no-control-regex": "error",
+      // Warn, not error: production stripping is enforced by the esbuild `drop`
+      // above, so this is a nudge against adding new call sites rather than a
+      // gate on the hundred historical ones. New code should log through no
+      // channel at all, or behind `import.meta.env.DEV`.
+      "no-console": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-empty-object-type": "warn",
       "prefer-const": "warn",
