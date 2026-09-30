@@ -20,6 +20,13 @@ _OTEL_LOG_HANDLER = None
 # field M1's correlation depends on. Adding the package to silence a warning would
 # trade a known, working log path for a new dependency and a new failure mode. The
 # deprecation is currently a warning only; the handler still populates trace context.
+#
+# The OTLP handler ships WARNING and above only. The collector feeds Loki, which
+# retains everything for its full retention period, so INFO and DEBUG stay
+# console-only: anything below a warning -- including the DEBUG-only token hints
+# and any identifier a future info line carries by accident -- never reaches
+# retained storage. The level-by-level Grafana panel simply goes quiet at INFO;
+# the WARN/ERROR panels it is actually watched through are unaffected.
 
 def get_console_handler():
     console_handler = logging.StreamHandler(sys.stdout)
@@ -80,7 +87,7 @@ def _get_otel_log_handler():
     exporter = OTLPLogExporter(endpoint=endpoint, insecure=insecure, credentials=credentials)
     provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
 
-    _OTEL_LOG_HANDLER = LoggingHandler(level=logging.INFO, logger_provider=provider)
+    _OTEL_LOG_HANDLER = LoggingHandler(level=logging.WARNING, logger_provider=provider)
     return _OTEL_LOG_HANDLER
 
 def get_console_only_logger(logger_name):

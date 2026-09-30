@@ -27,11 +27,22 @@ RUN pip install --no-cache-dir -r requirements.txt
 # else in this app imports watchfiles, so uninstalling it is safe here.
 RUN pip uninstall -y watchfiles
 
+# Unprivileged account for the game-scheduler sidecar's cron job and catch-up
+# pass (see scripts/game-scheduler-entrypoint.sh): the reset needs the database
+# and the app tree, not root. The API and the entrypoint itself still start as
+# root -- cron must, to read cron.d and change user -- only the tick runs here.
+RUN useradd -r -m appuser
+
 # Expose the port the app runs on
 EXPOSE 8001
 
 # Copy the rest of the application code
 COPY . .
+
+# The sidecar reads the tree as appuser, so it must own it in the image. (Under
+# the dev bind mount the host owns the files instead; world-readable host
+# permissions are what the sidecar relies on there.)
+RUN chown -R appuser:appuser /app
 
 # Run the FastAPI app with auto-reload enabled.
 # --limit-concurrency caps how many request bodies can be in flight at once and

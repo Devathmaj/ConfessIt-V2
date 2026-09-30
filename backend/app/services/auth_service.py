@@ -438,8 +438,40 @@ def get_current_user_optional(
     return _account_from_bearer_token(token, db, require_active_session=False)
 
 
-def _rate_limit_rejection(
-    verdict: RateLimitVerdict,
+# Log-safe stand-ins for login actors. These logs ship to OTLP/Loki, which keeps
+# them for the full retention period, so a raw regno, client id or IP must never
+# reach a log line: each would turn the log store into a browsable record of who
+# signed in, from where, on every throttled or failed attempt.
+def _log_identity_hash(value: str) -> str:
+    """A stable, non-reversible 8-hex-char tag for a regno or client id.
+
+    Keyed with SECRET_KEY (the pepper): identical inputs hash identically, so an
+    operator can still correlate one actor's lines, but the tag reverses to
+    nothing without the deployment secret. Eight hex chars (32 bits) is enough
+    to join on and too short to brute-force a high-entropy client id; regnos
+    are lower-entropy, which is why the pepper -- not just the hash -- carries
+    the protection against dictionary enumeration.
+    """
+    return hashlib.sha256(f"{value}:{settings.SECRET_KEY}".encode("utf-8")).hexdigest()[:8]
+
+
+def _log_ip_network(ip: Any) -> str:
+    """The caller's subnet for logs: /24 for IPv4, /64 for IPv6.
+
+    Host bits identify a device; the subnet is what abuse review needs (same
+    neighbourhood as the mint, same actor behind a NAT) without it. Mirrors the
+    widths :func:`_redemption_continuity` enforces, so the log says what the
+    check checked. Anything unparseable logs as ``unparseable`` rather than raw.
+    """
+    try:
+        parsed = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return "unparseable"
+    width = 24 if isinstance(parsed, ipaddress.IPv4Address) else 64
+    return str(ipaddress.ip_network(f"{parsed}/{width}", strict=False))
+
+
+def _rate_limit_rejection(    verdict: RateLimitVerdict,
     *,
     account_type: str,
     regno: str,
@@ -449,30 +481,36 @@ def _rate_limit_rejection(
     """Log which limiter refused a login request, and build the 429 that says so.
 
     The log lines are the observability contract: one per scope, named the way an
-    operator would search for them. They carry the key that was counted -- a client id
-    or an ip, neither of which grants anything -- and never the token, because no token
-    exists yet at this point in the request and none ever needs to be in a log line.
+    operator would search for them. They carry hashed/truncated keys -- a client
+    hash or subnet, never the raw values -- because these warnings ship to
+    OTLP/Loki and are retained: a raw regno, client id or IP on every refusal
+    would be a browsable record of who signs in from where. The hashes are
+    stable per deployment, so one actor's lines still correlate. No token ever
+    appears here, because no token exists yet at this point in the request.
     """
     if verdict.scope == SCOPE_CLIENT:
         logger.warning(
-            f"Client rate limit triggered: client_id={client_id} ip={ip} "
+            f"Client rate limit triggered: "
+            f"client_hash={_log_identity_hash(client_id)} "
+            f"ip_net={_log_ip_network(ip)} "
             f"retry_after={verdict.retry_after}s"
         )
     elif verdict.scope == SCOPE_IP:
         logger.warning(
-            f"IP rate limit triggered: ip={ip} client_id={client_id} "
+            f"IP rate limit triggered: ip_net={_log_ip_network(ip)} "
+            f"client_hash={_log_identity_hash(client_id)} "
             f"retry_after={verdict.retry_after}s"
         )
     elif verdict.scope == SCOPE_ACCOUNT:
         logger.warning(
             f"Account cooldown triggered: account_type={normalize_account_type(account_type)} "
-            f"regno={regno!r} retry_after={verdict.retry_after}s"
+            f"regno_hash={_log_identity_hash(regno)} retry_after={verdict.retry_after}s"
         )
     elif verdict.scope == SCOPE_ACCOUNT_LONG:
         logger.warning(
             f"Account rate limit triggered (long window): "
-            f"account_type={normalize_account_type(account_type)} regno={regno!r} "
-            f"retry_after={verdict.retry_after}s"
+            f"account_type={normalize_account_type(account_type)} "
+            f"regno_hash={_log_identity_hash(regno)} retry_after={verdict.retry_after}s"
         )
 
     return HTTPException(
@@ -590,10 +628,11 @@ async def generate_magic_link_service(
         found = find_account_in_table(session, account_type, regno)
     if not found:
         # Answered, not refused: the caller gets the same body as a mint, and no
-        # token is stored. The log names what happened; the response does not.
+        # token is stored. The log names what happened for a hashed tag, never the
+        # submitted regno itself; the response does not.
         logger.info(
-            f"Login request for unknown {category} registration number {regno!r}: "
-            "answering as if a link was sent"
+            f"Login request for unknown {category} registration number "
+            f"(regno_hash={_log_identity_hash(regno)}): answering as if a link was sent"
         )
         return _uniform_link_response()
 
@@ -604,8 +643,8 @@ async def generate_magic_link_service(
     # unknown number, so blocked state is not learnable from this endpoint.
     if account.is_blocked:
         logger.warning(
-            f"Login request for blocked {category} account {regno!r}: "
-            "answering as if a link was sent"
+            f"Login request for blocked {category} account "
+            f"(regno_hash={_log_identity_hash(regno)}): answering as if a link was sent"
         )
         return _uniform_link_response()
 
@@ -614,7 +653,10 @@ async def generate_magic_link_service(
 
     magic_link = f"{public_frontend_origin()}/verify-login?token={token}"
     magic_link_logger.info(f"Magic Link for {account.name}: {magic_link}")
-    logger.info(f"Login request accepted: magic link minted for {category} account {regno!r}")
+    logger.info(
+        f"Login request accepted: magic link minted for {category} account "
+        f"(regno_hash={_log_identity_hash(regno)})"
+    )
 
     return {"message": LOGIN_LINK_SENT_MESSAGE, "expires_at": expires_at.isoformat()}
 
@@ -691,10 +733,15 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     # an operator can tell a link that aged out from one an attacker is replaying
     # without the answer to either becoming a signal to the caller.
     if login_token is None:
-        logger.warning(
+        # The hint is DEBUG-only and 6 chars: a 12-char prefix of a live token
+        # hash at WARNING would sit in retained logs next to the timestamp of the
+        # attempt, narrowing an offline search for the token. Six chars still
+        # joins a debug session against the database row when needed.
+        logger.debug(
             f"Invalid magic link token: no matching token "
-            f"(hash_hint={hashed_token[:12]}, ip={request.client.host})"
+            f"(hash_hint={hashed_token[:6]})"
         )
+        logger.warning("Invalid magic link token: no matching token")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
     if login_token.revoked:
         logger.warning(f"Invalid magic link token: token {login_token.id} is revoked")
@@ -727,7 +774,10 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     # -- the same /24 (IPv4) or /64 (IPv6) subnet, or the same User-Agent the mint saw.
     # Either is enough to proceed; the unguessable token itself remains the real gate.
     # Anything else is counted (bounded, so spam cannot overflow the counter) and
-    # refused, and the log keeps the exact addresses for abuse review.
+    # refused, and the log keeps the subnets for abuse review -- the /24 or /64
+    # each side was in, never the host addresses. Exact IPs would retain who was
+    # where in Loki for the full retention period; the neighbourhood is what the
+    # continuity check actually compared, so it is also what the log records.
     if not _redemption_continuity(
         minted_ip=login_token.request_ip,
         minted_user_agent=request_user_agent,
@@ -736,7 +786,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     ):
         logger.warning(
             f"Magic link token {login_token_id} redeemed from an unrelated network "
-            f"(minted at {login_token.request_ip}, redeemed from {request.client.host})"
+            f"(minted at {_log_ip_network(login_token.request_ip)}, "
+            f"redeemed from {_log_ip_network(request.client.host)})"
         )
         with db.sessions.begin() as session:
             session.execute(
@@ -951,10 +1002,11 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
             select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
         )
         if row is None:
-            logger.warning(
+            logger.debug(
                 f"Refresh rejected: no session holds refresh token "
-                f"(hash_hint={hashed[:12]})"
+                f"(hash_hint={hashed[:6]})"
             )
+            logger.warning("Refresh rejected: no session holds refresh token")
             raise credentials_exception()
 
         session_id = str(row.id)
@@ -1020,9 +1072,13 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 )
                 raise _session_superseded_exception()
             if fresh is not None and fresh.refresh_token_replaced_hash == hashed:
+                logger.debug(
+                    f"Refresh token replayed: session {session_id} already rotated away "
+                    f"this value (hash_hint={hashed[:6]})"
+                )
                 logger.warning(
                     f"Refresh token replayed: session {session_id} already rotated away "
-                    f"this value (hash_hint={hashed[:12]})"
+                    f"this value"
                 )
             else:
                 logger.warning(f"Refresh race lost for session {session_id}")

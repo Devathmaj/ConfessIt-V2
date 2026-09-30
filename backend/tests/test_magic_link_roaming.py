@@ -7,9 +7,10 @@ IPv6 normalisation -- or when the User-Agent matches the one recorded at mint. T
 unguessable token remains the real gate; these only decide roam versus refuse.
 
 What refusal still means is unchanged: an unrelated network counts (bounded, so spam
-cannot overflow the counter) and gets a 403, and the exact addresses stay in the log
-for abuse review. The counter column is a plain Integer, widened at boot on databases
-that predate the change.
+cannot overflow the counter) and gets a 403, and the two subnets stay in the log
+for abuse review -- the /24 or /64 each side was in, never the host addresses,
+which must not reach retained storage. The counter column is a plain Integer,
+widened at boot on databases that predate the change.
 """
 
 from fastapi.testclient import TestClient
