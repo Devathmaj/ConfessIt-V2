@@ -33,7 +33,7 @@ from app.db_models import LoginTokenRecord, UserRecord, find_account_in_table
 from app.main import app
 from app.services import auth_service as auth_service_module
 from app.services import login_rate_limit as login_rate_limit_module
-from app.services.auth_service import LOGIN_LINK_SENT_MESSAGE, hash_token
+from app.services.auth_service import LOGIN_LINK_SENT_MESSAGE, TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
 LOGIN_ENDPOINT = f"/auth/login/{AccountType.USERS.value}/magic"
 VERIFY_ENDPOINT = "/auth/login/magic/verify"
@@ -136,7 +136,7 @@ def _mint_token_for(db, regno, account_type=AccountType.USERS.value):
 def _token_row(db, plaintext):
     with db.sessions() as session:
         return session.scalar(
-            select(LoginTokenRecord).where(LoginTokenRecord.token_hash == hash_token(plaintext))
+            select(LoginTokenRecord).where(LoginTokenRecord.token_hash == hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC))
         )
 
 
@@ -154,7 +154,7 @@ def _backdate_expiry(db, plaintext, *, minutes=1):
     with db.sessions.begin() as session:
         session.execute(
             update(LoginTokenRecord)
-            .where(LoginTokenRecord.token_hash == hash_token(plaintext))
+            .where(LoginTokenRecord.token_hash == hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC))
             .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=minutes))
         )
 
@@ -394,7 +394,7 @@ def test_every_token_outcome_is_logged_by_name(db, auth_log):
 def test_logs_carry_no_token_material(db, auth_log):
     _seed_user(db, "quiet-user")
     plaintext = _mint_token_for(db, "quiet-user")
-    digest = hash_token(plaintext)
+    digest = hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC)
 
     assert _browser().get(f"{VERIFY_ENDPOINT}?token={plaintext}").status_code == 200
     assert _browser().get(f"{VERIFY_ENDPOINT}?token={plaintext}").status_code == 400

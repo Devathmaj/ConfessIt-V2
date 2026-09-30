@@ -219,6 +219,25 @@ def _deadline_passed(deadline: Optional[datetime], now: datetime) -> bool:
         deadline = deadline.replace(tzinfo=timezone.utc)
     return deadline <= now
 
+#: The only JWT algorithm this deployment speaks, on both sides of the wire. A
+#: configurable algorithm is how ``none`` (and cross-algorithm confusion generally)
+#: gets in: decoding accepts exactly this tuple and nothing else, so there is no
+#: setting to misconfigure into accepting an unsigned token.
+_JWT_ALGORITHM = "HS256"
+_JWT_ALGORITHMS = (_JWT_ALGORITHM,)
+
+#: Claims a decoded access token must carry. ``exp`` is verified for freshness by
+#: PyJWT once required; the identity claims are re-checked against the session row
+#: below rather than trusted, but a token missing them is refused before any lookup.
+_JWT_REQUIRED_CLAIMS = ("exp", "account_id", "session_id")
+
+#: Token-hash domains. Magic-link and refresh values hash under different prefixes so
+#: a stored value for one column can never be replayed as the other, even if a caller
+#: mixed the columns up.
+TOKEN_HASH_DOMAIN_MAGIC = "magic"
+TOKEN_HASH_DOMAIN_REFRESH = "refresh"
+
+
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     """
     Used to create a JWT access token.
@@ -232,14 +251,23 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=_JWT_ALGORITHM)
     return encoded_jwt
 
-def hash_token(token: str) -> str:
+def hash_token(token: str, *, domain: str) -> str:
+    """Hash a token for storage, peppered and domain-separated.
+
+    The pepper (``TOKEN_HASH_PEPPER``, required and shared like ``SECRET_KEY``) is what
+    makes a database dump useless for offline search: without it the stored SHA-256 of
+    a high-entropy token cannot be reversed, replayed, or rainbow-tabled. The domain
+    prefix scopes the hash to one column's purpose -- a magic-link hash presented as a
+    refresh hash simply misses, even though both live in the same table. The domain is
+    keyword-only so no call site can pass it positionally and no reader can mistake
+    which column a hash is for.
     """
-    Used to hash a token using SHA-256.
-    """
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hashlib.sha256(
+        f"{domain}:{settings.TOKEN_HASH_PEPPER}:{token}".encode()
+    ).hexdigest()
 
 def generate_refresh_token() -> str:
     """A fresh opaque refresh token.
@@ -307,7 +335,12 @@ def _account_from_bearer_token(
     if token is None:
         return None
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=list(_JWT_ALGORITHMS),
+            options={"require": list(_JWT_REQUIRED_CLAIMS)},
+        )
     except jwt.PyJWTError as exc:
         logger.error(f"JWT decode error: {exc}")
         return None
@@ -640,7 +673,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     if not token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token is required")
 
-    hashed_token = hash_token(token)
+    hashed_token = hash_token(token, domain=TOKEN_HASH_DOMAIN_MAGIC)
 
     now = datetime.now(timezone.utc)
 
@@ -760,7 +793,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 last_seen_at=now,
                 device=consume_user_agent or request_user_agent or "unknown",
                 session_expires_at=session_expires_at,
-                refresh_token_hash=hash_token(refresh_token),
+                refresh_token_hash=hash_token(refresh_token, domain=TOKEN_HASH_DOMAIN_REFRESH),
             )
         )
         if result.rowcount != 1:
@@ -910,7 +943,7 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
     if not raw_token:
         raise credentials_exception()
 
-    hashed = hash_token(raw_token)
+    hashed = hash_token(raw_token, domain=TOKEN_HASH_DOMAIN_REFRESH)
     now = datetime.now(timezone.utc)
 
     with db.sessions.begin() as session:
@@ -971,7 +1004,7 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 LoginTokenRecord.refresh_token_hash == hashed,
             )
             .values(
-                refresh_token_hash=hash_token(new_raw),
+                refresh_token_hash=hash_token(new_raw, domain=TOKEN_HASH_DOMAIN_REFRESH),
                 refresh_token_replaced_hash=hashed,
                 last_seen_at=now,
             )
@@ -1023,7 +1056,7 @@ def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
     """
     if not raw_token:
         return False
-    hashed = hash_token(raw_token)
+    hashed = hash_token(raw_token, domain=TOKEN_HASH_DOMAIN_REFRESH)
     with db.sessions.begin() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
@@ -1044,17 +1077,3 @@ def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
             f"Logout revoked session {row.id} for account {row.account_id}"
         )
         return True
-
-
-def decode_token(token: str) -> dict:
-    """
-    Used to decode and validate a JWT token.
-    """
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload
-    except jwt.PyJWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Could not validate token: {str(e)}"
-        )

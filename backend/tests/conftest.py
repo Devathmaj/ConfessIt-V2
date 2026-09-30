@@ -11,6 +11,12 @@ os.environ.setdefault(
     "SECRET_KEY",
     "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491",
 )
+# Same treatment for the token-hash pepper: fixed, test-only, and shared by every
+# worker-equivalent in the run, so stored hashes minted in one test verify in the next.
+os.environ.setdefault(
+    "TOKEN_HASH_PEPPER",
+    "bb5e97d44532f0cf881d23496899e04175c30d8db62b501c5a22057ab1200e31",
+)
 
 import pytest
 from anyio.from_thread import start_blocking_portal

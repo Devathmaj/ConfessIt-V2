@@ -41,6 +41,7 @@ from app.services.auth_service import (
     SESSION_STATUS_ACTIVE,
     SESSION_STATUS_SUPERSEDED,
     SESSION_SUPERSEDED_DETAIL,
+    TOKEN_HASH_DOMAIN_MAGIC,
     create_access_token,
     get_current_user,
     hash_token,
@@ -141,7 +142,7 @@ def _mint_token_for(db, regno, account_type=AccountType.USERS.value):
 def _token_row(db, plaintext):
     with db.sessions() as session:
         return session.scalar(
-            select(LoginTokenRecord).where(LoginTokenRecord.token_hash == hash_token(plaintext))
+            select(LoginTokenRecord).where(LoginTokenRecord.token_hash == hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC))
         )
 
 
@@ -311,7 +312,7 @@ def test_an_access_token_for_an_unknown_session_is_refused(db, no_auth_override)
     _seed_user(db, "phantom-user")
     plaintext = _mint_token_for(db, "phantom-user")
     token = _redeem_token(_browser(), plaintext)
-    claims = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    claims = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
     forged = create_access_token({
         "sub": claims["sub"],
         "account_id": claims["account_id"],
@@ -334,7 +335,7 @@ def test_a_session_that_is_no_longer_active_is_refused(db, no_auth_override):
     with db.sessions.begin() as session:
         session.execute(
             update(LoginTokenRecord)
-            .where(LoginTokenRecord.token_hash == hash_token(plaintext))
+            .where(LoginTokenRecord.token_hash == hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC))
             .values(session_status="expired")
         )
 

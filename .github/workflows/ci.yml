@@ -52,6 +52,8 @@ jobs:
       # against it, so CI pins the same fixed test-only key tests/conftest.py falls
       # back to. Never a production key.
       SECRET_KEY: "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491"
+      # Test-only token pepper, matching tests/conftest.py. Never a production value.
+      TOKEN_HASH_PEPPER: "bb5e97d44532f0cf881d23496899e04175c30d8db62b501c5a22057ab1200e31"
       # Required by app.config with no default. Nothing here speaks Redis (pub/sub is
       # stubbed and the flood brake is disabled in tests), so this only has to exist
       # for settings to build -- it must never point at a real store the suite could
@@ -119,6 +121,7 @@ jobs:
       # when a variable is missing, so the build carries the same names a real start
       # needs. The value is irrelevant at build time -- nothing bakes it into the image.
       SECRET_KEY: compose-build-placeholder-not-a-real-key-00000000
+      TOKEN_HASH_PEPPER: compose-build-placeholder-not-a-real-pepper-0000
     steps:
       - uses: actions/checkout@v4
       - name: Verify Docker Compose Build

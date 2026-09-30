@@ -208,7 +208,7 @@ def test_body_is_ignored_in_favour_of_the_cookie_when_the_gate_is_shut(db, monke
     claims = jwt.decode(
         response.json()["access_token"],
         settings.SECRET_KEY,
-        algorithms=[settings.ALGORITHM],
+        algorithms=["HS256"],
     )
     with db.sessions() as session:
         cookie_owner = session.scalar(

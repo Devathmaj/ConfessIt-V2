@@ -42,6 +42,7 @@ from app.services.auth_service import (
     SESSION_STATUS_REVOKED,
     SESSION_STATUS_SUPERSEDED,
     SESSION_SUPERSEDED_DETAIL,
+    TOKEN_HASH_DOMAIN_REFRESH,
     get_current_user,
     hash_token,
 )
@@ -220,13 +221,13 @@ def test_the_rotated_away_refresh_token_stops_working(db, no_auth_override):
     with db.sessions() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(latest_cookie)
+                LoginTokenRecord.refresh_token_hash == hash_token(latest_cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     assert row is not None
     # Each rotation records the value it rotated away from, so a replay of that value is
     # recognisable in the logs.
-    assert row.refresh_token_replaced_hash == hash_token(fresh_cookie)
+    assert row.refresh_token_replaced_hash == hash_token(fresh_cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
 
 
 def test_refresh_never_extends_the_session_deadline(db, no_auth_override):
@@ -238,7 +239,7 @@ def test_refresh_never_extends_the_session_deadline(db, no_auth_override):
     with db.sessions() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(cookie)
+                LoginTokenRecord.refresh_token_hash == hash_token(cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     first_deadline = row.session_expires_at
@@ -250,7 +251,7 @@ def test_refresh_never_extends_the_session_deadline(db, no_auth_override):
     with db.sessions() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(cookie)
+                LoginTokenRecord.refresh_token_hash == hash_token(cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     assert row.session_expires_at == first_deadline
@@ -265,7 +266,7 @@ def test_a_refresh_after_the_absolute_deadline_is_refused(db, no_auth_override):
     with db.sessions() as session:
         session_row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(cookie)
+                LoginTokenRecord.refresh_token_hash == hash_token(cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     _set_deadline(db, session_row.id, datetime.now(timezone.utc) - timedelta(seconds=1))
@@ -288,7 +289,7 @@ def test_an_access_token_cannot_outlive_the_sessions_deadline(db, no_auth_overri
     with db.sessions() as session:
         session_row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(cookie)
+                LoginTokenRecord.refresh_token_hash == hash_token(cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     # A 30-minute JWT can straddle the 24-hour mark; the row the token names is what cuts
@@ -319,7 +320,7 @@ def test_reusing_a_rotated_away_token_is_refused_without_revoking_the_session(
     # value, still active, and the fresh value still works.
     row = _session_row(db, session_id_of(db, fresh_cookie))
     assert row.session_status == SESSION_STATUS_ACTIVE
-    assert row.refresh_token_hash == hash_token(fresh_cookie)
+    assert row.refresh_token_hash == hash_token(fresh_cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
     assert browser.post(REFRESH_ENDPOINT, json={"refresh_token": fresh_cookie}).status_code == 200
 
 
@@ -327,7 +328,7 @@ def session_id_of(db, raw_refresh):
     with db.sessions() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.refresh_token_hash == hash_token(raw_refresh)
+                LoginTokenRecord.refresh_token_hash == hash_token(raw_refresh, domain=TOKEN_HASH_DOMAIN_REFRESH)
             )
         )
     assert row is not None

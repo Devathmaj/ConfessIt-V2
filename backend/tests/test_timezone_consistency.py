@@ -146,7 +146,7 @@ def test_create_access_token_sets_exp_from_utc_clock():
     before = int(time.time())
     token = create_access_token({"sub": "someone"})
     claims = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_exp": False}
+        token, settings.SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False}
     )
     after = int(time.time())
 

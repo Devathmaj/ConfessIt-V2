@@ -235,7 +235,7 @@ def test_a_redeemed_link_becomes_a_session_for_that_exact_account(
     access_token = verified.json()["access_token"]
 
     claims = jwt.decode(
-        access_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        access_token, settings.SECRET_KEY, algorithms=["HS256"]
     )
     assert claims["account_id"] == ids[account_type]
     assert claims["account_type"] == account_type
@@ -375,12 +375,12 @@ def test_postgresql_still_refuses_a_duplicate_regno_within_one_table(db):
 
 def _consumed_token(db, account_id, account_type, *, regno_suffix=""):
     """A consumed, unexpired login token, as redemption leaves it."""
-    from app.create_token import hash_token
+    from app.services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
     with db.sessions.begin() as session:
         now = datetime.now(timezone.utc)
         token = LoginTokenRecord(
-            token_hash=hash_token(f"used-{account_type}-{regno_suffix}"),
+            token_hash=hash_token(f"used-{account_type}-{regno_suffix}", domain=TOKEN_HASH_DOMAIN_MAGIC),
             account_id=account_id,
             account_type=account_type,
             issued_at=now,

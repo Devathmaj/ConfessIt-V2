@@ -2,7 +2,6 @@
 
 import logging
 import secrets
-import hashlib
 from datetime import datetime, timedelta, timezone
 from .config import settings
 from .postgres import Database
@@ -10,12 +9,7 @@ from .db_models import LoginTokenRecord
 from fastapi import Request
 
 from .models import LoginToken
-
-def hash_token(token: str) -> str:
-    """
-    Used to hash a token using SHA-256 for secure storage.
-    """
-    return hashlib.sha256(token.encode()).hexdigest()
+from .services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
 def create_and_store_magic_token(
     db: Database, account_id: str, account_type: str, request: Request
@@ -37,7 +31,7 @@ def create_and_store_magic_token(
     token = secrets.token_urlsafe(32)
 
     # 2. Hash the token for database storage
-    token_hash = hash_token(token)
+    token_hash = hash_token(token, domain=TOKEN_HASH_DOMAIN_MAGIC)
 
     # 3. Set the token's issuance and expiration timestamps. The lifetime is short and
     # bounded by configuration (10-15 minutes): the plaintext token is a bearer

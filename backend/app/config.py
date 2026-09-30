@@ -3,6 +3,37 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _reject_weak_secret(value: str, *, field: str) -> str:
+    """Refuse a missing, short, placeholder or low-entropy deployment secret.
+
+    Shared by SECRET_KEY and TOKEN_HASH_PEPPER so the two cannot drift apart: length
+    alone is not strength (32 repeats of one character pass a length check and sign
+    with ~nothing), and the checks are deliberately fail-closed -- a rejected start is
+    always safer than running with a guessable key. The error tells the operator
+    exactly how to mint a real one.
+    """
+    key = value.strip()
+    hint = (
+        f"Set {field} to a random value with at least 32 characters, identical "
+        'in every worker/replica, e.g. python -c "import secrets; '
+        'print(secrets.token_hex(32))"'
+    )
+    if len(key) < 32:
+        raise ValueError(f"{field} must be at least 32 characters. {hint}")
+    lowered = key.lower()
+    # Substrings no hex key can contain, but every placeholder does. A urlsafe/base64
+    # key could match one by astronomical coincidence; if it does, mint another -- a
+    # rejected start is always safer than running with a guessable key.
+    if any(marker in lowered for marker in ("changeme", "change-me", "change_me", "test", "secret", "password")):
+        raise ValueError(f"{field} must not be a placeholder or dictionary word. {hint}")
+    # A key with almost no distinct characters (aaaa..., ababab...) has almost no
+    # entropy no matter how long it is. A random 32-character hex key carries ~14
+    # distinct characters, so this threshold cannot trip on a real key.
+    if len(set(key)) < 8:
+        raise ValueError(f"{field} must not be a repeated pattern. {hint}")
+    return key
+
+
 class Settings(BaseSettings):
     # Connection strings have no defaults on purpose. A baked-in
     # ``confessit:confessit@...`` fallback would ship in the image and its history, and
@@ -128,35 +159,31 @@ class Settings(BaseSettings):
     @field_validator("SECRET_KEY")
     @classmethod
     def _validate_secret_key(cls, value: str) -> str:
-        """Refuse to start on a missing, short or placeholder signing key.
+        """Refuse to start on a missing, short or placeholder signing key."""
+        return _reject_weak_secret(value, field="SECRET_KEY")
 
-        Length alone is not strength: 32 repeats of one character, or the word
-        "test" eight times, both pass a length check and both sign with ~nothing.
-        The checks below are deliberately fail-closed -- a rejected start is
-        always safer than a fleet signing with a guessable key -- and the error
-        tells the operator exactly how to mint a real one.
-        """
-        key = value.strip()
-        hint = (
-            "Set SECRET_KEY to a random value with at least 32 characters, identical "
-            "in every worker/replica, e.g. python -c "
-            '"import secrets; print(secrets.token_hex(32))"'
-        )
-        if len(key) < 32:
-            raise ValueError(f"SECRET_KEY must be at least 32 characters. {hint}")
-        lowered = key.lower()
-        # Substrings no hex key can contain, but every placeholder does. A urlsafe/base64
-        # key could match one by astronomical coincidence; if it does, mint another -- a
-        # rejected start is always safer than running with a guessable key.
-        if any(marker in lowered for marker in ("changeme", "change-me", "change_me", "test", "secret", "password")):
-            raise ValueError(f"SECRET_KEY must not be a placeholder or dictionary word. {hint}")
-        # A key with almost no distinct characters (aaaa..., ababab...) has almost no
-        # entropy no matter how long it is. A random 32-character hex key carries ~14
-        # distinct characters, so this threshold cannot trip on a real key.
-        if len(set(key)) < 8:
-            raise ValueError(f"SECRET_KEY must not be a repeated pattern. {hint}")
-        return key
-    ALGORITHM: str = "HS256"
+    # --- Pepper for stored token hashes ---
+    #
+    # REQUIRED, validated exactly like SECRET_KEY, and identical in every process.
+    # Magic-link and refresh tokens are stored as hashes; without a secret input a
+    # database dump turns every hash into an offline search problem (fast SHA-256 plus
+    # a short hash prefix in the logs to narrow it). The pepper makes the stored
+    # values unsearchable without the deployment secret, and each token domain hashes
+    # under its own prefix (see auth_service.hash_token) so a value for one column can
+    # never be replayed as the other.
+    #
+    # Rotation invalidates every outstanding session and unredeemed magic link at once
+    # (old rows were hashed under the old pepper and stop matching), so rotate it the
+    # way SECRET_KEY is rotated: deliberately, and everywhere together. Generate with:
+    # python -c "import secrets; print(secrets.token_hex(32))"
+    TOKEN_HASH_PEPPER: str = Field(..., min_length=32)
+
+    @field_validator("TOKEN_HASH_PEPPER")
+    @classmethod
+    def _validate_token_hash_pepper(cls, value: str) -> str:
+        """Refuse to start on a missing, short or placeholder pepper."""
+        return _reject_weak_secret(value, field="TOKEN_HASH_PEPPER")
+
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     # Required like the database URLs: the template in backend/.env resolves the password
     # from the container environment, and anything without it fails fast instead of

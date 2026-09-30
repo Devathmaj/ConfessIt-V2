@@ -81,6 +81,10 @@ services:
       # python -c "import secrets; print(secrets.token_hex(32))", keep it out of git,
       # and rotate knowingly -- rotation invalidates all outstanding JWTs at once.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
+      # Pepper for stored login-token hashes, shared by every worker and replica like the
+      # key above. Without it a database dump turns stored hashes into an offline search;
+      # rotating it invalidates all sessions and unredeemed links, so rotate deliberately.
+      TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       # The bundled collector serves plaintext gRPC on the Compose network only, so the
@@ -148,8 +152,12 @@ services:
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt_Test"
       # Same image and settings as the API, so the same signing key: the scheduler
       # imports the app and must verify (and mint, via game HMACs) with the key the
-      # API uses, or its resets disagree with live traffic.
+      # API uses, or its resets disagree with live traffic. The token pepper travels
+      # with it for the same reason: any worker hashing tokens must agree, and
+      # rotating it invalidates all sessions and unredeemed links, so rotate
+      # deliberately.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
+      TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
       # The scheduler builds the same Settings object, whose connection strings are
       # required: REDIS_URL resolves from backend/.env off this password, exactly as
       # on the API. Telemetry rides the plaintext local collector like the API does.

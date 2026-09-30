@@ -1,4 +1,3 @@
-import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +8,7 @@ from .accounts import AccountType
 from .config import settings
 from .db_models import ACCOUNT_MODELS, LoginTokenRecord
 from .postgres import PostgresClient
+from .services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
 # 100 participants, split evenly. A school run of this app has a real gender mix and the
 # matchmaking screens filter and sort by it, so a seed that is all one value hides layout and
@@ -33,13 +33,6 @@ def create_magic_link_token() -> str:
     Generates a secure, random token for magic link authentication.
     """
     return secrets.token_urlsafe(32)
-
-
-def hash_token(token: str) -> str:
-    """
-    Hashes a token using SHA-256 for secure storage.
-    """
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _participants() -> list[dict]:
@@ -142,7 +135,7 @@ def main():
                 issued_at = datetime.now(timezone.utc)
                 token_row = LoginTokenRecord(
                     account_id=account_row.id, account_type=account_type,
-                    token_hash=hash_token(token), issued_at=issued_at,
+                    token_hash=hash_token(token, domain=TOKEN_HASH_DOMAIN_MAGIC), issued_at=issued_at,
                     expires_at=issued_at + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES),
                     used=False, revoked=False,
                     request_ip="127.0.0.1", request_user_agent="Test Script", attempt_count=0,

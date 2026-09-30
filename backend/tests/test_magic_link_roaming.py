@@ -70,12 +70,12 @@ def _mint_token_for(db, regno, *, host="127.0.0.1", user_agent="Test Agent"):
 
 
 def _attempts(db, plaintext):
-    from app.services.auth_service import hash_token
+    from app.services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
     with db.sessions() as session:
         row = session.scalar(
             select(LoginTokenRecord).where(
-                LoginTokenRecord.token_hash == hash_token(plaintext)
+                LoginTokenRecord.token_hash == hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC)
             )
         )
         return row.attempt_count
@@ -128,7 +128,7 @@ def test_attempt_counter_saturates_instead_of_overflowing(db):
     _seed_user(db, "hammered")
     plaintext = _mint_token_for(db, "hammered", host="127.0.0.1")
 
-    from app.services.auth_service import hash_token
+    from app.services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
     with db.sessions.begin() as session:
         session.execute(
@@ -136,7 +136,7 @@ def test_attempt_counter_saturates_instead_of_overflowing(db):
                 "UPDATE login_tokens SET attempt_count = 2147483647 "
                 "WHERE token_hash = :hash"
             ),
-            {"hash": hash_token(plaintext)},
+            {"hash": hash_token(plaintext, domain=TOKEN_HASH_DOMAIN_MAGIC)},
         )
 
     refused = _browser(host="10.9.9.9").get(f"{VERIFY_ENDPOINT}?token={plaintext}")
