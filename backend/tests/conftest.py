@@ -66,11 +66,13 @@ from app.services.auth_service import get_current_user
 from app.services.redis_service import redis_service
 
 # The out-of-band refresh-token body flow is gated behind ENABLE_DEBUG_ENDPOINTS in
-# production, but the rotation mechanics tests drive it directly (they hold raw tokens
-# the way a non-browser client would). The flag is read per request, so enabling it
-# here changes no routes -- /db-test stays unregistered -- while the gate itself is
-# pinned by dedicated tests that switch the flag off.
-settings.ENABLE_DEBUG_ENDPOINTS = True
+# production, and the rotation mechanics tests drive the cookie jar instead (they
+# hold raw tokens the way a browser holds cookies, presenting them per request or
+# from the jar). The suite therefore runs with the flag off -- the production
+# posture -- so a test can only pass through the credential path a deployment
+# serves. The gate itself is pinned by dedicated tests that switch the flag on
+# explicitly (see test_auth_csrf).
+settings.ENABLE_DEBUG_ENDPOINTS = False
 
 # The host allowlist is read per request: Starlette's TestClient answers as
 # "testserver", which can never resolve publicly and is not a production name, so the

@@ -1,5 +1,5 @@
 import os
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,37 @@ def _reject_weak_secret(value: str, *, field: str) -> str:
     return key
 
 
+def _require_url_scheme(value: str, *, field: str, schemes: tuple[str, ...]) -> str:
+    """Refuse a blank connection string or one for the wrong driver.
+
+    A scheme typo (``postgres://`` without the driver, ``sqlite://``) otherwise
+    surfaces deep in engine creation as a confusing driver error -- or worse,
+    connects somewhere unintended. Failing here names the field and the schemes
+    it accepts.
+    """
+    text = (value or "").strip()
+    if not text:
+        raise ValueError(f"{field} must not be blank.")
+    lowered = text.lower()
+    if not any(lowered.startswith(f"{scheme}://") for scheme in schemes):
+        raise ValueError(
+            f"{field} must start with one of "
+            f"{', '.join(f'{scheme}://' for scheme in schemes)} (got {text[:24]!r}...)."
+        )
+    return value
+
+
+def _require_positive_int_or_none(value: int | None, *, field: str) -> int | None:
+    """Refuse a zero or negative ceiling: a bound of 0 refuses everything (or,
+    for body caps, breaks every upload), and a negative one is never what an
+    operator meant. Unset stays unset -- the services fall back to their own
+    defaults when the deployment names none.
+    """
+    if value is not None and value <= 0:
+        raise ValueError(f"{field} must be a positive integer when set (got {value}).")
+    return value
+
+
 class Settings(BaseSettings):
     # Connection strings have no defaults on purpose. A baked-in
     # ``confessit:confessit@...`` fallback would ship in the image and its history, and
@@ -43,6 +74,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(...)
     TEST_DATABASE_URL: str = Field(...)
     DATABASE_NAME: str = "ConfessIt"
+
+    @field_validator("DATABASE_URL", "TEST_DATABASE_URL")
+    @classmethod
+    def _validate_database_url(cls, value: str, info: ValidationInfo) -> str:
+        """Only the driver this app speaks: anything else fails at connect time
+        with a driver error that names nothing about configuration."""
+        return _require_url_scheme(
+            value, field=info.field_name, schemes=("postgresql+psycopg",)
+        )
 
     # There is exactly one engine per process (see app.postgres), so the worst-case
     # connection count against Postgres is (POOL_SIZE + MAX_OVERFLOW) * WEB_WORKERS plus
@@ -76,9 +116,21 @@ class Settings(BaseSettings):
     MAX_REQUEST_BODY_BYTES: int | None = None
     # Uvicorn's connection ceiling. Bounds how many request bodies can be in flight at
     # once, which is the second line of defence if the body cap is being probed.
-    MAX_CONCURRENCY: int = 100
+    MAX_CONCURRENCY: int = Field(default=100, ge=1)
     PUBLIC_BASE_URL: str | None = None
     CLOUDINARY_ALLOWED_FORMATS: str | None = None
+
+    @field_validator(
+        "MAX_IMAGE_SIZE_MB",
+        "MAX_IMAGE_DIMENSION",
+        "MAX_IMAGE_PIXELS",
+        "MAX_REQUEST_BODY_BYTES",
+    )
+    @classmethod
+    def _validate_positive_ceiling(cls, value: int | None, info: ValidationInfo) -> int | None:
+        """A zero or negative ceiling refuses everything (or breaks every upload);
+        unset stays unset and the services use their own defaults."""
+        return _require_positive_int_or_none(value, field=info.field_name)
 
     # --- Organising the library ---
     #
@@ -192,6 +244,13 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(...)
     CLOUD: bool = False
 
+    @field_validator("REDIS_URL")
+    @classmethod
+    def _validate_redis_url(cls, value: str) -> str:
+        """Only Redis schemes: a typo here otherwise fails at first use, long
+        after boot, as an opaque connection error."""
+        return _require_url_scheme(value, field="REDIS_URL", schemes=("redis", "rediss"))
+
     # --- Reverse proxy and cookie transport ---
     #
     # Comma-separated IPs or CIDRs of proxies allowed to set X-Forwarded-* on the way in
@@ -293,9 +352,9 @@ class Settings(BaseSettings):
     # which is a real configuration for a deployment that provisions staff out of band. It is
     # deliberately not treated as "unset" -- there is no sentinel for that, because a missing
     # variable falls back to the default below rather than to zero.
-    MAX_USER_COUNT: int = 500
-    MAX_ADMIN_COUNT: int = 10
-    MAX_MODERATOR_COUNT: int = 25
+    MAX_USER_COUNT: int = Field(default=500, ge=0)
+    MAX_ADMIN_COUNT: int = Field(default=10, ge=0)
+    MAX_MODERATOR_COUNT: int = Field(default=25, ge=0)
 
     # --- Observability / Telemetry ---
     # Secure transport is the default because spans, logs and metrics carry registration
@@ -334,7 +393,47 @@ class Settings(BaseSettings):
     PORT: int = 8001
     RELOAD: bool = True
 
-    model_config = SettingsConfigDict(env_file=".env", extra="allow")
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def _validate_cors_origins(cls, value: str) -> str:
+        """Refuse a CORS misconfiguration at boot rather than on first request.
+
+        A bare ``*`` (or a stray one in the list) combined with credentialed
+        requests would let any site call this API with the user's cookies, and
+        a schemeless entry never matches a real Origin -- both are always
+        mistakes, and both are invisible until the first cross-site call. The
+        runtime parser (``cors_allow_origins``) keeps its own identical refusal
+        for values mutated after boot.
+        """
+        entries = [o.strip().rstrip("/") for o in value.split(",") if o.strip()]
+        if not entries:
+            raise ValueError("CORS_ORIGINS must name at least one origin.")
+        if "*" in entries:
+            raise ValueError(
+                'CORS_ORIGINS must not contain "*": wildcard origins with '
+                "credentials enabled would let any site call this API with the "
+                "user's cookies."
+            )
+        for entry in entries:
+            lowered = entry.lower()
+            if "://" not in lowered:
+                raise ValueError(
+                    f"CORS_ORIGINS entry {entry!r} has no scheme: origins look like "
+                    "https://app.example.com."
+                )
+            scheme = lowered.split("://", 1)[0]
+            if scheme not in ("http", "https"):
+                raise ValueError(
+                    f"CORS_ORIGINS entry {entry!r} must use http or https."
+                )
+        return value
+
+    # Unknown keys are refused outright: with extra="allow" a misspelled
+    # SECRETKEY or DATABSE_URL would be silently ignored while the deployment
+    # ran on defaults (or failed much later on a required field), and .env is a
+    # shared file where a typo is a matter of time. Every legitimate key is a
+    # declared field; anything else is a mistake worth a loud boot error.
+    model_config = SettingsConfigDict(env_file=".env", extra="forbid")
 
 
 settings = Settings()

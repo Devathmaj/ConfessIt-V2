@@ -1,0 +1,117 @@
+"""Settings fail fast on typos and insecure values (see app.config).
+
+With ``extra="allow"`` a misspelled ``SECRETKEY`` or ``DATABSE_URL`` would be
+silently ignored while the deployment ran on defaults, and a ``CORS_ORIGINS``
+of ``*`` or a negative ``MAX_*`` would only surface as misbehaviour. These
+tests pin the fail-closed contract: unknown keys, wrong-scheme URLs, wildcard
+or schemeless origins, and non-positive ceilings all refuse to construct.
+"""
+
+import pytest
+from pydantic import ValidationError
+
+from app.config import Settings
+
+# A well-formed 64-hex-character key, distinct from the suite's own pinned key.
+VALID_KEY = "b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1"
+
+# Everything required, all valid, so each test fails (or passes) on the one
+# value it varies -- never on an unrelated missing setting.
+_BASE_KWARGS = {
+    "SECRET_KEY": VALID_KEY,
+    "TOKEN_HASH_PEPPER": VALID_KEY,
+    "DATABASE_URL": "postgresql+psycopg://u:p@db:5432/ConfessIt",
+    "TEST_DATABASE_URL": "postgresql+psycopg://u:p@db:5432/ConfessIt_Test",
+    "REDIS_URL": "redis://db:6379",
+}
+
+
+def _settings(monkeypatch, tmp_path, **overrides):
+    """Build Settings isolated from the real environment and .env file."""
+    for name in (
+        "SECRET_KEY", "TOKEN_HASH_PEPPER", "DATABASE_URL", "TEST_DATABASE_URL",
+        "REDIS_URL", "CORS_ORIGINS", "MAX_USER_COUNT", "MAX_ADMIN_COUNT",
+        "MAX_MODERATOR_COUNT", "MAX_IMAGE_SIZE_MB", "MAX_IMAGE_DIMENSION",
+        "MAX_IMAGE_PIXELS", "MAX_REQUEST_BODY_BYTES", "MAX_CONCURRENCY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    kwargs = dict(_BASE_KWARGS)
+    kwargs.update(overrides)
+    return Settings(**kwargs)
+
+
+def test_misspelled_and_unknown_keys_are_refused(monkeypatch, tmp_path):
+    # The typo from the finding: SECRETKEY must not be silently ignored.
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, SECRETKEY="whatever-this-is-ignored")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, DATABSE_URL="postgresql+psycopg://u:p@db:5432/x")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGNS="https://app.example.com")
+
+
+def test_database_urls_require_the_psycopg_driver(monkeypatch, tmp_path):
+    for field in ("DATABASE_URL", "TEST_DATABASE_URL"):
+        with pytest.raises(ValidationError):
+            _settings(monkeypatch, tmp_path, **{field: "postgresql://u:p@db:5432/x"})
+        with pytest.raises(ValidationError):
+            _settings(monkeypatch, tmp_path, **{field: "sqlite:///x.db"})
+        with pytest.raises(ValidationError):
+            _settings(monkeypatch, tmp_path, **{field: "   "})
+
+
+def test_redis_url_requires_a_redis_scheme(monkeypatch, tmp_path):
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, REDIS_URL="http://db:6379")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, REDIS_URL="")
+    assert _settings(monkeypatch, tmp_path, REDIS_URL="redis://db:6379").REDIS_URL.startswith(
+        "redis://"
+    )
+    assert _settings(monkeypatch, tmp_path, REDIS_URL="rediss://db:6379").REDIS_URL.startswith(
+        "rediss://"
+    )
+
+
+def test_cors_origins_reject_wildcards_and_schemeless_entries(monkeypatch, tmp_path):
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGINS="*")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGINS="https://app.example.com,*")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGINS="app.example.com")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGINS="ftp://app.example.com")
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, CORS_ORIGINS="   ")
+    parsed = _settings(
+        monkeypatch, tmp_path, CORS_ORIGINS="https://app.example.com/,http://localhost:5173"
+    )
+    assert parsed.CORS_ORIGINS == "https://app.example.com/,http://localhost:5173"
+
+
+@pytest.mark.parametrize("field", ["MAX_USER_COUNT", "MAX_ADMIN_COUNT", "MAX_MODERATOR_COUNT"])
+def test_account_caps_reject_negatives_but_allow_zero(monkeypatch, tmp_path, field):
+    # Zero is a real configuration ("this kind cannot be created"); negatives are not.
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, **{field: -1})
+    assert getattr(_settings(monkeypatch, tmp_path, **{field: 0}), field) == 0
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["MAX_IMAGE_SIZE_MB", "MAX_IMAGE_DIMENSION", "MAX_IMAGE_PIXELS", "MAX_REQUEST_BODY_BYTES"],
+)
+def test_optional_ceilings_must_be_positive_when_set(monkeypatch, tmp_path, field):
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, **{field: 0})
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, **{field: -5})
+    assert getattr(_settings(monkeypatch, tmp_path, **{field: None}), field) is None
+
+
+def test_concurrency_ceiling_must_be_positive(monkeypatch, tmp_path):
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=0)
+    assert _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=1).MAX_CONCURRENCY == 1

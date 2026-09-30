@@ -209,12 +209,16 @@ def test_the_rotated_away_refresh_token_stops_working(db, no_auth_override):
 
     # The old value is refused the moment it was rotated away, with the same generic 401
     # an unknown token gets, so a reuse cannot be told apart from noise by a caller.
-    replay = browser.post(REFRESH_ENDPOINT, json={"refresh_token": old_cookie})
+    # Presented as a cookie (not the debug-only body): the replay must fail on the
+    # production credential path.
+    replay = _browser().post(
+        REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: old_cookie}
+    )
     assert replay.status_code == 401
     assert replay.json()["detail"] == "Could not validate credentials"
 
     # The new value carries the session through a further rotation.
-    assert browser.post(REFRESH_ENDPOINT, json={"refresh_token": fresh_cookie}).status_code == 200
+    assert browser.post(REFRESH_ENDPOINT).status_code == 200
     latest_cookie = _refresh_cookie(browser)
     assert latest_cookie != fresh_cookie
 
@@ -312,7 +316,9 @@ def test_reusing_a_rotated_away_token_is_refused_without_revoking_the_session(
     assert browser.post(REFRESH_ENDPOINT).status_code == 200
     fresh_cookie = _refresh_cookie(browser)
 
-    replay = browser.post(REFRESH_ENDPOINT, json={"refresh_token": old_cookie})
+    replay = _browser().post(
+        REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: old_cookie}
+    )
     assert replay.status_code == 401
     assert replay.json()["detail"] == "Could not validate credentials"
 
@@ -321,7 +327,7 @@ def test_reusing_a_rotated_away_token_is_refused_without_revoking_the_session(
     row = _session_row(db, session_id_of(db, fresh_cookie))
     assert row.session_status == SESSION_STATUS_ACTIVE
     assert row.refresh_token_hash == hash_token(fresh_cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
-    assert browser.post(REFRESH_ENDPOINT, json={"refresh_token": fresh_cookie}).status_code == 200
+    assert browser.post(REFRESH_ENDPOINT).status_code == 200
 
 
 def session_id_of(db, raw_refresh):
@@ -447,7 +453,7 @@ def test_logout_revokes_the_session_on_the_server(db, no_auth_override):
     row = _session_row(db, session_id_of(db, cookie))
     assert row.session_status == SESSION_STATUS_REVOKED
 
-    assert browser.post(REFRESH_ENDPOINT, json={"refresh_token": cookie}).status_code == 401
+    assert browser.post(REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: cookie}).status_code == 401
     assert browser.get("/auth/me", headers=_bearer(access_token)).status_code == 401
 
 
@@ -481,10 +487,12 @@ def test_refresh_with_an_unknown_token_is_refused_without_touching_the_session(
     access_token = _redeem_token(browser, _mint_token_for(db, "phantom-refresh-user"))
     cookie = _refresh_cookie(browser)
 
-    forged = browser.post(REFRESH_ENDPOINT, json={"refresh_token": "not-a-real-token"})
+    forged = _browser().post(
+        REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: "not-a-real-token"}
+    )
     assert forged.status_code == 401
     assert forged.json()["detail"] == "Could not validate credentials"
 
     # The account's own session is untouched by a stranger presenting a random token.
     assert browser.get("/auth/me", headers=_bearer(access_token)).status_code == 200
-    assert browser.post(REFRESH_ENDPOINT, json={"refresh_token": cookie}).status_code == 200
+    assert browser.post(REFRESH_ENDPOINT).status_code == 200
