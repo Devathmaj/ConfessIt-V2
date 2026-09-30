@@ -234,16 +234,30 @@ def _init_dependency_instrumentation(postgres: Database) -> None:
     endpoint could not be told apart from a slow query.
 
     SQLAlchemy is instrumented against this one shared engine rather than globally,
-    because the engine is created per :class:`~app.postgres.PostgresClient` and the
-    one the process serves traffic from is the one that matters. Redis and urllib3
+    because the engine is created per :class:`~app.postgres.PostgresClient` and
+    the one the process serves traffic from is the one that matters. Redis and urllib3
     patch their clients globally, which is why they need no arguments; the urllib3
     hook is what keeps a signed Cloudinary query string out of the span.
+
+    Which database tracing runs is decided by ``telemetry.sqlalchemy_instrumentation``:
+    the contrib instrumentor refuses SQLAlchemy >= 2.1, in which case the in-house
+    Engine adapter in the same module takes over (same CLIENT spans, same db.*
+    names) instead of silently emitting nothing.
 
     Called from ``on_startup`` rather than at import because it needs a live engine,
     and after that event's own schema work so that booting the process does not emit
     a burst of spans that belong to no request.
     """
-    SQLAlchemyInstrumentor().instrument(engine=postgres.engine)
+    from .telemetry import instrument_database_engine, sqlalchemy_instrumentation
+
+    if sqlalchemy_instrumentation() == "manual":
+        logger.info(
+            "Contrib SQLAlchemy instrumentor does not support the installed "
+            "SQLAlchemy; using the in-house Engine adapter for database spans."
+        )
+        instrument_database_engine(postgres.engine)
+    else:
+        SQLAlchemyInstrumentor().instrument(engine=postgres.engine)
     RedisInstrumentor().instrument()
     URLLib3Instrumentor().instrument(request_hook=redact_client_url)
 

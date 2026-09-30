@@ -59,15 +59,6 @@ services:
       # configured. Raising it widens what one process will hold at once, so the request
       # body cap is what should move first if this needs raising.
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
-      # Legacy. Nothing builds an image URL from this any more: profile pictures are public
-      # Cloudinary CDN URLs and love note images are signed CDN URLs, both absolute and
-      # minted by the backend, so the browser never resolves them against this origin. It is
-      # still injected because PUBLIC_BASE_URL/ASSET_BASE_URL fall back to it for the links the
-      # backend does generate (magic-link emails, for one), and a change here would silently
-      # rewrite those. Left unset it falls back to PUBLIC_BASE_URL, which in backend/.env names
-      # the Vite dev server's container-internal port (8080) -- an origin nothing is published
-      # on, so every such link points nowhere. Override when the API is published elsewhere.
-      ASSET_BASE_URL: "${ASSET_BASE_URL:-http://localhost:8001}"
       # Injected so backend/.env can resolve REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379"
       # via python-dotenv, which keeps the root .env the only file the credential is written
       # in. REDIS_URL itself stays out of this file; setting it in the environment overrides.
