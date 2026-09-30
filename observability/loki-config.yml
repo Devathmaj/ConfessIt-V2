@@ -39,5 +39,9 @@ compactor:
   retention_enabled: true
   delete_request_store: filesystem
 
-ruler:
-  alertmanager_url: http://localhost:9093
+# No ruler block: the only consumer a ruler would notify is an Alertmanager, and
+# this stack deliberately runs none (Prometheus evaluates the alert rules in
+# alerting-rules.yml and exposes their state through its own API and Alerts
+# page). A ruler stanza pointed at the default Alertmanager port nothing listens
+# on would only fail closed on rule evaluation while alerting nobody -- removed
+# rather than left as dead configuration implying coverage.

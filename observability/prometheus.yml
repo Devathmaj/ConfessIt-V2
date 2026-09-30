@@ -2,6 +2,21 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# The remote-write receiver (enabled in docker-compose.yml for Tempo's metrics
+# generator) takes unauthenticated writes by default, which would let any
+# container on the Compose network forge the RED/service-graph series the
+# alerts read. HTTP basic auth closes it: it lives in the separate web config
+# file (prometheus-web.yml -- this main config has no such field) and applies
+# to everything Prometheus serves, receiver included. The only writer is Tempo,
+# which authenticates with the password in the gitignored
+# observability/.rw-password (mounted into its container; see tempo.yml). This
+# also gates the UI, the query API and /-/ready, so Grafana's datasource and
+# the healthcheck authenticate the same way -- Grafana with a file pointer (no
+# secret lands in its tracked provisioning), the healthcheck by reading the
+# mounted file.
+# The hash in prometheus-web.yml is bcrypt of that password: safe to track,
+# recompute both together on rotation.
+
 # Alerting runs in Prometheus's own rule engine, which is already part of this stack.
 # No Alertmanager is configured: the rules evaluate and their state is readable from
 # the /api/v1/rules endpoint and the Alerts page, without adding a notification

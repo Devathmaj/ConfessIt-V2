@@ -8,10 +8,18 @@
 # same hostnames otel-collector-config.yml and prometheus.yml already use.
 #
 # No credential appears in this file. Prometheus, Loki and Tempo are all reached
-# without authentication over the Compose network: Loki's `auth_enabled` is tenant
-# isolation, not login, and the tenant is a name rather than a secret -- it is
-# already written literally in otel-collector-config.yml and promtail-config.yml.
-# Grafana's own admin login stays in the root .env via GF_SECURITY_ADMIN_*.
+# without authentication over the Compose network, except Prometheus itself:
+# its remote-write receiver (and therefore its whole HTTP surface, basic auth
+# cannot be scoped to one path) requires the user below. Loki's `auth_enabled`
+# is tenant isolation, not login, and the tenant is a name rather than a
+# secret -- it is already written literally in otel-collector-config.yml and
+# promtail-config.yml. The Prometheus password is never written here either: it
+# arrives through the `$__file{}` pointer below, which Grafana resolves from the
+# mounted gitignored observability/.rw-password at start-up. (The doubled `$$`
+# escapes the provisioning loader's own environment variable expansion, so the
+# pointer survives into the datasource as a literal -- same mechanism as the
+# `$${__value.raw}` below.) Grafana's own admin login stays in the root .env
+# via GF_SECURITY_ADMIN_*.
 apiVersion: 1
 
 # Applied on every start, so an edit here replaces the previous definition instead
@@ -27,11 +35,19 @@ datasources:
     url: http://prometheus:9090
     access: proxy
     isDefault: true
+    # Prometheus requires basic auth since its remote-write receiver was
+    # authenticated (see prometheus.yml): queries fail without this, including
+    # Grafana's start-up health check of the datasource.
+    basicAuth: true
+    basicAuthUser: tempo
     jsonData:
       httpMethod: POST
       # Matches the scrape interval in prometheus.yml, so a panel covers at least one
       # full scrape and a newly started backend shows a point without a long wait.
       timeInterval: 15s
+    # The password is read from the mounted file, not tracked here.
+    secureJsonData:
+      basicAuthPassword: $$__file{/etc/grafana/rw-password}
     editable: false
 
   - name: Loki

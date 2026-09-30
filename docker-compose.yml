@@ -241,22 +241,32 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
+      # Web-layer config (TLS/basic-auth live here, not in prometheus.yml).
+      - "--web.config.file=/etc/prometheus/web.yml"
       # Tempo 2.5's metrics-generator delivers the RED and service-graph series it
       # derives from traces by remote write; it has no local scrape endpoint. This
-      # flag is the receiver for that. The endpoint stays bound to loopback.
+      # flag is the receiver for that. The endpoint stays bound to loopback, and
+      # every request to it (like to the UI, the query API and /-/ready) now
+      # needs the basic-auth user in prometheus.yml: an unauthenticated receiver
+      # would let any container on this network forge the series the alerts read.
       - "--web.enable-remote-write-receiver"
     # Loopback only: the metrics contain request rates, error counts and target topology.
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus-web.yml:/etc/prometheus/web.yml:ro
       - ./observability/alerting-rules.yml:/etc/prometheus/alerting-rules.yml:ro
+      - ./observability/.rw-password:/etc/prometheus/rw-password:ro
+      - ./observability/prometheus-healthcheck.sh:/etc/prometheus/healthcheck.sh:ro
       - prometheus_data:/prometheus
     # Grafana health-checks every datasource on start-up, so it needs a readiness
     # signal of its own to wait on. /-/ready is the endpoint Prometheus exposes for
-    # exactly this; the image ships busybox wget and no curl.
+    # exactly this. A script rather than an inline flag: busybox wget has no
+    # --user/--password, and the password must be read out of the mounted file --
+    # never passed on argv, where `docker inspect` and `ps` would retain it.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      test: ["CMD", "/bin/sh", "/etc/prometheus/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -295,6 +305,10 @@ services:
       # logs a read error for each of the four. Overlaying the one directory that is
       # actually provisioned leaves the rest intact.
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      # The Prometheus basic-auth password (see prometheus.yml): Grafana reads
+      # Prometheus through it via a `$__file{}` pointer in datasources.yml, so the
+      # secret itself never lands in a tracked file.
+      - ./observability/.rw-password:/etc/grafana/rw-password:ro
       # The operator dashboard, overlaid the same way. Without this a fresh
       # `docker compose up` yields a connected but blank Grafana and someone has to
       # rebuild the panels by hand. The directory is empty in the image, so adding a
@@ -346,6 +360,9 @@ services:
       - "4317"
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
+      # The remote-write password for Prometheus (see prometheus.yml): Tempo is
+      # the only writer, and the receiver answers 401 without it.
+      - ./observability/.rw-password:/etc/tempo/rw-password:ro
       - tempo_data:/var/tempo
     # Tempo answers /ready only once its ingester has joined its own memberlist
     # ring, and the startup log shows it logging "auto-joining cluster after

@@ -23,6 +23,11 @@ dist-ssr
 backend/.env
 frontend/.env
 
+# Prometheus remote-write password, shared by Tempo (writer), Grafana (reader)
+# and the Prometheus healthcheck via bind mounts. The tracked configs hold only
+# its bcrypt hash (prometheus.yml) or a file pointer, never this secret.
+observability/.rw-password
+
 # Production TLS certificates for the edge (see docker-compose.prod.yml). Private key
 # material must never be committed; without these files Nginx refuses to start.
 tls/

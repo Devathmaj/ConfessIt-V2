@@ -1,0 +1,12 @@
+# Web-layer config for Prometheus (loaded via --web.config.file, which is the only
+# place these fields exist -- prometheus.yml itself has no basic_auth_users).
+#
+# The remote-write receiver takes unauthenticated writes by default, which would
+# let any container on the Compose network forge the RED/service-graph series
+# the alerts read. This closes every HTTP surface Prometheus serves (receiver,
+# UI, query API, /-/ready) behind the one writer Tempo authenticates with. The
+# password itself lives in the gitignored observability/.rw-password; this file
+# holds only its bcrypt hash, which is safe to track. Recompute both together
+# on rotation (cost 12).
+basic_auth_users:
+  tempo: $2b$12$F4RycxCMHtI8QjxiHOtBO.KZJl2SZO34UszcvNtuUOzAId/jJsoJO

@@ -45,9 +45,19 @@ metrics_generator:
     # collector in this stack is the same single Prometheus that serves the rest
     # of the observability data. send_exemplars lets Grafana jump from a RED
     # metric straight to the trace it came from.
+    #
+    # Prometheus requires basic auth on everything it serves (see prometheus.yml):
+    # without this block its receiver answers 401 and the generator's series --
+    # the RED metrics and the service graph -- silently stop arriving. The
+    # password lives in the gitignored observability/.rw-password, mounted
+    # read-only at the path below by docker-compose.yml, so no secret is
+    # tracked here either.
     remote_write:
       - url: http://prometheus:9090/api/v1/write
         send_exemplars: true
+        basic_auth:
+          username: tempo
+          password_file: /etc/tempo/rw-password
   processor:
     service_graphs:
       # How long to wait for the rest of a trace before drawing its edges, so a
