@@ -15,6 +15,7 @@ from ..accounts import (
     normalize_account_type,
 )
 from ..services.authorization import require_capability
+from ..utils import ilike_contains
 from .. import limits as app_limits
 from ..logger import get_logger
 from ..services.love_note_service import rotate_sender_love_note_images
@@ -140,7 +141,7 @@ def _user_payload(user):
 async def get_all_confessions(
     skip: int = Query(0, ge=0, description="How many matching confessions to skip."),
     limit: int = Query(50, ge=1, le=CONFESSIONS_MAX_LIMIT, description="How many matching confessions to return. Clamped so one request can never materialise the whole table with every comment, report and reactor row attached."),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on the body, the recipient name and the sender's name, regno and email."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the body, the recipient name and the sender's name, regno and email."),
     filter: str = Query("all", description="Narrow to a subset: all, reported, anonymous or with-comments."),
     sort: str = Query("recent", description="Order the page: recent, reports, comments or reactions."),
     db: Database = Depends(get_db),
@@ -260,7 +261,7 @@ async def get_confession_reports(
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on the reason, the reporter name and the reported content."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the reporter name and the reported content."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
@@ -314,7 +315,7 @@ async def update_confession_report(
 async def get_all_users(
     skip: int = Query(0, ge=0, description="How many matching participants to skip. Applies to the users table only when no account_type is given."),
     limit: int = Query(50, ge=1, le=ADMIN_USERS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole table."),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on name, regno, email (and department for participants)."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on name, regno, email (and department for participants)."),
     account_type: Optional[str] = Query(None, description="Restrict to one account table: users, admin or moderator."),
     year: Optional[int] = Query(None, description="Participants only: exact year of study."),
     department: Optional[str] = Query(None, description="Participants only: exact department, case-insensitive."),
@@ -819,7 +820,7 @@ async def get_message_reports(
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on the reason, the message body and both parties' regnos."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the message body and both parties' regnos."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
@@ -852,12 +853,11 @@ async def get_message_reports(
         filters.append(MessageReportRecord.status.in_(wanted))
     cleaned = (q or "").strip()
     if cleaned:
-        pattern = f"%{cleaned}%"
         filters.append(or_(
-            MessageReportRecord.reason.ilike(pattern),
-            MessageReportRecord.reporter_regno.ilike(pattern),
-            MessageReportRecord.reported_user_regno.ilike(pattern),
-            MessageRecord.body.ilike(pattern),
+            ilike_contains(MessageReportRecord.reason, cleaned),
+            ilike_contains(MessageReportRecord.reporter_regno, cleaned),
+            ilike_contains(MessageReportRecord.reported_user_regno, cleaned),
+            ilike_contains(MessageRecord.body, cleaned),
         ))
     with db.sessions() as session:
         base = select(MessageReportRecord).outerjoin(

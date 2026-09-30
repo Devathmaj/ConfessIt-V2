@@ -27,6 +27,7 @@ from app.db_models import (
     UserRecord,
 )
 from app.services.storage_service import storage_service
+from app.utils import escape_like_literal
 
 REACTIONS = {"heart": [], "haha": [], "whoa": [], "heartbreak": []}
 
@@ -265,3 +266,57 @@ def test_message_search_matches_reason_body_and_both_regnos(db, admin_client):
         "/admin/messages/reports", params={"q": "loudmouth"}).json()) == ["threatening tone"]
     missed = admin_client.get("/admin/messages/reports", params={"q": "nothing like this"}).json()
     assert missed["total"] == 0
+
+
+def test_like_wildcards_match_literally_not_as_wildcards(db, admin_client):
+    # "%" and "_" in q must match themselves. Unescaped, q="%" is pattern "%%%",
+    # which matches every row in the queue, and q="a_b" matches "axb" too --
+    # both overmatches that also defeat any index on the column. The corpus
+    # below separates the readings: only the "100% certain" / "a_b plan" row
+    # holds literal wildcard characters.
+    sender = make_user(db, "wildmouth")
+    receiver = make_user(db, "wildone")
+    plain_id = make_message(db, sender, receiver, body="midnight plot here")
+    file_message_report(db, plain_id, receiver, sender["regno"], reason="plain threats")
+    wild_id = make_message(db, sender, receiver, body="a_b plan")
+    file_message_report(db, wild_id, receiver, sender["regno"], reason="100% certain")
+    decoy_id = make_message(db, sender, receiver, body="axb decoy")
+    file_message_report(db, decoy_id, receiver, sender["regno"], reason="unrelated remark")
+
+    # Literal "%" matches only the row containing one (unescaped: all three).
+    assert reasons(admin_client.get(
+        "/admin/messages/reports", params={"q": "%"}).json()) == ["100% certain"]
+    # Literal "_" matches only the row containing one (unescaped: all three).
+    assert reasons(admin_client.get(
+        "/admin/messages/reports", params={"q": "_"}).json()) == ["100% certain"]
+    # "a%b" is not a substring of anything here (unescaped: matches a_b and axb).
+    assert admin_client.get("/admin/messages/reports", params={"q": "a%b"}).json()["total"] == 0
+    # "a_b" matches the literal holder only (unescaped: also "axb decoy").
+    assert reasons(admin_client.get(
+        "/admin/messages/reports", params={"q": "a_b"}).json()) == ["100% certain"]
+    assert reasons(admin_client.get(
+        "/admin/messages/reports", params={"q": "100%"}).json()) == ["100% certain"]
+
+
+def test_overlong_search_is_rejected_with_422(admin_client):
+    # q is capped at 100 characters: an unbounded ILIKE pattern is both a
+    # ReDoS-shaped input to the planner and a way to exfiltrate by stuffing.
+    too_long = "x" * 101
+    assert admin_client.get(
+        "/admin/messages/reports", params={"q": too_long}).status_code == 422
+    assert admin_client.get(
+        "/admin/love-notes/reports", params={"q": too_long}).status_code == 422
+    assert admin_client.get(
+        "/admin/confessions/reports", params={"q": too_long}).status_code == 422
+    assert admin_client.get(
+        "/admin/confessions", params={"q": too_long}).status_code == 422
+    assert admin_client.get(
+        "/admin/users", params={"q": too_long}).status_code == 422
+
+
+def test_escape_like_literal_escapes_only_metacharacters():
+    assert escape_like_literal("plain text 123") == "plain text 123"
+    assert escape_like_literal("100%") == "100\\%"
+    assert escape_like_literal("a_b") == "a\\_b"
+    assert escape_like_literal("back\\slash") == "back\\\\slash"
+    assert escape_like_literal("%_\\") == "\\%\\_\\\\"

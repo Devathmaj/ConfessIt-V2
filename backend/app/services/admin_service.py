@@ -15,6 +15,7 @@ from ..db_models import (ACCOUNT_MODELS, ConfessionCommentRecord, ConfessionReco
 from ..accounts import AccountType, is_valid_account_type, normalize_account_type
 from ..services.report_resolution_service import pending_report_totals, resolve_status_filter
 from ..services.storage_service import storage_service
+from ..utils import ilike_contains
 from .report_counters import tally_for_row
 
 # Above how many upheld removals a participant lands in the flagged work queue.
@@ -434,18 +435,17 @@ def _admin_confession_search_filters(query: Optional[str]) -> list:
     cleaned = (query or "").strip()
     if not cleaned:
         return []
-    pattern = f"%{cleaned}%"
     sender_match = and_(
         ConfessionRecord.anonymous.is_(False),
         or_(
-            UserRecord.name.ilike(pattern),
-            UserRecord.regno.ilike(pattern),
-            UserRecord.email.ilike(pattern),
+            ilike_contains(UserRecord.name, cleaned),
+            ilike_contains(UserRecord.regno, cleaned),
+            ilike_contains(UserRecord.email, cleaned),
         ),
     )
     return [or_(
-        ConfessionRecord.body.ilike(pattern),
-        ConfessionRecord.recipient_name.ilike(pattern),
+        ilike_contains(ConfessionRecord.body, cleaned),
+        ilike_contains(ConfessionRecord.recipient_name, cleaned),
         sender_match,
     )]
 
@@ -589,18 +589,17 @@ def _confession_report_search_filters(query: Optional[str]) -> list:
     cleaned = (query or "").strip()
     if not cleaned:
         return []
-    pattern = f"%{cleaned}%"
     confession_body = select(ConfessionRecord.id).where(
         ConfessionRecord.id == ReportRecord.confession_id,
-        ConfessionRecord.body.ilike(pattern),
+        ilike_contains(ConfessionRecord.body, cleaned),
     ).exists()
     comment_body = select(ConfessionCommentRecord.id).where(
         ConfessionCommentRecord.id == ReportRecord.comment_id,
-        ConfessionCommentRecord.body.ilike(pattern),
+        ilike_contains(ConfessionCommentRecord.body, cleaned),
     ).exists()
     return [or_(
-        ReportRecord.reason.ilike(pattern),
-        ReportRecord.reported_by_name.ilike(pattern),
+        ilike_contains(ReportRecord.reason, cleaned),
+        ilike_contains(ReportRecord.reported_by_name, cleaned),
         confession_body,
         comment_body,
     )]
@@ -877,10 +876,13 @@ def _apply_account_search(model: Any, filters: list, query: Optional[str], *, in
     cleaned = (query or "").strip()
     if not cleaned:
         return
-    pattern = f"%{cleaned}%"
-    clauses = [model.name.ilike(pattern), model.regno.ilike(pattern), model.email.ilike(pattern)]
+    clauses = [
+        ilike_contains(model.name, cleaned),
+        ilike_contains(model.regno, cleaned),
+        ilike_contains(model.email, cleaned),
+    ]
     if include_department:
-        clauses.append(model.department.ilike(pattern))
+        clauses.append(ilike_contains(model.department, cleaned))
     filters.append(or_(*clauses))
 
 

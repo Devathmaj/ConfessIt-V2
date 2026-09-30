@@ -87,7 +87,7 @@ async def get_love_note_reports(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on the reason, the note body, the reporter regno and the sender name/regno."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the note body, the reporter regno and the sender name/regno."),
     db: Database = Depends(get_db),
     admin: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW)),
     response: Response = None

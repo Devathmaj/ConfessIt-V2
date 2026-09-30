@@ -4,6 +4,7 @@ import gzip
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import HTTPException, status
@@ -32,6 +33,21 @@ _ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
 # One page may never materialise a whole day at once, matching the reports queues.
 ARCHIVED_MESSAGES_MAX_LIMIT = 200
 
+# Server-side streaming batch for the archival SELECT. Rows are fetched in batches
+# of this size instead of .all(), so a runaway backlog costs buffer memory, not
+# the process.
+_ARCHIVE_STREAM_BATCH = 1000
+
+# DELETE ... WHERE id IN (...) is chunked at this many ids per statement: PostgreSQL
+# caps a statement at 65535 bind parameters, and one giant IN list also plans badly.
+_DELETE_ID_CHUNK = 1000
+
+# Archive files hold chat bodies -- PII -- so they are owner-only on disk. The
+# directory is 0o700 for the same reason: the old 0o777 default made every
+# archived conversation readable (and the directory writable) by any local user.
+_ARCHIVE_FILE_MODE = 0o600
+_ARCHIVE_DIR_MODE = 0o700
+
 
 class MessageArchivalService:
     """Service for archiving old messages to compressed JSON files"""
@@ -41,9 +57,37 @@ class MessageArchivalService:
         self._ensure_archive_dir()
     
     def _ensure_archive_dir(self):
-        """Create archive directory if it doesn't exist"""
-        os.makedirs(self.archive_dir, exist_ok=True)
+        """Create the archive directory owner-only if it doesn't exist.
+
+        Mode 0o700 (and an explicit chmod afterwards, which also tightens a
+        directory created earlier under the old world-readable default or by a
+        bind mount): archives hold chat bodies, so other local users get neither
+        read nor listing. A chmod failure is a warning rather than fatal -- the
+        writes that follow will fail loudly on their own if the directory is
+        truly unusable.
+        """
+        os.makedirs(self.archive_dir, mode=_ARCHIVE_DIR_MODE, exist_ok=True)
+        try:
+            os.chmod(self.archive_dir, _ARCHIVE_DIR_MODE)
+        except OSError as e:
+            logger.warning(f"Could not chmod archive directory: {e}")
         logger.info(f"Archive directory: {self.archive_dir}")
+
+    def _fsync_dir(self) -> None:
+        """Force the archive directory entry itself to durable storage.
+
+        os.replace() only guarantees the rename is atomic, not that it survives
+        a power cut: the directory entry has to be fsynced too. Best effort --
+        a platform without directory fsync still gets the atomic rename.
+        """
+        try:
+            fd = os.open(self.archive_dir, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            logger.warning(f"Could not fsync archive directory: {e}")
 
     def _safe_archive_path(self, date: str) -> str:
         """Resolve `messages_<date>.json.gz` strictly inside the archive directory.
@@ -111,74 +155,127 @@ class MessageArchivalService:
         return b"".join(chunks)
     
     def archive_old_messages(self, db: Database, hours_old: int = 4) -> Dict[str, Any]:
-        """
-        Archive messages older than specified hours to compressed JSON
-        
-        Args:
-            db: PostgreSQL database
-            hours_old: Archive messages older than this many hours (default 4)
-        
-        Returns:
-            Dict with archive statistics
+        """Move messages older than ``hours_old`` from PostgreSQL into per-day gzip files.
+
+        Ordering is the whole safety argument, so it is stated plainly:
+
+        1. SELECT the doomed set once, streamed (never ``.all()``), grouped by day.
+        2. Write every day's file first -- atomically (temp + fsync + rename),
+           owner-only, merged with whatever the file already holds. If any write
+           fails, nothing is deleted: database rows imply archived bytes, so an
+           aborted run is retried whole by the next one.
+        3. DELETE exactly the archived row ids (chunked ``IN``), never a
+           re-derived cutoff: rows inserted between the SELECT and the DELETE are
+           not in the id set and survive. The deleted total is verified against
+           the archived total; a mismatch is logged critical and reported.
+
+        Returns the archived/deleted counts, the files written and the cutoff, or
+        an ``error`` entry when nothing was deleted.
         """
         try:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_old)
-            
-            # Find old messages
+
+            # Streamed, not .all(): a far-behind scheduler must not materialise
+            # the whole backlog in one list. Ordered by id so retries and logs
+            # see a stable sequence.
+            old_messages: List[Dict[str, Any]] = []
+            archived_ids: List[str] = []
             with db.sessions() as session:
-                rows = session.scalars(select(MessageRecord).where(MessageRecord.created_at < cutoff_time)).all()
-                old_messages = [{"id": row.id, "conversation_id": row.conversation_id,
-                    "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno,
-                    "body": row.body, "created_at": row.created_at, "is_read": row.is_read} for row in rows]
-            
+                result = session.execute(
+                    select(MessageRecord)
+                    .where(MessageRecord.created_at < cutoff_time)
+                    .order_by(MessageRecord.id)
+                    .execution_options(
+                        yield_per=_ARCHIVE_STREAM_BATCH, stream_results=True
+                    )
+                )
+                for row in result.scalars():
+                    archived_ids.append(row.id)
+                    old_messages.append({
+                        "id": row.id,
+                        "conversation_id": row.conversation_id,
+                        "sender_regno": row.sender_regno,
+                        "receiver_regno": row.receiver_regno,
+                        "body": row.body,
+                        "created_at": row.created_at,
+                        "is_read": row.is_read,
+                    })
+
             if not old_messages:
                 logger.info("No messages to archive")
                 return {
                     "archived_count": 0,
                     "message": "No messages to archive"
                 }
-            
+
             # Group messages by date
-            messages_by_date = {}
+            messages_by_date: Dict[str, List[Dict[str, Any]]] = {}
             for msg in old_messages:
                 date_key = msg["created_at"].strftime("%Y-%m-%d")
-                if date_key not in messages_by_date:
-                    messages_by_date[date_key] = []
-                messages_by_date[date_key].append(msg)
-            
+                messages_by_date.setdefault(date_key, []).append(msg)
+
             archived_count = 0
             archive_files = []
-            
-            # Archive each day's messages
+
+            # Files before deletes: a failed write must leave the rows where a
+            # retry will find them. Any single failure aborts the whole delete
+            # below, and the merge in _archive_messages_to_file makes the retry
+            # reproduce exactly the bytes a partial run already wrote.
             for date_key, messages in messages_by_date.items():
                 archive_file = self._archive_messages_to_file(date_key, messages)
-                if archive_file:
-                    archive_files.append(archive_file)
-                    archived_count += len(messages)
-            
-            # Delete archived messages from PostgreSQL
-            if archived_count > 0:
-                with db.sessions.begin() as session:
-                    result = session.execute(delete(MessageRecord).where(MessageRecord.created_at < cutoff_time))
-                    deleted_count = result.rowcount or 0
-                
-                logger.info(
-                    f"Archived {archived_count} messages to {len(archive_files)} files, "
-                    f"deleted {deleted_count} from PostgreSQL"
+                if not archive_file:
+                    logger.error(
+                        f"Archive write failed for {date_key}; "
+                        f"keeping {len(old_messages)} rows in PostgreSQL"
+                    )
+                    return {
+                        "error": f"Archive write failed for {date_key}",
+                        "archived_count": 0,
+                        "deleted_count": 0,
+                    }
+                archive_files.append(archive_file)
+                archived_count += len(messages)
+
+            # Delete exactly what was archived, by id: rows that arrived after
+            # the SELECT carry other ids and are untouched even when their
+            # created_at predates the cutoff.
+            deleted_count = 0
+            with db.sessions.begin() as session:
+                for i in range(0, len(archived_ids), _DELETE_ID_CHUNK):
+                    chunk = archived_ids[i:i + _DELETE_ID_CHUNK]
+                    result = session.execute(
+                        delete(MessageRecord).where(MessageRecord.id.in_(chunk))
+                    )
+                    deleted_count += result.rowcount or 0
+
+            if deleted_count != archived_count:
+                # The files hold every archived row, so nothing is lost; but a
+                # gap means something else deleted rows concurrently (or a chunk
+                # silently dropped), which must not pass quietly.
+                logger.critical(
+                    f"Archive/delete count mismatch: archived {archived_count} "
+                    f"messages but deleted {deleted_count}"
                 )
-                
                 return {
+                    "error": "Archive/delete count mismatch",
                     "archived_count": archived_count,
                     "deleted_count": deleted_count,
                     "archive_files": archive_files,
-                    "cutoff_time": cutoff_time.isoformat()
+                    "cutoff_time": cutoff_time.isoformat(),
                 }
-            
+
+            logger.info(
+                f"Archived {archived_count} messages to {len(archive_files)} files, "
+                f"deleted {deleted_count} from PostgreSQL"
+            )
+
             return {
-                "archived_count": 0,
-                "message": "Failed to archive messages"
+                "archived_count": archived_count,
+                "deleted_count": deleted_count,
+                "archive_files": archive_files,
+                "cutoff_time": cutoff_time.isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Error archiving messages: {e}")
             return {
@@ -191,15 +288,17 @@ class MessageArchivalService:
         date_key: str,
         messages: List[Dict[str, Any]]
     ) -> str:
-        """
-        Archive messages to a compressed JSON file
-        
-        Args:
-            date_key: Date string (YYYY-MM-DD)
-            messages: List of message documents
-        
-        Returns:
-            Archive filename or empty string if failed
+        """Merge one day's messages into its archive file, atomically and owner-only.
+
+        The file is read first (when present) and the new batch merged by id, so
+        a retried run after a crash between write and delete reproduces the bytes
+        instead of orphaning the first batch under an overwrite. The merged list
+        goes to a temp file (mode 0o600) that is fsynced and renamed over the
+        target, so a reader never sees a half-written day; the directory is
+        fsynced after the rename so the entry itself is durable.
+
+        Returns the filename, or "" when nothing was written -- in which case the
+        caller must keep the rows in the database.
         """
         try:
             # Resolved through the same gate as reads: the key is minted with
@@ -215,18 +314,58 @@ class MessageArchivalService:
                 msg_copy["conversation_id"] = str(msg_copy["conversation_id"])
                 msg_copy["created_at"] = isoformat_datetime(msg_copy["created_at"])
                 serializable_messages.append(msg_copy)
-            
-            # Write to compressed file
-            with gzip.open(filepath, "wt", encoding="utf-8") as f:
-                json.dump(serializable_messages, f, indent=2)
-            
+
+            # Merge with what the day already holds: without this a second run
+            # for the same date (the retry after an aborted delete) would drop
+            # the first batch from the archive while its rows are already gone
+            # from the database. New rows win on id collision; ids are unique per
+            # row, so a collision is always the same row re-archived.
+            merged: Dict[str, Dict[str, Any]] = {}
+            if os.path.exists(filepath):
+                existing_raw = self._read_archive_bytes(filepath)
+                existing = json.loads(existing_raw.decode("utf-8"))
+                if not isinstance(existing, list) or any(
+                    not isinstance(msg, dict) for msg in existing
+                ):
+                    logger.error(f"Existing archive has an unexpected shape: {filepath}")
+                    return ""
+                for msg in existing:
+                    if msg.get("id") is not None:
+                        merged[str(msg["id"])] = msg
+            for msg in serializable_messages:
+                merged[str(msg["id"])] = msg
+            payload = [merged[key] for key in sorted(merged)]
+
+            # Temp file in the same directory (rename stays on one filesystem),
+            # owner-only from creation, fsynced before the rename.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=self.archive_dir, prefix=".tmp_archive_", suffix=".json.gz"
+            )
+            try:
+                os.chmod(tmp_path, _ARCHIVE_FILE_MODE)
+                with os.fdopen(fd, "wb") as raw:
+                    with gzip.open(raw, "wt", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=2)
+                    raw.flush()
+                    os.fsync(raw.fileno())
+                os.chmod(tmp_path, _ARCHIVE_FILE_MODE)
+                os.replace(tmp_path, filepath)
+                os.chmod(filepath, _ARCHIVE_FILE_MODE)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            self._fsync_dir()
+
             file_size = os.path.getsize(filepath)
             filename = os.path.basename(filepath)
             logger.info(
                 f"Archived {len(messages)} messages to {filename} "
                 f"({file_size / 1024:.2f} KB)"
             )
-            
+
             return filename
 
         except HTTPException:

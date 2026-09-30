@@ -118,6 +118,41 @@ WIDENED_COLUMNS: dict[tuple[str, str], str] = {
     ("login_tokens", "attempt_count"): "integer",
 }
 
+# Free-text columns the staff queues and the notification inbox search with
+# ILIKE '%...%' substring matches (see utils.ilike_contains). A leading wildcard
+# defeats every btree index, so without these each keystroke is a sequential scan
+# over the whole table; a trigram GIN index is what makes '%substring%' plannable.
+# Declared here rather than as Index() in db_models because the index method needs
+# the pg_trgm extension, which plain model metadata cannot install -- and a model
+# declaring an index the database cannot build would fail every boot instead of
+# degrading to a scan. Entries are (table, column); names derive as ix_trgm_<table>_<column>.
+TRGM_INDEX_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("messages", "body"),
+    ("message_reports", "reason"),
+    ("message_reports", "reporter_regno"),
+    ("message_reports", "reported_user_regno"),
+    ("confessions", "body"),
+    ("confessions", "recipient_name"),
+    ("confession_comments", "body"),
+    ("reports", "reason"),
+    ("reports", "reported_by_name"),
+    ("love_notes", "body"),
+    ("love_note_reports", "reason"),
+    ("love_note_reports", "reporter_regno"),
+    ("notifications", "heading"),
+    ("notifications", "body"),
+    ("users", "name"),
+    ("users", "regno"),
+    ("users", "email"),
+    ("users", "department"),
+    ("admin", "name"),
+    ("admin", "regno"),
+    ("admin", "email"),
+    ("moderator", "name"),
+    ("moderator", "regno"),
+    ("moderator", "email"),
+)
+
 
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
@@ -171,6 +206,9 @@ class PostgresClient:
         self.apply_retired_columns()
         self.apply_unique_indexes()
         self.apply_check_constraints()
+        # Needs the extension installed first, and nothing else depends on it, so it
+        # runs with the other additive DDL rather than in table-creation order.
+        self.apply_trgm_indexes()
         # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
         # unlike the others it may have to *rewrite rows* before it can be applied.
         self.apply_not_null_constraints()
@@ -340,6 +378,41 @@ class PostgresClient:
                         table.name,
                         column.name,
                     )
+
+    def apply_trgm_indexes(self) -> None:
+        """Install pg_trgm GIN indexes for the ILIKE-searched columns.
+
+        ``create_all`` cannot do this one: the index method needs the pg_trgm
+        extension, and model metadata has nowhere to put ``CREATE EXTENSION``.
+        Installing the extension needs superuser (or rds_superuser); the bundled
+        Postgres image grants it to the app role, but a managed database may not.
+        So a missing privilege degrades to a warning and sequential scans -- search
+        stays correct, only slower -- rather than refusing to boot. Each index is
+        ``IF NOT EXISTS`` and the whole step runs outside any data decision, so it
+        is safe to retry on every boot.
+        """
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                installed = connection.scalar(
+                    text("SELECT count(*) FROM pg_extension WHERE extname = 'pg_trgm'")
+                )
+                if not installed:
+                    logger.warning(
+                        "pg_trgm extension unavailable; ILIKE searches will use "
+                        "sequential scans until it is installed"
+                    )
+                    return
+                for table, column in TRGM_INDEX_COLUMNS:
+                    index_name = f"ix_trgm_{table}_{column}"
+                    connection.execute(
+                        text(
+                            f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                            f'ON "{table}" USING gin ("{column}" gin_trgm_ops)'
+                        )
+                    )
+        except Exception as e:
+            logger.warning("Skipping trigram indexes: %s", e)
 
     def apply_check_constraints(self) -> None:
         """Bring the database's CHECK constraints in line with the models.

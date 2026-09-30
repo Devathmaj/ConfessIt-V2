@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from ..postgres import new_id, is_valid_id
 from ..utils import isoformat_datetime
+from ..utils import ilike_contains
 from ..limits import LOVE_NOTE_BODY_MAX, REPORT_REASON_MAX
 from fastapi import HTTPException, status
 
@@ -558,13 +559,12 @@ async def get_love_note_reports_for_admin(
     cleaned = (query or "").strip()
     search_senders = bool(cleaned)
     if cleaned:
-        pattern = f"%{cleaned}%"
         filters.append(or_(
-            LoveNoteReportRecord.reason.ilike(pattern),
-            LoveNoteReportRecord.reporter_regno.ilike(pattern),
-            LoveNoteRecord.body.ilike(pattern),
-            UserRecord.name.ilike(pattern),
-            UserRecord.regno.ilike(pattern),
+            ilike_contains(LoveNoteReportRecord.reason, cleaned),
+            ilike_contains(LoveNoteReportRecord.reporter_regno, cleaned),
+            ilike_contains(LoveNoteRecord.body, cleaned),
+            ilike_contains(UserRecord.name, cleaned),
+            ilike_contains(UserRecord.regno, cleaned),
         ))
 
     def _joined(statement):

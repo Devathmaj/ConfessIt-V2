@@ -10,11 +10,14 @@ the directory (even through symlinks), and reads are byte-capped and paginated.
 import gzip
 import json
 import os
-from datetime import datetime, timezone
+import stat
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import func, select
 
+from app.db_models import ConversationRecord, MatchRecord, MessageRecord, UserRecord
 from app.services import message_archival_service as archival_module
 from app.services.message_archival_service import MessageArchivalService
 
@@ -195,3 +198,138 @@ def test_router_returns_paginated_envelope(admin_client):
     assert body["limit"] == 5
     assert body["count"] == 0
     assert body["messages"] == []
+
+
+def test_archive_files_and_directory_are_owner_only(tmp_path):
+    # Archives hold chat bodies: the directory must be 0o700 and each file
+    # 0o600, never the old makedirs default that left them world-readable.
+    service = _service(tmp_path)
+    _write_day(service, "2026-01-05", 3)
+
+    assert stat.S_IMODE(os.stat(str(tmp_path)).st_mode) == 0o700
+    target = tmp_path / "messages_2026-01-05.json.gz"
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_repeated_write_for_one_day_merges_instead_of_overwriting(tmp_path):
+    # A retried run after an aborted delete must reproduce the bytes, not orphan
+    # the first batch under an overwrite: the second write for the same date
+    # keeps both batches, deduped by id.
+    service = _service(tmp_path)
+    _write_day(service, "2026-01-05", 3)
+    extra = [
+        {
+            "id": "id-extra",
+            "conversation_id": "conv-1",
+            "sender_regno": "user-1",
+            "receiver_regno": "other",
+            "body": "late arrival",
+            "created_at": datetime(2026, 1, 5, 13, 0, 0, tzinfo=timezone.utc),
+            "is_read": False,
+        }
+    ]
+    assert service._archive_messages_to_file("2026-01-05", extra) == "messages_2026-01-05.json.gz"
+
+    page, total = service.get_archived_messages(date="2026-01-05")
+    assert total == 4
+    assert {msg["id"] for msg in page} == {"id-0", "id-1", "id-2", "id-extra"}
+
+    # Re-archiving the same rows is a no-op on the content.
+    assert service._archive_messages_to_file("2026-01-05", extra) == "messages_2026-01-05.json.gz"
+    _, total = service.get_archived_messages(date="2026-01-05")
+    assert total == 4
+
+
+def _seed_thread(db, sender_regno="old-timer", receiver_regno="listener"):
+    """One match + conversation + users, returning ids for message seeding."""
+    now = datetime.now(timezone.utc)
+    with db.sessions.begin() as session:
+        for regno in (sender_regno, receiver_regno):
+            session.add(UserRecord(
+                regno=regno, name=f"User {regno}", email=f"{regno}@test.com",
+                year=2, department="Test_Class", gender="other",
+            ))
+        session.flush()
+        match = MatchRecord(
+            user_1_regno=sender_regno, user_2_regno=receiver_regno,
+            created_at=now, expires_at=now + timedelta(days=30),
+        )
+        session.add(match)
+        session.flush()
+        conversation = ConversationRecord(
+            match_id=str(match.id),
+            initiator_regno=sender_regno, receiver_regno=receiver_regno,
+            status="accepted", created_at=now,
+        )
+        session.add(conversation)
+        session.flush()
+        return str(conversation.id)
+
+
+def _seed_message(db, conversation_id, sender, receiver, *, age_hours=None,
+                  created_at=None, body="old hello"):
+    stamp = created_at or (datetime.now(timezone.utc) - timedelta(hours=age_hours or 0))
+    with db.sessions.begin() as session:
+        session.add(MessageRecord(
+            conversation_id=conversation_id,
+            sender_regno=sender, receiver_regno=receiver,
+            body=body, created_at=stamp,
+            is_read=False,
+        ))
+
+
+def _message_count(db):
+    with db.sessions() as session:
+        return session.scalar(select(func.count()).select_from(MessageRecord)) or 0
+
+
+def test_archive_run_moves_only_old_rows_and_counts_match(db, tmp_path, monkeypatch):
+    # End to end through the real writer into an isolated directory: old rows
+    # are archived and deleted by id, fresh rows survive, and the deleted total
+    # is verified against the archived total.
+    service = MessageArchivalService(archive_dir=str(tmp_path / "archives"))
+    conversation_id = _seed_thread(db)
+    # One shared instant for both old rows: two separate "5h/6h ago" stamps could
+    # straddle UTC midnight into two date files and flake the file count.
+    dusty_at = datetime.now(timezone.utc) - timedelta(hours=5)
+    _seed_message(db, conversation_id, "old-timer", "listener",
+                  created_at=dusty_at, body="dusty one")
+    _seed_message(db, conversation_id, "old-timer", "listener",
+                  created_at=dusty_at, body="dusty two")
+    _seed_message(db, conversation_id, "old-timer", "listener", age_hours=0, body="fresh hello")
+    monkeypatch.setattr(
+        archival_module, "message_archival_service", service, raising=False
+    )
+
+    result = service.archive_old_messages(db, hours_old=4)
+
+    assert result["archived_count"] == 2
+    assert result["deleted_count"] == 2
+    assert len(result["archive_files"]) == 1
+    assert _message_count(db) == 1
+    with db.sessions() as session:
+        survivor = session.scalar(select(MessageRecord))
+        assert survivor.body == "fresh hello"
+
+    # A backdated row inserted after the run is picked up by the next one, and
+    # merges into the same day file rather than orphaning the first batch.
+    _seed_message(db, conversation_id, "old-timer", "listener", age_hours=5, body="late dust")
+    result = service.archive_old_messages(db, hours_old=4)
+    assert result["archived_count"] == 1
+    assert result["deleted_count"] == 1
+    assert _message_count(db) == 1
+
+
+def test_failed_write_aborts_the_delete(db, tmp_path, monkeypatch):
+    # Files before deletes: when the write fails the rows must stay where a
+    # retry will find them, or the delete silently drops unarchived history.
+    service = MessageArchivalService(archive_dir=str(tmp_path / "archives"))
+    conversation_id = _seed_thread(db)
+    _seed_message(db, conversation_id, "old-timer", "listener", age_hours=5)
+    monkeypatch.setattr(service, "_archive_messages_to_file", lambda *args: "")
+
+    result = service.archive_old_messages(db, hours_old=4)
+
+    assert "error" in result
+    assert result.get("deleted_count", 0) == 0
+    assert _message_count(db) == 1

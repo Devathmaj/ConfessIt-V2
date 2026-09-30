@@ -25,7 +25,7 @@ def get_notifications(
     db: Database = Depends(get_db),
     skip: int = Query(0, ge=0, description="How many matching notices to skip."),
     limit: int = Query(50, ge=1, le=NOTIFICATIONS_MAX_LIMIT, description="How many matching notices to return. Clamped so one request can never serialise years of notices at once."),
-    q: Optional[str] = Query(None, description="Case-insensitive substring match on the heading and body."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the heading and body."),
 ):
     """One page of the reader's notifications, newest first, with the total beside it.
 

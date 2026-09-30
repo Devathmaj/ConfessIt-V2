@@ -130,3 +130,16 @@ def test_a_reader_never_sees_another_readers_notices(db, alice_client):
     page = alice_client.get("/notifications").json()
     assert page["total"] == 0
     assert page["notifications"] == []
+
+
+def test_search_wildcards_match_literally_and_q_is_bounded(db, alice_client):
+    # "%" must match a literal percent sign, not every row; and q is capped at
+    # 100 characters like every other search box in the app.
+    file_notice(db, "alice", "100% delivered", "Everything arrived.")
+    file_notice(db, "alice", "Plain notice", "Nothing special.")
+
+    assert alice_client.get("/notifications", params={"q": "%"}).json()["total"] == 1
+    assert headings(alice_client.get("/notifications", params={"q": "100%"}).json()) == [
+        "100% delivered"
+    ]
+    assert alice_client.get("/notifications", params={"q": "x" * 101}).status_code == 422

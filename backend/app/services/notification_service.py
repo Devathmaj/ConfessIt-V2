@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from ..db_models import NotificationRecord
 
 from ..utils import isoformat_datetime
+from ..utils import ilike_contains
 
 # What a notification can point at, and what the target id means in each case.
 #
@@ -115,9 +116,9 @@ def get_user_notifications_service(
     filters = [NotificationRecord.recipient_regno == user_id]
     cleaned = (query or "").strip()
     if cleaned:
-        pattern = f"%{cleaned}%"
         filters.append(
-            NotificationRecord.heading.ilike(pattern) | NotificationRecord.body.ilike(pattern)
+            ilike_contains(NotificationRecord.heading, cleaned)
+            | ilike_contains(NotificationRecord.body, cleaned)
         )
     with db.sessions() as session:
         total = session.scalar(
