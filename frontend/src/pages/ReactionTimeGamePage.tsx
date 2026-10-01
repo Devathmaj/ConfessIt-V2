@@ -566,7 +566,7 @@ export const ReactionTimeGamePage = () => {
             >
               {lastAttempt.status === 'valid' ? (
                 <>
-                  <span className="text-sm font-bold uppercase tracking-[0.2em] text-white/80 md:text-base">
+                  <span className="text-sm font-bold uppercase tracking-[0.12em] text-white/80 md:text-base">
                     Your reaction time
                   </span>
                   <span className="text-6xl font-black tabular-nums tracking-tight md:text-8xl">

@@ -390,7 +390,7 @@ export const AdminConnectionsManage = () => {
           {current && (
             <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
               Current session:{' '}
-              <span className="font-mono font-semibold">
+              <span className="font-mono font-medium">
                 {current.groups.length === 4
                   ? `${current.groups.flat().length} words in 4 groups`
                   : 'no puzzle yet'}
@@ -475,7 +475,7 @@ export const AdminConnectionsManage = () => {
                     className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3 text-sm"
                   >
                     <span>
-                      <span className="font-mono font-semibold">{entry.target_date}</span>
+                      <span className="font-mono font-medium">{entry.target_date}</span>
                       {' — '}
                       <span className="text-muted-foreground">
                         {entry.groups.flat().length} words in {entry.groups.length} groups
@@ -539,7 +539,7 @@ export const AdminConnectionsManage = () => {
                     key={game.id}
                     className="flex flex-wrap items-center gap-3 rounded-xl border border-border/60 p-3 text-sm"
                   >
-                    <span className="font-mono font-semibold">{game.game_date}</span>
+                    <span className="font-mono font-medium">{game.game_date}</span>
                     <Badge variant={game.status === 'active' ? 'default' : 'outline'}>
                       {game.status ?? 'active'}
                     </Badge>

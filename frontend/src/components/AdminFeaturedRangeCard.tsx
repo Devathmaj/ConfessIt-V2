@@ -264,7 +264,7 @@ export const AdminFeaturedRangeCard = ({ onChanged }: { onChanged: () => void })
           <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded-xl border border-border/60 p-3 text-sm">
             {confirmConflicts.map((entry) => (
               <li key={entry.game_date} className="flex items-center gap-2">
-                <span className="font-mono font-semibold">{entry.game_date}</span>
+                <span className="font-mono font-medium">{entry.game_date}</span>
                 <span className="text-muted-foreground">
                   {gameNameFor(entry.game_id)}
                 </span>

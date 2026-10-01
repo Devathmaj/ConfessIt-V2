@@ -19,7 +19,11 @@ export default {
     },
     extend: {
       fontFamily: {
-        montserrat: ["Montserrat", "sans-serif"],
+        display: ['"Fraunces"', '"Iowan Old Style"', '"Palatino Linotype"', "Georgia", "serif"],
+        sans: ['"Plus Jakarta Sans"', "ui-sans-serif", "system-ui", "-apple-system", '"Segoe UI"', "Roboto", "sans-serif"],
+        mono: ['"DM Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
+        // Compatibility alias for existing `font-montserrat` classes. Source of truth is src/index.css.
+        montserrat: ['"Plus Jakarta Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
       },
       colors: {
         border: "hsl(var(--border))",

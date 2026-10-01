@@ -219,7 +219,7 @@ export const UserDashboard = () => {
   };
 
   return (
-    <div className="min-h-screen w-full text-white font-sans overflow-hidden">
+    <div className="min-h-screen w-full text-white overflow-hidden">
       {/* Add the Navigation component here */}
       <Navigation />
 

@@ -996,7 +996,7 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                       </span>
                                       {comment.report_count > 0 && (
                                         <Badge variant="destructive">
-                                          <span className="text-[10px]">
+                                          <span className="text-xs">
                                             {comment.report_count} reports
                                           </span>
                                         </Badge>
@@ -1025,7 +1025,7 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                         <p className="font-medium">
                                           {report.reporter.name ?? 'Anonymous reporter'}
                                         </p>
-                                        <p className="text-[10px] uppercase tracking-wide opacity-75">
+                                        <p className="text-xs uppercase tracking-wide opacity-75">
                                           {formatTimestamp(report.created_at)}
                                         </p>
                                         <p className="mt-2 text-sm text-destructive-foreground/90">

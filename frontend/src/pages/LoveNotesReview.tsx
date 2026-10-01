@@ -449,7 +449,7 @@ export const LoveNotesReview = () => {
             <Badge variant="secondary">
               Showing {renderedCount} of {renderedTotal}
             </Badge>
-            <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               {statusSections.map((section) => (
                 <span key={section.key}>
                   {section.heading}: {totalFor(section.key)}

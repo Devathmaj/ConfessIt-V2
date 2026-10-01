@@ -465,7 +465,7 @@ const ResultsTable = ({ results }: { results: TriviaResults }) => (
           className="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 px-3 py-2 text-sm"
         >
           <span className="flex min-w-0 items-center gap-2">
-            <span className="font-mono font-bold tabular-nums">{entry.rank}.</span>
+            <span className="font-mono font-medium tabular-nums">{entry.rank}.</span>
             <span className="truncate font-medium">{entry.display_name}</span>
             {entry.is_correct ? (
               <span className="shrink-0 text-xs font-bold text-green-600">Correct</span>

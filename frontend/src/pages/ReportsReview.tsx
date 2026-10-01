@@ -890,7 +890,7 @@ export const ReportsReview = () => {
               Showing {loadedTotal} of {serverTotal}
               {refreshing ? ' · Updating…' : ''}
             </Badge>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Search matches the reason, the reported content and who reported it, across all
               three queues at once.
             </p>

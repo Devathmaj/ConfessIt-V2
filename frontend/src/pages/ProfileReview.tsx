@@ -694,14 +694,14 @@ const ProfileCard = ({
                 </div>
               );
             })}
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-xs leading-snug text-muted-foreground">
               Removals are the authoritative count: reports includes complaints a moderator
               dismissed as unfounded.
             </p>
           </div>
         )}
 
-        <div className="grid gap-0.5 text-[11px] text-muted-foreground">
+        <div className="grid gap-0.5 text-xs text-muted-foreground">
           <span>Last login: {formatDate(profile.last_login_at)}</span>
           {profile.last_login_ip && <span>Last IP: {profile.last_login_ip}</span>}
         </div>
@@ -738,11 +738,11 @@ const ProfileCard = ({
             )}
           </Button>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Admins cannot be blocked, so that another admin always retains access.
           </p>
         )}
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-xs text-muted-foreground">
           Matchmaking: {profile.matchmaking_enabled ? 'Enabled' : 'Disabled'} · Notifications:{' '}
           {profile.notifications_enabled ? 'On' : 'Off'} · Love notes receive:{' '}
           {profile.love_notes_receive_enabled ? 'On' : 'Off'}

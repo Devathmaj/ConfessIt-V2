@@ -123,11 +123,11 @@ export const GamesFeaturedPage = () => {
         <div className="relative overflow-hidden bg-gradient-hero px-5 py-6 text-white sm:px-8 sm:py-7">
           <div className="relative z-10 flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-white/85">
+              <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-white/85">
                 <Sparkles className="h-3.5 w-3.5" />
                 Game of the day
               </p>
-              <h2 className="mt-2 break-words text-2xl font-extrabold tracking-tight sm:text-3xl">
+              <h2 className="mt-2 break-words text-2xl font-bold tracking-tight sm:text-3xl">
                 {game.name}
               </h2>
               <div className="mt-2 flex flex-wrap gap-2">

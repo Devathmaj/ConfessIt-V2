@@ -522,7 +522,7 @@ export const AnagramGamePage = () => {
 
       <div className="flex flex-col items-center gap-6">
         <div className="flex flex-wrap items-center justify-center gap-4 text-sm">
-          <p className="font-mono text-2xl font-bold tabular-nums" data-testid="play-clock">
+          <p className="font-mono text-2xl font-medium tabular-nums" data-testid="play-clock">
             {formatClock(displaySeconds)}
           </p>
           {participation && (
@@ -667,7 +667,7 @@ export const AnagramGamePage = () => {
                   {participation.guesses.map((guess, index) => (
                     <li
                       key={`${index}-${guess}`}
-                      className="font-mono text-sm uppercase tracking-widest"
+                      className="font-mono text-sm uppercase tracking-[0.08em]"
                     >
                       <span className="mr-2 text-muted-foreground">{index + 1}.</span>
                       {guess}
@@ -684,7 +684,7 @@ export const AnagramGamePage = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
           <Card className="w-full max-w-sm">
             <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-romantic">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-romantic">
                 {participation.success ? 'Solved!' : 'Out of guesses'}
               </p>
               {participation.success ? (
@@ -697,13 +697,13 @@ export const AnagramGamePage = () => {
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">
                     Correct answer
                   </p>
-                  <p className="text-3xl font-extrabold uppercase tracking-tight">
+                  <p className="text-3xl font-bold uppercase tracking-tight">
                     {participation.answer ?? '?????'}
                   </p>
                 </>
               )}
               <p className="text-sm text-muted-foreground">
-                Time: <span className="font-mono font-bold">{formatClock(participation.active_time_seconds)}</span>
+                Time: <span className="font-mono font-medium">{formatClock(participation.active_time_seconds)}</span>
               </p>
               <NavLink to="/games">
                 <Button>Back to Games</Button>

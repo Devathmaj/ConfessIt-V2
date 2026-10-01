@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @plugin "tailwindcss-animate";
@@ -6,7 +5,14 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --font-montserrat: "Montserrat", sans-serif;
+  /* Typography source of truth: ConfessIt_Typography_Report.md §02/§06.
+     Display + accent: Fraunces. UI/body: Plus Jakarta Sans. Numeric/code: DM Mono. */
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Compatibility alias so existing `font-montserrat` classes keep working. Remove after migration. */
+  --font-montserrat: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
 
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
@@ -47,6 +53,94 @@
   --animate-sparkle: sparkle 2s infinite;
   --animate-slot-spin: slot-spin 0.1s infinite linear;
   --animate-fade-in: fade-in 0.6s ease-out;
+}
+
+/* Typography compat + roles (source of truth: ConfessIt_Typography_Report.md §06 Step 2/4).
+   Fixes the ~50 existing `font-dancing` usages: serif italic accent instead of a missing script. */
+@utility font-dancing {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-variation-settings: "SOFT" 100, "WONK" 0;
+}
+
+@utility font-accent {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-variation-settings: "SOFT" 100, "WONK" 0;
+}
+
+/* Role utilities: pick a role instead of five separate classes. */
+@utility type-display {
+  font-family: var(--font-display);
+  font-weight: var(--heading-weight);
+  font-size: clamp(2.25rem, 1.4rem + 3.6vw, 3.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+@utility type-h1 {
+  font-family: var(--font-display);
+  font-weight: var(--heading-weight);
+  font-size: clamp(1.875rem, 1.3rem + 2.4vw, 3rem);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+@utility type-h2 {
+  font-family: var(--font-display);
+  font-weight: var(--heading-weight);
+  font-size: clamp(1.5rem, 1.3rem + 0.8vw, 1.875rem);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+@utility type-h3 {
+  font-family: var(--font-display);
+  font-weight: var(--heading-weight);
+  font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem);
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  text-wrap: balance;
+}
+@utility type-accent {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2.25rem);
+  line-height: 1.2;
+  text-wrap: balance;
+}
+@utility type-label {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+@utility type-caption {
+  font-family: var(--font-sans);
+  font-weight: var(--text-secondary-weight);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+@utility type-eyebrow {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+@utility type-numeric {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 1.5rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes accordion-down {
@@ -139,6 +233,13 @@
     /* Animations */
     --transition-smooth: all 0.4s cubic-bezier(0.23, 1, 0.320, 1);
     --transition-bounce: all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+    /* Typography theme tokens (source of truth: ConfessIt_Typography_Report.md §05).
+       Typefaces/sizes stay identical across themes; only rendering details shift. */
+    --heading-weight: 600;
+    --text-secondary-weight: 500;
+    --body-tracking: 0;
+    --body-leading: 1.6;
   }
 
   .dark {
@@ -193,16 +294,34 @@
     --shadow-romantic: 0 15px 30px -10px hsl(var(--romantic) / 0.2);
     --shadow-love: 0 8px 20px -5px hsl(var(--love-deep) / 0.3);
     --shadow-glow: 0 0 30px hsl(var(--primary-glow) / 0.5);
+
+    /* Typography dark-mode rendering (same family/size, lighter optical weight). */
+    --heading-weight: 560;
+    --text-secondary-weight: 450;
+    --body-tracking: 0.005em;
+    --body-leading: 1.65;
   }
 }
 
 @layer base {
+  html {
+    font-optical-sizing: auto;
+    text-rendering: optimizeLegibility;
+  }
+
+  .dark {
+    -webkit-font-smoothing: antialiased;
+  }
+
   * {
     @apply border-border;
   }
 
   body {
-    @apply bg-background text-foreground font-montserrat;
+    @apply bg-background text-foreground font-sans;
+    font-size: 1rem;
+    line-height: var(--body-leading);
+    letter-spacing: var(--body-tracking);
     background-image: 
       radial-gradient(circle at 20% 80%, hsl(var(--love)) 0%, transparent 50%),
       radial-gradient(circle at 80% 20%, hsl(var(--romantic-light)) 0%, transparent 50%),
@@ -217,8 +336,19 @@
       radial-gradient(circle at 40% 40%, hsl(var(--passion-light) / 0.5) 0%, transparent 40%);
   }
 
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-montserrat font-bold;
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: var(--heading-weight);
+    font-variation-settings: "SOFT" 100, "WONK" 0;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    text-wrap: balance;
+  }
+
+  h4, h5, h6 {
+    font-family: var(--font-sans);
+    font-weight: 700;
+    line-height: 1.35;
   }
 }
 
@@ -348,14 +478,16 @@
     100% { transform: translateY(-100%); }
   }
 
-  /* Valentine Button Variants */
+  /* Valentine Button Variants (report §04: button label 16px/600 + 0.01em). */
   .btn-romantic {
     background: var(--gradient-romantic);
     color: white;
     border: none;
     border-radius: var(--radius);
     padding: 0.75rem 2rem;
+    font-family: var(--font-sans);
     font-weight: 600;
+    letter-spacing: 0.01em;
     transition: var(--transition-smooth);
     box-shadow: var(--shadow-romantic);
   }
@@ -371,7 +503,9 @@
     border: 2px solid hsl(var(--romantic));
     border-radius: var(--radius);
     padding: 0.75rem 2rem;
+    font-family: var(--font-sans);
     font-weight: 600;
+    letter-spacing: 0.01em;
     transition: var(--transition-bounce);
   }
 
@@ -379,16 +513,6 @@
     background: var(--gradient-romantic);
     color: white;
     transform: scale(1.05);
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border;
-  }
-
-  body {
-    @apply bg-background text-foreground;
   }
 }
 

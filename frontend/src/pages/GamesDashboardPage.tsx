@@ -184,7 +184,7 @@ export const GamesDashboardPage = () => {
                       </div>
                       <div className="hidden text-right sm:block">
                         <p className="text-sm font-bold tabular-nums">{play.score}</p>
-                        <p className="text-[11px] text-muted-foreground">points</p>
+                        <p className="text-xs text-muted-foreground">points</p>
                       </div>
                       <Button
                         type="button"
@@ -308,7 +308,7 @@ export const GamesDashboardPage = () => {
                     <span className="w-5 text-center text-xs font-extrabold tabular-nums text-muted-foreground">
                       {entry.rank}
                     </span>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-xs font-bold text-white">
                       {entry.display_name
                         .replace(/[^a-zA-Z]/g, '')
                         .slice(0, 2)

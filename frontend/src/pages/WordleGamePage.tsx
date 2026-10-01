@@ -308,7 +308,7 @@ export const WordleGamePage = () => {
                     className={cn(
                       'flex h-12 flex-1 items-center justify-center rounded-md border text-sm font-bold uppercase transition-colors',
                       isEnter || isBackspace ? 'max-w-24' : 'max-w-11',
-                      isBackspace ? 'text-[10px]' : '',
+                      isBackspace ? 'text-xs' : '',
                       state
                         ? TILE_STYLES[state]
                         : 'border-border bg-secondary/70 text-foreground hover:bg-secondary',
@@ -334,10 +334,10 @@ export const WordleGamePage = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
           <Card className="w-full max-w-sm">
             <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-romantic">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-romantic">
                 {participation.success ? 'Solved' : 'Out of guesses'}
               </p>
-              <p className="text-3xl font-extrabold uppercase tracking-tight">
+              <p className="text-3xl font-bold uppercase tracking-tight">
                 {participation.answer ?? '?????'}
               </p>
               <p className="text-sm text-muted-foreground">

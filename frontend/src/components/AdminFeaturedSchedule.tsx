@@ -297,7 +297,7 @@ export const AdminFeaturedSchedule = () => {
                   className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3"
                 >
                   <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
-                    <span className="font-mono font-semibold">{entry.game_date}</span>
+                    <span className="font-mono font-medium">{entry.game_date}</span>
                     {' — '}
                     {GAME_LABELS[entry.game_id] ?? entry.game_id}
                     {entry.game_date === todayIso() && (

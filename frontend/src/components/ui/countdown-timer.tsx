@@ -36,7 +36,7 @@ export const CountdownTimer = () => {
   return (
     <div className="bg-gradient-romantic text-white px-6 py-3 rounded-full shadow-romantic flex items-center gap-3">
       <Heart className="animate-pulse-heart" size={20} fill="currentColor" />
-      <div className="font-dancing text-lg font-semibold">
+      <div className="type-numeric !text-lg">
         Event ends in: {String(timeLeft.hours).padStart(2, '0')}:
         {String(timeLeft.minutes).padStart(2, '0')}:
         {String(timeLeft.seconds).padStart(2, '0')}

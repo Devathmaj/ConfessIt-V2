@@ -140,7 +140,7 @@ export const GamesSelectPage = () => {
               {chip.label}
               <span
                 className={cn(
-                  'rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
+                  'rounded-full px-1.5 py-0.5 text-xs font-bold tabular-nums',
                   isActive ? 'bg-white/25 text-white' : 'bg-secondary text-muted-foreground',
                 )}
               >

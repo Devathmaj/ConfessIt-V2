@@ -172,7 +172,7 @@ export const AdminGamesDashboard = () => {
                     className="flex items-start justify-between gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0"
                   >
                     <div className="min-w-0">
-                      <Badge variant="outline" className="mb-1.5 text-[10px] uppercase tracking-wider">
+                      <Badge variant="outline" className="mb-1.5 text-xs uppercase tracking-wider">
                         {ACTIVITY_LABELS[entry.kind]}
                       </Badge>
                       <p className="truncate text-sm">{entry.message}</p>

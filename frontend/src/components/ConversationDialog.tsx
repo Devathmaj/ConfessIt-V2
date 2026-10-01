@@ -1151,7 +1151,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                         }`}
                       >
                         <p className="text-xs sm:text-sm break-words">{message.body}</p>
-                        <p className={`text-[10px] sm:text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                        <p className={`text-xs mt-1 ${message.is_sender ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
                           {parseTimestamp(message.created_at)?.toLocaleTimeString() ?? ''}
 
                         </p>
@@ -1199,7 +1199,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
             {/* Message Input */}
             {canChat && !is_blocked && (
-              <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-[11px] sm:text-xs text-muted-foreground">
+              <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-xs text-muted-foreground">
                 You can send up to 100 messages in this conversation.
               </div>
             )}
@@ -1217,7 +1217,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     className="flex-1 px-3 sm:px-4 py-2 text-sm sm:text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary min-w-0"
                     disabled={sending || !isConnected}
                   />
-                  <span className="whitespace-nowrap text-[11px] sm:text-xs text-muted-foreground">
+                  <span className="whitespace-nowrap text-xs text-muted-foreground">
                     {messageText.length}/{MESSAGE_BODY_MAX}
                   </span>
                   <Button
@@ -1232,7 +1232,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     message rather than near the end of the allowance: someone who has not
                     been told the limit cannot plan around reaching it. */}
                 {messageQuotaLabel(quota) && (
-                  <p className="mt-1 text-right text-[11px] sm:text-xs text-muted-foreground">
+                  <p className="mt-1 text-right text-xs text-muted-foreground">
                     {messageQuotaLabel(quota)}
                   </p>
                 )}

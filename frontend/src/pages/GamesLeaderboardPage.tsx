@@ -276,7 +276,7 @@ export const GamesLeaderboardPage = () => {
       <Card className="mb-6 rounded-2xl border-romantic/40 bg-romantic/10">
         <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Your rank
             </p>
             <p className="mt-1 text-3xl font-extrabold tabular-nums">
@@ -284,7 +284,7 @@ export const GamesLeaderboardPage = () => {
             </p>
           </div>
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Points
             </p>
             <p className="mt-1 text-3xl font-extrabold tabular-nums">
@@ -292,7 +292,7 @@ export const GamesLeaderboardPage = () => {
             </p>
           </div>
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Events played
             </p>
             <p className="mt-1 text-3xl font-extrabold tabular-nums">
@@ -364,7 +364,7 @@ export const GamesLeaderboardPage = () => {
                 <p className="truncate text-sm font-extrabold tabular-nums text-romantic sm:text-lg">
                   {formatScore(entry.score)}
                 </p>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground sm:text-xs">
+                <p className="mt-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">
                   Rank #{entry.rank}
                 </p>
               </Card>
@@ -428,7 +428,7 @@ const LeaderboardRow = ({ entry, gameId }: { entry: BoardEntry; gameId: string |
       <span className="w-6 text-center text-sm font-extrabold tabular-nums text-muted-foreground">
         {entry.rank}
       </span>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-[11px] font-bold text-white">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-hero text-xs font-bold text-white">
         {entryDisplayName(entry)
           .replace(/[^a-zA-Z]/g, '')
           .slice(0, 2)

@@ -343,7 +343,7 @@ export const AdminWordleConfig = () => {
         {current && (
           <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
             Current session:{' '}
-            <span className="font-mono font-semibold">
+            <span className="font-mono font-medium">
               {current.answer ?? 'no word yet'}
             </span>{' '}
             <span className="text-muted-foreground">
@@ -440,7 +440,7 @@ export const AdminWordleConfig = () => {
                 <p className="text-xs uppercase tracking-wide text-muted-foreground">
                   Answer for today
                 </p>
-                <p className="font-mono text-2xl font-semibold uppercase tracking-widest">
+                <p className="font-mono text-2xl font-medium uppercase tracking-[0.08em]">
                   {drawn.word}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -550,9 +550,9 @@ export const AdminWordleConfig = () => {
                   className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3 text-sm"
                 >
                   <span>
-                    <span className="font-mono font-semibold">{entry.target_date}</span>
+                    <span className="font-mono font-medium">{entry.target_date}</span>
                     {' — '}
-                    <span className="font-mono uppercase tracking-widest">{entry.word}</span>
+                    <span className="font-mono uppercase tracking-[0.08em]">{entry.word}</span>
                   </span>
                   <Button
                     type="button"
@@ -619,14 +619,14 @@ export const AdminWordleConfig = () => {
                       aria-label={`Inspect the session for ${game.game_date}`}
                       className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-left"
                     >
-                      <span className="font-mono text-sm font-semibold">{game.game_date}</span>
+                      <span className="font-mono text-sm font-medium">{game.game_date}</span>
                       <Badge variant={game.mode === 'custom' ? 'secondary' : 'default'}>
                         {game.mode === 'custom' ? 'Typed' : 'Drawn'}
                       </Badge>
                       <Badge variant={game.status === 'active' ? 'default' : 'outline'}>
                         {game.status ?? 'active'}
                       </Badge>
-                      <span className="font-mono uppercase tracking-widest">
+                      <span className="font-mono uppercase tracking-[0.08em]">
                         {game.answer ?? 'pending'}
                       </span>
                     </button>
@@ -664,7 +664,7 @@ export const AdminWordleConfig = () => {
                   </p>
                   <p>
                     {detail.mode === 'custom' ? 'Typed' : 'Drawn'} answer:{' '}
-                    <span className="font-mono uppercase tracking-widest">
+                    <span className="font-mono uppercase tracking-[0.08em]">
                       {detail.answer ?? 'pending'}
                     </span>
                   </p>

@@ -82,7 +82,7 @@ export const AdminCoupleConfig = () => {
           {session && (
             <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
               Current session period:{' '}
-              <span className="font-mono font-semibold">
+              <span className="font-mono font-medium">
                 {session.period_start_date ?? '—'}
                 {session.period_end_date ? ` → ${session.period_end_date}` : ''}
               </span>{' '}

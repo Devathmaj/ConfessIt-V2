@@ -63,7 +63,7 @@ export const GamesLayout = () => (
             <span className="rounded-xl bg-gradient-romantic p-2 shadow-romantic">
               <Gamepad2 className="h-4 w-4 text-white sm:h-5 sm:w-5" />
             </span>
-            <span className="truncate text-base font-extrabold tracking-tight sm:text-lg">
+            <span className="truncate font-display text-base font-semibold tracking-tight sm:text-lg">
               <span className="hidden font-semibold text-muted-foreground sm:inline">
                 ConfessIt{' '}
               </span>

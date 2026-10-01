@@ -20,7 +20,7 @@ export const StatCard = ({ label, value, hint, icon: Icon, accent }: StatCardPro
     <CardContent className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
             {label}
           </p>
           <p className="mt-1.5 truncate text-2xl font-extrabold tabular-nums sm:text-3xl">
