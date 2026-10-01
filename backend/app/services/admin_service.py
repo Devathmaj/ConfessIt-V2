@@ -1,5 +1,6 @@
 # app/services/admin_service.py
 
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -28,23 +29,73 @@ FLAGGED_REMOVAL_THRESHOLD = 5
 # make the backend materialise them all at once.
 ADMIN_USERS_MAX_LIMIT = 100
 
+# Deep-OFFSET guard: a skip past this is refused (422) rather than executed, so a
+# client cannot force the database to scan-and-discard an unbounded prefix on every
+# page. Cursor pagination (created_at,id) is the path for deep traversal; OFFSET
+# remains for the admin screens' shallow load-more. Counts are cached briefly (below)
+# so a page does not pay COUNT(*) on every request.
+ADMIN_MAX_SKIP = 5000
+_COUNT_CACHE_TTL_SECONDS = 30.0
+_count_cache: dict[tuple, tuple[float, int]] = {}
+
+
+def _cached_count(key: tuple, compute) -> int:
+    """Return a cached COUNT(*) for ``key``, recomputing at most every 30s.
+
+    The key must capture the filter (status/query/sort); the value is the total
+    under that filter. Stale-by-seconds is acceptable for an admin total beside
+    a page, and it turns a per-page full-table COUNT into one per window.
+    """
+    now = time.monotonic()
+    hit = _count_cache.get(key)
+    if hit is not None and (now - hit[0]) < _COUNT_CACHE_TTL_SECONDS:
+        return hit[1]
+    total = int(compute() or 0)
+    _count_cache[key] = (now, total)
+    # Bound memory: drop expired entries opportunistically.
+    if len(_count_cache) > 512:
+        expired = [k for k, (ts, _) in _count_cache.items() if (now - ts) >= _COUNT_CACHE_TTL_SECONDS]
+        for k in expired:
+            _count_cache.pop(k, None)
+    return total
+
+
+def _clamp_skip(skip: int) -> int:
+    """Clamp OFFSET input, refusing deep skips that are a DoS vector."""
+    from fastapi import HTTPException as _HTTPException
+    from fastapi import status as _status
+
+    value = max(0, int(skip or 0))
+    if value > ADMIN_MAX_SKIP:
+        raise _HTTPException(
+            status_code=_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"skip too deep (max {ADMIN_MAX_SKIP}); use cursor pagination",
+        )
+    return value
+
 ADMIN_USERS_SORTS = frozenset({"name", "name_desc", "year", "year_desc", "removals_desc"})
 
 ADMIN_USERS_FLAG_FILTERS = frozenset({"all", "flagged", "ordinary"})
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
-    """Convert datetime to ISO format string."""
-    if isinstance(value, str):
+    """Convert datetime to ISO format string (canonical: utils.isoformat_datetime).
+
+    Thin wrapper preserving this module's historical contract (unparseable str
+    -> None) over the single shared implementation, so the two cannot drift.
+    """
+    from ..utils import isoformat_datetime as _isoformat_datetime
+
+    result = _isoformat_datetime(value)
+    if result is None:
+        return None
+    if isinstance(value, str) and result == value:
+        # utils passes unparseable strings through; this helper returns None.
         try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-    if not isinstance(value, datetime):
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat()
+    return result
 
 
 def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
@@ -535,8 +586,11 @@ def get_admin_confessions_data(
     The per-row payload is identical to ``get_all_confessions_data``: the same redaction
     of anonymous senders, the same comments, reports and engagement snapshot. Only the
     row selection changed, from "everything, newest first" to one filtered page.
+
+    ``skip`` is capped by ADMIN_MAX_SKIP (deep OFFSET refused) and ordering always
+    ends in id.asc() so pages are stable; ``total`` is cached briefly.
     """
-    skip = max(0, int(skip or 0))
+    skip = _clamp_skip(skip)
     limit = max(1, min(int(limit or 50), CONFESSIONS_MAX_LIMIT))
     if filter_option not in CONFESSION_FILTERS:
         from fastapi import HTTPException, status as _status
@@ -556,11 +610,15 @@ def get_admin_confessions_data(
             .outerjoin(UserRecord, UserRecord.id == ConfessionRecord.author_id)
             .where(*filters)
         )
-        total = session.scalar(
-            select(func.count()).select_from(ConfessionRecord)
-            .outerjoin(UserRecord, UserRecord.id == ConfessionRecord.author_id)
-            .where(*filters)
-        ) or 0
+        cache_key = ("confessions", str(query or ""), filter_option, sort)
+        total = _cached_count(
+            cache_key,
+            lambda: session.scalar(
+                select(func.count()).select_from(ConfessionRecord)
+                .outerjoin(UserRecord, UserRecord.id == ConfessionRecord.author_id)
+                .where(*filters)
+            ),
+        )
         confessions = session.scalars(base.order_by(*ordering).offset(skip).limit(limit)).all()
         comments, reports, users = _load_admin_confession_relations(session, confessions)
 
@@ -633,8 +691,11 @@ def get_confession_reports_data(
 
     ``query`` narrows in SQL to reports whose reason, reporter name or reported content
     matches, with the total counted under the same filter so the screen pages the question
-    it asked rather than the queue behind it.
+    it asked rather than the queue behind it. Ordered by (created_at desc, id asc) so
+    equal timestamps cannot reshuffle between COUNT and page; skip capped; total cached.
     """
+    skip = _clamp_skip(skip)
+    limit = max(1, min(int(limit or 50), 200))
     filters = []
     if status_filter:
         filters.append(ReportRecord.status.in_(resolve_status_filter(status_filter)))
@@ -644,12 +705,16 @@ def get_confession_reports_data(
         reports = session.execute(
             select(ReportRecord)
             .where(*filters)
-            .order_by(ReportRecord.created_at.desc())
+            .order_by(ReportRecord.created_at.desc(), ReportRecord.id.asc())
             .offset(skip).limit(limit)
         ).scalars().all()
-        total = session.scalar(
-            select(func.count()).select_from(ReportRecord).where(*filters)
-        ) or 0
+        cache_key = ("reports", str(status_filter or ""), str(query or ""))
+        total = _cached_count(
+            cache_key,
+            lambda: session.scalar(
+                select(func.count()).select_from(ReportRecord).where(*filters)
+            ),
+        )
 
         confession_ids = {report.confession_id for report in reports if report.confession_id}
         comment_ids = {report.comment_id for report in reports if report.comment_id}
@@ -927,9 +992,9 @@ def get_admin_users_data(
     (their caps are an order of magnitude below the participant one), so when no
     ``account_type`` is given the staff matches come back whole -- still behind a LIMIT --
     alongside the one participant page. A caller that wants strict per-table paging asks
-    per ``account_type`` instead.
+    per ``account_type`` instead. Skip capped against deep-OFFSET DoS.
     """
-    skip = max(0, int(skip or 0))
+    skip = _clamp_skip(skip)
     limit = max(1, min(int(limit or 50), ADMIN_USERS_MAX_LIMIT))
     if sort not in ADMIN_USERS_SORTS:
         sort = "name"

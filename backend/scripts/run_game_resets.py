@@ -18,6 +18,7 @@ idempotent, and a second run for the same boundary changes nothing.
 """
 
 import os
+import re
 import sys
 import time
 import traceback
@@ -28,7 +29,28 @@ from datetime import datetime, timezone
 # working directory, so without this a cron tick dies with
 # "ModuleNotFoundError: No module named 'app'". Resolving from __file__ keeps
 # the cron, manual and test invocations identical.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Isolated import guard: only trust the resolved backend root if it actually
+# holds the app package -- a shadowed directory (CWD/pythonpath attack) fails
+# fast instead of importing hostile `app.*`.
+if not os.path.isfile(os.path.join(_BACKEND_ROOT, "app", "postgres.py")):
+    raise RuntimeError(f"Refusing to import app from shadowed path: {_BACKEND_ROOT}")
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+
+def _sanitize_failure(text: str) -> str:
+    """Redact DSN/password/secret material from a traceback before printing.
+
+    SQLAlchemy/DBAPI errors echo the connection URL (user:password@host); cron
+    logs are retained, so the raw traceback is a credential leak.
+    """
+    redacted = re.sub(r"://[^@\\s]+@", "://***@", text)
+    for secret_name in ("DB_PASSWORD", "SECRET_KEY", "TOKEN_HASH_PEPPER", "REDIS_PASSWORD"):
+        secret = os.getenv(secret_name)
+        if secret and len(secret) >= 4:
+            redacted = redacted.replace(secret, "***")
+    return redacted
 
 # Tries × delay before giving up on the database. The sidecar starts alongside
 # the rest of the stack, so postgres may still be accepting its first
@@ -58,7 +80,9 @@ def main() -> int:
 
     started = datetime.now(timezone.utc)
     print(f"[game-resets] starting reset cycle at {started.isoformat()}", flush=True)
-    client = PostgresClient()
+    # One-shot process: small pool (not the prod WEB_WORKERS-sized pool) so a
+    # cron tick holds at most 2 connections instead of the serving budget.
+    client = PostgresClient(pool_size=2, max_overflow=0)
     try:
         _wait_for_db(client)
         summary = run_reset_cycle(client)
@@ -84,10 +108,17 @@ def main() -> int:
         )
         return 0 if succeeded else 1
     except Exception:
-        traceback.print_exc()
+        # Sanitized: raw tracebacks echo the DB DSN (user:password@host).
+        print(
+            _sanitize_failure(traceback.format_exc()),
+            flush=True,
+        )
         return 1
     finally:
-        client.close()
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -226,7 +226,7 @@ def _create_staff_tables(connection, steps: list[str]) -> None:
 
 
 def _add_shared_email_column(connection, steps: list[str]) -> None:
-    """Give every account table an ``email`` column, and make ``users.email`` nullable.
+    """Give every account table an ``email`` column, keeping ``email`` NOT NULL.
 
     An address is how a person is reached, which is true of a moderator as much as a student,
     so all three tables carry one now. A staff table created by an earlier run of this script
@@ -238,11 +238,11 @@ def _add_shared_email_column(connection, steps: list[str]) -> None:
     refuse if ``users`` holds a duplicate -- that cannot happen either, the column has been
     unique there throughout.
 
-    The NOT NULL is dropped on ``users`` rather than left in place. The model declares the
-    column nullable on all three tables so that a row written by a script, a seed, or this
-    migration itself is not rejected for a field the API only *requires* of a participant.
-    Every existing row has a value, so relaxing the constraint loses nothing and refuses
-    nothing.
+    NOT NULL is kept on all three tables, matching ``db_models`` and the boot
+    backfill (``PostgresClient.apply_not_null_constraints`` backfills legacy NULLs
+    with placeholders then SETs NOT NULL). Relaxing ``users.email`` here would
+    contradict that path: the next boot would backfill and re-tighten it, so the
+    churn buys nothing and leaves the constraint flapping between runs.
     """
     for table in ("users", "admin", "moderator"):
         if not _table_exists(connection, table):
@@ -252,18 +252,6 @@ def _add_shared_email_column(connection, steps: list[str]) -> None:
                 text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "email" varchar(320)')
             )
             _report(steps, f'added email column to {table}')
-
-    if _table_exists(connection, "users"):
-        nullable = connection.execute(
-            text(
-                "SELECT is_nullable FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'users' "
-                "AND column_name = 'email'"
-            )
-        ).scalar()
-        if nullable == "NO":
-            connection.execute(text("ALTER TABLE users ALTER COLUMN email DROP NOT NULL"))
-            _report(steps, "users.email is now nullable, as it is on the other two tables")
 
 
 def _drop_participant_fields_from_staff(connection, steps: list[str]) -> None:
@@ -480,7 +468,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     url = args.database_url or settings.DATABASE_URL
-    print(f"Migrating {url.split('@')[-1]}")
+    # Sanitized log: never print host/user/password. Only the database name (or a
+    # redacted placeholder) reaches stdout so a CI log cannot leak topology.
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        _parsed = _urlparse(url)
+        _dbname = (_parsed.path or "").lstrip("/") or "database"
+        print(f"Migrating database '{_dbname}'")
+    except Exception:
+        print("Migrating database")
 
     client = PostgresClient(url)
     try:

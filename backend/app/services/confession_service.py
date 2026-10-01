@@ -181,7 +181,7 @@ class ConfessionService:
     def create_confession(self, confession_data: ConfessionCreate, user_id: str):
         # recipient_name arrives already normalized: trimmed, or None when the confession
         # is not addressed to anyone. Both spellings mean the same thing, so both are NULL.
-        confession_dict = confession_data.dict()
+        confession_dict = confession_data.model_dump()
         now = datetime.datetime.now(datetime.timezone.utc)
 
         # One confession per participant every CONFESSION_COOLDOWN_HOURS. Read-then-write
@@ -530,7 +530,7 @@ class ConfessionService:
             if author_info:
                 if confession_doc.get('anonymous'):
                     author_info.profile_picture_url = None
-                confession_doc['user_info'] = author_info.dict()
+                confession_doc['user_info'] = author_info.model_dump()
 
             return Confession(**confession_doc)
         return None
@@ -552,7 +552,7 @@ class ConfessionService:
             return None
 
         update_fields = {}
-        update_data_dict = update_data.dict(exclude_unset=True)
+        update_data_dict = update_data.model_dump(exclude_unset=True)
 
         # Handle 'comments_enabled' update - this is straightforward
         if "comments_enabled" in update_data_dict:

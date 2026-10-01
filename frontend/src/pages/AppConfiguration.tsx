@@ -47,6 +47,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
           headers: {
             ...getAuthHeaders(),
           },
+          signal: AbortSignal.timeout(15000),
         });
         if (!response.ok) throw new Error('Failed to load configuration');
         const data = await response.json();
@@ -196,6 +197,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
         headers: {
           ...getAuthHeaders(),
         },
+        signal: AbortSignal.timeout(15000),
       });
       
       if (!existingResponse.ok) throw new Error('Failed to load existing config');
@@ -216,6 +218,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ slot_id: existingSlot.id }),
+            signal: AbortSignal.timeout(15000),
           }),
           'Removing the previous configuration'
         );
@@ -240,6 +243,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
               'Content-Type': 'application/json',
             },
             body: JSON.stringify(pair),
+            signal: AbortSignal.timeout(15000),
           }),
           `Saving the ${cohortLabel(pair.year_a, pair.department_a)} / ${cohortLabel(pair.year_b, pair.department_b)} pairing`
         );

@@ -1,4 +1,6 @@
 import logging
+import os
+import stat as stat_module
 from .config import settings
 import sys
 
@@ -42,6 +44,80 @@ def get_console_handler():
 # duplicate, so a log-on-disk requirement should be met by the collector's own
 # export rather than by a second copy of the application log.
 
+# CA bundle cap: a PEM CA is ~1-2KB; 10KB admits chains while bounding what the
+# telemetry path reads into memory before any parsing.
+_OTLP_CERT_MAX_BYTES = 10 * 1024
+# Symlink targets must resolve under one of these prefixes. Regular files are
+# accepted anywhere (tests/dev mount certs from tmp), but a symlink escaping to
+# an attacker-controlled path is refused -- this closes the check-then-open
+# TOCTOU without breaking local runs that point at a tmp file.
+_OTLP_CERT_SYMLINK_ALLOWED_PREFIXES = ("/certs", "/etc/otel", "/etc/ssl", "/run/secrets")
+
+
+def _read_otlp_certificate(path: str) -> bytes:
+    """Read the OTLP CA bundle with TOCTOU hardening.
+
+    Realpath-confines symlink escapes to the collector cert directories, opens
+    with O_NOFOLLOW where the platform offers it, fstats the open descriptor
+    (not the path) and enforces a 10KB cap before reading. Raises RuntimeError
+    without echoing the configured path.
+    """
+    try:
+        realpath = os.path.realpath(path)
+    except OSError as exc:
+        raise RuntimeError("OTEL_EXPORTER_OTLP_CERTIFICATE could not be read") from exc
+    try:
+        is_link = os.path.islink(path)
+    except OSError:
+        is_link = False
+    if is_link and not any(
+        realpath == prefix or realpath.startswith(prefix.rstrip("/") + "/")
+        for prefix in _OTLP_CERT_SYMLINK_ALLOWED_PREFIXES
+    ):
+        raise RuntimeError(
+            "OTEL_EXPORTER_OTLP_CERTIFICATE must resolve under /certs "
+            "(symlink escape refused)"
+        )
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError("OTEL_EXPORTER_OTLP_CERTIFICATE could not be read") from exc
+    try:
+        st = os.fstat(fd)
+        if stat_module.S_ISDIR(st.st_mode):
+            raise RuntimeError("OTEL_EXPORTER_OTLP_CERTIFICATE is a directory")
+        if st.st_size <= 0 or st.st_size > _OTLP_CERT_MAX_BYTES:
+            raise RuntimeError(
+                f"OTEL_EXPORTER_OTLP_CERTIFICATE size out of bounds "
+                f"(max {_OTLP_CERT_MAX_BYTES} bytes)"
+            )
+        chunks: list[bytes] = []
+        remaining = _OTLP_CERT_MAX_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(8192, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > _OTLP_CERT_MAX_BYTES or not data:
+            raise RuntimeError(
+                "OTEL_EXPORTER_OTLP_CERTIFICATE is empty or exceeds size cap"
+            )
+        return data
+    except OSError as exc:
+        raise RuntimeError("OTEL_EXPORTER_OTLP_CERTIFICATE could not be read") from exc
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def otlp_transport():
     """Resolve OTLP transport security from the environment.
 
@@ -63,11 +139,8 @@ def otlp_transport():
             "OTEL_EXPORTER_OTLP_INSECURE is false but OTEL_EXPORTER_OTLP_CERTIFICATE is unset; "
             "refusing to send telemetry with no way to verify the collector"
         )
-    try:
-        with open(certificate, "rb") as handle:
-            return False, grpc.ssl_channel_credentials(handle.read())
-    except OSError as exc:
-        raise RuntimeError(f"OTEL_EXPORTER_OTLP_CERTIFICATE could not be read: {certificate}") from exc
+    data = _read_otlp_certificate(certificate)
+    return False, grpc.ssl_channel_credentials(data)
 
 def _get_otel_log_handler():
     global _OTEL_LOG_HANDLER

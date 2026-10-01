@@ -354,8 +354,15 @@ class MessageService:
             "is_read": False
         }
         
-        redis_service.publish_message(conversation_id, redis_message)
-        
+        if not redis_service.publish_message(conversation_id, redis_message):
+            # Persistence already committed above; this is a realtime outage, not
+            # data loss. Logged loudly so a chat outage cannot hide behind the
+            # boolean publish_message returns.
+            logger.error(
+                f"Chat realtime outage: message {message_doc['id']} persisted "
+                f"but Redis publish failed (conversation {conversation_id})"
+            )
+
         logger.info(f"Message sent: {sender.regno} -> {receiver_id} in conversation {conversation_id}")
         
         return {

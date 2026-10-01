@@ -427,16 +427,22 @@ class AdminUserUpdate(BaseModel):
     def _blank_is_not_a_value(cls, value):
         """Treat an empty string as "not supplied" rather than as a value to write.
 
-        A form that submits every field sends ``""`` for the ones the admin left untouched.
-        Without this, editing a staff account's name through the participant-shaped form
-        would blank out fields that were never offered on that form at all.
+        Three spellings, three meanings (disambiguated with exclude_unset in the
+        router): absent means "leave alone"; ``""`` (blank/whitespace, e.g. an
+        untouched form field) means "leave alone" -- normalised here to None so
+        the model stays valid; explicit JSON ``null`` also means "leave alone"
+        for these NOT NULL columns and is dropped by the router. None of the
+        three ever becomes a NULL write: ``name``, ``regno``, ``gender``,
+        ``year``, ``department`` and ``email`` are NOT NULL, so writing the
+        ``None`` this validator produces would be a 500 from PostgreSQL rather
+        than a validation message. Dropping the key is the honest reading. See
+        ``update_user_details``, which drops these keys outright as a second
+        line of defence.
 
-        It also keeps a cleared input from becoming a NULL in a column that cannot hold one.
-        ``name``, ``regno``, ``gender``, ``year``, ``department`` and ``email`` are NOT NULL, so
-        writing the ``None`` this validator produces would be a 500 from PostgreSQL rather than a
-        validation message. Dropping the key is the honest reading: the admin left it empty,
-        which is not the same as asking to erase it. See ``update_user_details``, which drops
-        these keys outright as a second line of defence.
+        ``bio`` is deliberately absent from this validator and from this model
+        (extra="forbid"): a participant clearing their bio sends ``""`` on the
+        profile path, which must stay ``""`` (or be handled there) and must
+        never be coerced to NULL here.
 
         ``year`` needs this more than any of the others. The participant-shaped editor submits a
         ``<select>`` with no blank option, so the only way an empty string arrives is a client

@@ -220,6 +220,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         // Per-request, like every credentialed call: the response sets the HttpOnly refresh
         // cookie, which a cross-origin fetch drops unless it opts in. Nothing else sends cookies.
         credentials: 'include',
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {

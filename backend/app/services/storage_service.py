@@ -324,6 +324,10 @@ class CloudinaryStorageService:
 
         return kind
 
+    # Bound on animated re-encode: decoding every frame is unbounded work, so
+    # an animation past this many frames is refused rather than rebuilt.
+    MAX_ANIMATED_FRAMES = 64
+
     def normalize_image(self, content: bytes, image_format: str) -> bytes:
         """Re-encode a validated image, so the object stored is its pixels and nothing else.
 
@@ -332,10 +336,11 @@ class CloudinaryStorageService:
         comments. The EXIF *orientation* is baked into the pixels first, which is what keeps a
         phone photo the right way up after the tag that said which way up it was has gone.
 
-        Animated images are returned as they arrived. Only their first frame is validated, and
-        re-encoding them would mean decoding every frame -- the unbounded work the geometry
-        check exists to avoid -- so the safer of the two options is to store bytes that have
-        already been read, sniffed and decoded rather than bytes that have been partly rebuilt.
+        Animated images are re-encoded with metadata stripped, bounded by
+        MAX_ANIMATED_FRAMES: info.clear() drops per-frame comments/XMP, and no
+        exif/icc_profile/xmp bytes are passed to save, so GPS/device tags cannot
+        survive on any frame. An animation past the frame cap is refused (413)
+        rather than stored as-is -- storing it unstripped would be an EXIF bypass.
 
         Falls back to the input on any failure. Those bytes passed :meth:`validate_image_file`,
         so they are safe to store; refusing a good picture because an optimisation failed would
@@ -346,8 +351,9 @@ class CloudinaryStorageService:
 
         try:
             with Image.open(io.BytesIO(content)) as image:
-                if getattr(image, "n_frames", 1) > 1:
-                    return content
+                n_frames = getattr(image, "n_frames", 1)
+                if n_frames > 1:
+                    return self._normalize_animated(image, image_format, n_frames)
                 frame = ImageOps.exif_transpose(image)
                 save_format = "JPEG" if image_format in {"jpg", "jpeg"} else image_format.upper()
                 save_kwargs: Dict[str, Any] = {"optimize": True}
@@ -361,6 +367,8 @@ class CloudinaryStorageService:
                 reencoded = io.BytesIO()
                 frame.save(reencoded, format=save_format, **save_kwargs)
                 return reencoded.getvalue()
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.warning(
                 "Could not re-encode a validated %s image (%s); storing it as received",
@@ -368,6 +376,50 @@ class CloudinaryStorageService:
                 exc,
             )
             return content
+
+    def _normalize_animated(self, image: Image.Image, image_format: str, n_frames: int) -> bytes:
+        """Re-encode an animation with all metadata stripped, bounded by frame cap."""
+        from fastapi import HTTPException as _HTTPException
+
+        if n_frames > self.MAX_ANIMATED_FRAMES:
+            raise _HTTPException(
+                status_code=413,
+                detail=(
+                    f"Animated image has too many frames ({n_frames}; "
+                    f"max {self.MAX_ANIMATED_FRAMES})"
+                ),
+            )
+        save_format = "GIF" if image_format == "gif" else image_format.upper()
+        frames: list[Image.Image] = []
+        durations: list[int] = []
+        try:
+            for index in range(n_frames):
+                image.seek(index)
+                frame = ImageOps.exif_transpose(image.copy())
+                # Strip everything that is not pixels: EXIF/XMP/comments/ICC.
+                try:
+                    frame.info.clear()
+                except Exception:
+                    pass
+                frames.append(frame)
+                durations.append(int(image.info.get("duration", 100)))
+        except EOFError:
+            pass
+        if not frames:
+            return b""
+        out = io.BytesIO()
+        first, rest = frames[0], frames[1:]
+        save_kwargs: Dict[str, Any] = {
+            "format": save_format,
+            "save_all": True,
+            "append_images": rest,
+            "loop": 0,
+        }
+        if durations:
+            save_kwargs["duration"] = durations
+        # No exif=, icc_profile=, xmp= or comment= passed: metadata stays dropped.
+        first.save(out, **save_kwargs)
+        return out.getvalue()
 
     def _check_image_dimensions(self, width: Optional[int], height: Optional[int]) -> None:
         """Reject images whose decoded pixel grid is too large to process safely.
@@ -690,11 +742,14 @@ class CloudinaryStorageService:
         Takes bytes rather than the upload part, because the format the object is stored under
         comes from :meth:`validate_image_file` reading those bytes -- not from the part's name or
         content type, which the client chose and which therefore never reach this call.
+        Re-normalizes here as defence in depth so a direct caller cannot bypass
+        the metadata strip the account-picture path already performs.
         """
         self._ensure_enabled()
         image_format = self.validate_image_file(
             content, max_size_mb=self.max_image_size_mb
         )
+        content = self.normalize_image(content, image_format)
         public_id = self.profile_public_id(owner_regno, self.new_asset_id())
 
         try:
@@ -748,9 +803,13 @@ class CloudinaryStorageService:
 
         Returns ``{"public_id": ..., "format": ...}``, the same shape as
         :meth:`upload_profile_image` and for the same reason: identity is durable, a URL is not.
+        Normalizes (re-encodes, metadata-stripped) like the profile path so EXIF
+        cannot survive on love-note JPEGs either.
         """
         self._ensure_enabled()
         image_bytes, image_format, _dimensions = self.decode_base64_image(image_base64)
+        # Strip EXIF/XMP/comments before upload; animated frames are capped inside.
+        image_bytes = self.normalize_image(image_bytes, image_format)
         public_id = self.love_note_public_id(love_note_id)
 
         try:

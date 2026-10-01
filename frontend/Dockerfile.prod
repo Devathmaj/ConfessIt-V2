@@ -19,3 +19,8 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Rendered at container start from SERVER_NAME/API_ORIGIN (nginx:alpine envsubst).
 COPY nginx.prod.conf.example /etc/nginx/templates/default.conf.template
 EXPOSE 80 443
+# Drop privileges: serve static files as nginx, not root. The dist output and the
+# rendered template must be world-readable for this to hold (they are: COPY defaults).
+USER nginx
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1

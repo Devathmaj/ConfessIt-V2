@@ -22,9 +22,17 @@ jobs:
           cache: 'npm'
           cache-dependency-path: './frontend/package-lock.json'
       - name: Install dependencies
-        run: npm ci || npm install
+        # Strict ci (never `|| npm install`): a lockfile drift must fail loudly rather
+        # than silently resolving fresh versions in CI that nobody reviewed.
+        run: npm ci
       - name: Run linting
         run: npm run lint
+      - name: Zero-warning ratchet (advisory)
+        # `--max-warnings 0` is enforced here as a non-blocking ratchet while the
+        # historical warning backlog (no-explicit-any etc.) is worked down; the
+        # blocking `npm run lint` above already fails on errors.
+        continue-on-error: true
+        run: npm run lint -- --max-warnings 0
       - name: Run tests
         run: npm run test
       - name: Audit shipped dependencies
@@ -32,6 +40,30 @@ jobs:
         # transitive highs with no patched versions, which Dependabot (below) keeps
         # pressure on instead. Anything critical in what ships to browsers fails here.
         run: npm audit --omit=dev --audit-level=critical
+      - name: Unused dependency check (advisory)
+        # depcheck flags unused/shadowed deps (e.g. dev-only tagger helpers, removed
+        # cmdk/embla/vaul/input-otp/resizable-panels). Advisory: it false-positives on
+        # dynamically-imported modules, so failures are triage, not gates.
+        continue-on-error: true
+        run: npx --yes depcheck --ignores="eslint-*,@types/*,tailwindcss,autoprefixer,postcss,jsdom,@testing-library/*,typescript,vitest,@vitejs/*,@tailwindcss/*"
+      - name: Generate frontend SBOM
+        run: npm sbom --omit=dev --sbom-format=cyclonedx -o sbom-frontend.cdx.json
+      - name: Upload frontend SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-frontend
+          path: ./frontend/sbom-frontend.cdx.json
+      - name: Trivy filesystem scan (advisory)
+        # Advisory (exit-code 0 + SARIF) while pre-existing HIGHs in dev tooling are
+        # triaged; npm audit above remains the blocking prod-dependency gate.
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: './frontend'
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
 
   backend-tests:
     runs-on: ubuntu-latest
@@ -106,7 +138,31 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: .
-        run: pytest
+        # --strict-markers: only builtin markers (parametrize) are used, so an
+        # unregistered marker is always a typo worth failing on. Coverage is
+        # reported (term-missing) as a non-gating baseline; a --cov-fail-under
+        # gate follows once the baseline is pinned.
+        run: |
+          pip install pytest-cov
+          pytest --strict-markers --cov=app --cov-report=term-missing
+      - name: Generate backend SBOM
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py requirements -o sbom-backend.cdx.json
+      - name: Upload backend SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-backend
+          path: ./backend/sbom-backend.cdx.json
+      - name: Trivy filesystem scan (advisory)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: './backend'
+          format: 'sarif'
+          output: 'trivy-backend.sarif'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
 
   docker-build:
     runs-on: ubuntu-latest

@@ -254,7 +254,8 @@ export async function sendMessage(
     body: JSON.stringify({
       conversation_id: conversationId,
       body
-    })
+    }),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!response.ok) {
@@ -294,7 +295,8 @@ export async function fetchMessages(
     const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${token}`
-      }
+      },
+      signal: AbortSignal.timeout(15000),
     });
 
     console.log('📡 Fetch response status:', response.status, response.statusText);
@@ -342,7 +344,8 @@ export async function reportMessage(
     body: JSON.stringify({
       message_id: messageId,
       reason
-    })
+    }),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!response.ok) {

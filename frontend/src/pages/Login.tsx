@@ -193,6 +193,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       // on every request and the per-browser limit would never engage.
       credentials: 'include',
       body: JSON.stringify({ regno: regnoToSend }),
+      signal: AbortSignal.timeout(15000),
     });
     return { response, body: await response.json().catch(() => null) };
   };

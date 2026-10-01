@@ -65,7 +65,7 @@ export async function syncServerClock(force = false): Promise<number> {
   inFlight = (async () => {
     const sentAt = Date.now();
     try {
-      const response = await fetch(`${API_URL}/api/time`, { cache: 'no-store' });
+      const response = await fetch(`${API_URL}/api/time`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error(`server time responded ${response.status}`);
       const payload = await response.json();
       const receivedAt = Date.now();

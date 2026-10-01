@@ -98,10 +98,11 @@ RECIPIENT_NAME_MAX = 160
 REACTION_MAX = 24
 
 # Admin-supplied profile fields, sized to the columns they are stored in.
+# (USER_ROLE_MAX removed: the `role` column is gone -- the table a row lives in
+# *is* its account type -- so a role length cap is dead code.)
 USER_NAME_MAX = 160
 USER_BIO_MAX = 500
 USER_GENDER_MAX = 24
-USER_ROLE_MAX = 20
 USER_REGNO_MAX = 100
 
 # A participant's department. Free text and deliberately *not* a closed set: the departments that

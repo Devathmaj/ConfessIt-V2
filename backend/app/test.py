@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from .accounts import AccountType
 from .config import settings
 from .db_models import ACCOUNT_MODELS, LoginTokenRecord
+from .limits import INTEREST_VALUES, USER_YEAR_MAX, USER_YEAR_MIN
 from .postgres import PostgresClient
 from .services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
@@ -20,12 +22,17 @@ PARTICIPANTS_PER_GENDER = 50
 #
 # Year and department are two fields rather than one joined string, because that is what the
 # column is now: seeding a pre-joined "2nd Year CSE" would exercise a shape the schema can no
-# longer store. ``YEARS`` spans the ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX`` range the CHECK
-# constraint holds the column to, and holds numbers because the column is an ``Integer`` -- an
-# invented year here would be refused by the database rather than stored.
-YEARS = tuple(range(1, 13))
+# longer store. ``YEARS`` is derived from ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX`` (the range
+# the CHECK constraint holds the column to) so it cannot drift out of step with it, and holds
+# numbers because the column is an ``Integer`` -- an invented year here would be refused by the
+# database rather than stored. ``INTERESTS`` is ``limits.INTEREST_VALUES`` itself (case included:
+# "music" is not "Music" and violates ck_users_interests_known).
+YEARS = tuple(range(USER_YEAR_MIN, USER_YEAR_MAX + 1))
 DEPARTMENTS = ("Test_Department_A", "Test_Department_B", "Test_Department_C")
-INTERESTS = ("music", "games", "films", "books", "sports")
+INTERESTS = INTEREST_VALUES
+# Fixed rotating window so every participant holds exactly two interests even at
+# wrap-around (a slice of INTERESTS[i:i+2] shrinks to one element at the tail).
+SEED_INTEREST_COUNT = 2
 
 
 def create_magic_link_token() -> str:
@@ -58,7 +65,10 @@ def _participants() -> list[dict]:
                     "year": YEARS[index % len(YEARS)],
                     "department": DEPARTMENTS[index % len(DEPARTMENTS)],
                     "bio": f"Seeded {gender} participant {regno}.",
-                    "interests": list(INTERESTS[index % len(INTERESTS) : index % len(INTERESTS) + 2]),
+                    "interests": [
+                        INTERESTS[(index + offset) % len(INTERESTS)]
+                        for offset in range(SEED_INTEREST_COUNT)
+                    ],
                     "profile_picture_public_id": None, "profile_picture_format": None,
                     "matchmaking_enabled": index % 10 != 0,
                     "notifications_enabled": True,
@@ -102,7 +112,16 @@ def main():
     ``role`` to set -- the table a row is written to *is* the account type -- and each token
     records both the account id and the table it came from, which is how redemption knows
     where to look.
+
+    Debug-gated: this mints live bearer tokens (102 per run) and must never run in
+    production. Refuses unless ENABLE_DEBUG_ENDPOINTS is on or ALLOW_TEST_SEED=1.
     """
+    if not settings.ENABLE_DEBUG_ENDPOINTS and os.getenv("ALLOW_TEST_SEED") != "1":
+        print(
+            "Refusing to seed test accounts: set ENABLE_DEBUG_ENDPOINTS=true "
+            "or ALLOW_TEST_SEED=1 to run this debug-only seeder."
+        )
+        return
     try:
         # A one-shot script owns its own engine and disposes it in the finally block.
         client = PostgresClient()

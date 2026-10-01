@@ -108,7 +108,7 @@ describe('handleResponseError (access-token refresh)', () => {
     // The retry is a Bearer-only API call: the refresh must not smuggle cookie
     // credentials onto it by mutating the config it was given.
     expect(retryConfig).not.toHaveProperty('withCredentials');
-    expect(result.data).toEqual({});
+    expect((result as { data: unknown }).data).toEqual({});
     expect(expired).toBe(0);
   });
 

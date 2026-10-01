@@ -722,7 +722,14 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     if request is None or request.client is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request context is required")
 
-    with db.sessions.begin() as session:
+    # Read-only classification lookup (no write txn): the single conditional
+    # UPDATE ... WHERE used=False AND revoked=False AND expires_at>now in the
+    # consume step below is the linearisation point for single-use -- two racers
+    # can both pass this read, but PostgreSQL re-evaluates the predicate under
+    # the row lock so exactly one UPDATE matches (rowcount==1). See the consume
+    # block for the full reasoning. All failures here answer the uniform
+    # "Invalid or expired token" so classification is not a timing oracle.
+    with db.sessions() as session:
         login_token = session.scalar(select(LoginTokenRecord).where(
             LoginTokenRecord.token_hash == hashed_token,
         ))

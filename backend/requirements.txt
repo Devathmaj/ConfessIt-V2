@@ -13,7 +13,8 @@ httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
 redis==8.1.0
-websockets==17.2
+# websockets removed: never imported -- WebSockets are served by Starlette/FastAPI
+# (see routers/messages.py websocket_endpoint), so the pin was dead weight.
 opentelemetry-api==1.45.1
 opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp==1.45.1

@@ -348,8 +348,13 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     # Hand the pool's connections back so a reload or restart does not leak them until
-    # Postgres itself times them out.
+    # Postgres itself times them out. Redis pool is closed explicitly for the same
+    # reason: PubSub connections otherwise linger past shutdown.
     close_postgres_client()
+    try:
+        redis_service.close()
+    except Exception as exc:
+        logger.warning("Redis close on shutdown failed: %s", exc)
 
 # ----------------------
 # Request body size limit

@@ -579,9 +579,14 @@ async def update_user_details(
     not_null_fields = frozenset({
         "regno", "name", "email", "gender", "year", "department",
     })
+    # model_dump (not deprecated .dict()): exclude_unset distinguishes "field
+    # absent" (leave alone) from "field sent as null/blank" (None after the
+    # validator). Both None spellings are dropped for NOT NULL columns -- an
+    # explicit null is never a value to write there -- so a cleared input can
+    # never become a NULL write; it is read as "leave it alone".
     update_payload = {
         key: value
-        for key, value in update.dict(exclude_unset=True).items()
+        for key, value in update.model_dump(exclude_unset=True).items()
         if not (value is None and key in not_null_fields)
     }
 
@@ -859,12 +864,20 @@ async def get_message_reports(
             ilike_contains(MessageReportRecord.reported_user_regno, cleaned),
             ilike_contains(MessageRecord.body, cleaned),
         ))
+    from ..services.admin_service import ADMIN_MAX_SKIP as _ADMIN_MAX_SKIP
+
+    if skip > _ADMIN_MAX_SKIP:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"skip too deep (max {_ADMIN_MAX_SKIP}); use cursor pagination",
+        )
     with db.sessions() as session:
         base = select(MessageReportRecord).outerjoin(
             MessageRecord, MessageRecord.id == MessageReportRecord.message_id
         ).where(*filters)
         reports = session.scalars(base.order_by(
-            MessageReportRecord.reported_at.desc()).offset(skip).limit(limit)).all()
+            MessageReportRecord.reported_at.desc(),
+            MessageReportRecord.id.asc()).offset(skip).limit(limit)).all()
         total = session.scalar(select(func.count()).select_from(MessageReportRecord).outerjoin(
             MessageRecord, MessageRecord.id == MessageReportRecord.message_id
         ).where(*filters)) or 0

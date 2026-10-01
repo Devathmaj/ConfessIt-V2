@@ -1,4 +1,5 @@
 """PostgreSQL engine and SQLAlchemy session lifecycle."""
+import threading
 import uuid
 from typing import Any
 
@@ -171,6 +172,18 @@ class PostgresClient:
         pool_timeout: int | None = None,
         pool_recycle: int | None = None,
     ):
+        # Fail-closed at construction: a one-shot script or test that asks for a
+        # pool the server cannot hold fails here, not under load.
+        _size = settings.DATABASE_POOL_SIZE if pool_size is None else pool_size
+        _overflow = settings.DATABASE_MAX_OVERFLOW if max_overflow is None else max_overflow
+        _budget = (_size + _overflow) * max(settings.WEB_WORKERS, 1)
+        if _budget > 100:
+            raise RuntimeError(
+                f"Postgres connection budget is {_budget} "
+                f"({_size} pool + {_overflow} overflow "
+                f"x {settings.WEB_WORKERS} workers), which exceeds the default max_connections "
+                "of 100. Lower DATABASE_POOL_SIZE/DATABASE_MAX_OVERFLOW, or raise the server limit."
+            )
         # create_engine is lazy: it opens no sockets until a connection is first checked
         # out, so a single shared instance costs nothing until the app actually serves.
         #
@@ -839,6 +852,31 @@ class PostgresClient:
 Database = PostgresClient
 
 _client: PostgresClient | None = None
+_client_lock = threading.Lock()
+
+
+def validate_postgres_budget(
+    pool_size: int | None = None, max_overflow: int | None = None
+) -> int:
+    """Validate the worst-case connection budget before any engine is built.
+
+    Fail-closed at startup rather than under load: Postgres ships with
+    max_connections=100, so a budget above that is a hard outage, not tuning.
+    Returns the computed budget for callers that need it.
+    """
+    size = settings.DATABASE_POOL_SIZE if pool_size is None else pool_size
+    overflow = settings.DATABASE_MAX_OVERFLOW if max_overflow is None else max_overflow
+    max_conns = (size + overflow) * max(settings.WEB_WORKERS, 1)
+    if max_conns > 100:
+        # Postgres ships with max_connections=100, so this is a hard outage, not a
+        # tuning nit. Fail loudly at startup rather than under load.
+        raise RuntimeError(
+            f"Postgres connection budget is {max_conns} "
+            f"({size} pool + {overflow} overflow "
+            f"x {settings.WEB_WORKERS} workers), which exceeds the default max_connections "
+            "of 100. Lower DATABASE_POOL_SIZE/DATABASE_MAX_OVERFLOW, or raise the server limit."
+        )
+    return max_conns
 
 
 def get_postgres_client() -> PostgresClient:
@@ -846,29 +884,24 @@ def get_postgres_client() -> PostgresClient:
 
     Lazy rather than import-time so that a test (or a script) can point
     ``settings.DATABASE_URL`` at its own database before the engine is built.
+    Thread-safe with double-checked locking; the connection budget is validated
+    before the engine is created so a misconfigured pool fails fast.
     """
     global _client
-    if _client is None:
-        _client = PostgresClient()
-        max_conns = (
-            settings.DATABASE_POOL_SIZE + settings.DATABASE_MAX_OVERFLOW
-        ) * max(settings.WEB_WORKERS, 1)
-        if max_conns > 100:
-            # Postgres ships with max_connections=100, so this is a hard outage, not a
-            # tuning nit. Fail loudly at startup rather than under load.
-            raise RuntimeError(
-                f"Postgres connection budget is {max_conns} "
-                f"({settings.DATABASE_POOL_SIZE} pool + {settings.DATABASE_MAX_OVERFLOW} overflow "
-                f"x {settings.WEB_WORKERS} workers), which exceeds the default max_connections "
-                "of 100. Lower DATABASE_POOL_SIZE/DATABASE_MAX_OVERFLOW, or raise the server limit."
-            )
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is None:
+            validate_postgres_budget()
+            _client = PostgresClient()
     return _client
 
 
 def close_postgres_client() -> None:
     """Dispose the shared engine's connections. Called on application shutdown."""
     global _client
-    if _client is not None:
-        _client.close()
-        _client = None
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
 

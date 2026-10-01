@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
+    // lovable-tagger is dev-only and must never reach a production bundle: it injects
+    // `data-component` attributes (source paths) into the DOM. Strict `===` on the exact
+    // mode string (not `!== 'production'`, which would also match test/staging modes),
+    // plus the post-build `check-prod-bundle.mjs` gate that fails the build if a
+    // `data-component`/`lovable` marker ever lands in dist.
     mode === 'development' &&
     componentTagger(),
   ].filter(Boolean),

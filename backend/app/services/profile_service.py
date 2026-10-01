@@ -5,7 +5,7 @@ from datetime import timezone
 from typing import List, Optional
 
 from fastapi import File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import or_, select, update
 
 from ..db_models import UserRecord
@@ -152,7 +152,14 @@ class UserProfileUpdate(BaseModel):
     ``String(500)`` column would be the only limit, which means the participant gets a 500
     from the database instead of a 422 naming the field -- and a response that says
     "Internal Server Error" for a 501st character is not a useful one.
+
+    ``extra="forbid"`` so an unknown key is a 422 instead of a KeyError in the
+    field_map below (or a silently dropped edit): the map is an allowlist, and
+    anything outside it must fail loudly.
     """
+
+    model_config = ConfigDict(extra="forbid")
+
     bio: Optional[str] = Field(default=None, max_length=USER_BIO_MAX)
     interests: Optional[List[Interest]] = None
     matchmaking_enabled: Optional[bool] = None
@@ -197,6 +204,13 @@ async def update_user_profile_service(
             "love_notes_receive_enabled": "love_notes_receive_enabled",
         }
         for field, value in update_data.items():
+            if field not in field_map:
+                # Unreachable with extra="forbid" above, but fail loudly (422)
+                # rather than KeyError (500) if the model ever widens.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Unknown profile field: {field}",
+                )
             setattr(user, field_map[field], value)
         updated_user_doc = {
             "id": str(user.id), "regno": user.regno, "name": user.name,

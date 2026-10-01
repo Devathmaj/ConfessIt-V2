@@ -43,8 +43,12 @@ class RefreshRequest(BaseModel):
     credential these endpoints read, and a body that worked there would be a second,
     unguarded way to drive rotation and revocation. With the flag off a body is
     silently ignored and the cookie flow below applies.
+
+    Optional (default None) rather than required: browser clients POST an empty ``{}``
+    body on refresh/logout while the credential travels in the HttpOnly cookie, and a
+    required field turned that into a 422 -- logging the user out right after login.
     """
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 def _request_origin(value: str) -> Optional[str]:
@@ -91,6 +95,10 @@ def _enforce_cookie_origin(request: Request) -> None:
 def _refresh_cookie_options(request: Request) -> Dict[str, object]:
     """Keyword arguments for setting the session's refresh token as a cookie.
 
+    Backend-asserted contract (see tests/test_refresh_cookie_contract.py -- the
+    frontend's comments restate this, but this function plus that test is the
+    source of truth, not the frontend):
+
     ``HttpOnly`` keeps the raw token out of page scripts, ``SameSite=Lax`` keeps it off
     cross-site requests while still delivering it to the API from a sibling port of the
     same site, and ``Secure`` follows the client-facing scheme -- behind a TLS proxy
@@ -98,6 +106,14 @@ def _refresh_cookie_options(request: Request) -> Dict[str, object]:
     proxy-to-app hop -- or the explicit ``COOKIE_SECURE`` override. ``Path=/auth``
     means the browser only ever attaches it to authentication endpoints, never to the
     rest of the API, so even an XSS cannot send it along with an ordinary request.
+
+    Deliberately NOT ``__Host-``-prefixed and NOT ``SameSite=Strict``: a ``__Host-``
+    cookie is rejected by browsers unless ``Path=/`` exactly, so adopting the prefix
+    would force widening this cookie from ``/auth`` to the whole API -- the opposite
+    of containment. ``Strict`` would break any cross-site deployment's refresh POST
+    outright (the cookie would never be sent); ``Lax`` plus the Origin/Referer check
+    on cookie-authenticated refresh (see ``_enforce_cookie_origin``) and rotation on
+    every use is the CSRF posture instead.
     """
     return {
         "key": settings.REFRESH_COOKIE_NAME,
@@ -121,6 +137,7 @@ def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
         settings.REFRESH_COOKIE_NAME,
         path=settings.REFRESH_COOKIE_PATH,
         secure=secure,
+        httponly=True,
         samesite="lax",
     )
 
