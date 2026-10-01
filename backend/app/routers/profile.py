@@ -19,13 +19,13 @@ router = APIRouter(
 )
 
 @router.put("/update", response_model=UserDetails)
-async def update_user_profile(
+def update_user_profile(
     profile_data: UserProfileUpdate,
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """Update the profile of the currently authenticated user."""
-    return await update_user_profile_service(profile_data, current_user, db)
+    return update_user_profile_service(profile_data, current_user, db)
 
 
 @router.post("/upload-picture")

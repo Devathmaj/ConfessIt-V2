@@ -24,7 +24,7 @@ router = APIRouter(prefix="/games/reaction-time", tags=["Reaction Time"])
 
 
 @router.get("", response_model=ReactionTimeState)
-async def current_state(
+def current_state(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> ReactionTimeState:
@@ -39,7 +39,7 @@ async def current_state(
 
 
 @router.post("/start", response_model=ReactionTimeState)
-async def start_attempt(
+def start_attempt(
     payload: ReactionTimeStartRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -55,7 +55,7 @@ async def start_attempt(
 
 
 @router.post("/complete", response_model=ReactionTimeState)
-async def complete_attempt(
+def complete_attempt(
     payload: ReactionTimeCompleteRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

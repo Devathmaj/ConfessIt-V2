@@ -182,23 +182,41 @@ def validate_board_request(game_id: Optional[str], competition_type: str, period
     return competition_type
 
 
-def _native_for_subject(rows, competition_type: str, subject: tuple) -> dict:
-    """The subject's latest native metrics in the window, plus context."""
-    latest = None
-    featured = False
-    played = 0
+def _native_by_subject(rows, competition_type: str) -> dict:
+    """Every subject's latest native metrics in the window, plus context.
+
+    One O(rows) pass keyed by subject, instead of one O(rows) scan per subject
+    (ENG-003): boards with hundreds of subjects were re-walking the whole award
+    window for every ranked row, on top of materialising an entry per row only
+    to discard all but the requested page.
+    """
+    latest: dict = {}
+    featured: dict = {}
+    played: dict = {}
     for row in rows:
-        if _subject_key(row, competition_type) != subject:
-            continue
-        played += 1
-        featured = featured or bool(row.is_featured_snapshot)
-        if latest is None or row.competition_at >= latest.competition_at:
-            latest = row
-    return {
-        "raw_metrics": dict(latest.raw_metrics or {}) if latest is not None else {},
-        "is_featured": featured,
-        "opportunities_played": played,
-    }
+        subject = _subject_key(row, competition_type)
+        played[subject] = played.get(subject, 0) + 1
+        if row.is_featured_snapshot:
+            featured[subject] = True
+        current = latest.get(subject)
+        if current is None or row.competition_at >= current.competition_at:
+            latest[subject] = row
+    natives = {}
+    for subject in played:
+        row = latest[subject]
+        natives[subject] = {
+            "raw_metrics": dict(row.raw_metrics or {}),
+            "is_featured": bool(featured.get(subject, False)),
+            "opportunities_played": played[subject],
+        }
+    return natives
+
+
+# A subject that somehow reaches entry building without a row (unreachable
+# through the builders below, which rank only scored subjects): the old
+# per-subject scan answered this with empties rather than raising, so the
+# lookup sites below keep that contract instead of KeyErroring.
+_EMPTY_NATIVE = {"raw_metrics": {}, "is_featured": False, "opportunities_played": 0}
 
 
 def game_board(
@@ -227,24 +245,31 @@ def game_board(
         per_game = _game_period_scores(rows, competition_type)
         game = per_game.get(game_id, {"opportunity_count": 0, "scores": {}})
         scored = list(game["scores"].items())
+        # Ranks are competition ranks over the full set, so ranking stays
+        # whole-board; only entry materialisation is paged (ENG-003). Names
+        # and native stats are read for the page alone rather than for every
+        # ranked subject.
         ranked = _competition_ranks(scored)
+        total = len(ranked)
+        page = ranked[skip:skip + limit]
+        natives = _native_by_subject(rows, competition_type)
         names = _display_names(
-            session, {part for subject, _ in scored for part in subject}
+            session, {part for _, item in page for part in item[0]}
         )
-        entries = []
-        for rank, (subject, score) in ranked:
-            native = _native_for_subject(rows, competition_type, subject)
-            entries.append(_subject_entry(
-                competition_type, subject, names, rank, score, native, None
-            ))
-        total = len(entries)
+        entries = [
+            _subject_entry(
+                competition_type, subject, names, rank, score,
+                natives.get(subject, _EMPTY_NATIVE), None,
+            )
+            for rank, (subject, score) in page
+        ]
         return {
             "game_id": game_id,
             "competition_type": competition_type,
             "period": period,
             "opportunity_count": game["opportunity_count"],
             "total": total,
-            "entries": entries[skip:skip + limit],
+            "entries": entries,
         }
 
 
@@ -254,21 +279,24 @@ def _all_time_game_board(session, game_id: str, competition_type: str, skip: int
     game = totals.get(game_id, {})
     scored = list(game.items())
     ranked = _competition_ranks(scored)
-    names = _display_names(session, {part for subject, _ in scored for part in subject})
-    entries = []
-    for rank, (subject, score) in ranked:
-        native = _native_for_subject(rows, competition_type, subject)
-        entries.append(_subject_entry(
-            competition_type, subject, names, rank, score, native, None
-        ))
-    total = len(entries)
+    total = len(ranked)
+    page = ranked[skip:skip + limit]
+    natives = _native_by_subject(rows, competition_type)
+    names = _display_names(session, {part for _, item in page for part in item[0]})
+    entries = [
+        _subject_entry(
+            competition_type, subject, names, rank, score,
+            natives.get(subject, _EMPTY_NATIVE), None,
+        )
+        for rank, (subject, score) in page
+    ]
     return {
         "game_id": game_id,
         "competition_type": competition_type,
         "period": PERIOD_ALL_TIME,
         "opportunity_count": len({str(row.opportunity_id) for row in rows}),
         "total": total,
-        "entries": entries[skip:skip + limit],
+        "entries": entries,
     }
 
 
@@ -299,6 +327,13 @@ def _accumulate_all_time(rows, competition_type: str, game_ids: list[str]) -> di
     }
 
 
+def _subject_matches_user(subject: tuple, competition_type: str, user_id: str) -> bool:
+    """Whether this ranked subject involves ``user_id`` (for per-user reads)."""
+    if competition_type == COMPETITION_COUPLE:
+        return user_id in subject
+    return len(subject) == 1 and subject[0] == user_id
+
+
 def global_board(
     db: Database,
     *,
@@ -307,8 +342,15 @@ def global_board(
     anchor: Optional[date] = None,
     skip: int = 0,
     limit: int = 50,
+    only_user_id: Optional[str] = None,
 ) -> dict:
-    """The combined normalized standings across a competition type's games."""
+    """The combined normalized standings across a competition type's games.
+
+    ``only_user_id`` narrows entry materialisation to one user's subjects
+    (used by :func:`my_standing`): ranks are still computed over the whole
+    board first, so a caller's rank stays its global rank rather than its rank
+    among itself.
+    """
     validate_board_request(None, competition_type, period)
     game_ids = (
         list(INDIVIDUAL_GAMES)
@@ -340,26 +382,33 @@ def global_board(
             subject: quantize_points(total) for subject, total in combined.items()
         }
         ranked = _competition_ranks(list(combined.items()))
+        total = len(ranked)
+        if only_user_id is not None:
+            ranked = [
+                item for item in ranked
+                if _subject_matches_user(item[1], competition_type, only_user_id)
+            ]
+        page = ranked[skip:skip + limit]
+        natives = _native_by_subject(rows, competition_type)
         names = _display_names(
-            session, {part for subject in combined for part in subject}
+            session, {part for _, item in page for part in item[0]}
         )
         entries = []
-        for rank, (subject, score) in ranked:
-            native = _native_for_subject(rows, competition_type, subject)
+        for rank, (subject, score) in page:
             per_game_scores = {
                 game_id: float(breakdown[subject].get(game_id, Decimal("0")))
                 for game_id in game_ids
                 if subject in breakdown and game_id in breakdown[subject]
             }
             entries.append(_subject_entry(
-                competition_type, subject, names, rank, score, native, per_game_scores
+                competition_type, subject, names, rank, score,
+                natives.get(subject, _EMPTY_NATIVE), per_game_scores,
             ))
-        total = len(entries)
         return {
             "competition_type": competition_type,
             "period": period,
             "total": total,
-            "entries": entries[skip:skip + limit],
+            "entries": entries,
         }
 
 
@@ -371,23 +420,20 @@ def my_standing(
     period: str,
     anchor: Optional[date] = None,
 ) -> dict:
-    """The caller's own entries on one board, with ranks."""
+    """The caller's own entries on one board, with global ranks.
+
+    Ranks the whole board but materialises only the caller's subjects
+    (ENG-003): the old version built an entry -- native scan, names and all --
+    for every subject on the board only to discard all but one.
+    """
     board = global_board(
         db, competition_type=competition_type, period=period,
-        anchor=anchor, skip=0, limit=10_000,
+        anchor=anchor, skip=0, limit=10_000, only_user_id=user_id,
     )
-    mine = []
-    for entry in board["entries"]:
-        if competition_type == COMPETITION_COUPLE:
-            if user_id not in (entry["member_a_id"], entry["member_b_id"]):
-                continue
-        elif entry["user_id"] != user_id:
-            continue
-        mine.append(entry)
     return {
         "competition_type": competition_type,
         "period": period,
-        "entries": mine,
+        "entries": board["entries"],
     }
 
 

@@ -33,7 +33,7 @@ router = APIRouter(prefix="/admin", tags=["Admin - Games"])
 
 
 @router.get("/games/config", response_model=List[GameConfig])
-async def list_game_configs(
+def list_game_configs(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> List[GameConfig]:
@@ -42,7 +42,7 @@ async def list_game_configs(
 
 
 @router.put("/games/config/{game_id}", response_model=GameConfig)
-async def update_game_config(
+def update_game_config(
     game_id: str,
     payload: GameConfigUpdate,
     db: Database = Depends(get_db),
@@ -68,7 +68,7 @@ async def update_game_config(
 
 
 @router.get("/featured", response_model=List[FeaturedGame])
-async def list_featured_games(
+def list_featured_games(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> List[FeaturedGame]:
@@ -77,7 +77,7 @@ async def list_featured_games(
 
 
 @router.post("/featured", response_model=FeaturedGame, status_code=201)
-async def set_featured_game(
+def set_featured_game(
     payload: FeaturedGameCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -95,7 +95,7 @@ async def set_featured_game(
 
 
 @router.put("/featured", response_model=FeaturedGame)
-async def replace_featured_game(
+def replace_featured_game(
     payload: FeaturedGameCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -117,7 +117,7 @@ async def replace_featured_game(
 
 
 @router.post("/featured/range", response_model=List[FeaturedGame], status_code=201)
-async def set_featured_range(
+def set_featured_range(
     payload: FeaturedGameRangeCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -137,7 +137,7 @@ async def set_featured_range(
 
 
 @router.put("/featured/range", response_model=List[FeaturedGame])
-async def replace_featured_range(
+def replace_featured_range(
     payload: FeaturedGameRangeCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -158,7 +158,7 @@ async def replace_featured_range(
 
 
 @router.delete("/featured/{game_date}", status_code=204)
-async def clear_featured_game(
+def clear_featured_game(
     game_date: date,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -169,7 +169,7 @@ async def clear_featured_game(
 
 
 @router.post("/games/run-resets")
-async def run_scheduled_resets(
+def run_scheduled_resets(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> dict:
@@ -187,7 +187,7 @@ async def run_scheduled_resets(
 
 
 @router.post("/leaderboards/finalize")
-async def finalize_league_opportunity(
+def finalize_league_opportunity(
     payload: LeagueFinalizeRequest,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -205,7 +205,7 @@ async def finalize_league_opportunity(
 
 
 @router.post("/leaderboards/reprocess")
-async def reprocess_league_opportunity(
+def reprocess_league_opportunity(
     payload: LeagueFinalizeRequest,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -223,7 +223,7 @@ async def reprocess_league_opportunity(
 
 
 @router.get("/leaderboards/summary", response_model=LeagueSummary)
-async def league_summary(
+def league_summary(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> LeagueSummary:
@@ -236,7 +236,7 @@ _MAX_BOARD_LIMIT = 200
 
 
 @router.get("/leaderboards/individual", response_model=LeagueIndividualBoard)
-async def admin_individual_board(
+def admin_individual_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
@@ -265,7 +265,7 @@ async def admin_individual_board(
 
 
 @router.get("/leaderboards/couples", response_model=LeagueCoupleBoard)
-async def admin_couples_board(
+def admin_couples_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
@@ -296,7 +296,7 @@ async def admin_couples_board(
     "/leaderboards/games/{game_id}",
     response_model=Union[LeagueIndividualBoard, LeagueCoupleBoard],
 )
-async def admin_game_board(
+def admin_game_board(
     game_id: str,
     competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
     period: str = Query(default="weekly"),

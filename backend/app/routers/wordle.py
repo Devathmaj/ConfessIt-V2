@@ -23,7 +23,7 @@ router = APIRouter(prefix="/games/wordle", tags=["Wordle"])
 
 
 @router.get("", response_model=WordleCurrentGame)
-async def current_wordle(
+def current_wordle(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> WordleCurrentGame:
@@ -36,7 +36,7 @@ async def current_wordle(
 
 
 @router.post("/guess", response_model=WordleGuessResponse)
-async def guess(
+def guess(
     payload: WordleGuessRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

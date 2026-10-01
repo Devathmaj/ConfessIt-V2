@@ -28,7 +28,7 @@ router = APIRouter(prefix="/admin/trivia-drop", tags=["Admin - Trivia Drop"])
 
 
 @router.post("", response_model=TriviaDropQuestion, status_code=status.HTTP_201_CREATED)
-async def create_trivia_question(
+def create_trivia_question(
     payload: TriviaDropQuestionCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -57,7 +57,7 @@ async def create_trivia_question(
 
 
 @router.get("/current", response_model=TriviaDropQuestion)
-async def current_trivia_question(
+def current_trivia_question(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> TriviaDropQuestion:
@@ -74,7 +74,7 @@ async def current_trivia_question(
 
 
 @router.post("/{question_id}/deploy", response_model=TriviaDropQuestion)
-async def deploy_trivia_question(
+def deploy_trivia_question(
     question_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -88,7 +88,7 @@ async def deploy_trivia_question(
 
 
 @router.post("/{question_id}/schedule", response_model=TriviaDropQuestion)
-async def schedule_trivia_question(
+def schedule_trivia_question(
     question_id: str,
     payload: TriviaDropScheduleRequest,
     db: Database = Depends(get_db),
@@ -99,7 +99,7 @@ async def schedule_trivia_question(
 
 
 @router.post("/{question_id}/reschedule", response_model=TriviaDropQuestion)
-async def reschedule_trivia_question(
+def reschedule_trivia_question(
     question_id: str,
     payload: TriviaDropScheduleRequest,
     db: Database = Depends(get_db),
@@ -110,7 +110,7 @@ async def reschedule_trivia_question(
 
 
 @router.post("/{question_id}/cancel", response_model=TriviaDropQuestion)
-async def cancel_trivia_question(
+def cancel_trivia_question(
     question_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -120,7 +120,7 @@ async def cancel_trivia_question(
 
 
 @router.put("/{question_id}", response_model=TriviaDropQuestion)
-async def update_trivia_draft(
+def update_trivia_draft(
     question_id: str,
     payload: TriviaDropQuestionUpdate,
     db: Database = Depends(get_db),
@@ -139,7 +139,7 @@ async def update_trivia_draft(
 
 
 @router.get("", response_model=Dict[str, Any])
-async def list_trivia_questions(
+def list_trivia_questions(
     skip: int = Query(0, ge=0, description="How many questions to skip."),
     limit: int = Query(50, ge=1, le=TRIVIA_QUESTIONS_MAX_LIMIT, description="How many questions to return. Clamped so one request can never materialise the whole bank at once."),
     status: Optional[str] = Query(
@@ -160,7 +160,7 @@ async def list_trivia_questions(
 
 
 @router.get("/{question_id}", response_model=TriviaDropQuestion)
-async def get_trivia_question(
+def get_trivia_question(
     question_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

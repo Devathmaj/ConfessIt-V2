@@ -27,7 +27,7 @@ router = APIRouter(prefix="/games/trivia-drop", tags=["Trivia Drop"])
 
 
 @router.get("", response_model=TriviaDropCurrentQuestion)
-async def current_trivia(
+def current_trivia(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> TriviaDropCurrentQuestion:
@@ -43,7 +43,7 @@ async def current_trivia(
 
 
 @router.post("/submit", response_model=TriviaDropSubmitResponse)
-async def submit(
+def submit(
     payload: TriviaDropSubmitRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -61,7 +61,7 @@ async def submit(
 
 
 @router.get("/previous", response_model=TriviaDropPreviousQuestion)
-async def previous(
+def previous(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> TriviaDropPreviousQuestion:
@@ -75,7 +75,7 @@ async def previous(
 
 
 @router.get("/results/{question_id}", response_model=TriviaDropResults)
-async def results(
+def results(
     question_id: str,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

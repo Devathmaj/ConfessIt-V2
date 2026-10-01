@@ -16,7 +16,6 @@ which row the service can see, so the tests do not depend on the router that hap
 in.
 """
 
-import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -151,8 +150,8 @@ def test_a_participant_is_not_refused_a_cooldown_check(db):
 # --- love notes cannot reach staff ------------------------------------------------
 
 
-async def _send(note_data, sender, db):
-    return await love_note_service.send_love_note_service(note_data, sender, db)
+def _send(note_data, sender, db):
+    return love_note_service.send_love_note_service(note_data, sender, db)
 
 
 def _note(recipient_id, image_b64="aGk="):
@@ -170,7 +169,7 @@ def test_a_staff_id_cannot_be_a_love_note_recipient(db, staff_type):
     """
     staff_id = make_staff(db, "staffmod", staff_type)
     with pytest.raises(HTTPException) as refusal:
-        asyncio.run(_send(_note(staff_id), details_for("sender"), db))
+        _send(_note(staff_id), details_for("sender"), db)
     assert refusal.value.status_code == 404
 
 

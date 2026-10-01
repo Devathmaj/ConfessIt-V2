@@ -355,14 +355,13 @@ def test_a_confession_and_a_comment_share_one_bucket(db):
     assert only(db, person["id"], CONFESSION, None) == (2, 0)
 
 
-@pytest.mark.asyncio
-async def test_reporting_a_love_note_counts_against_the_sender(db):
+def test_reporting_a_love_note_counts_against_the_sender(db):
     """The recipient is the reporter, so the sender is who gets the complaint."""
     sender = make_user(db, "sender")
     recipient = make_user(db, "recipient")
     note_id = make_note(db, sender, recipient)
 
-    await report_love_note_service(
+    report_love_note_service(
         note_id, LoveNoteReportCreate(reason=REASON), as_participant(recipient), db
     )
 
@@ -382,8 +381,7 @@ def test_reporting_a_message_counts_against_its_sender(db):
     assert_clean(db, receiver["id"])
 
 
-@pytest.mark.asyncio
-async def test_filing_does_not_move_any_removal_count(db):
+def test_filing_does_not_move_any_removal_count(db):
     """The whole point of having two numbers: filing is not a finding.
 
     Asserted across all three kinds together because the failure mode being guarded against is
@@ -398,7 +396,7 @@ async def test_filing_does_not_move_any_removal_count(db):
     message_id = make_message(db, author, reporter)
 
     service.report_confession(confession_id, ReportCreate(reason=REASON), as_participant(reporter))
-    await report_love_note_service(
+    report_love_note_service(
         note_id, LoveNoteReportCreate(reason=REASON), as_participant(reporter), db
     )
     message_service.report_message(db, message_id, as_participant(reporter), REASON)
@@ -628,14 +626,13 @@ def test_counts_do_not_leak_between_participants(db):
     assert_clean(db, bystander["id"])
 
 
-@pytest.mark.asyncio
-async def test_counts_do_not_leak_between_kinds(db):
+def test_counts_do_not_leak_between_kinds(db):
     """A love note removal must not show up on somebody's chat or confession figures."""
     person = make_user(db, "person")
     other = make_user(db, "other")
     note_id = make_note(db, person, other)
 
-    await report_love_note_service(
+    report_love_note_service(
         note_id, LoveNoteReportCreate(reason=REASON), as_participant(other), db
     )
     resolve_love_note_report(db, filed_love_note_report_id(db, note_id), "removed", reviewer())
@@ -645,8 +642,7 @@ async def test_counts_do_not_leak_between_kinds(db):
     assert only(db, person["id"], MESSAGE, None) == (0, 0)
 
 
-@pytest.mark.asyncio
-async def test_a_participant_can_be_reported_for_all_three_kinds(db):
+def test_a_participant_can_be_reported_for_all_three_kinds(db):
     """The three buckets are independent, so one person's history can span all of them."""
     person = make_user(db, "person")
     reporter = make_user(db, "reporter")
@@ -656,7 +652,7 @@ async def test_a_participant_can_be_reported_for_all_three_kinds(db):
     message_id = make_message(db, person, reporter)
 
     service.report_confession(confession_id, ReportCreate(reason=REASON), as_participant(reporter))
-    await report_love_note_service(
+    report_love_note_service(
         note_id, LoveNoteReportCreate(reason=REASON), as_participant(reporter), db
     )
     message_service.report_message(db, message_id, as_participant(reporter), REASON)

@@ -20,7 +20,7 @@ router = APIRouter(prefix="/admin/couple", tags=["Admin - Couple"])
 
 
 @router.post("", response_model=CoupleGame, status_code=status.HTTP_201_CREATED)
-async def create_couple_game(
+def create_couple_game(
     payload: CoupleGameCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -39,7 +39,7 @@ async def create_couple_game(
 
 
 @router.get("/session")
-async def current_couple_session(
+def current_couple_session(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> dict:
@@ -60,7 +60,7 @@ async def current_couple_session(
 
 
 @router.get("", response_model=List[CoupleGame])
-async def list_couple_games(
+def list_couple_games(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> List[CoupleGame]:
@@ -69,7 +69,7 @@ async def list_couple_games(
 
 
 @router.get("/{game_id}", response_model=CoupleGame)
-async def get_couple_game(
+def get_couple_game(
     game_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

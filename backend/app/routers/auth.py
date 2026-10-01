@@ -190,7 +190,7 @@ async def generate_magic_link(
     return payload
 
 @router.get("/login/magic/verify", response_model=Token)
-async def verify_magic_link(
+def verify_magic_link(
     token: str,
     request: Request,
     response: Response,
@@ -211,7 +211,7 @@ async def verify_magic_link(
 
 
 @router.post("/refresh")
-async def refresh_access_token(
+def refresh_access_token(
     request: Request,
     response: Response,
     body: Optional[RefreshRequest] = None,
@@ -255,7 +255,7 @@ async def refresh_access_token(
 
 
 @router.post("/logout")
-async def logout(
+def logout(
     request: Request,
     response: Response,
     body: Optional[RefreshRequest] = None,
@@ -291,7 +291,7 @@ async def logout(
 # being able to tell a missing field from a null one. Declaring no model keeps the response
 # equal to what the account actually is.
 @router.get("/me")
-async def read_users_me(current_user: Annotated[AccountDetails, Depends(get_current_user)]):
+def read_users_me(current_user: Annotated[AccountDetails, Depends(get_current_user)]):
     """
     Fetch the details of the currently authenticated account.
 

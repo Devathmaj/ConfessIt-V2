@@ -180,7 +180,7 @@ class UserProfileUpdate(BaseModel):
         return list(clean_interests(value))
 
 
-async def update_user_profile_service(
+def update_user_profile_service(
     profile_data: UserProfileUpdate,
     current_user: UserDetails,
     db: Database

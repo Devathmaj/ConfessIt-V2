@@ -138,7 +138,7 @@ def _user_payload(user):
 
 
 @router.get("/confessions", response_model=Dict[str, Any])
-async def get_all_confessions(
+def get_all_confessions(
     skip: int = Query(0, ge=0, description="How many matching confessions to skip."),
     limit: int = Query(50, ge=1, le=CONFESSIONS_MAX_LIMIT, description="How many matching confessions to return. Clamped so one request can never materialise the whole table with every comment, report and reactor row attached."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the body, the recipient name and the sender's name, regno and email."),
@@ -164,7 +164,7 @@ async def get_all_confessions(
 
 
 @router.delete("/confessions/{confession_id}")
-async def delete_confession(
+def delete_confession(
     confession_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE))
@@ -188,7 +188,7 @@ the row so the report trail stays intact.
 
 
 @router.patch("/confessions/{confession_id}/hide")
-async def hide_confession(
+def hide_confession(
     confession_id: str,
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
@@ -217,7 +217,7 @@ async def hide_confession(
 
 
 @router.patch("/comments/{comment_id}/hide")
-async def hide_comment(
+def hide_comment(
     comment_id: str,
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
@@ -255,7 +255,7 @@ async def hide_comment(
 
 
 @router.get("/confessions/reports")
-async def get_confession_reports(
+def get_confession_reports(
     status_filter: Optional[str] = Query(
         None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
@@ -276,7 +276,7 @@ async def get_confession_reports(
 
 
 @router.patch("/confessions/reports/{report_id}")
-async def update_confession_report(
+def update_confession_report(
     report_id: str,
     new_status: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),
@@ -312,7 +312,7 @@ async def update_confession_report(
 
 
 @router.get("/users", response_model=Dict[str, Any])
-async def get_all_users(
+def get_all_users(
     skip: int = Query(0, ge=0, description="How many matching participants to skip. Applies to the users table only when no account_type is given."),
     limit: int = Query(50, ge=1, le=ADMIN_USERS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole table."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on name, regno, email (and department for participants)."),
@@ -343,7 +343,7 @@ async def get_all_users(
 
 
 @router.post("/users", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
-async def create_user(
+def create_user(
     payload: AdminUserCreate,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.USERS_CREATE))
@@ -477,7 +477,7 @@ async def create_user(
 
 
 @router.put("/users/{user_id}/block")
-async def set_user_block_state(
+def set_user_block_state(
     user_id: str,
     blocked: bool = Query(..., alias="blocked"),
     db: Database = Depends(get_db),
@@ -540,7 +540,7 @@ async def set_user_block_state(
 
 
 @router.put("/users/{user_id}", response_model=Dict[str, Any])
-async def update_user_details(
+def update_user_details(
     user_id: str,
     update: AdminUserUpdate,
     db: Database = Depends(get_db),
@@ -640,7 +640,7 @@ async def update_user_details(
 
 
 @router.get("/stats", response_model=Dict[str, Any])
-async def get_admin_statistics(
+def get_admin_statistics(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.STATS_READ))
 ) -> Dict[str, Any]:
@@ -649,7 +649,7 @@ async def get_admin_statistics(
 
 
 @router.get("/config", response_model=Dict[str, Any])
-async def read_app_configuration(
+def read_app_configuration(
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ)),
     db: Database = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -665,8 +665,8 @@ async def read_app_configuration(
     """
     from ..services.matchmaking_slot_service import get_all_slots_service, list_participant_cohorts
 
-    cohorts = await list_participant_cohorts(db)
-    slots = await get_all_slots_service(db)
+    cohorts = list_participant_cohorts(db)
+    slots = get_all_slots_service(db)
 
     return {
         "settings": {},
@@ -676,7 +676,7 @@ async def read_app_configuration(
 
 
 @router.post("/config/matchmaking-slot", response_model=Dict[str, Any])
-async def create_matchmaking_slot(
+def create_matchmaking_slot(
     year_a: Year = Body(..., description="Year of the first cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
     department_a: str = Body(..., description="Department or division of the first cohort. Required."),
     year_b: Year = Body(..., description="Year of the second cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
@@ -710,14 +710,14 @@ async def create_matchmaking_slot(
     """
     from ..services.matchmaking_slot_service import create_matchmaking_slot_service
 
-    slot = await create_matchmaking_slot_service(
+    slot = create_matchmaking_slot_service(
         db, year_a, department_a, year_b, department_b, group_key
     )
     return slot
 
 
 @router.delete("/config/matchmaking-slot", response_model=Dict[str, Any])
-async def delete_matchmaking_slot(
+def delete_matchmaking_slot(
     slot_id: str = Body(..., embed=True),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.APP_CONFIG_READ))
@@ -733,7 +733,7 @@ async def delete_matchmaking_slot(
     """
     from ..services.matchmaking_slot_service import delete_matchmaking_slot_service
 
-    result = await delete_matchmaking_slot_service(db, slot_id)
+    result = delete_matchmaking_slot_service(db, slot_id)
     return result
 
 
@@ -742,7 +742,7 @@ async def delete_matchmaking_slot(
 # ----------------------
 
 @router.post("/messages/archive")
-async def archive_old_messages(
+def archive_old_messages(
     hours_old: int = Query(4, ge=1, le=168, description="Archive messages older than this many hours"),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
@@ -759,7 +759,7 @@ async def archive_old_messages(
 
 
 @router.get("/messages/archives")
-async def list_message_archives(
+def list_message_archives(
     _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
 ) -> Dict[str, Any]:
     """List all archived message files"""
@@ -778,7 +778,7 @@ async def list_message_archives(
 
 
 @router.get("/messages/archives/{date}")
-async def get_archived_messages(
+def get_archived_messages(
     date: str,
     user_regno: Optional[str] = Query(None, description="Filter by user regno"),
     conversation_id: Optional[str] = Query(None, description="Filter by conversation ID"),
@@ -819,7 +819,7 @@ async def get_archived_messages(
 
 
 @router.get("/messages/reports")
-async def get_message_reports(
+def get_message_reports(
     status_filter: Optional[str] = Query(
         None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
@@ -1001,7 +1001,7 @@ async def get_message_reports(
 
 
 @router.patch("/messages/reports/{report_id}")
-async def update_message_report_status(
+def update_message_report_status(
     report_id: str,
     new_status: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),

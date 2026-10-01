@@ -26,7 +26,7 @@ router = APIRouter(prefix="/games/anagram", tags=["Anagram"])
 
 
 @router.get("", response_model=AnagramCurrentGame)
-async def current_anagram(
+def current_anagram(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> AnagramCurrentGame:
@@ -39,7 +39,7 @@ async def current_anagram(
 
 
 @router.post("/start", response_model=AnagramParticipation)
-async def start(
+def start(
     payload: AnagramActionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -54,7 +54,7 @@ async def start(
 
 
 @router.post("/pause", response_model=AnagramParticipation)
-async def pause(
+def pause(
     payload: AnagramActionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -68,7 +68,7 @@ async def pause(
 
 
 @router.post("/heartbeat", response_model=AnagramParticipation)
-async def heartbeat(
+def heartbeat(
     payload: AnagramActionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -82,7 +82,7 @@ async def heartbeat(
 
 
 @router.post("/guess", response_model=AnagramGuessResponse)
-async def guess(
+def guess(
     payload: AnagramGuessRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

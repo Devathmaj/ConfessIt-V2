@@ -24,7 +24,7 @@ router = APIRouter(prefix="/games/connections", tags=["Connections"])
 
 
 @router.get("", response_model=ConnectionsCurrentGame)
-async def current_connections(
+def current_connections(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> ConnectionsCurrentGame:
@@ -38,7 +38,7 @@ async def current_connections(
 
 
 @router.post("/submit", response_model=ConnectionsSubmitResponse)
-async def submit(
+def submit(
     payload: ConnectionsSubmitRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

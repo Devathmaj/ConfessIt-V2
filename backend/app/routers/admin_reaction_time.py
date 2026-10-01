@@ -30,7 +30,7 @@ router = APIRouter(prefix="/admin/reaction-time", tags=["Admin - Reaction Time"]
 
 
 @router.post("", response_model=ReactionTimeGame, status_code=status.HTTP_201_CREATED)
-async def create_reaction_time_game(
+def create_reaction_time_game(
     payload: ReactionTimeGameCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -52,7 +52,7 @@ async def create_reaction_time_game(
 
 
 @router.get("/session")
-async def current_reaction_time_session(
+def current_reaction_time_session(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> dict:
@@ -74,7 +74,7 @@ async def current_reaction_time_session(
 
 
 @router.get("", response_model=List[ReactionTimeGame])
-async def list_reaction_time_games(
+def list_reaction_time_games(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> List[ReactionTimeGame]:
@@ -83,7 +83,7 @@ async def list_reaction_time_games(
 
 
 @router.get("/{game_id}", response_model=ReactionTimeGame)
-async def get_reaction_time_game(
+def get_reaction_time_game(
     game_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

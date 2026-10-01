@@ -33,7 +33,7 @@ router = APIRouter(prefix="/admin/wordle", tags=["Admin - Wordle"])
 # publishes it, and a list endpoint open to any caller would be that answer, exposed.
 
 @router.get("/preview", response_model=WordleDraw)
-async def preview_wordle_answer(
+def preview_wordle_answer(
     game_date: Optional[date] = Query(
         default=None,
         description="The day the draw is for. Defaults to today in UTC.",
@@ -54,7 +54,7 @@ async def preview_wordle_answer(
 
 
 @router.post("", response_model=WordleGame, status_code=status.HTTP_201_CREATED)
-async def create_wordle_game(
+def create_wordle_game(
     payload: WordleGameCreate,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -72,7 +72,7 @@ async def create_wordle_game(
 
 
 @router.get("/current", response_model=WordleGame)
-async def current_wordle_session(
+def current_wordle_session(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> WordleGame:
@@ -91,7 +91,7 @@ async def current_wordle_session(
 
 
 @router.post("/schedule", response_model=ScheduledWord, status_code=status.HTTP_201_CREATED)
-async def schedule_wordle_word(
+def schedule_wordle_word(
     payload: ScheduledWordCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -110,7 +110,7 @@ async def schedule_wordle_word(
 
 
 @router.get("/scheduled", response_model=list[ScheduledWord])
-async def list_wordle_scheduled(
+def list_wordle_scheduled(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> list[ScheduledWord]:
@@ -119,7 +119,7 @@ async def list_wordle_scheduled(
 
 
 @router.delete("/scheduled/{target_date}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_wordle_scheduled(
+def delete_wordle_scheduled(
     target_date: date,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -130,7 +130,7 @@ async def delete_wordle_scheduled(
 
 
 @router.get("", response_model=Dict[str, Any])
-async def list_wordle_games(
+def list_wordle_games(
     skip: int = Query(0, ge=0, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=WORDLE_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
@@ -141,7 +141,7 @@ async def list_wordle_games(
 
 
 @router.get("/{game_id}", response_model=WordleGame)
-async def get_wordle_game(
+def get_wordle_game(
     game_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

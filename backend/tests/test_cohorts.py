@@ -20,8 +20,6 @@ a "which year is this person in" field and spell it differently, and storing one
 spelling would have needed a second column to serve the other.
 """
 
-import pytest
-
 from sqlalchemy import select
 
 from app.db_models import MatchmakingSlotRecord, UserRecord
@@ -45,8 +43,7 @@ def add_user(regno: str, year: int, department: str) -> UserRecord:
     return user
 
 
-@pytest.mark.asyncio
-async def test_the_cohort_list_reports_each_pair_once(db):
+def test_the_cohort_list_reports_each_pair_once(db):
     """Two students in one cohort produce one entry, not two.
 
     The filter is built from this list, so a per-participant list would offer the operator a
@@ -56,13 +53,12 @@ async def test_the_cohort_list_reports_each_pair_once(db):
         session.add(add_user("dup-1", 2, "CSE"))
         session.add(add_user("dup-2", 2, "CSE"))
 
-    cohorts = await list_participant_cohorts(db)
+    cohorts = list_participant_cohorts(db)
     assert {"year": 2, "department": "CSE"} in cohorts
     assert cohorts.count({"year": 2, "department": "CSE"}) == 1
 
 
-@pytest.mark.asyncio
-async def test_a_department_alone_does_not_make_one_cohort(db):
+def test_a_department_alone_does_not_make_one_cohort(db):
     """Same department, different years: two cohorts.
 
     This is the property the split was for. With one ``class_name`` column holding "CSE" twice,
@@ -73,25 +69,23 @@ async def test_a_department_alone_does_not_make_one_cohort(db):
         session.add(add_user("year-2", 2, "CSE"))
         session.add(add_user("year-3", 3, "CSE"))
 
-    cohorts = await list_participant_cohorts(db)
+    cohorts = list_participant_cohorts(db)
     assert {"year": 2, "department": "CSE"} in cohorts
     assert {"year": 3, "department": "CSE"} in cohorts
 
 
-@pytest.mark.asyncio
-async def test_the_same_year_in_two_departments_is_two_cohorts(db):
+def test_the_same_year_in_two_departments_is_two_cohorts(db):
     """The mirror case, so neither half is treated as the primary one."""
     with db.sessions.begin() as session:
         session.add(add_user("dept-cse", 2, "CSE"))
         session.add(add_user("dept-ece", 2, "ECE"))
 
-    cohorts = await list_participant_cohorts(db)
+    cohorts = list_participant_cohorts(db)
     assert {"year": 2, "department": "CSE"} in cohorts
     assert {"year": 2, "department": "ECE"} in cohorts
 
 
-@pytest.mark.asyncio
-async def test_a_cohort_with_no_participants_is_not_listed(db):
+def test_a_cohort_with_no_participants_is_not_listed(db):
     """The list is derived from the people who exist, not from the four years times every slot.
 
     A cohort nobody occupies would still be a valid filter value, and selecting it would show an
@@ -100,7 +94,7 @@ async def test_a_cohort_with_no_participants_is_not_listed(db):
     with db.sessions.begin() as session:
         session.add(add_user("only", 1, "Mechanical"))
 
-    cohorts = await list_participant_cohorts(db)
+    cohorts = list_participant_cohorts(db)
     assert {"year": 4, "department": "Mechanical"} not in cohorts
 
 
@@ -238,8 +232,7 @@ def test_the_recipient_list_returns_numbers(db, _confession_author_client):
     assert {recipient["year"] for recipient in recipients} >= {2, 10}
 
 
-@pytest.mark.asyncio
-async def test_a_boot_does_not_invent_a_placeholder_slot(db):
+def test_a_boot_does_not_invent_a_placeholder_slot(db):
     """The empty table is the initialised state; a boot must leave it empty.
 
     ``init_matchmaking_slot_service`` used to write one representative pair "to give the editor
@@ -253,7 +246,7 @@ async def test_a_boot_does_not_invent_a_placeholder_slot(db):
     """
     seed_cohorts(db)
 
-    result = await init_matchmaking_slot_service(db)
+    result = init_matchmaking_slot_service(db)
 
     assert result["slots_count"] == 0
     assert result["configured"] is False
@@ -261,12 +254,11 @@ async def test_a_boot_does_not_invent_a_placeholder_slot(db):
         assert len(session.scalars(select(MatchmakingSlotRecord)).all()) == 0
 
 
-@pytest.mark.asyncio
-async def test_a_boot_leaves_a_real_configuration_alone(db):
+def test_a_boot_leaves_a_real_configuration_alone(db):
     """The no-op seeder must still not delete what an operator configured."""
     seed_one_slot(db)
 
-    result = await init_matchmaking_slot_service(db)
+    result = init_matchmaking_slot_service(db)
 
     assert result["slots_count"] == 1
     assert result["configured"] is True

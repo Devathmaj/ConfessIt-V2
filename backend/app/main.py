@@ -340,7 +340,7 @@ async def on_startup():
 
     # Initialize matchmaking slots: fetch all classes and create initial slot
     from .services.matchmaking_slot_service import init_matchmaking_slot_service
-    init_result = await init_matchmaking_slot_service(postgres)
+    init_result = init_matchmaking_slot_service(postgres)
     logger.info(
         "Matchmaking slots initialized: %s - %s",
         init_result.get("message"),
@@ -352,7 +352,7 @@ async def on_startup():
 
 
 @app.on_event("shutdown")
-async def on_shutdown():
+def on_shutdown():
     # Hand the pool's connections back so a reload or restart does not leak them until
     # Postgres itself times them out. Redis pool is closed explicitly for the same
     # reason: PubSub connections otherwise linger past shutdown.
@@ -413,7 +413,7 @@ def _make_encodable(value):
     return value
 
 
-async def _request_validation_response(request: Request, exc: RequestValidationError) -> Response:
+def _request_validation_response(request: Request, exc: RequestValidationError) -> Response:
     return JSONResponse(
         {"detail": _make_encodable(jsonable_encoder(exc.errors()))},
         status_code=422,
@@ -432,14 +432,14 @@ async def _request_validation_response(request: Request, exc: RequestValidationE
 # So the code travels beside the sentence rather than inside it. ``detail`` stays a plain string,
 # which keeps ``describeApiError`` and the toast exactly as they were; the client branches on
 # ``code`` and falls back to the sentence alone if it meets a server that does not send one.
-async def _matchmaking_refusal_response(request: Request, exc: MatchmakingRefusal) -> Response:
+def _matchmaking_refusal_response(request: Request, exc: MatchmakingRefusal) -> Response:
     return JSONResponse(
         {"detail": exc.detail, "code": exc.code},
         status_code=exc.status_code,
     )
 
 
-async def _game_unavailable_response(request: Request, exc) -> Response:
+def _game_unavailable_response(request: Request, exc) -> Response:
     """Render a game availability refusal with its client-branchable code.
 
     ``detail`` stays the plain sentence toasts already show; ``code`` is what
@@ -860,12 +860,12 @@ FastAPIInstrumentor.instrument_app(
 # Endpoints
 # ----------------------
 @app.get("/", tags=["Root"])
-async def read_root():
+def read_root():
     logger.info("Root endpoint accessed")
     return {"message": "Welcome to the ConfessIt API!"}
 
 @app.get("/api/time", tags=["Root"])
-async def read_server_time():
+def read_server_time():
     """Report the server's own UTC time so clients need not trust the device clock.
 
     The application stores and computes everything in UTC, and this is the reference the
@@ -886,7 +886,7 @@ async def read_server_time():
     )
 
 @app.get("/metrics", include_in_schema=False)
-async def read_metrics():
+def read_metrics():
     """Expose process liveness for Prometheus to scrape.
 
     The target of the ``confessit-backend`` job in prometheus.yml, and what makes

@@ -36,7 +36,7 @@ router = APIRouter(prefix="/admin/anagram", tags=["Admin - Anagram"])
 
 
 @router.get("/preview", response_model=AnagramDraw)
-async def preview_anagram_answer(
+def preview_anagram_answer(
     game_date: Optional[date] = Query(
         default=None,
         description="The day the draw is for. Defaults to today in UTC.",
@@ -57,7 +57,7 @@ async def preview_anagram_answer(
 
 
 @router.post("", response_model=AnagramGame, status_code=status.HTTP_201_CREATED)
-async def create_anagram_game(
+def create_anagram_game(
     payload: AnagramGameCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -77,7 +77,7 @@ async def create_anagram_game(
 
 
 @router.get("/current", response_model=AnagramGame)
-async def current_anagram_session(
+def current_anagram_session(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> AnagramGame:
@@ -94,7 +94,7 @@ async def current_anagram_session(
 
 
 @router.post("/schedule", response_model=ScheduledWord, status_code=status.HTTP_201_CREATED)
-async def schedule_anagram_word(
+def schedule_anagram_word(
     payload: ScheduledWordCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -113,7 +113,7 @@ async def schedule_anagram_word(
 
 
 @router.get("/scheduled", response_model=list[ScheduledWord])
-async def list_anagram_scheduled(
+def list_anagram_scheduled(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> list[ScheduledWord]:
@@ -122,7 +122,7 @@ async def list_anagram_scheduled(
 
 
 @router.delete("/scheduled/{target_date}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_anagram_scheduled(
+def delete_anagram_scheduled(
     target_date: _date,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -133,7 +133,7 @@ async def delete_anagram_scheduled(
 
 
 @router.get("", response_model=Dict[str, Any])
-async def list_anagram_games(
+def list_anagram_games(
     skip: int = Query(0, ge=0, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=ANAGRAM_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
@@ -144,7 +144,7 @@ async def list_anagram_games(
 
 
 @router.get("/{game_id}", response_model=AnagramGame)
-async def get_anagram_game(
+def get_anagram_game(
     game_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

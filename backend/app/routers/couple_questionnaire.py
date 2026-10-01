@@ -30,7 +30,7 @@ router = APIRouter(prefix="/games/couple-questionnaire", tags=["Couple Questionn
 
 
 @router.get("", response_model=CoupleCurrentState)
-async def current_state(
+def current_state(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> CoupleCurrentState:
@@ -45,7 +45,7 @@ async def current_state(
 
 
 @router.get("/partners", response_model=List[CouplePartnerCandidate])
-async def partner_candidates(
+def partner_candidates(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> List[CouplePartnerCandidate]:
@@ -60,7 +60,7 @@ async def partner_candidates(
 
 
 @router.post("/selection", response_model=CoupleCurrentState)
-async def choose_partner(
+def choose_partner(
     payload: CoupleSelectionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -77,7 +77,7 @@ async def choose_partner(
 
 
 @router.post("/answers", response_model=CoupleCurrentState)
-async def answer_question(
+def answer_question(
     payload: CoupleAnswerRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -93,7 +93,7 @@ async def answer_question(
 
 
 @router.post("/predictions", response_model=CoupleCurrentState)
-async def predict_answer(
+def predict_answer(
     payload: CouplePredictionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

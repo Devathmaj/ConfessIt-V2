@@ -22,7 +22,7 @@ router = APIRouter(prefix="/admin/love-notes", tags=["Admin - Love Notes"])
 
 
 @router.get("", response_model=Dict[str, Any])
-async def get_all_love_notes(
+def get_all_love_notes(
     skip: int = Query(0, ge=0, description="How many matching notes to skip."),
     limit: int = Query(50, ge=1, le=LOVE_NOTES_MAX_LIMIT, description="How many matching notes to return. Clamped so one request can never materialise the whole table."),
     status: str = Query("all", description="Narrow to one moderation state: all, pending_review, approved or rejected."),
@@ -42,11 +42,11 @@ async def get_all_love_notes(
     and ``total`` is a COUNT under the same filter so the screen can load more downwards
     without holding the notes it is not showing.
     """
-    return await get_admin_love_notes_data(db, skip=skip, limit=limit, status=status, order=order)
+    return get_admin_love_notes_data(db, skip=skip, limit=limit, status=status, order=order)
 
 
 @router.put("/{note_id}/status")
-async def update_love_note_status(
+def update_love_note_status(
     note_id: str,
     status_value: str = Query(..., alias="status", pattern="^(approved|rejected|pending_review)$"),
     db: Database = Depends(get_db),
@@ -61,17 +61,17 @@ async def update_love_note_status(
     - For approved: Notifies both sender and recipient
     - For rejected: Notifies only the sender
     """
-    return await update_love_note_status_service(note_id, status_value, db)
+    return update_love_note_status_service(note_id, status_value, db)
 
 
 @router.delete("/{note_id}")
-async def delete_love_note(
+def delete_love_note(
     note_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_DELETE))
 ) -> Dict[str, Any]:
     """Delete a love note from the system permanently."""
-    return await delete_love_note_service(note_id, db)
+    return delete_love_note_service(note_id, db)
 
 
 # The report queue carries the reporting capabilities rather than the love-note ones, so that
@@ -83,7 +83,7 @@ async def delete_love_note(
 
 
 @router.get("/reports")
-async def get_love_note_reports(
+def get_love_note_reports(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -98,7 +98,7 @@ async def get_love_note_reports(
     # carry it sideways into a third party's logs.
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
-    return await get_love_note_reports_for_admin(
+    return get_love_note_reports_for_admin(
         db,
         AccountRef.of(admin),
         status_filter=status_filter,
@@ -109,7 +109,7 @@ async def get_love_note_reports(
 
 
 @router.patch("/reports/{report_id}")
-async def update_love_note_report_status(
+def update_love_note_report_status(
     report_id: str,
     status_value: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
     db: Database = Depends(get_db),

@@ -37,7 +37,7 @@ def _board_response(board: dict, competition_type: str):
 
 
 @router.get("/individual", response_model=LeagueIndividualBoard)
-async def individual_board(
+def individual_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
@@ -67,7 +67,7 @@ async def individual_board(
 
 
 @router.get("/couples", response_model=LeagueCoupleBoard)
-async def couples_board(
+def couples_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
@@ -100,7 +100,7 @@ async def couples_board(
     "/games/{game_id}",
     response_model=Union[LeagueIndividualBoard, LeagueCoupleBoard],
 )
-async def game_board(
+def game_board(
     game_id: str,
     competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
     period: str = Query(default="weekly"),
@@ -124,7 +124,7 @@ async def game_board(
 
 
 @router.get("/me", response_model=LeagueMyStanding)
-async def my_standing(
+def my_standing(
     competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),

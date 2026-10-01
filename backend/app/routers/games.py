@@ -142,7 +142,7 @@ def _entry(
 
 
 @router.get("/select", response_model=GameSelectResponse)
-async def game_selection(
+def game_selection(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> GameSelectResponse:
@@ -169,7 +169,7 @@ async def game_selection(
 
 
 @router.get("/featured")
-async def featured_today(
+def featured_today(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> dict:

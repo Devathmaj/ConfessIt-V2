@@ -29,7 +29,7 @@ router = APIRouter(prefix="/admin/connections", tags=["Admin - Connections"])
 
 
 @router.post("", response_model=ConnectionsGame, status_code=status.HTTP_201_CREATED)
-async def create_connections_game(
+def create_connections_game(
     payload: ConnectionsPuzzleCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -55,7 +55,7 @@ async def create_connections_game(
 
 
 @router.get("/current", response_model=ConnectionsGame)
-async def current_connections_session(
+def current_connections_session(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> ConnectionsGame:
@@ -72,7 +72,7 @@ async def current_connections_session(
 
 
 @router.post("/schedule", response_model=ConnectionsScheduledPuzzle, status_code=status.HTTP_201_CREATED)
-async def schedule_connections_puzzle(
+def schedule_connections_puzzle(
     payload: ConnectionsScheduledPuzzleCreate,
     db: Database = Depends(get_db),
     account: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -94,7 +94,7 @@ async def schedule_connections_puzzle(
 
 
 @router.get("/scheduled", response_model=list[ConnectionsScheduledPuzzle])
-async def list_connections_scheduled(
+def list_connections_scheduled(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> list[ConnectionsScheduledPuzzle]:
@@ -103,7 +103,7 @@ async def list_connections_scheduled(
 
 
 @router.delete("/scheduled/{target_date}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_connections_scheduled(
+def delete_connections_scheduled(
     target_date: date,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -114,7 +114,7 @@ async def delete_connections_scheduled(
 
 
 @router.get("", response_model=Dict[str, Any])
-async def list_connections_games(
+def list_connections_games(
     skip: int = Query(0, ge=0, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=CONNECTIONS_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
@@ -125,7 +125,7 @@ async def list_connections_games(
 
 
 @router.get("/{game_id}", response_model=ConnectionsGame)
-async def get_connections_game(
+def get_connections_game(
     game_id: str,
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

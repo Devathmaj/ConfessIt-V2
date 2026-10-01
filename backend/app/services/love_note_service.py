@@ -51,7 +51,7 @@ class LoveNoteReportCreate(BaseModel):
     reason: str = Field(max_length=REPORT_REASON_MAX)
 
 
-async def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
+def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
     """
     Service to fetch all users available as love note recipients, excluding the
     active user, any administrator accounts, and users who opted out of
@@ -72,7 +72,7 @@ async def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
         )).all()
         return [_user_payload(row, account=viewer) for row in rows]
 
-async def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
+def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
     """Every ``(year, department)`` pair a love note recipient can be filtered by.
 
     Delegates to :func:`matchmaking_slot_service.list_participant_cohorts` rather than repeating
@@ -80,7 +80,7 @@ async def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
     filter list and the matchmaking palette answering differently for the same database was a
     question nobody needed to be asking. One query, one answer.
     """
-    return await list_participant_cohorts(db)
+    return list_participant_cohorts(db)
 
 
 def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
@@ -159,7 +159,7 @@ def love_note_image_url(
     return storage_service.love_note_delivery_url(note.image_public_id, note.image_format)
 
 
-async def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: Database):
+def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: Database):
     """
     Service to create and save a new love note with 'pending_review' status.
 
@@ -280,7 +280,7 @@ def _serialise_admin_love_note(doc: Any) -> Dict[str, Any]:
     }
 
 
-async def get_admin_love_notes_data(
+def get_admin_love_notes_data(
     db: Database,
     *,
     skip: int = 0,
@@ -343,7 +343,7 @@ async def get_admin_love_notes_data(
     }
 
 
-async def update_love_note_status_service(
+def update_love_note_status_service(
     note_id: str, 
     status_value: str, 
     db: Database
@@ -455,7 +455,7 @@ async def update_love_note_status_service(
     return {"id": note_id, "status": status_value}
 
 
-async def report_love_note_service(
+def report_love_note_service(
     note_id: str,
     report_data: LoveNoteReportCreate,
     reporter: UserDetails,
@@ -528,7 +528,7 @@ async def report_love_note_service(
     return {"id": report_id, "message": "Love note reported successfully"}
 
 
-async def get_love_note_reports_for_admin(
+def get_love_note_reports_for_admin(
     db: Database,
     viewer: AccountRef,
     status_filter: Optional[str] = None,
@@ -653,7 +653,7 @@ async def get_love_note_reports_for_admin(
 
 
 
-async def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:
+def delete_love_note_service(note_id: str, db: Database) -> Dict[str, Any]:
     """
     Delete a love note, permanently, and destroy the image it points at.
 

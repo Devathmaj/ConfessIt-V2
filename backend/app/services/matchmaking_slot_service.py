@@ -170,7 +170,7 @@ def _names_candidate_cohort():
     )
 
 
-async def list_participant_cohorts(db: Database) -> List[CohortDict]:
+def list_participant_cohorts(db: Database) -> List[CohortDict]:
     """Every ``(year, department)`` pair at least one participant actually belongs to.
 
     Distinct, and derived from ``users`` rather than stored, so a cohort with nobody in it never
@@ -220,7 +220,7 @@ def _serialise_slot(slot: MatchmakingSlotRecord) -> Dict[str, Any]:
     }
 
 
-async def get_all_slots_service(db: Database) -> List[Dict[str, Any]]:
+def get_all_slots_service(db: Database) -> List[Dict[str, Any]]:
     """Every configured slot, both sides as ``(year, department)`` pairs.
 
     Ordered, and by ``group_key`` first, because the editor reconstructs a list of boxes out of this
@@ -264,7 +264,7 @@ def _normalize_department(value: str, field_name: str) -> str:
     return normalized
 
 
-async def create_matchmaking_slot_service(
+def create_matchmaking_slot_service(
     db: Database,
     year_a: int,
     department_a: str,
@@ -384,7 +384,7 @@ def _normalize_group_key(group_key: Optional[str]) -> Optional[str]:
         )
 
 
-async def delete_matchmaking_slot_service(
+def delete_matchmaking_slot_service(
     db: Database,
     slot_id: str,
 ) -> Dict[str, Any]:
@@ -417,7 +417,7 @@ async def delete_matchmaking_slot_service(
     return {"id": slot_id, "deleted": True}
 
 
-async def init_matchmaking_slot_service(
+def init_matchmaking_slot_service(
     db: Database,
 ) -> Dict[str, Any]:
     """Report the slot configuration's state on boot. Writes nothing.
@@ -448,7 +448,7 @@ async def init_matchmaking_slot_service(
     with db.sessions() as session:
         existing_count = session.scalar(select(func.count()).select_from(MatchmakingSlotRecord)) or 0
 
-    cohorts = await list_participant_cohorts(db)
+    cohorts = list_participant_cohorts(db)
     return {
         "initialized": True,
         "configured": existing_count > 0,
@@ -462,7 +462,7 @@ async def init_matchmaking_slot_service(
     }
 
 
-async def is_cohort_match_service(
+def is_cohort_match_service(
     db: Database,
     year_a: int,
     department_a: str,
@@ -497,7 +497,7 @@ async def is_cohort_match_service(
     return result is not None
 
 
-async def get_matching_cohorts_service(
+def get_matching_cohorts_service(
     db: Database,
     year: int,
     department: str,

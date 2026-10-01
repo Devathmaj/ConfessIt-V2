@@ -17,7 +17,6 @@ the failure is silent -- a target on the matchmaking notice would look entirely 
 the diff and would leave the reader on a page about a match that no longer exists.
 """
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -208,9 +207,7 @@ def test_the_sender_delivery_notice_points_at_nothing(db):
 def approve_note(db, moderator_regno):
     """Run the moderator approval path, which is what writes both notices."""
     note_id = note_id_for(db, "alice")
-    asyncio.run(
-        love_note_service.update_love_note_status_service(note_id, "approved", db)
-    )
+    love_note_service.update_love_note_status_service(note_id, "approved", db)
 
 
 def test_the_matchmaking_notice_points_at_nothing(db):

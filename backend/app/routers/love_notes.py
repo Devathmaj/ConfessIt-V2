@@ -51,17 +51,17 @@ class UserRecipient(BaseModel):
     is_blocked: bool = False
 
 @router.get("/users", response_model=List[UserRecipient])
-async def get_all_users(
+def get_all_users(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
     """
     Used to fetch all users from the database, excluding the current user.
     """
-    return await get_all_users_service(db, AccountRef.of(current_user))
+    return get_all_users_service(db, AccountRef.of(current_user))
 
 @router.get("/cohorts", response_model=List[Cohort])
-async def get_all_cohorts(
+def get_all_cohorts(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
@@ -73,10 +73,10 @@ async def get_all_cohorts(
     fields -- the year and "CSE" are chosen separately rather than by picking one pre-joined
     string that happened to contain both.
     """
-    return await get_all_cohorts_service(db)
+    return get_all_cohorts_service(db)
 
 @router.post("/send", status_code=status.HTTP_201_CREATED)
-async def send_love_note(
+def send_love_note(
     note_data: LoveNoteCreate,
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
@@ -121,11 +121,11 @@ async def send_love_note(
             detail="You cannot send a love note to yourself."
         )
 
-    return await send_love_note_service(note_data, current_user, db)
+    return send_love_note_service(note_data, current_user, db)
 
 
 @router.get("/inbox", response_model=Dict[str, Any])
-async def get_received_love_notes(
+def get_received_love_notes(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
     response: Response = None,
@@ -190,7 +190,7 @@ async def get_received_love_notes(
 
 
 @router.post("/inbox/{note_id}/mark-read", status_code=status.HTTP_200_OK)
-async def mark_love_note_read(
+def mark_love_note_read(
     note_id: str,
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
@@ -224,7 +224,7 @@ async def mark_love_note_read(
 
 
 @router.post("/inbox/{note_id}/report", status_code=status.HTTP_201_CREATED)
-async def report_received_love_note(
+def report_received_love_note(
     note_id: str,
     report_data: LoveNoteReportCreate,
     current_user: Annotated[UserDetails, Depends(require_participant)],
@@ -237,4 +237,4 @@ async def report_received_love_note(
     moderation action on the note: the note stays exactly as it was until staff act on the
     report, so filing one does not silently retract a note somebody was shown.
     """
-    return await report_love_note_service(note_id, report_data, current_user, db)
+    return report_love_note_service(note_id, report_data, current_user, db)

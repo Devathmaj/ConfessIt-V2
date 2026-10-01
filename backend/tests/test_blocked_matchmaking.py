@@ -317,13 +317,12 @@ def test_staff_cannot_read_a_blocked_conversation_either(db, staff_type):
 # ------------------------------------------------------------------ love notes stay open
 
 
-@pytest.mark.asyncio
-async def test_a_blocked_profile_is_still_offered_as_a_love_note_recipient(db):
+def test_a_blocked_profile_is_still_offered_as_a_love_note_recipient(db):
     """The one channel that stays open, and it says so: the client warns before sending."""
     sender_id = make_user(db, "sender", "female")
     make_user(db, "blocked", "male", is_blocked=True)
 
-    recipients = await love_note_service.get_all_users_service(
+    recipients = love_note_service.get_all_users_service(
         db, AccountRef(regno="sender", account_id=sender_id, account_type="users")
     )
 
@@ -331,13 +330,12 @@ async def test_a_blocked_profile_is_still_offered_as_a_love_note_recipient(db):
     assert by_regno_name["User blocked"]["is_blocked"] is True
 
 
-@pytest.mark.asyncio
-async def test_a_blocked_profile_that_opted_out_is_still_not_offered(db):
+def test_a_blocked_profile_that_opted_out_is_still_not_offered(db):
     """is_blocked must not become a back door around the opt-out filter."""
     sender_id = make_user(db, "sender", "female")
     make_user(db, "optedout", "male", is_blocked=True, love_notes_receive_enabled=False)
 
-    recipients = await love_note_service.get_all_users_service(
+    recipients = love_note_service.get_all_users_service(
         db, AccountRef(regno="sender", account_id=sender_id, account_type="users")
     )
 

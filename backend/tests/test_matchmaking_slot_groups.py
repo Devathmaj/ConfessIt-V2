@@ -94,21 +94,20 @@ def add_user(db, regno: str, year: int, department: str, gender: str = "other") 
         )
 
 
-async def save_box(db, box, group_key=None) -> None:
+def save_box(db, box, group_key=None) -> None:
     """Write one box the way the editor does: a clique of pairs, plus a self-pair for one cohort."""
     if len(box) >= 2:
         for cohort_a, cohort_b in combinations(box, 2):
-            await create_matchmaking_slot_service(db, *cohort_a, *cohort_b, group_key)
+            create_matchmaking_slot_service(db, *cohort_a, *cohort_b, group_key)
     elif len(box) == 1:
         (cohort,) = box
-        await create_matchmaking_slot_service(db, *cohort, *cohort, group_key)
+        create_matchmaking_slot_service(db, *cohort, *cohort, group_key)
 
 
 # --------------------------------------------------------------------------- the column
 
 
-@pytest.mark.asyncio
-async def test_a_group_key_is_stored_and_returned(db, admin_client):
+def test_a_group_key_is_stored_and_returned(db, admin_client):
     """The one thing the column is for: getting back what was put in.
 
     A key that came back as a different string would not fail loudly. It would fall into the legacy
@@ -117,56 +116,52 @@ async def test_a_group_key_is_stored_and_returned(db, admin_client):
     """
     group_key = str(uuid.uuid4())
 
-    created = await create_matchmaking_slot_service(
+    created = create_matchmaking_slot_service(
         db, *COHORT_A, *COHORT_B, group_key=group_key
     )
 
     assert created["group_key"] == group_key
-    listed = await get_all_slots_service(db)
+    listed = get_all_slots_service(db)
     assert [slot["group_key"] for slot in listed] == [group_key]
 
 
-@pytest.mark.asyncio
-async def test_a_pair_with_no_group_key_is_still_valid(db):
+def test_a_pair_with_no_group_key_is_still_valid(db):
     """Optional, because a pair is a legitimate thing to store on its own.
 
     Every row written before this column existed is one, and requiring a key would make the editor
     unable to save anything at all until the whole table had been rewritten.
     """
-    created = await create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B)
+    created = create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B)
 
     assert created["group_key"] is None
-    assert (await get_all_slots_service(db))[0]["group_key"] is None
+    assert (get_all_slots_service(db))[0]["group_key"] is None
 
 
-@pytest.mark.asyncio
-async def test_a_malformed_group_key_is_refused_with_a_message_naming_it(db):
+def test_a_malformed_group_key_is_refused_with_a_message_naming_it(db):
     """400, not a 500 and not a stored string that will not come back as itself.
 
     The alternative -- letting it through -- writes a value the editor cannot match on load, which is
     the failure this column exists to remove, so it is worth a round trip to catch.
     """
     with pytest.raises(Exception) as excinfo:
-        await create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, group_key="not-a-uuid")
+        create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, group_key="not-a-uuid")
 
     assert getattr(excinfo.value, "status_code", None) == 400
     assert "group_key" in str(excinfo.value.detail)
 
 
-@pytest.mark.asyncio
-async def test_an_empty_group_key_means_absent_rather_than_invalid(db):
+def test_an_empty_group_key_means_absent_rather_than_invalid(db):
     """A form field the operator never touched submits "", and that means "no box".
 
     Refusing it would make it impossible to save from a client that includes the field
     unconditionally, which is the ordinary case for one that did not create it.
     """
-    created = await create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, group_key="   ")
+    created = create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, group_key="   ")
 
     assert created["group_key"] is None
 
 
-@pytest.mark.asyncio
-async def test_the_column_is_nullable_on_a_table_that_predates_it(db):
+def test_the_column_is_nullable_on_a_table_that_predates_it(db):
     """A deployed table has rows written before this column existed.
 
     ``apply_missing_columns`` will not invent a value for them, so the column has to accept NULL.
@@ -184,8 +179,7 @@ async def test_the_column_is_nullable_on_a_table_that_predates_it(db):
 # --------------------------------------------------------------------------- overlapping boxes
 
 
-@pytest.mark.asyncio
-async def test_two_boxes_naming_the_same_pair_are_both_stored(db):
+def test_two_boxes_naming_the_same_pair_are_both_stored(db):
     """[A, B] and [A, B, C] overlap on A-B, and that is a configuration, not a mistake.
 
     The duplicate check is scoped to the box as well as the pair precisely so this can be saved.
@@ -194,8 +188,8 @@ async def test_two_boxes_naming_the_same_pair_are_both_stored(db):
     """
     first, second = str(uuid.uuid4()), str(uuid.uuid4())
 
-    await save_box(db, [COHORT_A, COHORT_B], first)
-    await save_box(db, [COHORT_A, COHORT_B, COHORT_C], second)
+    save_box(db, [COHORT_A, COHORT_B], first)
+    save_box(db, [COHORT_A, COHORT_B, COHORT_C], second)
 
     with db.sessions() as session:
         rows = session.scalars(select(MatchmakingSlotRecord)).all()
@@ -204,55 +198,51 @@ async def test_two_boxes_naming_the_same_pair_are_both_stored(db):
     assert {row.group_key for row in rows} == {first, second}
 
 
-@pytest.mark.asyncio
-async def test_the_same_pair_twice_in_one_box_is_still_a_duplicate(db):
+def test_the_same_pair_twice_in_one_box_is_still_a_duplicate(db):
     """The 409 keeps its job: an operator who pressed save twice is told, rather than served silently.
 
     Scoping the check to the box must not have made it a no-op -- that is the failure mode of
     "relax the constraint until the error stops appearing".
     """
     group_key = str(uuid.uuid4())
-    await save_box(db, [COHORT_A, COHORT_B], group_key)
+    save_box(db, [COHORT_A, COHORT_B], group_key)
 
     with pytest.raises(Exception) as excinfo:
-        await create_matchmaking_slot_service(
+        create_matchmaking_slot_service(
             db, *COHORT_A, *COHORT_B, group_key=group_key
         )
 
     assert getattr(excinfo.value, "status_code", None) == 409
 
 
-@pytest.mark.asyncio
-async def test_a_pair_repeated_without_a_box_is_still_a_duplicate(db):
+def test_a_pair_repeated_without_a_box_is_still_a_duplicate(db):
     """The legacy path keeps its own duplicate detection.
 
     Two NULL-group rows naming the same pair are the same rule written twice, which is what the 409
     has always meant, and nothing about the new column should have relaxed it.
     """
-    await save_box(db, [COHORT_A, COHORT_B])
+    save_box(db, [COHORT_A, COHORT_B])
 
     with pytest.raises(Exception) as excinfo:
-        await create_matchmaking_slot_service(db, *COHORT_B, *COHORT_A)
+        create_matchmaking_slot_service(db, *COHORT_B, *COHORT_A)
 
     assert getattr(excinfo.value, "status_code", None) == 409
 
 
-@pytest.mark.asyncio
-async def test_the_duplicate_check_is_order_independent_within_a_box(db):
+def test_the_duplicate_check_is_order_independent_within_a_box(db):
     """A-B and B-A are one rule, and the operator who adds the second should be told it exists."""
     group_key = str(uuid.uuid4())
-    await save_box(db, [COHORT_A, COHORT_B], group_key)
+    save_box(db, [COHORT_A, COHORT_B], group_key)
 
     with pytest.raises(Exception) as excinfo:
-        await create_matchmaking_slot_service(
+        create_matchmaking_slot_service(
             db, *COHORT_B, *COHORT_A, group_key=group_key
         )
 
     assert getattr(excinfo.value, "status_code", None) == 409
 
 
-@pytest.mark.asyncio
-async def test_a_duplicate_in_one_of_two_boxes_is_found_whichever_row_is_read(db):
+def test_a_duplicate_in_one_of_two_boxes_is_found_whichever_row_is_read(db):
     """A pair stored in two boxes must still be a duplicate in *both*.
 
     The check fetches a row for the pair and compares its box; if it fetched whichever row the
@@ -261,40 +251,38 @@ async def test_a_duplicate_in_one_of_two_boxes_is_found_whichever_row_is_read(db
     self-contradictory depending on the query plan. Asked here of the box written *second*, which is
     the one a first-row comparison would miss.
     """
-    await save_box(db, [COHORT_A, COHORT_B], BOX_ONE)
-    await save_box(db, [COHORT_A, COHORT_B], BOX_TWO)
+    save_box(db, [COHORT_A, COHORT_B], BOX_ONE)
+    save_box(db, [COHORT_A, COHORT_B], BOX_TWO)
 
     with pytest.raises(Exception) as excinfo:
-        await create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, BOX_TWO)
+        create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, BOX_TWO)
 
     assert getattr(excinfo.value, "status_code", None) == 409
 
 
-@pytest.mark.asyncio
-async def test_a_pair_stored_in_two_boxes_may_join_a_third(db):
+def test_a_pair_stored_in_two_boxes_may_join_a_third(db):
     """The complement: a third box naming an existing pair is stored, not refused.
 
     Together with the test above this pins the check to "same pair *and* same box", in both
     directions. Either half on its own would pass a suite that only ever used one box.
     """
     third = str(uuid.UUID(int=3))
-    await save_box(db, [COHORT_A, COHORT_B], BOX_ONE)
-    await save_box(db, [COHORT_A, COHORT_B], BOX_TWO)
+    save_box(db, [COHORT_A, COHORT_B], BOX_ONE)
+    save_box(db, [COHORT_A, COHORT_B], BOX_TWO)
 
-    await save_box(db, [COHORT_A, COHORT_B], third)
+    save_box(db, [COHORT_A, COHORT_B], third)
 
-    assert len(await get_all_slots_service(db)) == 3
+    assert len(get_all_slots_service(db)) == 3
 
 
-@pytest.mark.asyncio
-async def test_a_cohort_may_be_in_several_boxes(db):
+def test_a_cohort_may_be_in_several_boxes(db):
     """[A, B, C] and [D, E, A]: A is in both, and both must survive.
 
     This is the configuration the whole feature exists to express, so it is written as one save
     rather than two so that a duplicate anywhere in the second box would fail the test.
     """
-    await save_box(db, [COHORT_A, COHORT_B, COHORT_C], str(uuid.uuid4()))
-    await save_box(db, [COHORT_D, COHORT_E, COHORT_A], str(uuid.uuid4()))
+    save_box(db, [COHORT_A, COHORT_B, COHORT_C], str(uuid.uuid4()))
+    save_box(db, [COHORT_D, COHORT_E, COHORT_A], str(uuid.uuid4()))
 
     assert cohort_is_configured(db, *COHORT_A)
     assert cohort_is_configured(db, *COHORT_B)
@@ -306,8 +294,7 @@ async def test_a_cohort_may_be_in_several_boxes(db):
 # --------------------------------------------------------------------------- the rule ignores it
 
 
-@pytest.mark.asyncio
-async def test_pairing_does_not_depend_on_the_group_key(db):
+def test_pairing_does_not_depend_on_the_group_key(db):
     """The rule reads pairs. Grouping is how the editor *shows* a configuration, nothing more.
 
     Stated as two configurations that must be indistinguishable rather than as a comment, because
@@ -317,34 +304,32 @@ async def test_pairing_does_not_depend_on_the_group_key(db):
     same pairs are the same rule, and the table is compared without the keys.
     """
     one_box = str(uuid.uuid4())
-    await save_box(db, [COHORT_A, COHORT_B, COHORT_C], one_box)
+    save_box(db, [COHORT_A, COHORT_B, COHORT_C], one_box)
     pairs_in_one_box = stored_pairs(db)
 
     with db.sessions.begin() as session:
         session.execute(delete(MatchmakingSlotRecord))
 
     for pair_box in ([COHORT_A, COHORT_B], [COHORT_A, COHORT_C], [COHORT_B, COHORT_C]):
-        await save_box(db, pair_box, str(uuid.uuid4()))
+        save_box(db, pair_box, str(uuid.uuid4()))
     pairs_in_three_boxes = stored_pairs(db)
 
     assert pairs_in_one_box == pairs_in_three_boxes
 
 
-@pytest.mark.asyncio
-async def test_a_cohort_named_only_by_another_boxes_cohort_is_still_configured(db):
+def test_a_cohort_named_only_by_another_boxes_cohort_is_still_configured(db):
     """Being in a slot means being named by a row, whatever box that row came from.
 
     A cohort in box [D, E, A] is named by that box's rows and is therefore configured, even though
     no row in *its own* box exists -- it has no box of its own to be in.
     """
-    await save_box(db, [COHORT_D, COHORT_E, COHORT_A], str(uuid.uuid4()))
+    save_box(db, [COHORT_D, COHORT_E, COHORT_A], str(uuid.uuid4()))
 
     assert cohort_is_configured(db, *COHORT_A)
     assert not cohort_is_configured(db, *COHORT_B)
 
 
-@pytest.mark.asyncio
-async def test_the_order_slots_are_listed_in_keeps_each_box_together(db):
+def test_the_order_slots_are_listed_in_keeps_each_box_together(db):
     """The editor rebuilds a list of boxes from this ordering, so it cannot be left to the planner.
 
     An unordered SELECT reshuffles whenever PostgreSQL picks a different plan, and a drag-and-drop
@@ -353,41 +338,39 @@ async def test_the_order_slots_are_listed_in_keeps_each_box_together(db):
     exact list, because which box sorts first is an implementation detail and "rows of a box are
     adjacent" is the property the screen actually depends on.
     """
-    await save_box(db, [COHORT_A, COHORT_B, COHORT_C], BOX_ONE)
-    await save_box(db, [COHORT_D, COHORT_E], BOX_TWO)
+    save_box(db, [COHORT_A, COHORT_B, COHORT_C], BOX_ONE)
+    save_box(db, [COHORT_D, COHORT_E], BOX_TWO)
 
-    keys = [slot["group_key"] for slot in await get_all_slots_service(db)]
+    keys = [slot["group_key"] for slot in get_all_slots_service(db)]
 
     assert len(keys) == 4
     assert runs_of(keys) == [BOX_ONE, BOX_TWO]
 
 
-@pytest.mark.asyncio
-async def test_rows_with_no_box_sort_after_the_ones_that_have_one(db):
+def test_rows_with_no_box_sort_after_the_ones_that_have_one(db):
     """Legacy rows read in the order the pairs were created, and stay together.
 
     They share the NULL group, so the same contiguity argument applies to all of them at once. This
     is the order the pre-migration configuration is shown in until somebody saves it.
     """
-    await save_box(db, [COHORT_A, COHORT_B])
-    await save_box(db, [COHORT_C, COHORT_D])
+    save_box(db, [COHORT_A, COHORT_B])
+    save_box(db, [COHORT_C, COHORT_D])
 
-    keys = [slot["group_key"] for slot in await get_all_slots_service(db)]
+    keys = [slot["group_key"] for slot in get_all_slots_service(db)]
 
     assert keys == [None, None]
 
 
-@pytest.mark.asyncio
-async def test_a_keyed_box_and_a_legacy_box_are_both_reported(db):
+def test_a_keyed_box_and_a_legacy_box_are_both_reported(db):
     """The migration case: some rows upgraded, some not, and the screen still renders both.
 
     Asserted because it is the state every deployment is in between the two, and an ordering that
     only works when every row has a key would interleave them.
     """
-    await save_box(db, [COHORT_A, COHORT_B])
-    await save_box(db, [COHORT_C, COHORT_D], BOX_TWO)
+    save_box(db, [COHORT_A, COHORT_B])
+    save_box(db, [COHORT_C, COHORT_D], BOX_TWO)
 
-    keys = [slot["group_key"] for slot in await get_all_slots_service(db)]
+    keys = [slot["group_key"] for slot in get_all_slots_service(db)]
 
     assert None in keys and BOX_TWO in keys
     assert keys == [BOX_TWO, None]  # the keyed box first, the legacy row last

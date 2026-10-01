@@ -31,7 +31,7 @@ router = APIRouter(prefix="/games/two-key-escape", tags=["Two-Key Escape"])
 
 
 @router.get("", response_model=TwoKeyEscapeState)
-async def current_state(
+def current_state(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> TwoKeyEscapeState:
@@ -47,7 +47,7 @@ async def current_state(
 
 
 @router.get("/partners", response_model=List[CouplePartnerCandidate])
-async def partner_candidates(
+def partner_candidates(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> List[CouplePartnerCandidate]:
@@ -61,7 +61,7 @@ async def partner_candidates(
 
 
 @router.post("/selection", response_model=TwoKeyEscapeState)
-async def choose_partner(
+def choose_partner(
     payload: CoupleSelectionRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -77,7 +77,7 @@ async def choose_partner(
 
 
 @router.post("/role-submit", response_model=TwoKeyEscapeState)
-async def submit_role(
+def submit_role(
     payload: TwoKeyEscapeRoleRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -94,7 +94,7 @@ async def submit_role(
 
 
 @router.post("/role-change", response_model=TwoKeyEscapeState)
-async def change_role(
+def change_role(
     payload: TwoKeyEscapeRoleRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -109,7 +109,7 @@ async def change_role(
 
 
 @router.post("/move", response_model=TwoKeyEscapeState)
-async def move(
+def move(
     payload: TwoKeyEscapeMoveRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -123,7 +123,7 @@ async def move(
 
 
 @router.post("/key", response_model=TwoKeyEscapeState)
-async def use_key(
+def use_key(
     payload: TwoKeyEscapeKeyRequest,
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -142,7 +142,7 @@ async def use_key(
 
 
 @router.get("/leaderboard", response_model=List[TwoKeyEscapeLeaderboardEntry])
-async def get_leaderboard(
+def get_leaderboard(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> List[TwoKeyEscapeLeaderboardEntry]:
