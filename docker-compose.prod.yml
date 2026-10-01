@@ -26,6 +26,19 @@
 # Telemetry is intentionally unwired here: point OTEL_EXPORTER_OTLP_ENDPOINT at a TLS
 # collector (with OTEL_EXPORTER_OTLP_CERTIFICATE) when one exists; with no endpoint
 # the app simply does not export.
+#
+# Data-transport encryption (SEC-004): the DATABASE_URL/REDIS_URL below are cleartext
+# (`redis://`, no `sslmode`), which is only safe while Postgres and Redis are reachable
+# solely over this host's own Compose network -- the posture this overlay ships, with
+# no published database/cache ports. The backend and scheduler therefore boot with
+# ALLOW_PLAINTEXT_DATA_TRANSPORT=true (see app.config.validate_transport_security):
+# an explicit acknowledgment, not a default. Moving either store off this host (a
+# managed database, a multi-node swarm, a cache anything else can reach) must switch
+# to `rediss://` (the app pins CERT_REQUIRED for it) and `?sslmode=require` (or
+# verify-ca / verify-full) and DROP the acknowledgment -- without it a cloud boot
+# with cleartext transports refuses to start rather than leaking credentials,
+# session hashes and chat content at the network layer. Postgres/Redis TLS needs
+# server-side certificates first (stock images do not serve TLS unconfigured).
 
 services:
   edge:
@@ -82,6 +95,10 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
       CLOUD: "true"
+      # Single-host acknowledgment for the cleartext Compose-network transports below
+      # (SEC-004): remove once DATABASE_URL carries ?sslmode=require and REDIS_URL is
+      # rediss:// -- see the header comment. Without it a cloud boot refuses to start.
+      ALLOW_PLAINTEXT_DATA_TRANSPORT: "true"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public site origin}
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the public frontend origin(s)}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS to the public names this deployment serves}
@@ -109,6 +126,10 @@ services:
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
     environment:
       TZ: UTC
+      # Same transport acknowledgment as the API (SEC-004): the sidecar enforces
+      # the identical posture at tick time rather than assuming the API's boot
+      # covered it.
+      ALLOW_PLAINTEXT_DATA_TRANSPORT: "true"
       DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"

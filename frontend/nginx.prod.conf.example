@@ -32,7 +32,12 @@
 # VITE_API_URL at build time (see scripts/check-prod-env.mjs).
 
 # Access log with latency and status for every request the edge serves or proxies.
-log_format confessit '$remote_addr - $remote_user [$time_local] "$request" '
+# The request line is logged WITHOUT the query string (`$request_method $uri`
+# rather than `$request`): bearer tokens travel in query strings here -- the
+# chat socket authenticates as `/messages/ws/<id>?token=...` and magic links
+# verify as `?token=...` -- and a retained edge log must never hold live
+# credentials. `$uri` is the normalized path with args stripped.
+log_format confessit '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" '
                       '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
                       'rt=$request_time uct="$upstream_connect_time" urt="$upstream_response_time"';
 
@@ -83,6 +88,12 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # The chat socket (`/messages/ws/<id>`) tunnels through this same
+        # location: without an HTTP/1.1 Upgrade handshake the proxy answers
+        # the upgrade request as plain HTTP and the socket never opens.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
 

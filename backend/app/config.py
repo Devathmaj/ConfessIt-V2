@@ -1,6 +1,11 @@
+import logging
 import os
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Standard-library logging only: app.logger imports this module, so importing
+# it here would be circular. Used for the acknowledged-plaintext warning below.
+logger = logging.getLogger(__name__)
 
 
 def _reject_weak_secret(value: str, *, field: str) -> str:
@@ -251,6 +256,19 @@ class Settings(BaseSettings):
         after boot, as an opaque connection error."""
         return _require_url_scheme(value, field="REDIS_URL", schemes=("redis", "rediss"))
 
+    # --- Data-transport encryption (SEC-004) ---
+    #
+    # Plain `redis://` / bare `postgresql+psycopg://` URLs are the local-dev
+    # posture: one host, one Compose network, nothing sensitive leaving the
+    # machine. Anything a network can observe must use `rediss://`
+    # (redis_service pins CERT_REQUIRED for it, so the certificate is verified
+    # rather than merely negotiated) and `?sslmode=require` (or verify-ca /
+    # verify-full, honoured by psycopg straight from the URL). This flag is the
+    # explicit acknowledgment for single-host Compose deployments that knowingly
+    # keep the loopback posture behind the edge -- see docker-compose.prod.yml
+    # for the scope it covers and the recipe for switching to TLS.
+    ALLOW_PLAINTEXT_DATA_TRANSPORT: bool = False
+
     # --- Reverse proxy and cookie transport ---
     #
     # Comma-separated IPs or CIDRs of proxies allowed to set X-Forwarded-* on the way in
@@ -488,6 +506,68 @@ def validate_public_base_url() -> None:
             f"PUBLIC_BASE_URL must not point at loopback when CLOUD is true (got {base!r}): "
             "magic links minted for it would be unusable in production."
         )
+
+
+def _database_sslmode() -> str | None:
+    """The ``sslmode`` query parameter of ``DATABASE_URL``, lowercased, if present.
+
+    Never logs or returns the URL itself -- only this one parameter, which names
+    a policy rather than a credential.
+    """
+    from urllib.parse import parse_qs, urlsplit
+
+    try:
+        query = parse_qs(urlsplit(settings.DATABASE_URL).query)
+    except ValueError:
+        return None
+    values = query.get("sslmode") or []
+    return values[0].strip().lower() if values and values[0].strip() else None
+
+
+def validate_transport_security() -> None:
+    """Refuse a cloud deployment whose database and cache traffic is cleartext.
+
+    Credentials, session hashes and chat content traverse both connections, so
+    a deployment reachable over a network must encrypt them: ``rediss://`` for
+    Redis and ``?sslmode=require`` (or verify-ca / verify-full) for Postgres.
+    ``allow``/``prefer`` are refused alongside a missing value -- both silently
+    downgrade to cleartext against a server that does not insist on TLS, which
+    is exactly the deployment this check is guarding.
+
+    Fail-closed with one explicit escape hatch: a single-host Compose stack
+    whose database and cache are reachable only over its own internal network
+    may set ``ALLOW_PLAINTEXT_DATA_TRANSPORT=true``, which turns the refusal
+    into a startup warning naming the scope. Local runs (``CLOUD`` off) are
+    unaffected either way.
+    """
+    if not settings.CLOUD:
+        return
+    problems = []
+    if _database_sslmode() not in ("require", "verify-ca", "verify-full"):
+        problems.append(
+            "DATABASE_URL must carry ?sslmode=require (or verify-ca / verify-full): "
+            "database credentials and session data must not traverse a network in cleartext."
+        )
+    if not settings.REDIS_URL.lower().startswith("rediss://"):
+        problems.append(
+            "REDIS_URL must use the rediss:// scheme: chat traffic and the rate-limit "
+            "counters must not traverse a network in cleartext."
+        )
+    if not problems:
+        return
+    if settings.ALLOW_PLAINTEXT_DATA_TRANSPORT:
+        logger.warning(
+            "Running with plaintext database/cache transport (%s). This is only safe "
+            "while Postgres and Redis are reachable solely over this host's own Compose "
+            "network; see docker-compose.prod.yml for the TLS migration.",
+            "; ".join(problems),
+        )
+        return
+    raise RuntimeError(
+        "Insecure data transport: " + " ".join(problems) + " Either enable TLS, or set "
+        "ALLOW_PLAINTEXT_DATA_TRANSPORT=true to knowingly keep the single-host "
+        "Compose-network posture (see docker-compose.prod.yml)."
+    )
 
 
 def cors_allow_origins() -> list[str]:

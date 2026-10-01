@@ -19,6 +19,7 @@ from .config import (
     cors_allow_origins,
     validate_cloudinary_settings,
     validate_public_base_url,
+    validate_transport_security,
 )
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
@@ -302,6 +303,11 @@ async def on_startup():
     # Before any login can be minted: a cloud deployment without PUBLIC_BASE_URL would print
     # localhost magic links for every prod sign-in. Same fail-fast shape as the check above.
     validate_public_base_url()
+
+    # Before any credential traverses a wire: a cloud deployment on cleartext database
+    # and cache connections leaks everything it stores at the network layer. Same
+    # fail-fast shape as the checks above, with an explicit single-host opt-out.
+    validate_transport_security()
 
     postgres.initialize()
     # No accounts are created here. Booting the application used to seed a test participant

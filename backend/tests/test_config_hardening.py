@@ -115,3 +115,69 @@ def test_concurrency_ceiling_must_be_positive(monkeypatch, tmp_path):
     with pytest.raises(ValidationError):
         _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=0)
     assert _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=1).MAX_CONCURRENCY == 1
+
+def test_cloud_transport_gate_ignores_local_runs(monkeypatch):
+    """Plaintext transports stay legal off CLOUD: local dev is the posture they describe."""
+    from app.config import settings, validate_transport_security
+
+    monkeypatch.setattr(settings, "CLOUD", False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+psycopg://u:p@db:5432/ConfessIt")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://db:6379")
+    monkeypatch.setattr(settings, "ALLOW_PLAINTEXT_DATA_TRANSPORT", False)
+    validate_transport_security()  # must not raise
+
+
+def test_cloud_refuses_cleartext_data_transport(monkeypatch):
+    """SEC-004: a cloud boot on redis:// + bare postgres refuses to start."""
+    from app.config import settings, validate_transport_security
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+psycopg://u:p@db:5432/ConfessIt")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://:pw@db:6379")
+    monkeypatch.setattr(settings, "ALLOW_PLAINTEXT_DATA_TRANSPORT", False)
+    with pytest.raises(RuntimeError):
+        validate_transport_security()
+
+
+@pytest.mark.parametrize("sslmode", ["require", "verify-ca", "verify-full"])
+def test_cloud_accepts_encrypted_data_transport(monkeypatch, sslmode):
+    """SEC-004: rediss:// + an enforcing sslmode boots clean."""
+    from app.config import settings, validate_transport_security
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"postgresql+psycopg://u:p@db:5432/ConfessIt?sslmode={sslmode}"
+    )
+    monkeypatch.setattr(settings, "REDIS_URL", "rediss://:pw@db:6379")
+    monkeypatch.setattr(settings, "ALLOW_PLAINTEXT_DATA_TRANSPORT", False)
+    validate_transport_security()  # must not raise
+
+
+@pytest.mark.parametrize("sslmode", ["disable", "allow", "prefer"])
+def test_cloud_refuses_downgradable_sslmodes(monkeypatch, sslmode):
+    """SEC-004: allow/prefer silently cleartext against a lax server -- refused like absent."""
+    from app.config import settings, validate_transport_security
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"postgresql+psycopg://u:p@db:5432/ConfessIt?sslmode={sslmode}"
+    )
+    monkeypatch.setattr(settings, "REDIS_URL", "rediss://:pw@db:6379")
+    monkeypatch.setattr(settings, "ALLOW_PLAINTEXT_DATA_TRANSPORT", False)
+    with pytest.raises(RuntimeError):
+        validate_transport_security()
+
+
+def test_cloud_plaintext_acknowledgment_warns_instead_of_booting(monkeypatch, caplog):
+    """SEC-004: the single-host opt-out is a loud warning, never silent."""
+    import logging
+
+    from app.config import settings, validate_transport_security
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+psycopg://u:p@db:5432/ConfessIt")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://:pw@db:6379")
+    monkeypatch.setattr(settings, "ALLOW_PLAINTEXT_DATA_TRANSPORT", True)
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        validate_transport_security()  # must not raise
+    assert "plaintext" in caplog.text.lower()

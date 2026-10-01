@@ -52,6 +52,16 @@ interface WebSocketMessage {
 type MessageCallback = (message: Message) => void;
 type ErrorCallback = (error: Error) => void;
 
+/**
+ * Handshake refusals that retrying cannot fix (SEC-003, mirrors the backend
+ * close codes in `app/routers/messages.py`): an invalid token, a dialog the
+ * caller may not stream, or a foreign origin. Reconnecting on these would
+ * re-fail the same gate five times and trip the handshake flood brake for
+ * nothing, so they surface to error callbacks instead. Flood (4429) and idle
+ * (4400) closes stay retryable -- both are transient by construction.
+ */
+const WS_CLOSE_NO_RETRY = new Set([4001, 4003, 4403]);
+
 class MessagingClient {
   private ws: WebSocket | null = null;
   private conversationId: string | null = null;
@@ -135,11 +145,27 @@ class MessagingClient {
           console.log('🔌 WebSocket disconnected:', event.code, event.reason);
           this.stopPingInterval();
 
+          // A refused handshake (bad token, no entitlement, foreign origin)
+          // fails the same way every time: report it instead of reconnecting
+          // into the same refusal (and into the handshake flood brake).
+          if (WS_CLOSE_NO_RETRY.has(event.code)) {
+            const refusal = new Error(
+              `WebSocket refused the handshake (code ${event.code})`
+            );
+            this.errorCallbacks.forEach((callback) => {
+              try {
+                callback(refusal);
+              } catch (error) {
+                console.error('Error in error callback:', error);
+              }
+            });
+            return;
+          }
+
           // Attempt to reconnect if not a normal closure
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
-            
             setTimeout(() => {
               if (this.conversationId && this.token) {
                 // Explicit call form, not `.catch(console.error)`: the production
