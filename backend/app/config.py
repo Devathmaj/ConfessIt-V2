@@ -570,6 +570,37 @@ def validate_transport_security() -> None:
     )
 
 
+def validate_cookie_transport() -> None:
+    """Refuse a cloud deployment that would mint auth cookies without Secure (SEC-005).
+
+    ``Secure`` follows the explicit override when set, otherwise the request scheme --
+    which is the client-facing one only when the proxy middleware is on, and the direct
+    socket scheme otherwise. A cloud deployment behind a TLS-terminating proxy with no
+    trusted proxies therefore mints bearer cookies (refresh, login rate-limit client id)
+    without ``Secure`` on an https site, and any plain-http vector then carries the
+    session. Either resolution is correct in its posture: behind a proxy, name the
+    proxies in ``TRUSTED_PROXY_HOSTS`` so the reported scheme is the client's; when
+    the app itself terminates TLS, set ``COOKIE_SECURE=true``. ``False`` is refused
+    outright under ``CLOUD`` -- no deployment reachable over a network serves plain
+    HTTP publicly, so there is nothing it could correctly describe. Local runs
+    (``CLOUD`` off) are unaffected either way.
+    """
+    if not settings.CLOUD:
+        return
+    if settings.COOKIE_SECURE is False:
+        raise RuntimeError(
+            "COOKIE_SECURE must not be false when CLOUD is true: auth cookies would "
+            "leave the browser over plain HTTP. Remove the override (the request scheme "
+            "then decides) or set it to true."
+        )
+    if settings.COOKIE_SECURE is not True and not settings.TRUSTED_PROXY_HOSTS.strip():
+        raise RuntimeError(
+            "CLOUD deployments must set COOKIE_SECURE=true or TRUSTED_PROXY_HOSTS: with "
+            "neither, an app behind a TLS proxy sees the proxy-to-app hop as http and mints "
+            "auth cookies without the Secure flag on an https site."
+        )
+
+
 def cors_allow_origins() -> list[str]:
     """Parse ``CORS_ORIGINS`` into the exact origins browsers may call with cookies.
 

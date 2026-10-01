@@ -6,11 +6,14 @@ and redeem addresses share a /24 (IPv4) or /64 (IPv6) subnet -- after IPv4-mappe
 IPv6 normalisation -- or when the User-Agent matches the one recorded at mint. The
 unguessable token remains the real gate; these only decide roam versus refuse.
 
-What refusal still means is unchanged: an unrelated network counts (bounded, so spam
-cannot overflow the counter) and gets a 403, and the two subnets stay in the log
-for abuse review -- the /24 or /64 each side was in, never the host addresses,
-which must not reach retained storage. The counter column is a plain Integer,
-widened at boot on databases that predate the change.
+What refusal still means is unchanged, except its shape: an unrelated network
+counts (bounded, so spam cannot overflow the counter) and is refused with the same
+uniform 400 body as every other dead token (SEC-008) -- a distinct status would tell
+anyone holding a stolen token whether it is live, while the recovery is identical
+either way. The two subnets stay in the log for abuse review -- the /24 or /64
+each side was in, never the host addresses, which must not reach retained storage.
+The counter column is a plain Integer, widened at boot on databases that predate
+the change.
 """
 
 from fastapi.testclient import TestClient
@@ -100,11 +103,13 @@ def test_unrelated_network_is_refused_and_counted(db):
     plaintext = _mint_token_for(db, "traveller", host="127.0.0.1")
 
     first = _browser(host="10.9.9.9").get(f"{VERIFY_ENDPOINT}?token={plaintext}")
-    assert first.status_code == 403, first.text
+    assert first.status_code == 400, first.text
+    assert first.json()["detail"] == "Invalid or expired token"
     assert _attempts(db, plaintext) == 1
 
     second = _browser(host="10.9.9.9").get(f"{VERIFY_ENDPOINT}?token={plaintext}")
-    assert second.status_code == 403, second.text
+    assert second.status_code == 400, second.text
+    assert second.json()["detail"] == "Invalid or expired token"
     assert _attempts(db, plaintext) == 2
 
 
@@ -142,7 +147,8 @@ def test_attempt_counter_saturates_instead_of_overflowing(db):
 
     refused = _browser(host="10.9.9.9").get(f"{VERIFY_ENDPOINT}?token={plaintext}")
 
-    assert refused.status_code == 403, refused.text
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["detail"] == "Invalid or expired token"
     assert _attempts(db, plaintext) == 2147483647
 
 

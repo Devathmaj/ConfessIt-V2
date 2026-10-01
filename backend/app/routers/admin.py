@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, update
 
 from ..postgres import new_id, is_valid_id
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
@@ -8,8 +8,9 @@ from ..postgres import Database
 from ..dependencies import get_db
 from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate, Year
 from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
-    MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
+    LoginTokenRecord, MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
     resolve_account_by_id)
+from ..services.auth_service import SESSION_STATUS_ACTIVE, SESSION_STATUS_REVOKED
 from ..accounts import (
     AccountType, Capability, account_cap, account_cap_lock_key,
     normalize_account_type,
@@ -503,6 +504,14 @@ def set_user_block_state(
     the account was live would otherwise keep resolving forever. Rotation replaces each
     object under the same name, so old signatures stop verifying while entitled viewers
     keep working. It is best-effort and never fails the block itself.
+
+    Blocking also retires the account's sessions atomically with the flag flip
+    (SEC-008): live sessions move to ``revoked`` and unredeemed links are marked
+    revoked, so the database stops describing a blocked account as actively signed
+    in. Enforcement never depended on this -- every auth path re-checks the block
+    per request -- but no status-only reader can now mistake a blocked session for
+    a live one. Unblocking does not resurrect retired sessions: the account signs
+    in fresh, which is also what rotates its credentials.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
@@ -524,6 +533,28 @@ def set_user_block_state(
             became_blocked = blocked and not row.is_blocked
             blocked_type = normalize_account_type(target_type)
             row.is_blocked = blocked
+            if became_blocked:
+                # Same transaction as the flag flip: a block that revokes nothing
+                # is a block the session table disagrees with.
+                session.execute(
+                    update(LoginTokenRecord)
+                    .where(
+                        LoginTokenRecord.account_id == str(user_id),
+                        LoginTokenRecord.account_type == blocked_type,
+                        LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
+                    )
+                    .values(session_status=SESSION_STATUS_REVOKED)
+                )
+                session.execute(
+                    update(LoginTokenRecord)
+                    .where(
+                        LoginTokenRecord.account_id == str(user_id),
+                        LoginTokenRecord.account_type == blocked_type,
+                        LoginTokenRecord.used.is_(False),
+                        LoginTokenRecord.revoked.is_(False),
+                    )
+                    .values(revoked=True)
+                )
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if became_blocked and blocked_type == AccountType.USERS.value:

@@ -781,10 +781,13 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     # -- the same /24 (IPv4) or /64 (IPv6) subnet, or the same User-Agent the mint saw.
     # Either is enough to proceed; the unguessable token itself remains the real gate.
     # Anything else is counted (bounded, so spam cannot overflow the counter) and
-    # refused, and the log keeps the subnets for abuse review -- the /24 or /64
-    # each side was in, never the host addresses. Exact IPs would retain who was
-    # where in Loki for the full retention period; the neighbourhood is what the
-    # continuity check actually compared, so it is also what the log records.
+    # refused with the same uniform body as every other dead token (SEC-008): a distinct
+    # status would tell anyone holding a stolen token whether it is live, while the
+    # recovery is identical either way -- request a fresh link. The log keeps the
+    # subnets for abuse review -- the /24 or /64 each side was in, never the host
+    # addresses. Exact IPs would retain who was where in Loki for the full retention
+    # period; the neighbourhood is what the continuity check actually compared, so it
+    # is also what the log records.
     if not _redemption_continuity(
         minted_ip=login_token.request_ip,
         minted_user_agent=request_user_agent,
@@ -805,7 +808,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 # it. LEAST(x, MAX - 1) + 1 saturates at MAX with no overflow possible.
                 .values(attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1)
             )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token can only be used from the same network or device")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
 
     consume_ip = request.client.host
     consume_user_agent = request.headers.get("user-agent", "unknown")
@@ -972,6 +975,68 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     }
 
 
+# Rate-limit window for the replay notice below: at most one per session per hour,
+# so two tabs racing a refresh do not nag the holder, while a credential presented
+# repeatedly still surfaces.
+_REFRESH_REPLAY_NOTICE_TTL_SECONDS = 3600
+
+
+def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional[str]) -> None:
+    """Count a proven refresh replay and, sparingly, tell the holder (SEC-008).
+
+    A proven replay is a second presentation of a value the session already rotated
+    away from -- recognisable because the row keeps the previous hash, unlike a random
+    guess, which matches no row at all. The counter is the row's ``attempt_count``,
+    shared with the pre-redemption presentation counting: post-redemption it only ever
+    moves here, so a session with a high count is one whose old credentials keep
+    showing up, queryable without trawling logs.
+
+    Best-effort and never raises: the caller is already answering 401, and
+    bookkeeping must not turn a refusal into a 500. Runs in its own transaction
+    because the caller's is rolling back, and the holder notice is gated to one per
+    hour per session in Redis (skipped entirely when Redis is unreachable).
+    """
+    try:
+        with db.sessions.begin() as session:
+            session.execute(
+                update(LoginTokenRecord)
+                .where(LoginTokenRecord.id == session_id)
+                .values(attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1)
+            )
+    except Exception as exc:
+        logger.warning(f"Refresh replay count failed for session {session_id}: {exc}")
+    if not holder_regno:
+        return
+    try:
+        from .redis_service import redis_service
+
+        first = redis_service.client.set(
+            f"replay-notify:{session_id}", "1",
+            ex=_REFRESH_REPLAY_NOTICE_TTL_SECONDS, nx=True,
+        )
+    except Exception as exc:
+        logger.debug(f"Replay notice gate unavailable for session {session_id}: {exc}")
+        return
+    if not first:
+        return
+    try:
+        from .notification_service import create_notification_service
+
+        create_notification_service(
+            recipient_regno=holder_regno,
+            heading="An old session credential was used",
+            body=(
+                "Someone -- possibly you on another tab or device -- tried to refresh "
+                "this session with an outdated credential, so nothing changed. If that "
+                "was you, no action is needed. If it was not, request a fresh magic link "
+                "to replace this session."
+            ),
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning(f"Replay notice failed for session {session_id}: {exc}")
+
+
 def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]:
     """Rotate a refresh token and mint a fresh access token for its session.
 
@@ -1087,6 +1152,12 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                     f"Refresh token replayed: session {session_id} already rotated away "
                     f"this value"
                 )
+                # Proven second use of a consumed value (SEC-008): count it and, at
+                # most hourly, tell the holder. The 401 below is unchanged -- the
+                # value can never succeed again, and killing the live session too
+                # would punish a benign double-submit (two tabs racing a refresh)
+                # rather than the replay.
+                _record_refresh_replay(db, session_id, getattr(account, "regno", None))
             else:
                 logger.warning(f"Refresh race lost for session {session_id}")
             raise credentials_exception()

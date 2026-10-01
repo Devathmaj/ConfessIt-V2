@@ -181,3 +181,48 @@ def test_cloud_plaintext_acknowledgment_warns_instead_of_booting(monkeypatch, ca
     with caplog.at_level(logging.WARNING, logger="app.config"):
         validate_transport_security()  # must not raise
     assert "plaintext" in caplog.text.lower()
+
+def test_cloud_cookie_gate_ignores_local_runs(monkeypatch):
+    """SEC-005: plain HTTP on loopback keeps working with no knobs set."""
+    from app.config import settings, validate_cookie_transport
+
+    monkeypatch.setattr(settings, "CLOUD", False)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS", "")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", None)
+    validate_cookie_transport()  # must not raise
+
+
+def test_cloud_without_proxy_trust_or_override_refuses_to_boot(monkeypatch):
+    """SEC-005: behind a TLS proxy with nothing configured, Secure silently drops."""
+    from app.config import settings, validate_cookie_transport
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS", "")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", None)
+    with pytest.raises(RuntimeError):
+        validate_cookie_transport()
+
+
+def test_cloud_accepts_either_resolution(monkeypatch):
+    """SEC-005: a Secure override or trusted proxies each restore the flag."""
+    from app.config import settings, validate_cookie_transport
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS", "")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", True)
+    validate_cookie_transport()  # must not raise
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS", "10.0.0.0/8")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", None)
+    validate_cookie_transport()  # must not raise
+
+
+def test_cloud_refuses_an_explicit_insecure_override(monkeypatch):
+    """SEC-005: COOKIE_SECURE=false describes nothing a public deployment serves."""
+    from app.config import settings, validate_cookie_transport
+
+    monkeypatch.setattr(settings, "CLOUD", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOSTS", "10.0.0.0/8")
+    monkeypatch.setattr(settings, "COOKIE_SECURE", False)
+    with pytest.raises(RuntimeError):
+        validate_cookie_transport()

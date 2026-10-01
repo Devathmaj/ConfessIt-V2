@@ -102,6 +102,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public site origin}
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the public frontend origin(s)}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS to the public names this deployment serves}
+      # Must cover the edge's address (the Compose network lives in 172.16/12): without it
+      # the app sees the proxy-to-app hop as http and mints auth cookies without Secure
+      # (SEC-005 -- a cloud boot with neither this nor COOKIE_SECURE=true refuses to start).
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     # Read-only root means bytecode caches cannot be written back; disable them so
     # imports never try (the image ships compiled-clean and runs identically).

@@ -18,6 +18,7 @@ from .config import (
     settings,
     cors_allow_origins,
     validate_cloudinary_settings,
+    validate_cookie_transport,
     validate_public_base_url,
     validate_transport_security,
 )
@@ -308,6 +309,11 @@ async def on_startup():
     # and cache connections leaks everything it stores at the network layer. Same
     # fail-fast shape as the checks above, with an explicit single-host opt-out.
     validate_transport_security()
+
+    # Before any session cookie is minted: a cloud deployment that cannot know the
+    # client-facing scheme (no trusted proxies, no Secure override) mints bearer
+    # cookies without Secure on an https site. Same fail-fast shape as above.
+    validate_cookie_transport()
 
     postgres.initialize()
     # No accounts are created here. Booting the application used to seed a test participant
