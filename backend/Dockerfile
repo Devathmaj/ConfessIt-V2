@@ -14,8 +14,12 @@ COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends cron \
     && rm -rf /var/lib/apt/lists/*
 
-# Ensure pip and wheel are up-to-date, then install a setuptools version that still provides pkg_resources
-RUN pip install --no-cache-dir --upgrade pip wheel "setuptools<81"
+# Ensure pip and wheel are up-to-date. setuptools itself comes from
+# requirements.txt (pinned and audited there): the old `setuptools<81` step for
+# pkg_resources is gone because nothing imports it, and keeping it only meant
+# installing one setuptools to have requirements.txt immediately replace it
+# (DEP-001).
+RUN pip install --no-cache-dir --upgrade pip wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
 # watchfiles comes in transitively through uvicorn[standard], and its reloader

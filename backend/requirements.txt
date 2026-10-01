@@ -34,5 +34,11 @@ opentelemetry-instrumentation-redis==0.66b1
 opentelemetry-instrumentation-sqlalchemy==0.66b1
 opentelemetry-instrumentation-urllib3==0.66b1
 opentelemetry-exporter-otlp-proto-grpc==1.45.1
+# Build tooling, pinned and audited like the rest of the tree -- not a
+# pkg_resources provider. Nothing here imports pkg_resources (only docstring
+# mentions and a guarded pytest fallback reference it), and the pinned
+# 84.0.0 is past the PYSEC-2026-3447 fix (83.0.0), so CI audits it with no
+# exceptions. DEP-001: this pin used to contradict the Dockerfile's
+# `setuptools<81` install step, which the image build immediately overrode.
 setuptools==84.0.0
 SQLAlchemy==2.1.4

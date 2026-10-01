@@ -24,7 +24,21 @@ updates:
       frontend-deps:
         patterns:
           - "*"
-    # Same story on this side: `npm audit --omit=dev --audit-level=critical` in CI
+    # Same story on this side: `npm audit --omit=dev --audit-level=high` in CI
     # is the merge gate for what ships to browsers.
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    # CI pins every third-party action to a commit SHA (version in the trailing
+    # comment), so without this the pins would fossilise: this proposes the
+    # updates as ordinary PRs with the full pipeline validating them.
     commit-message:
       prefix: "chore(deps)"

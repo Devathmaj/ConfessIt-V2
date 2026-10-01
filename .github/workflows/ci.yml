@@ -6,16 +6,30 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
+# Least privilege (INFRA-002): every job inherits read-only repository access.
+# Jobs that upload artifacts add `actions: write` on themselves. Nothing here
+# creates releases, pushes commits, or comments on PRs, so no broader scope is
+# granted. Third-party actions below are pinned to full commit SHAs (version in
+# the trailing comment), never to moving tags: a tag can be repointed, a SHA
+# cannot. Dependabot's github-actions ecosystem (see dependabot.yml) proposes
+# the updates, so frozen does not mean forgotten.
+permissions:
+  contents: read
+
 jobs:
   frontend-tests:
     runs-on: ubuntu-latest
+    # actions:write for the SBOM upload below; everything else needs contents:read.
+    permissions:
+      actions: write
+      contents: read
     defaults:
       run:
         working-directory: ./frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # Vite 7 requires ^20.19.0 || >=22.12.0; pin the newer line.
           node-version: '22'
@@ -37,9 +51,10 @@ jobs:
         run: npm run test
       - name: Audit shipped dependencies
         # Production attack surface only (--omit=dev): build/lint tooling carries
-        # transitive highs with no patched versions, which Dependabot (below) keeps
-        # pressure on instead. Anything critical in what ships to browsers fails here.
-        run: npm audit --omit=dev --audit-level=critical
+        # transitive highs with no patched versions, which Dependabot keeps pressure
+        # on instead. Anything high or critical in what ships to browsers fails here;
+        # a high with no patched version gets a documented exception, not a silent pass.
+        run: npm audit --omit=dev --audit-level=high
       - name: Unused dependency check (advisory)
         # depcheck flags unused/shadowed deps (e.g. dev-only tagger helpers, removed
         # cmdk/embla/vaul/input-otp/resizable-panels). Advisory: it false-positives on
@@ -49,14 +64,16 @@ jobs:
       - name: Generate frontend SBOM
         run: npm sbom --omit=dev --sbom-format=cyclonedx -o sbom-frontend.cdx.json
       - name: Upload frontend SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-frontend
           path: ./frontend/sbom-frontend.cdx.json
       - name: Trivy filesystem scan (advisory)
         # Advisory (exit-code 0 + SARIF) while pre-existing HIGHs in dev tooling are
         # triaged; npm audit above remains the blocking prod-dependency gate.
-        uses: aquasecurity/trivy-action@0.28.0
+        # Note the repo tags this release `v0.28.0`: the bare `0.28.0` ref is pinned
+        # here by SHA like everything else, so resolution never depends on tag aliasing.
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: 'fs'
           scan-ref: './frontend'
@@ -67,6 +84,10 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
+    # actions:write for the SBOM upload below; everything else needs contents:read.
+    permissions:
+      actions: write
+      contents: read
     defaults:
       run:
         working-directory: ./backend
@@ -109,9 +130,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           # Matches backend/Dockerfile, so the suite runs on the interpreter the app ships.
           python-version: '3.12'
@@ -122,12 +143,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Audit Python dependencies
-        # Fail-closed on known vulnerabilities in the pinned tree. setuptools is
-        # build-time only (kept <81 for pkg_resources) and ignored with reason;
-        # everything else must be clean.
+        # Fail-closed on known vulnerabilities in the pinned tree, with no
+        # exceptions: the PYSEC-2026-3447 (CVE-2026-59890, setuptools sdist
+        # handling) waiver used to live here, but it is moot -- the pinned
+        # setuptools==84.0.0 is past the 83.0.0 fix, and nothing in the tree
+        # imports pkg_resources (see requirements.txt), so there is nothing to
+        # waive. A future advisory with no patched version gets a documented
+        # ignore with an expiry date, never a silent one.
         run: |
           pip install pip-audit
-          pip-audit -r requirements.txt --ignore-vuln PYSEC-2026-3447
+          pip-audit -r requirements.txt
       - name: Create the test database
         # tests/conftest.py refuses to start unless TEST_DATABASE_URL names a database
         # other than DATABASE_URL, because its clear_db fixture truncates every table.
@@ -150,12 +175,12 @@ jobs:
           pip install cyclonedx-bom
           cyclonedx-py requirements -o sbom-backend.cdx.json
       - name: Upload backend SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-backend
           path: ./backend/sbom-backend.cdx.json
       - name: Trivy filesystem scan (advisory)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           scan-type: 'fs'
           scan-ref: './backend'
@@ -179,7 +204,7 @@ jobs:
       SECRET_KEY: compose-build-placeholder-not-a-real-key-00000000
       TOKEN_HASH_PEPPER: compose-build-placeholder-not-a-real-pepper-0000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify Docker Compose Build
         run: docker compose build
       - name: Verify production compose file parses
