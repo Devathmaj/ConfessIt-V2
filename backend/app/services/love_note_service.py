@@ -104,8 +104,10 @@ def may_view_love_note_image(
 ) -> bool:
     """Whether this viewer may be handed a working address for ``note``'s image.
 
-    A love note's delivery URL is a capability, not a convenience: it authorises Cloudinary to
-    serve that one image to whoever holds it, until it expires. So this question is answered
+    A love note's delivery URL is a durable bearer capability, not a convenience: it
+    authorises Cloudinary to serve that one image to whoever holds it, indefinitely --
+    the signature does not expire (see ``storage_service.love_note_delivery_url``). So
+    this question is answered
     before any token is minted, and it is answered from the row rather than from anything the
     request carried. The rules are unchanged from when the backend proxied the bytes, and each
     one exists for a reason:

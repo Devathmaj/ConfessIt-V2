@@ -696,16 +696,27 @@ class CloudinaryStorageService:
         and which is a different thing entirely from a URL signature -- see ``config``. That
         makes an issued URL a durable bearer capability, so the entitlement check above is the
         only gate there ever is, and the URL is derived per-response rather than stored.
+        Callers must therefore treat the URL as a credential: never store it, never log it,
+        serve it only under ``Cache-Control: no-store`` + ``Referrer-Policy: no-referrer``.
 
-        Fails closed. A URL that came back unsigned is a URL Cloudinary will refuse on every
-        fetch, so the failure is raised here where the message can say why, rather than in the
-        browser as a broken image. There is no public or proxied fallback: serving a love note
-        from a weaker path because the strong one was unconfigured would be a privacy incident,
-        not a degradation.
+        Fails closed. A URL that came back unsigned, off-host, or for an object outside the
+        love-note layout is a URL the CDN would refuse (or worse, one pointing somewhere
+        unintended), so the failure is raised here where the message can say why, rather than
+        in the browser as a broken image. There is no public or proxied fallback: serving a
+        love note from a weaker path because the strong one was unconfigured would be a privacy
+        incident, not a degradation.
         """
         if not public_id:
             return None
         self._ensure_enabled()
+        # The URL must name an object in this service's own layout: a stored identity that
+        # drifted (or was tampered) into another folder must fail here rather than mint a
+        # signed address for somewhere unintended.
+        if self.love_note_id_segment(public_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Love note image delivery is not configured",
+            )
 
         url, _ = cloudinary_url(
             public_id,
@@ -720,7 +731,15 @@ class CloudinaryStorageService:
             # token key and is unavailable here.
             sign_url=True,
         )
-        if not url or not SIGNED_URL_PATTERN.search(url):
+        # Both halves matter, like the profile path: the signature proves the CDN will serve
+        # it, and the host proves the address is on the CDN the frontend allowlists. The SDK
+        # builds the URL from configuration, so a misconfigured cloud name must fail here
+        # rather than hand out an address on an unexpected host.
+        if (
+            not url
+            or not url.startswith("https://res.cloudinary.com/")
+            or not SIGNED_URL_PATTERN.search(url)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Love note image delivery is not configured",

@@ -12,8 +12,10 @@ These tests pin the replacement contract:
 * the sort picker orders in SQL (recent, most reactions, most comments), with the total
   counting the same visible posts so the screen pages the feed it asked for;
 * removed posts stay out of the page and out of the total;
-* each post on the page still carries its comments, author snapshot and reporter ids --
-  resolved with bulk reads for the page alone, never the whole tables.
+* each post on the page still carries its comments, author snapshot, report counts and
+  the caller's own report/reaction state (SEC-002: reporter/reactor identities are
+  never disclosed to participants) -- resolved with bulk reads for the page alone,
+  never the whole tables.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -315,5 +317,37 @@ def test_a_page_carries_its_own_comments_authors_and_reporters(db, client):
     assert item["user_info"]["name"] == "The Author"
     assert [comment["body"] for comment in item["comments"]] == ["a reply"]
     assert item["comments"][0]["user_info"]["name"] == "The Commenter"
-    assert item["reported_by"] == [reporter["id"]]
+    # SEC-002: participant reads never enumerate reporters/reactors. The count
+    # stays so the UI can show it; the caller's own state is a boolean.
+    assert item["reported_by"] == []
+    assert item["has_reported"] is False
     assert item["report_count"] == 1
+    assert item["reactions"] == {}
+    assert item["comments"][0]["likes"] == []
+    assert item["comments"][0]["dislikes"] == []
+    assert item["comments"][0]["reported_by"] == []
+    assert item["comments"][0]["has_reported"] is False
+
+
+def test_the_reporter_themselves_sees_has_reported_without_identities(db):
+    """SEC-002 true path: the reporter learns *that* they reported, never *who else* did."""
+    from app.services.confession_service import ConfessionService
+
+    author = make_user(db, "author", name="The Author")
+    reporter = make_user(db, "reporter", name="The Reporter")
+    other = make_user(db, "other", name="Someone Else")
+    confession_id = make_confession(db, author, body="a reported post")
+    file_report(db, confession_id, reporter)
+    file_report(db, confession_id, other)
+
+    service = ConfessionService(db)
+    page = service.get_confessions("time", user_id=reporter["id"])
+    assert page["total"] == 1
+    item = page["confessions"][0]
+    assert item.report_count == 2
+    assert item.has_reported is True
+    # No identities leak even to someone who themselves reported.
+    assert item.reported_by == []
+    assert item.reactions == {}
+    assert reporter["id"] not in item.model_dump_json()
+    assert other["id"] not in item.model_dump_json()

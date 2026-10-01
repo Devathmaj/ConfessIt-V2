@@ -233,22 +233,29 @@ class UserInfo(BaseModel):
 class ConfessionComment(BaseModel):
     """
     Represents a comment on a confession post.
+
+    Participant-scoped: ``likes``/``dislikes``/``reported_by`` are always empty on
+    participant reads -- the caller's own state travels as ``user_reaction`` and
+    ``has_reported`` plus the public counts, so one participant can never enumerate
+    who else voted or reported. Staff surfaces carry the full lists under the same
+    field names.
     """
     id: str = Field(default_factory=new_id)
     confession_id: str
     user_info: UserInfo
     body: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    
+
     likes: List[str] = Field(default_factory=list)
     dislikes: List[str] = Field(default_factory=list)
     like_count: int = 0
     dislike_count: int = 0
-    
+
     user_reaction: Optional[str] = None
-    
+
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
+    has_reported: bool = False
 
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
@@ -257,6 +264,11 @@ class ConfessionComment(BaseModel):
 class Confession(BaseModel):
     """
     Represents a single confession post within the application.
+
+    Participant-scoped: ``reactions``/``reported_by`` are always empty on participant
+    reads -- the caller's own state travels as ``user_reaction`` and ``has_reported``
+    plus the public counts, so one participant can never enumerate who else reacted
+    or reported. Staff surfaces carry the full lists under the same field names.
     """
     id: str = Field(default_factory=new_id)
     body: str
@@ -269,8 +281,9 @@ class Confession(BaseModel):
     user_info: Optional[UserInfo] = None
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
+    has_reported: bool = False
     reactions: Dict[str, List[str]] = Field(default_factory=dict)
-    
+
     comments: List[ConfessionComment] = Field(default_factory=list)
 
     heart_count: int = 0
@@ -278,7 +291,7 @@ class Confession(BaseModel):
     whoa_count: int = 0
     heartbreak_count: int = 0
     comment_count: int = 0
-    
+
     user_reaction: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)

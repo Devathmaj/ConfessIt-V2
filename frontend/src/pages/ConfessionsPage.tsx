@@ -67,6 +67,13 @@ interface ConfessionComment {
   user_reaction: 'like' | 'dislike' | null;
   report_count: number;
   reported_by: string[];
+  /** Whether the current viewer reported this comment (SEC-002; preferred over reported_by). */
+  has_reported?: boolean;
+}
+
+interface HasReported {
+  has_reported?: boolean;
+  reported_by?: string[];
 }
 
 // Interface for a single confession post
@@ -88,7 +95,22 @@ interface Confession {
   user_reaction: string | null;
   report_count: number;
   reported_by: string[];
+  /** Whether the current viewer reported this confession (SEC-002; preferred over reported_by). */
+  has_reported?: boolean;
 }
+
+/**
+ * Whether the current user already reported this item (SEC-002).
+ *
+ * Prefers the server's per-viewer `has_reported` boolean, which discloses nothing
+ * about other reporters. Falls back to the legacy `reported_by` membership check
+ * for responses from servers that still send it.
+ */
+const hasReportedByMe = (item: HasReported, userId?: string | null): boolean => {
+  if (typeof item.has_reported === 'boolean') return item.has_reported;
+  if (!userId || !Array.isArray(item.reported_by)) return false;
+  return item.reported_by.includes(userId);
+};
 
 /**
  * A commenter's or non-anonymous author's avatar: their photo, or their first initial when
@@ -924,7 +946,7 @@ export const ConfessionsPage = () => {
 
       <div className="max-w-4xl mx-auto space-y-6 min-w-0">
         {confessions.map((confession, index) => {
-          const hasReportedConfession = user && confession.reported_by.includes(user.id);
+          const hasReportedConfession = user && hasReportedByMe(confession, user.id);
           return (
             <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300 min-w-0 overflow-hidden" style={{ animationDelay: `${index * 0.1}s` }}>
               <CardHeader>
@@ -1098,7 +1120,7 @@ export const ConfessionsPage = () => {
                 </div>
                 {selectedConfession.comments.length > 0 ? (
                   selectedConfession.comments.map(comment => {
-                    const hasReported = user && comment.reported_by.includes(user.id);
+                    const hasReported = user && hasReportedByMe(comment, user.id);
                     return (
                     <div key={comment.id} className="text-sm p-3 bg-muted/50 rounded-lg shadow-sm">
                       <div className="flex items-center gap-2">

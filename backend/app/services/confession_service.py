@@ -261,8 +261,12 @@ class ConfessionService:
         hydrated = []
         for row in comment_models:
             payload = self._comment_payload(row, user_map.get(row.user_id))
-            payload["reported_by"] = reporters.get(str(row.id), [])
-            payload["report_count"] = len(payload["reported_by"])
+            reporter_ids = reporters.get(str(row.id), [])
+            # Participant-scoped (SEC-002): the caller learns only whether *they*
+            # reported, never who else did; the count stays so the UI can show it.
+            payload["has_reported"] = bool(user_id and user_id in reporter_ids)
+            payload["reported_by"] = []
+            payload["report_count"] = len(reporter_ids)
             reaction = None
             if user_id:
                 if user_id in payload.get('likes', []):
@@ -270,6 +274,9 @@ class ConfessionService:
                 elif user_id in payload.get('dislikes', []):
                     reaction = 'dislike'
             payload['user_reaction'] = reaction
+            # Voter ID lists never leave the server on participant reads; counts stay.
+            payload['likes'] = []
+            payload['dislikes'] = []
             hydrated.append(payload)
         return hydrated
 
@@ -436,8 +443,12 @@ class ConfessionService:
                 comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
 
         for confession in confession_rows:
-            confession["reported_by"] = confession_reporters.get(str(confession["id"]), [])
-            confession["report_count"] = len(confession["reported_by"])
+            reporter_ids = confession_reporters.get(str(confession["id"]), [])
+            # Participant-scoped (SEC-002): only the caller's own report state is
+            # disclosed; reporter identities stay server-side. Counts are preserved.
+            confession["has_reported"] = bool(user_id and user_id in reporter_ids)
+            confession["reported_by"] = []
+            confession["report_count"] = len(reporter_ids)
             confession_id = str(confession["id"])
             confession["comments"] = sorted(
                 comments_by_confession.get(confession_id, []),
@@ -458,13 +469,13 @@ class ConfessionService:
         for confession_doc in confession_rows:
             comments_list = []
             for comment_doc in sorted(confession_doc.get('comments', []), key=lambda c: c['created_at'], reverse=True):
-                user_comment_reaction = None
-                if user_id:
+                # _hydrate_comments already derived this from the full voter lists
+                # before stripping them; keep it rather than re-deriving from [].
+                if comment_doc.get('user_reaction') is None and user_id:
                     if user_id in comment_doc.get('likes', []):
-                        user_comment_reaction = 'like'
+                        comment_doc['user_reaction'] = 'like'
                     elif user_id in comment_doc.get('dislikes', []):
-                        user_comment_reaction = 'dislike'
-                comment_doc['user_reaction'] = user_comment_reaction
+                        comment_doc['user_reaction'] = 'dislike'
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
@@ -475,6 +486,9 @@ class ConfessionService:
                         user_reaction = reaction_type
                         break
             confession_doc['user_reaction'] = user_reaction
+            # Participant-scoped (SEC-002): reactor identities never leave the
+            # server on participant reads; counts + the caller's own reaction do.
+            confession_doc['reactions'] = {}
 
             confessions.append(Confession(**confession_doc))
 
@@ -491,17 +505,21 @@ class ConfessionService:
                 row = None
             confession_doc = self._confession_payload(row) if row else None
         if confession_doc:
-            confession_doc["reported_by"] = self._reporter_ids(confession_id)
-            confession_doc["report_count"] = len(confession_doc["reported_by"])
+            reporter_ids = self._reporter_ids(confession_id)
+            # Participant-scoped (SEC-002): identities stay server-side.
+            confession_doc["has_reported"] = bool(user_id and user_id in reporter_ids)
+            confession_doc["reported_by"] = []
+            confession_doc["report_count"] = len(reporter_ids)
             user_reaction = None
             if user_id and 'reactions' in confession_doc:
                 for reaction_type, user_ids in confession_doc['reactions'].items():
                     if user_id in user_ids:
                         user_reaction = reaction_type
                         break
-            
+
             confession_doc['user_reaction'] = user_reaction
-            
+            confession_doc['reactions'] = {}
+
             with self.sessions() as session:
                 comment_models = session.scalars(select(ConfessionCommentRecord).where(
                     ConfessionCommentRecord.confession_id == str(confession_id),
@@ -513,8 +531,10 @@ class ConfessionService:
             comments_cursor = [self._comment_payload(c, comment_users.get(c.user_id)) for c in comment_models]
             comments_list = []
             for comment_doc in comments_cursor:
-                comment_doc["reported_by"] = self._reporter_ids(comment_doc["id"])
-                comment_doc["report_count"] = len(comment_doc["reported_by"])
+                comment_reporter_ids = self._reporter_ids(comment_doc["id"])
+                comment_doc["has_reported"] = bool(user_id and user_id in comment_reporter_ids)
+                comment_doc["reported_by"] = []
+                comment_doc["report_count"] = len(comment_reporter_ids)
                 user_comment_reaction = None
                 if user_id:
                     if user_id in comment_doc.get('likes', []):
@@ -522,6 +542,8 @@ class ConfessionService:
                     elif user_id in comment_doc.get('dislikes', []):
                         user_comment_reaction = 'dislike'
                 comment_doc['user_reaction'] = user_comment_reaction
+                comment_doc['likes'] = []
+                comment_doc['dislikes'] = []
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
@@ -670,6 +692,11 @@ class ConfessionService:
             session.flush()
             new_comment = self._comment_payload(row, user)
             new_comment["user_info"].update({"name": user.name})
+            # Participant-scoped (SEC-002): a fresh comment has no reports/votes yet.
+            new_comment["has_reported"] = False
+            new_comment["reported_by"] = []
+            new_comment["likes"] = []
+            new_comment["dislikes"] = []
         logger.info(f"Added comment {new_comment['id']} to confession {confession_id}")
         return ConfessionComment(**new_comment)
 
@@ -704,9 +731,14 @@ class ConfessionService:
         if not row:
             return None
         updated_comment = self._comment_payload(row, user)
-        updated_comment["reported_by"] = self._reporter_ids(comment_id)
-        updated_comment["report_count"] = len(updated_comment["reported_by"])
+        comment_reporter_ids = self._reporter_ids(comment_id)
+        # Participant-scoped (SEC-002).
+        updated_comment["has_reported"] = bool(user_id and user_id in comment_reporter_ids)
+        updated_comment["reported_by"] = []
+        updated_comment["report_count"] = len(comment_reporter_ids)
         updated_comment["user_reaction"] = user_new_reaction
+        updated_comment["likes"] = []
+        updated_comment["dislikes"] = []
         return ConfessionComment(**updated_comment)
 
     def like_comment(self, comment_id: str, user_id: str) -> Optional[ConfessionComment]:
@@ -753,8 +785,14 @@ class ConfessionService:
         if not row:
             return None
         updated_comment_doc = self._comment_payload(row, author)
-        updated_comment_doc["reported_by"] = self._reporter_ids(comment_id)
-        updated_comment_doc["report_count"] = len(updated_comment_doc["reported_by"])
+        comment_reporter_ids = self._reporter_ids(comment_id)
+        # Participant-scoped (SEC-002): the reporter just filed, so has_reported is
+        # True by construction; identities still stay server-side.
+        updated_comment_doc["has_reported"] = True
+        updated_comment_doc["reported_by"] = []
+        updated_comment_doc["report_count"] = len(comment_reporter_ids)
+        updated_comment_doc["likes"] = []
+        updated_comment_doc["dislikes"] = []
         return ConfessionComment(**updated_comment_doc)
 
     def report_confession(self, confession_id: str, report_data: ReportCreate, user: UserDetails) -> Optional[Confession]:

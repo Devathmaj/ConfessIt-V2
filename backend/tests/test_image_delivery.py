@@ -346,6 +346,46 @@ def test_a_token_style_url_is_rejected_even_though_it_looks_credentialed(monkeyp
     assert excinfo.value.status_code == 503
 
 
+def test_a_signed_url_off_the_cdn_host_is_never_handed_out(monkeypatch):
+    """SEC-001: the host is asserted, not assumed.
+
+    The SDK builds the URL from configuration, so a misconfigured (or tampered) cloud
+    name must fail closed here rather than hand the frontend a signed address on a host
+    the image allowlist does not know -- which it would refuse to render, or worse,
+    whatever the tampered value points at. Same shape as the profile-URL host check.
+    """
+    monkeypatch.setattr(storage_service, "enabled", True, raising=False)
+    monkeypatch.setattr(storage_service, "_ensure_enabled", lambda: None)
+    monkeypatch.setattr(
+        "app.services.storage_service.cloudinary_url",
+        lambda *a, **k: (
+            "https://cdn.evil.example/image/authenticated/s--abc123--/v1/y.png",
+            {},
+        ),
+        raising=True,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        storage_service.love_note_delivery_url(storage_service.love_note_public_id(NOTE_ID), "png")
+
+    assert excinfo.value.status_code == 503
+
+
+def test_a_signed_url_for_an_object_outside_the_layout_is_never_handed_out(monkeypatch):
+    """SEC-001: only objects in the love-note layout may be signed.
+
+    A stored identity that drifted (or was tampered) into another folder must fail here
+    rather than mint a signed address for somewhere unintended.
+    """
+    monkeypatch.setattr(storage_service, "enabled", True, raising=False)
+    monkeypatch.setattr(storage_service, "_ensure_enabled", lambda: None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        storage_service.love_note_delivery_url("profile_pics/someone/xyz/profile", "png")
+
+    assert excinfo.value.status_code == 503
+
+
 def test_startup_does_not_require_an_auth_token_key(monkeypatch):
     """Regression guard for the bug that made love notes undeliverable.
 
