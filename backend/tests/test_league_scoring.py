@@ -963,6 +963,62 @@ class TestCorrection:
             league_finalization.reprocess_opportunity(db, "wordle", session_id)
         assert caught.value.status_code == 404
 
+    def test_reprocess_of_an_open_event_keeps_live_awards(self, db):
+        """ENG-006: a refused recompute must not strand superseded-only state.
+
+        Reprocess used to supersede in one transaction and recompute in a second,
+        so an event that was no longer closed left its originals superseded with
+        no live awards. Supersede and recompute now commit atomically: the 409
+        below rolls both halves back and the board keeps showing the originals.
+        """
+        import pytest
+        from fastapi import HTTPException
+
+        day = today() - timedelta(days=3)
+        users = [make_user(db, f"X{i}") for i in range(2)]
+        session_id = add_wordle_session(db, day)
+        add_wordle_result(db, session_id, users[0].id, 2, True)
+        add_wordle_result(db, session_id, users[1].id, 4, True)
+        league_finalization.finalize_opportunity(db, "wordle", session_id)
+        assert len(live_awards(db, game_id="wordle")) == 2
+
+        # Reopen the event: sessions never reopen in production, which is exactly
+        # why the old code met this state only by interleaving -- and stranded it.
+        with db.sessions.begin() as session:
+            session.get(WordleGameRecord, session_id).status = "active"
+
+        with pytest.raises(HTTPException) as caught:
+            league_finalization.reprocess_opportunity(db, "wordle", session_id)
+        assert caught.value.status_code == 409
+
+        kept = live_awards(db, game_id="wordle")
+        assert len(kept) == 2
+        assert all(row.superseded_at is None for row in kept)
+
+    def test_due_scan_logs_skipped_events(self, db, caplog):
+        """ENG-006: unfinalizable events are retried visibly, not silently skipped."""
+        import logging
+        import uuid
+
+        from app.db_models import GameScoreOpportunityRecord
+
+        ghost_id = str(uuid.uuid4())
+        with db.sessions.begin() as session:
+            session.add(GameScoreOpportunityRecord(
+                game_id="wordle",
+                opportunity_id=ghost_id,
+                competition_type="individual",
+                activation_date=today(),
+                competition_at=at(today()),
+            ))
+
+        with caplog.at_level(logging.WARNING, logger="app.services.league_finalization"):
+            summary = league_finalization.finalize_due_opportunities(db, ["wordle"])
+
+        assert summary == {"wordle": {"snapshots": 0, "finalized": 0}}
+        assert ghost_id in caplog.text
+        assert "skipped finalization" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Publish-time finalization (admin Updates and trivia releases)

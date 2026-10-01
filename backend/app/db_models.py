@@ -921,10 +921,14 @@ class MatchmakingSlotRecord(Base):
     wondering. ``department_a`` and ``department_b`` are free text, because departments are a
     property of the institution rather than of this schema.
 
-    There is no uniqueness constraint on the pair. The service checks for a duplicate before
-    inserting and answers 409, which is the behaviour a caller can rely on; a database-level
-    unique index would be the belt to that braces, but it would also make a race between two
-    simultaneous requests a 500 rather than the 409 the second one is already promised.
+    There is no uniqueness constraint on the pair, and that is structural rather than
+    cautious: the duplicate rule is order-independent (A-B equals B-A) and NULL-sensitive
+    (a NULL group matches only NULL), neither of which a unique index expresses -- NULLs
+    never compare equal, so legacy unboxed rows could duplicate freely under one. The
+    service checks for a duplicate before inserting and answers 409, which is the
+    behaviour a caller can rely on, and slot writes serialise on a dedicated advisory
+    lock (see ``matchmaking_slot_service._SLOT_WRITE_LOCK_KEY``) so the promised 409
+    also holds for two simultaneous requests rather than landing both rows.
     """
 
     __tablename__ = "matchmaking_slots"

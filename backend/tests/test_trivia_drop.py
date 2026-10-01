@@ -1219,3 +1219,51 @@ def test_selection_discovery_and_availability(db):
     selection = client.get("/games/select").json()
     entry = next(game for game in selection["games"] if game["game_id"] == "trivia-drop")
     assert entry["playable"] is True
+
+
+def test_concurrent_reschedules_to_one_instant_leave_one_holder(db):
+    """ENG-005: two simultaneous reschedules to one instant answer 200+409, never two holders.
+
+    The conflict check is read-then-write, so without serialization both pass it and
+    both land. Reschedule runs under the game's advisory lock like create/deploy,
+    so the loser re-reads the winner's committed row and gets the promised 409.
+    """
+    from fastapi import HTTPException
+
+    first = trivia_service.create_question(
+        db, question_text="First?", options=OPTIONS, correct_indexes=[0],
+        created_by="admin",
+    )
+    second = trivia_service.create_question(
+        db, question_text="Second?", options=MULTI_OPTIONS, correct_indexes=[1],
+        created_by="admin",
+    )
+    now = datetime.now(timezone.utc)
+    trivia_service.schedule_question(db, first.id, now + timedelta(hours=3))
+    trivia_service.schedule_question(db, second.id, now + timedelta(hours=4))
+
+    instant = now + timedelta(hours=5)
+    barrier = threading.Barrier(2)
+    outcomes: list = []
+
+    def attempt(question_id: str) -> None:
+        barrier.wait(timeout=30)
+        try:
+            trivia_service.reschedule_question(db, question_id, instant)
+            outcomes.append(200)
+        except HTTPException as exc:
+            outcomes.append(exc.status_code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for future in [pool.submit(attempt, question_id) for question_id in (first.id, second.id)]:
+            future.result(timeout=60)
+
+    assert sorted(outcomes) == [200, 409]
+    with db.sessions() as session:
+        holders = session.scalars(
+            select(TriviaDropQuestionRecord).where(
+                TriviaDropQuestionRecord.status == "scheduled",
+                TriviaDropQuestionRecord.scheduled_for == instant,
+            )
+        ).all()
+        assert len(holders) == 1

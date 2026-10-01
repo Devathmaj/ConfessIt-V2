@@ -382,7 +382,25 @@ def schedule_puzzle(
                 created_by=created_by,
             )
             session.add(row)
-            session.flush()
+            try:
+                with session.begin_nested():
+                    session.flush()
+            except IntegrityError:
+                # Lost an insert race with a concurrent schedule for the same
+                # date: the unique index refused the duplicate. Re-read the
+                # winner (committed before the violation surfaced) and apply
+                # the replace the caller asked for, so concurrent identical
+                # writes converge instead of answering 500.
+                existing = session.scalar(
+                    select(ConnectionsScheduledPuzzleRecord).where(
+                        ConnectionsScheduledPuzzleRecord.target_date == target_date,
+                    )
+                )
+                assert existing is not None, "the winning schedule must exist"
+                existing.groups = normalized
+                existing.created_by = created_by
+                session.flush()
+                row = existing
         return {
             "id": str(row.id),
             "target_date": row.target_date.isoformat(),

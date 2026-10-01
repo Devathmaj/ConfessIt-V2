@@ -20,6 +20,7 @@ from ..limits import MAX_FUTURE_SCHEDULE_DAYS
 from ..postgres import Database
 from . import game_periods
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 
 def _manual_games() -> tuple[str, ...]:
@@ -93,7 +94,26 @@ def schedule_word(
                 created_by=created_by,
             )
             session.add(row)
-            session.flush()
+            try:
+                with session.begin_nested():
+                    session.flush()
+            except IntegrityError:
+                # Lost an insert race with a concurrent schedule for the same
+                # (game, date): the unique index refused the duplicate. Re-read
+                # the winner (committed before the violation surfaced) and apply
+                # the replace the caller asked for, so concurrent identical
+                # writes converge instead of answering 500.
+                existing = session.scalar(
+                    select(ScheduledGameContentRecord).where(
+                        ScheduledGameContentRecord.game_id == game_id,
+                        ScheduledGameContentRecord.target_date == target_date,
+                    )
+                )
+                assert existing is not None, "the winning schedule must exist"
+                existing.word = normalized
+                existing.created_by = created_by
+                session.flush()
+                row = existing
         return {
             "id": str(row.id),
             "game_id": row.game_id,

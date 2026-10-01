@@ -461,3 +461,62 @@ def test_connections_update_without_groups_uses_the_window_schedule(db):
             )
             == 0
         )
+
+
+# --- concurrent schedules ----------------------------------------------------
+# ENG-005: store-or-replace endpoints race on the unique (game, date) index when
+# two administrators save one date at once. The loser converges onto the
+# winner's row instead of answering 500, so both calls succeed and one row
+# survives -- whichever word committed last, which is why both racers below
+# write the same word.
+
+
+def test_concurrent_word_schedules_for_one_date_converge(db):
+    from app.services.scheduled_contents import schedule_word
+
+    target = today() + timedelta(days=2)
+    word = solution_words()[0]
+    barrier = threading.Barrier(2)
+    outcomes: list = []
+
+    def attempt() -> None:
+        barrier.wait(timeout=30)
+        outcomes.append(
+            schedule_word(db, "wordle", target, word, created_by="admin")["word"]
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for future in [pool.submit(attempt) for _ in range(2)]:
+            future.result(timeout=60)
+
+    assert outcomes == [word, word]
+    rows = [row for row in scheduled_words(db) if row.target_date == target]
+    assert len(rows) == 1
+    assert rows[0].word == word
+
+
+def test_concurrent_puzzle_schedules_for_one_date_converge(db):
+    from app.services.connections_service import schedule_puzzle as schedule_service_puzzle
+
+    target = today() + timedelta(days=2)
+    barrier = threading.Barrier(2)
+    outcomes: list = []
+
+    def attempt() -> None:
+        barrier.wait(timeout=30)
+        outcomes.append(
+            schedule_service_puzzle(db, target, GROUPS, created_by="admin")["target_date"]
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for future in [pool.submit(attempt) for _ in range(2)]:
+            future.result(timeout=60)
+
+    assert outcomes == [target.isoformat(), target.isoformat()]
+    with db.sessions() as session:
+        count = session.scalar(
+            select(func.count()).select_from(ConnectionsScheduledPuzzleRecord).where(
+                ConnectionsScheduledPuzzleRecord.target_date == target
+            )
+        )
+        assert count == 1

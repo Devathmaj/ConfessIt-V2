@@ -374,3 +374,42 @@ def test_a_keyed_box_and_a_legacy_box_are_both_reported(db):
 
     assert None in keys and BOX_TWO in keys
     assert keys == [BOX_TWO, None]  # the keyed box first, the legacy row last
+
+
+def test_concurrent_identical_creates_leave_one_row(db):
+    """ENG-005: two simultaneous creates of one pair+box answer 200+409, never 500 or two rows.
+
+    The duplicate rule is order-independent and NULL-sensitive, so no unique index can
+    back it; slot writes serialise on the dedicated advisory lock instead, and the loser
+    re-reads the winner's committed row and gets the promised duplicate 409.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi import HTTPException
+
+    from app.services.matchmaking_slot_service import create_matchmaking_slot_service
+
+    barrier = threading.Barrier(2)
+    outcomes: list = []
+
+    def attempt() -> None:
+        barrier.wait(timeout=30)
+        try:
+            create_matchmaking_slot_service(db, *COHORT_A, *COHORT_B, BOX_ONE)
+            outcomes.append(200)
+        except HTTPException as exc:
+            outcomes.append(exc.status_code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for future in [pool.submit(attempt) for _ in range(2)]:
+            future.result(timeout=60)
+
+    assert sorted(outcomes) == [200, 409]
+    with db.sessions() as session:
+        rows = session.scalars(
+            select(MatchmakingSlotRecord).where(
+                MatchmakingSlotRecord.group_key == BOX_ONE
+            )
+        ).all()
+        assert len(rows) == 1

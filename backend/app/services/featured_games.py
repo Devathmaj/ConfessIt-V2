@@ -161,14 +161,44 @@ def replace_featured(
         _refuse_overlong_chain(
             game_id, _chain_length(window, game_id, game_date), game_date, game_date
         )
-        if existing is not None:
-            session.delete(existing)
-            session.flush()
-        row = FeaturedGameRecord(
-            game_date=game_date, game_id=game_id, created_by=created_by
-        )
-        session.add(row)
-        session.flush()
+        try:
+            with session.begin_nested():
+                if existing is not None:
+                    session.delete(existing)
+                    session.flush()
+                row = FeaturedGameRecord(
+                    game_date=game_date, game_id=game_id, created_by=created_by
+                )
+                session.add(row)
+                session.flush()
+        except IntegrityError:
+            # Lost a replace race for this date (ENG-005): a concurrent replace
+            # committed first. Re-read the winner -- same game means converged
+            # (return it); another game won, so apply this replace onto the new
+            # state once more rather than answering 500.
+            winner = session.scalar(
+                select(FeaturedGameRecord).where(
+                    FeaturedGameRecord.game_date == game_date
+                )
+            )
+            if winner is not None and winner.game_id == game_id:
+                return _as_dict(winner)
+            try:
+                with session.begin_nested():
+                    if winner is not None:
+                        session.delete(winner)
+                        session.flush()
+                    row = FeaturedGameRecord(
+                        game_date=game_date, game_id=game_id, created_by=created_by
+                    )
+                    session.add(row)
+                    session.flush()
+            except IntegrityError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A featured game is already set for {game_date.isoformat()}.",
+                ) from exc
+            return _as_dict(row)
         return _as_dict(row)
 
 

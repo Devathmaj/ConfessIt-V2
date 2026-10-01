@@ -468,6 +468,10 @@ def schedule_question(
     Scheduling never ends the current session: the previous question ends
     when this one actually goes live, not when it is scheduled.
     """
+    from sqlalchemy import text as _text
+
+    from .game_configs import game_lock_key
+
     moment = now or _now()
     release_at = _as_utc(scheduled_for)
     if release_at <= moment:
@@ -476,6 +480,14 @@ def schedule_question(
             detail="A scheduled release must be in the future.",
         )
     with db.sessions.begin() as session:
+        # Same advisory lock as create/deploy/release (ENG-005): the conflict
+        # check is read-then-write, so two concurrent schedules for one instant
+        # would both pass it and both land. Serialized, the loser re-reads the
+        # winner's committed row and gets the 409 it was promised.
+        session.execute(
+            _text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": game_lock_key("trivia-drop")},
+        )
         row = _get_row(session, question_id)
         if row.status != "draft":
             raise HTTPException(
@@ -493,6 +505,10 @@ def reschedule_question(
     db: Database, question_id: str, scheduled_for: datetime, now: Optional[datetime] = None
 ) -> TriviaDropQuestion:
     """Move one scheduled question's release. Ended sessions are untouched."""
+    from sqlalchemy import text as _text
+
+    from .game_configs import game_lock_key
+
     moment = now or _now()
     release_at = _as_utc(scheduled_for)
     if release_at <= moment:
@@ -501,6 +517,13 @@ def reschedule_question(
             detail="A scheduled release must be in the future.",
         )
     with db.sessions.begin() as session:
+        # Same advisory lock as create/deploy/release (ENG-005): see
+        # schedule_question above -- without it two concurrent reschedules to
+        # one instant both pass the conflict check and both land.
+        session.execute(
+            _text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": game_lock_key("trivia-drop")},
+        )
         row = _get_row(session, question_id)
         if row.status != "scheduled":
             raise HTTPException(

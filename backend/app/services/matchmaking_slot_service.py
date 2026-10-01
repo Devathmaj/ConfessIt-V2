@@ -17,7 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, text
 
 from ..postgres import Database
 from ..db_models import MatchmakingSlotRecord, UserRecord
@@ -28,6 +28,12 @@ from ..db_models import MatchmakingSlotRecord, UserRecord
 # a ``Dict[str, str]`` annotation here is what let the whole read path look type-correct while
 # handing ints to code that joined them as text.
 CohortDict = Dict[str, Any]
+
+# Advisory-lock key serialising matchmaking-slot writes (ENG-005). Fixed and private
+# to this module: nothing else may reuse it. Distinct from the game lifecycle keys
+# (7_260_001..7_260_007) and the pair-session keys (7_250_001, 7_250_002) -- slot
+# writes never share a transaction with gameplay, so no lock ordering applies.
+_SLOT_WRITE_LOCK_KEY = 7_250_003
 
 
 def cohort_label(year: Optional[int], department: Optional[str]) -> str:
@@ -283,9 +289,10 @@ def create_matchmaking_slot_service(
     to put the pair back into when the editor loads.
 
     A duplicate is a 409 rather than a unique-constraint error: the operator pressed save twice, and
-    "this pairing is already configured" is an answer they can act on. The check and the insert are
-    in one transaction, but the row is still not protected by a unique index -- see
-    ``MatchmakingSlotRecord`` for why that trade is deliberate.
+    "this pairing is already configured" is an answer they can act on. The check and the insert run
+    under the slot-write advisory lock below, which is what makes the promised 409 hold under
+    concurrency too -- see ``MatchmakingSlotRecord`` for why a unique index cannot express this
+    invariant (order-independent pairs, NULL group semantics) and therefore cannot back it.
 
     The duplicate is scoped to ``group_key`` as well as to the pair, and that is what makes
     overlapping boxes expressible. Two boxes naming the same pair -- ``[A, B]`` and ``[A, B, C]``
@@ -326,6 +333,15 @@ def create_matchmaking_slot_service(
     )
 
     with db.sessions.begin() as session:
+        # ENG-005: serialize slot writes. The duplicate check below is read-then-write,
+        # so two concurrent creates of one pair+box both pass it and both land -- and no
+        # unique index can back it instead (the pair is order-independent and the group
+        # match is NULL-sensitive, neither of which a constraint expresses). Slot writes
+        # are administrator-only and rare; the lock is held for one short transaction.
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _SLOT_WRITE_LOCK_KEY},
+        )
         # Order-independent: A-B and B-A are the same rule, and an operator who adds the second
         # should be told it exists rather than be shown two rows that do the same thing.
         #
