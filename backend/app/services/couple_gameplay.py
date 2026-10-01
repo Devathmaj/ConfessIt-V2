@@ -502,6 +502,13 @@ def select_partner(
         _require_playable(session)
 
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock for the whole selection -- and take
+        # it *before* the pair lock below, the same order every gameplay
+        # transaction uses -- so a period rollover cannot end the global the
+        # new pair session is about to attach to.
+        lock_game_for_play(session, "couple-questionnaire")
         target = session.get(UserRecord, str(selected_user_id))
         if target is None:
             raise HTTPException(
@@ -655,6 +662,11 @@ def submit_answer(
         )
 
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the answer write, so a rollover cannot retire the global mid-submit.
+        lock_game_for_play(session, "couple-questionnaire")
         _require_playable(session)
         game = _latest_playable_game(session)
         if game is None:
@@ -749,6 +761,11 @@ def submit_prediction(
         )
 
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the prediction write, so a rollover cannot retire the global mid-submit.
+        lock_game_for_play(session, "couple-questionnaire")
         _require_playable(session)
         game = _latest_playable_game(session)
         if game is None:

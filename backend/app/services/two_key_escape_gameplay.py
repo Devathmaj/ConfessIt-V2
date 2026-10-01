@@ -714,6 +714,13 @@ def _get_or_create_row(session, game, couple) -> TwoKeyEscapeSessionRecord:
     Creation races serialize on the advisory lock plus the unique pair: the
     loser re-reads the winner's row instead of minting a second game.
     """
+    from .game_configs import lock_game_for_play
+
+    # ENG-001: the lifecycle lock first, then the pair lock -- the same order
+    # every gameplay transaction uses -- so a period rollover cannot retire the
+    # global between the game re-read below and the row creation. Re-acquiring
+    # the game key is a no-op when the caller already holds it.
+    lock_game_for_play(session, "two-key-escape")
     session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ESCAPE_SESSION_LOCK_KEY}
     )
@@ -755,6 +762,11 @@ def submit_role(db: Database, user: UserDetails, role: str) -> TwoKeyEscapeState
     """
     _validate_role(role)
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the role write, so a rollover cannot retire the global mid-submit.
+        lock_game_for_play(session, "two-key-escape")
         _require_playable(session)
         game = _latest_escape_game(session)
         if game is None:
@@ -804,6 +816,11 @@ def change_role(db: Database, user: UserDetails, role: str) -> TwoKeyEscapeState
     """
     _validate_role(role)
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the role write, so a rollover cannot retire the global mid-submit.
+        lock_game_for_play(session, "two-key-escape")
         _require_playable(session)
         game = _latest_escape_game(session)
         if game is None:
@@ -878,6 +895,11 @@ def move(db: Database, user: UserDetails, direction: str) -> TwoKeyEscapeState:
             status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown direction."
         )
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the move, so a rollover cannot retire the global mid-move.
+        lock_game_for_play(session, "two-key-escape")
         _require_playable(session)
         game = _latest_escape_game(session)
         if game is None:
@@ -1100,6 +1122,11 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
     nothing: only a successful activation stamps the server-side cooldown.
     """
     with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        # ENG-001: hold the lifecycle lock across latest-game resolution and
+        # the key use, so a rollover cannot retire the global mid-activation.
+        lock_game_for_play(session, "two-key-escape")
         _require_playable(session)
         game = _latest_escape_game(session)
         if game is None:

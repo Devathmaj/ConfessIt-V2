@@ -253,8 +253,12 @@ def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> Wor
 
     with db.sessions.begin() as session:
         from . import game_periods
-        from .game_configs import check_playable
+        from .game_configs import check_playable, lock_game_for_play
 
+        # ENG-001: hold the lifecycle lock across the liveness checks below and
+        # the participation write, so a scheduler rollover cannot slip between
+        # them and land this guess in the session being ended.
+        lock_game_for_play(session, "wordle")
         check_playable(session, "wordle")
         game = session.get(WordleGameRecord, payload.game_id)
         if game is None:

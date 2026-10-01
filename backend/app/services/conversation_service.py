@@ -441,7 +441,13 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
         logger.info(f"Conversation {conversation.id} rejected by {current_user.regno}")
 
         return {"status": "success", "message": "Conversation rejected successfully."}
-    except Exception as e: # <--- FIX: Added missing except block
+    except HTTPException:
+        # Keep deliberate rejections (expired match, wrong participant, wrong
+        # receiver, non-requested status) as themselves -- see
+        # accept_conversation_service above -- instead of reporting every one
+        # of them as a server fault.
+        raise
+    except Exception as e:
         logger.error(f"Error in reject_conversation_service: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error rejecting conversation.")
 

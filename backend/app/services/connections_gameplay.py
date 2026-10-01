@@ -224,8 +224,11 @@ def current_connections(db: Database, user_id: str) -> ConnectionsCurrentGame:
 def _get_game_for_update(session, game_id: str) -> tuple[ConnectionsGameRecord, list[ConnectionsWordRecord]]:
     """The named puzzle, arrived, current, configured -- or why it cannot be played."""
     from . import game_periods
-    from .game_configs import check_playable
+    from .game_configs import check_playable, lock_game_for_play
 
+    # ENG-001: hold the lifecycle lock across liveness-check + write so a
+    # scheduler rollover cannot slip between them. The sole caller writes.
+    lock_game_for_play(session, "connections")
     if not is_valid_id(game_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Connections game id"

@@ -729,3 +729,30 @@ def test_scheduler_racing_an_update_leaves_one_active_session(db):
         future_reset.result(timeout=60)
         future_update.result(timeout=60)
     assert len(active_rows(db, WordleGameRecord)) == 1
+
+def test_gameplay_writes_share_the_scheduler_lifecycle_lock():
+    """ENG-001: gameplay and the scheduler serialize on the same per-game key.
+
+    ``lock_game_for_play`` must issue the exact key ``ensure_single_game`` holds
+    across end-old/open-new -- otherwise the two sides lock different doors and
+    a play still lands in the session being ended. Asserted with a stub session
+    (no database) so the invariant holds even where a race test cannot run.
+    """
+    from app.limits import GAME_IDS
+    from app.services.game_configs import game_lock_key, lock_game_for_play
+
+    class StubSession:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, stmt, params):
+            self.calls.append((str(stmt), dict(params)))
+            return None
+
+    for game_id in GAME_IDS:
+        stub = StubSession()
+        lock_game_for_play(stub, game_id)
+        assert len(stub.calls) == 1
+        stmt, params = stub.calls[0]
+        assert "pg_advisory_xact_lock" in stmt
+        assert params == {"key": game_lock_key(game_id)}

@@ -136,8 +136,11 @@ def current_trivia(db: Database, user_id: str) -> TriviaDropCurrentQuestion:
 
 def _get_live_question(session, question_id: str) -> tuple[TriviaDropQuestionRecord, list[TriviaDropOptionRecord]]:
     """The named question, live and fully configured -- or why it cannot be answered."""
-    from .game_configs import check_playable
+    from .game_configs import check_playable, lock_game_for_play
 
+    # ENG-001: hold the lifecycle lock across liveness-check + write so a
+    # question release cannot slip between them. The sole caller writes.
+    lock_game_for_play(session, "trivia-drop")
     if not is_valid_id(question_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Trivia Drop question id"

@@ -25,14 +25,24 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from ..db_models import GameConfigRecord
 from ..limits import GAME_CONTENT_MODES, GAME_IDS, RESET_CADENCE_VALUES
 from ..postgres import Database
 
 # Advisory-lock keys serialising one game's lifecycle transitions (scheduler run
-# vs admin Update). Arbitrary but fixed; must not be reused elsewhere.
+# vs admin Update) *and* the gameplay writes made against its live session.
+# Arbitrary but fixed; no other lock namespace may reuse these values.
+#
+# The scheduler holds a game's key across end-old/open-new, so a gameplay write
+# that holds the same key across liveness-check/write cannot interleave a stale
+# play into the session being ended: either the play commits first and the
+# rollover ends a session that already holds it, or the rollover commits first
+# and the play's liveness check (re-read under the lock) 409s. Gameplay
+# transactions hold at most one game key; the couple/two-key-escape pair locks
+# (``_COUPLE_SESSION_LOCK_KEY``/``_ESCAPE_SESSION_LOCK_KEY``) are always acquired
+# *after* the game key, so no lock cycle is possible.
 _GAME_LOCK_KEYS: dict[str, int] = {
     "wordle": 7_260_001,
     "anagram": 7_260_002,
@@ -73,6 +83,24 @@ def validate_game_id(game_id: str) -> str:
 def game_lock_key(game_id: str) -> int:
     """The advisory-lock key serialising ``game_id``'s lifecycle transitions."""
     return _GAME_LOCK_KEYS[validate_game_id(game_id)]
+
+
+def lock_game_for_play(session, game_id: str) -> None:
+    """Hold ``game_id``'s lifecycle lock for a gameplay write transaction (ENG-001).
+
+    Call as the first statement inside any transaction that creates or mutates
+    gameplay state keyed to a game session -- guesses, submissions, answers,
+    moves, pair sessions -- so its liveness checks (``status == "active"``,
+    ``current.id == game.id``, ``is_reset_due``) cannot go stale between the
+    read and the commit while the scheduler rolls the period. Transaction-scoped
+    (``pg_advisory_xact_lock``): released automatically at commit/rollback, and
+    re-acquiring the same key later in the same transaction is a no-op, so
+    helpers that each lock are safe to nest.
+    """
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": game_lock_key(game_id)},
+    )
 
 
 def default_content_mode(game_id: str) -> Optional[str]:

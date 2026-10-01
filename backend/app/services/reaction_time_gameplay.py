@@ -230,8 +230,11 @@ def start_attempt(
     try:
         with db.sessions.begin() as session:
             from . import game_periods
-            from .game_configs import check_playable
+            from .game_configs import check_playable, lock_game_for_play
 
+            # ENG-001: hold the lifecycle lock across liveness-check + insert so
+            # a period rollover cannot slip between them.
+            lock_game_for_play(session, "reaction-time")
             check_playable(session, "reaction-time")
             game = session.get(ReactionTimeGameRecord, str(payload.game_id))
             if game is None:
@@ -354,8 +357,12 @@ def complete_attempt(
                 ),
             )
     with db.sessions.begin() as session:
-        from .game_configs import check_playable
+        from .game_configs import check_playable, lock_game_for_play
 
+        # ENG-001: hold the lifecycle lock across the session-liveness re-check
+        # and the settle, so a rollover cannot strand this settle in an ended
+        # session (see start_attempt above).
+        lock_game_for_play(session, "reaction-time")
         check_playable(session, "reaction-time")
         row = session.get(
             ReactionTimeSubmissionRecord, str(payload.submission_id)
