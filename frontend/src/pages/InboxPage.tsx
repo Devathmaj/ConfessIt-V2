@@ -113,6 +113,14 @@ export const InboxPage = () => {
   const [systemNotices, setSystemNotices] = useState<NotificationItem[]>([]);
   /** How many system notices the server holds, loaded or not. */
   const [systemTotal, setSystemTotal] = useState(0);
+  /**
+   * How many server rows the window has consumed under the current query, filtered
+   * rows included. The conversation family is filtered out client-side after each
+   * page lands, so the visible length undershoots what the server has handed over;
+   * paging and the remaining count off the visible length would re-read rows the
+   * screen already holds -- and stall forever on a tail of only filtered rows.
+   */
+  const [systemFetched, setSystemFetched] = useState(0);
   /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
   const [pagedInbox, setPagedInbox] = useState(false);
   /** Conversation cards derived from match state: always complete, never paged. */
@@ -168,13 +176,15 @@ export const InboxPage = () => {
 
   /**
    * Grow the system list downwards: the next page appends beneath the notices already
-   * on screen, so the reader's place never moves.
+   * on screen, so the reader's place never moves. The offset is the count of server
+   * rows already consumed, not the visible length: filtered-out rows still occupy
+   * their page, and re-reading from the visible length would duplicate them.
    */
   const loadMore = async () => {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      await fetchNotifications(systemNotices.length, INBOX_PAGE_SIZE, appliedSearch);
+      await fetchNotifications(systemFetched, INBOX_PAGE_SIZE, appliedSearch);
     } catch (error) {
       console.error('Failed to load more notifications:', error);
     } finally {
@@ -377,11 +387,14 @@ export const InboxPage = () => {
 
       // A first page replaces the window; an appended page grows it. Either way the
       // derived cards are rebuilt whole -- a handful of matches, always complete.
+      // The consumed count is the raw page size, not the survivors: the next read
+      // starts past every row this one touched, filtered or not.
       if (skip === 0) {
         setSystemNotices(systemRows);
       } else {
         setSystemNotices((prev) => [...prev, ...systemRows]);
       }
+      setSystemFetched(skip + systemPage.rows.length);
       setSystemTotal(systemPage.total);
       setPagedInbox(systemPage.enveloped);
       setDerivedCards(notifications);
@@ -728,9 +741,11 @@ const filtersNarrowed = activeSearch !== '';
         )}
         {/* The list only grows downwards: the next page appends beneath the notices
             already on screen, so the reader's place never moves. Shown only while the
-            server holds more system notices than the list is showing; the derived
+            server holds rows the list has not consumed yet; the count is consumed rows,
+            not visible cards, because a tail of filtered-out conversation rows would
+            otherwise hold the button up forever with nothing new to show. The derived
             conversation cards are always complete, and legacy answers never page. */}
-        {pagedInbox && systemNotices.length < systemTotal && (
+        {pagedInbox && systemFetched < systemTotal && (
           <div className="flex justify-center pt-6">
             <Button
               variant="outline"
@@ -741,7 +756,7 @@ const filtersNarrowed = activeSearch !== '';
             >
               {loadingMore
                 ? 'Loading…'
-                : `Show more (${systemTotal - systemNotices.length} remaining)`}
+                : `Show more (${systemTotal - systemFetched} remaining)`}
             </Button>
           </div>
         )}

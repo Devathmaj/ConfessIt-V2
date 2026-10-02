@@ -106,7 +106,7 @@ const conversationData = () => ({
   is_initiator: false,
 });
 
-async function renderDialog() {
+async function renderDialog(data: Record<string, unknown> = conversationData()) {
   render(
     <AuthContext.Provider
       value={{
@@ -120,13 +120,15 @@ async function renderDialog() {
         <ConversationDialog
           onClose={() => {}}
           onRefresh={() => {}}
-          conversationData={conversationData() as never}
+          conversationData={data as never}
         />
       </MemoryRouter>
     </AuthContext.Provider>,
   );
-  // The transcript arrives over an effect, so no message exists until it lands.
-  await screen.findByText(/msgs/);
+  // The transcript arrives over an effect, and the badge reads "0 msgs" from the
+  // first paint -- so wait for a nonzero count, not merely the badge, or the wait
+  // can resolve before the first window lands.
+  await screen.findByText(/[1-9]\d* msgs/);
 }
 
 /** The message bodies on screen, top to bottom. */
@@ -230,5 +232,39 @@ describe('ConversationDialog: paged thread', () => {
     expect(screen.getByText('thread message 0')).toBeInTheDocument();
     expect(screen.getByText('thread message 1')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show older messages' })).not.toBeInTheDocument();
+  });
+
+  it('never opens a socket into a blocked conversation', async () => {
+    db = [message(0), message(1)];
+    // The setup payload carries no block flag, exactly as in the report, and the
+    // authoritative answer lands on the block-status read: the dialog must wait
+    // for it instead of initializing messaging on the default.
+    api.getConversationByMatch.mockResolvedValue({
+      status: 'success',
+      is_blocked: true,
+      blocked_by: 'ALICE',
+    });
+    await renderDialog();
+
+    // History loads once, read-only -- and no socket is ever opened, so nothing
+    // can fail, retry, or toast.
+    await screen.findByText('thread message 1');
+    expect(messaging.messagingClient.connect).not.toHaveBeenCalled();
+    expect(messaging.fetchMessages).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stays read-only when the setup data already says blocked', async () => {
+    db = [message(0)];
+    api.getConversationByMatch.mockResolvedValue({
+      status: 'success',
+      is_blocked: true,
+      blocked_by: 'ALICE',
+    });
+    await renderDialog({ ...conversationData(), is_blocked: true, blocked_by: 'ALICE' });
+
+    await screen.findByText('thread message 0');
+    expect(messaging.messagingClient.connect).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

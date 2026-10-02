@@ -156,6 +156,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [is_blocked, setIsBlocked] = useState(false);
   const [blocked_by, setBlockedBy] = useState<string | null>(null);
+  /**
+   * Whether the authoritative block answer for the conversation on screen has
+   * landed. The setup payload may not carry the flag at all, and the confirmation
+   * read below travels on its own effect; until it lands the flag is still its
+   * default, which must not decide anything.
+   */
+  const [blockStatusKnown, setBlockStatusKnown] = useState(false);
+  /**
+   * A fresh mirror of the block flag for control flow after awaits. State read in
+   * an async continuation freezes at call time, so a block (or unblock) landing
+   * mid-load would decide wrong; every writer below keeps this beside the state,
+   * synchronously, so post-await reads see the answer as of now.
+   */
+  const blockedRef = useRef(false);
   const [messagesHidden, setMessagesHidden] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentUserRef = useRef<string | null>(null);
@@ -202,6 +216,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   // Check block status when conversation data changes
   useEffect(() => {
     if (conversationData?.conversation?.id) {
+      // A new conversation restarts the answer: the flag still describes the
+      // previous one until this read lands, so the init below waits afresh.
+      setBlockStatusKnown(false);
       checkBlockStatus();
     }
   }, [conversationData?.conversation?.id]);
@@ -218,6 +235,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   useEffect(() => {
     // Skip if we don't have conversation data yet
     if (!conversationData) return;
+
+    // The block answer travels on its own read (see the effect above), so while it
+    // is in flight the flag is still its default. Initializing messaging on the
+    // default opens a socket into a conversation the other side already blocked --
+    // refused, retried, erroring -- and then loads the history twice, once live
+    // and once read-only. Wait for the answer instead: both branches below then
+    // run exactly once, down the right one.
+    if (!blockStatusKnown) return;
 
     const isAcceptedConversation = conversationData.conversation.status === 'accepted';
     const isTerminatedConversation = conversationData.conversation.status === 'terminated';
@@ -256,7 +281,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
     // Note: Cleanup is handled separately, not here
     // We don't want to clean up messages when is_blocked changes
-  }, [conversationData?.conversation?.id, conversationData?.conversation?.status, is_blocked]);
+  }, [conversationData?.conversation?.id, conversationData?.conversation?.status, is_blocked, blockStatusKnown]);
 
   const cleanup = () => {
     if (unsubscribeMessageRef.current) {
@@ -293,8 +318,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       await loadMessagesFromBackend(token);
       console.log('✅ Messages loaded');
 
-      // Only connect WebSocket if not blocked (for real-time updates)
-      if (!is_blocked) {
+      // Only connect WebSocket if not blocked (for real-time updates). The ref, not
+      // the state: this resumes after awaits, and a block (or unblock) landing
+      // mid-load must decide, not the flag as of the call -- without this, blocking
+      // during the history read orphans a live socket into a blocked conversation,
+      // and unblocking leaves the thread silently socketless.
+      if (!blockedRef.current) {
         console.log('⏳ Connecting to WebSocket...');
         await messagingClient.connect(conversationId, token);
         console.log('✅ WebSocket connection promise resolved');
@@ -347,7 +376,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     } catch (error) {
       console.error('Failed to initialize messaging:', error);
       // Don't show error toast if just loading messages failed when blocked
-      if (!is_blocked) {
+      if (!blockedRef.current) {
         toast.error('Failed to load messages');
       }
       setIsConnected(false);
@@ -472,6 +501,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     
     // Set block status from the data
     if (data.is_blocked !== undefined) {
+      blockedRef.current = data.is_blocked;
       setIsBlocked(data.is_blocked);
       setBlockedBy(data.blocked_by || null);
       
@@ -677,7 +707,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   };
 
   const checkBlockStatus = async () => {
-    if (!conversationData?.match?.id) return;
+    if (!conversationData?.match?.id) {
+      // Nothing to ask about: fall back to whatever the setup data carried, and
+      // release the init below to decide on that rather than waiting forever.
+      setBlockStatusKnown(true);
+      return;
+    }
 
     try {
       // IMPORTANT: Use getConversationByMatch instead of getCurrentConversation
@@ -688,6 +723,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           is_blocked: response.is_blocked,
           blocked_by: response.blocked_by
         });
+        // The ref first: a blocked (or unblocked) answer must decide control flow
+        // immediately, without waiting for the re-render the state schedules.
+        blockedRef.current = response.is_blocked || false;
         setIsBlocked(response.is_blocked || false);
         setBlockedBy(response.blocked_by || null);
         
@@ -699,6 +737,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       }
     } catch (error) {
       console.error('Error checking block status:', error);
+    } finally {
+      // Answered or failed: either way the init below must stop waiting. On failure
+      // it decides on the setup value, exactly as it did before this gate existed.
+      setBlockStatusKnown(true);
     }
   };
 
@@ -742,6 +784,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           is_blocked: newConversationData.is_blocked,
           blocked_by: newConversationData.blocked_by
         });
+        blockedRef.current = newConversationData.is_blocked || false;
         setIsBlocked(newConversationData.is_blocked || false);
         setBlockedBy(newConversationData.blocked_by || null);
         setMessagesHidden(false);
@@ -752,6 +795,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         // Force immediate UI update with React 18's automatic batching workaround
         setTimeout(() => {
           console.log('🔄 Force updating block state after timeout');
+          blockedRef.current = newConversationData.is_blocked || false;
           setIsBlocked(newConversationData.is_blocked || false);
           setBlockedBy(newConversationData.blocked_by || null);
           

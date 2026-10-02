@@ -192,4 +192,55 @@ describe('InboxPage: paged notices', () => {
     expect(screen.getByText('Content Removed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument();
   });
+
+  it('ends the pager on a tail of only filtered-out conversation rows', async () => {
+    // Twenty plain notices, then one conversation-family row the screen derives
+    // from match state instead of rendering: the oldest row, so it is the whole
+    // of the second page and contributes no card.
+    db = Array.from({ length: 20 }, (_, index) =>
+      notice(`n${index}`, `Notice number ${index}`, index + 2),
+    );
+    db.push(notice('cold', 'Zed accepted your message request', 1));
+    await renderInbox();
+    await screen.findByText('Notice number 19');
+
+    expect(screen.getByRole('button', { name: 'Show more notifications' })).toHaveTextContent(
+      'Show more (1 remaining)',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more notifications' }));
+
+    // The last page held nothing renderable, so nothing new appears -- but the
+    // pager is consumed and the button goes away instead of stalling forever.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Show more notifications' }),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Notice number 19')).toBeInTheDocument();
+    expect(api.getNotifications.mock.calls.length).toBe(2);
+  });
+
+  it('never re-reads rows a filtered-out conversation row displaced', async () => {
+    // The newest row is conversation-family, so the first page holds twenty server
+    // rows but only nineteen cards; the next read must start past all twenty.
+    db = Array.from({ length: 20 }, (_, index) =>
+      notice(`n${index}`, `Notice number ${index}`, index + 1),
+    );
+    db.push(notice('cold', 'Zed accepted your message request', 21));
+    await renderInbox();
+    await screen.findByText('Notice number 19');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more notifications' }));
+    await screen.findByText('Notice number 0');
+
+    // Twenty cards, each exactly once: the row beneath the filtered one was not
+    // read twice, and the pager is consumed.
+    for (let index = 0; index < 20; index += 1) {
+      expect(screen.getAllByText(`Notice number ${index}`).length).toBe(1);
+    }
+    expect(
+      screen.queryByRole('button', { name: 'Show more notifications' }),
+    ).not.toBeInTheDocument();
+  });
 });
