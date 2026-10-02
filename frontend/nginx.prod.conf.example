@@ -71,6 +71,15 @@ server {
         limit_req zone=edge burst=60 nodelay;
         try_files $uri $uri/ /index.html;
     }
+    # Floral artwork: stable unhashed filenames whose content never changes
+    # without a deploy, so they cache for a year as immutable. `^~` pins this
+    # prefix ahead of the extension regex below, so the rule survives future
+    # regex edits rather than depending on incidental `.svg` coverage.
+    location ^~ /floral_svgs/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+        access_log off;
+    }
     location ~* \.(js|css|png|jpg|jpeg|gif|webp|svg|woff2?)$ {
         expires 1y;
         add_header Cache-Control "public, immutable" always;

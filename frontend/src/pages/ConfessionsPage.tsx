@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { 
   Heart, 
@@ -808,6 +810,13 @@ export const ConfessionsPage = () => {
     <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
+      {/* Floral preview: 4126474 top-left corner, extra large. */}
+      <FloralDecor pair={3} className="left-0 top-0 w-[34rem] opacity-90 sm:w-[44rem]" />
+      {/* Floral edges: 1706715_top top-right; 1706715_bottom bottom-left. */}
+      <FloralDecor pair={6} className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      {/* Scattered chat glyphs for the feed gutters. */}
+      <ScatteredIcons variant="chat" />
       <div className="max-w-6xl mx-auto mb-8 px-2 sm:px-4">
         {/*
           The persistent notice, above the fold rather than inside the dialog. A user who has

@@ -16,7 +16,7 @@ export const FloatingHearts = () => {
       const heart: FloatingHeart = {
         id: Date.now(),
         left: Math.random() * 100,
-        size: Math.random() * 20 + 10,
+        size: Math.random() * 24 + 12,
         delay: Math.random() * 6,
       };
       setHearts(prev => [...prev, heart]);

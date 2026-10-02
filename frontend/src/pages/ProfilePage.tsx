@@ -20,7 +20,10 @@ import {
 import { toast } from 'sonner';
 import { updateUserProfile, uploadProfilePicture } from '../services/api';
 import { ModeToggle } from '@/components/ui/ModeToggle';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { Navigation } from '@/components/Navigation';
+import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
@@ -196,8 +199,20 @@ export const ProfilePage = () => {
   };
 
   return (
-    <div className="min-h-screen p-4 pt-24">
+    <div className="min-h-screen p-4 pt-24 relative">
       <Navigation />
+      <FloatingHearts />
+      {/* Floral preview: cropped blossom mirrored, right edge centered. */}
+      <FloralDecor pair={5} className="right-0 top-1/2 w-[32rem] -translate-y-1/2 -scale-x-100 opacity-90 sm:w-[38rem]" />
+      {/* Floral edges: 4126474 top-left; 1706715_top top-right;
+          1706715_bottom bottom-left; 1748704 mirrored on the vertical axis
+          bottom-right. */}
+      <FloralDecor pair={3} className="left-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={6} className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={1} className="bottom-0 right-0 w-[34rem] -scale-x-100 opacity-90 sm:w-[42rem]" />
+      {/* Scattered profile glyphs for the side gutters. */}
+      <ScatteredIcons variant="profile" />
       <div className="max-w-4xl mx-auto pb-24"> {/* Added padding-bottom */}
         <div className="text-center mb-8">
             <h1 className="text-5xl font-dancing text-romantic mb-2">

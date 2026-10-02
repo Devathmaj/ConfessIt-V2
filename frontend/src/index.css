@@ -354,7 +354,7 @@
     --success: #14683A;
     --warning: #7A4A00;
 
-    --heart-color: rgba(172, 50, 110, .14);
+    --heart-color: rgba(172, 50, 110, .2);
     --shadow-card: 0 1px 2px rgba(74, 23, 51, .06), 0 8px 24px rgba(172, 50, 110, .10);
     --shadow-nav: 0 1px 0 rgba(172, 50, 110, .10), 0 6px 20px rgba(172, 50, 110, .10);
 
@@ -489,7 +489,7 @@
     --success: #8CE0AE;
     --warning: #FFD28A;
 
-    --heart-color: rgba(255, 122, 122, .16);
+    --heart-color: rgba(255, 122, 122, .22);
     --shadow-card: 0 1px 2px rgba(0, 0, 0, .40), 0 10px 28px rgba(0, 0, 0, .35);
     --shadow-nav: 0 1px 0 rgba(255, 193, 182, .08), 0 8px 24px rgba(0, 0, 0, .40);
 
@@ -570,7 +570,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     .floating-hearts .heart,
-    .hearts-layer .heart {
+    .hearts-layer .heart,
+    .scatter-icons .animate-sparkle {
       animation: none !important;
     }
   }
@@ -940,4 +941,53 @@
   [data-theme="light"] .bg-gradient-love {
     color: #4A1733;
   }
+}
+
+/* Floral decoration (public/floral_svgs tree branches): one file serves both
+   modes — the deleted *_darkened twins were a uniform ×0.9 remap, reproduced
+   here with brightness().
+   - Behind everything except the page background (negative z-index), so corners
+     and centered pieces never cover cards or text.
+   - The radial mask dissolves hard crop edges (split halves, canvas borders) so
+     cuts read as dissipation, not amputation. Corner pieces additionally bleed
+     off two adjacent viewport edges, which makes the crop look deliberate.
+   - .floral-front lifts back above video backgrounds (Login) where a negative
+     layer would hide the art entirely; pair it with a positioned content card. */
+.floral-decor {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+}
+.floral-front {
+  z-index: 0;
+}
+.floral-decor img {
+  display: block;
+  width: 100%;
+  height: auto;
+  -webkit-mask-image: radial-gradient(ellipse 72% 68% at 50% 46%, #000 56%, transparent 79%);
+  mask-image: radial-gradient(ellipse 72% 68% at 50% 46%, #000 56%, transparent 79%);
+}
+.dark .floral-decor img,
+[data-theme="dark"] .floral-decor img {
+  filter: brightness(0.9);
+}
+
+/* Scattered mid-page icons (lucide ornaments for gutters/section gaps):
+   - One absolute layer per page, behind everything except the page
+     background (negative z-index), so icons never cover cards or text.
+   - Icons render from `md:` up, where centered content leaves side space.
+   - Pair with `z-0` (utilities beat this components-layer rule) above video
+     backgrounds such as Login, where a negative layer would hide the art. */
+.scatter-icons {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+}
+.scatter-icons svg {
+  display: block;
 }

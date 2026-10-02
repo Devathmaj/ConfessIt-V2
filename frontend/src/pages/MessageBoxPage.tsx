@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
+import { FloralDecor, FloralSplit } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { serverNow } from '@/lib/serverClock';
 
@@ -363,6 +365,13 @@ export const MessageBoxPage = () => {
       <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
         <Navigation />
         <FloatingHearts />
+        {/* Floral edges: cropped blossom top-left (+ both-axes mirror
+            bottom-right); 1706715 upper half top-right. */}
+        <FloralDecor pair={5} className="left-0 top-0 w-[32rem] opacity-90 sm:w-[38rem]" />
+        <FloralSplit half="top" className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={5} className="bottom-0 right-0 w-[32rem] -scale-x-100 -scale-y-100 opacity-90 sm:w-[38rem]" />
+      {/* Scattered chat glyphs for the side gutters. */}
+      <ScatteredIcons variant="chat" />
         <div className="max-w-7xl mx-auto">
           <div className="flex items-center justify-center h-64">
             <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -377,6 +386,11 @@ export const MessageBoxPage = () => {
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
+      {/* Floral edges: cropped blossom top-left (+ both-axes mirror
+          bottom-right); 1706715 upper half top-right. */}
+      <FloralDecor pair={5} className="left-0 top-0 w-[32rem] opacity-90 sm:w-[38rem]" />
+      <FloralSplit half="top" className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={5} className="bottom-0 right-0 w-[32rem] -scale-x-100 -scale-y-100 opacity-90 sm:w-[38rem]" />
 
       <div className="max-w-7xl mx-auto mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

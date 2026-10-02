@@ -18,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { GameCard } from '@/components/games/GameCard';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { FloralDecor } from '@/components/FloralDecor';
 import { StatCard } from '@/components/games/StatCard';
 import { AVAILABLE_GAMES, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
 import {
@@ -85,7 +86,12 @@ export const GamesDashboardPage = () => {
   const firstName = user?.name?.trim().split(' ')[0];
 
   return (
-    <div>
+    <div className="relative">
+      {/* Floral preview: 1706715 top half, top-right, extra large. */}
+      <FloralDecor pair={6} className="right-0 top-0 w-[36rem] opacity-90 sm:w-[44rem]" />
+      {/* Floral edge: cropped blossom top-left.
+          The section frame (GamesLayout) covers the remaining corners. */}
+      <FloralDecor pair={5} className="left-0 top-0 w-[32rem] opacity-90 sm:w-[38rem]" />
       <GamesPageHeader
         eyebrow="Games"
         title={firstName ? `Welcome back, ${firstName}` : 'Welcome back'}

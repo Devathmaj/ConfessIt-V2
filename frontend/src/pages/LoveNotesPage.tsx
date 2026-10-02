@@ -10,6 +10,8 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -743,12 +745,22 @@ setSearchTerm('');
 
     return (
         <>
-            <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 overflow-x-hidden">
+            <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 overflow-x-hidden relative">
                 <Navigation />
                 <FloatingHearts />
+                {/* Floral preview: 4536919 centered behind the header box. */}
+                <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-90" />
+                {/* Floral edges: cropped blossom mirrored top-right;
+                    1706715_bottom bottom-left (+ vertical-axis mirror
+                    bottom-right). */}
+                <FloralDecor pair={5} className="right-0 top-0 w-[24rem] -scale-x-100 opacity-90 sm:w-[30rem]" />
+                <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+                <FloralDecor pair={7} className="bottom-0 right-0 w-[34rem] -scale-x-100 opacity-90 sm:w-[42rem]" />
+                {/* Scattered chat glyphs for the side gutters. */}
+                <ScatteredIcons variant="chat" />
 
-                {/* Header */}
-                <div className="max-w-7xl mx-auto mb-6 sm:mb-8 px-2 sm:px-4">
+                {/* Header (above the floral backdrop) */}
+                <div className="relative z-10 max-w-7xl mx-auto mb-6 sm:mb-8 px-2 sm:px-4">
                     <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 sm:gap-6">
                         <div className="text-center lg:text-left">
                             <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
 import { parseTimestamp } from '@/lib/utils';
 import { cohortLabel } from '@/lib/accountFields';
@@ -882,6 +883,9 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
+      {/* Floral preview: 4016406 bottom-centered, edge to edge, sunk so the
+          lower part clips off-screen. Single item only. */}
+      <FloralDecor pair={2} className="left-1/2 bottom-[-14rem] w-[130rem] max-w-none -translate-x-1/2 opacity-90" />
       
       <div className="max-w-7xl mx-auto mb-8 px-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">

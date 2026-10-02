@@ -8,6 +8,8 @@ import { notificationIsClickable, notificationTargetPath } from '@/lib/notificat
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { getCurrentConversation, acceptConversation, rejectConversation, getNotifications, getReceivedConversations } from '@/services/api';
 import {
   Inbox,
@@ -509,8 +511,17 @@ const filtersNarrowed = activeSearch !== '';
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
+      {/* Floral preview: 4536919 centered behind the header box. */}
+      <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-90" />
+      {/* Floral edges: 1706715_bottom bottom-left; 1748704 mirrored on the
+          vertical axis bottom-right. */}
+      <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={1} className="bottom-0 right-0 w-[34rem] -scale-x-100 opacity-90 sm:w-[42rem]" />
+      {/* Scattered chat glyphs for the side gutters. */}
+      <ScatteredIcons variant="chat" />
       
-      <div className="max-w-7xl mx-auto mb-8">
+      <div className="relative z-10 max-w-7xl mx-auto mb-8">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
             <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing page-heading mb-2 break-words">

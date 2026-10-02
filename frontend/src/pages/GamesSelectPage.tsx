@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { GameCard } from '@/components/games/GameCard';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { FloralDecor } from '@/components/FloralDecor';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import {
   AVAILABLE_GAMES,
@@ -112,7 +113,9 @@ export const GamesSelectPage = () => {
       : GAME_CATEGORIES.find((category) => category.id === filter)?.label ?? null;
 
   return (
-    <div>
+    <div className="relative">
+      {/* Floral preview: 1748704 mirrored on the left across the top. */}
+      <FloralDecor pair={1} className="left-0 top-0 w-[34rem] -scale-x-100 opacity-90 sm:w-[42rem]" />
       <GamesPageHeader
         eyebrow="Games"
         title="Select a Game"

@@ -1,7 +1,10 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { ArrowLeft, Dices, Gamepad2, LayoutDashboard, Sparkles, Trophy } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ModeToggle } from '@/components/ui/ModeToggle';
+import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { cn } from '@/lib/utils';
 
 /**
@@ -38,13 +41,48 @@ const sectionBackdropStyle = {
   ].join(', '),
 };
 
-export const GamesLayout = () => (
-  <div className="flex min-h-screen flex-col">
+export const GamesLayout = () => {
+  const { pathname } = useLocation();
+  // Per-route frame trims so individual tabs can drop corners without
+  // affecting the rest of the section: /games/featured keeps only an
+  // enlarged top-right, /games/leaderboard drops the bottom-left, and
+  // /games/select drops the top-right mirror behind the Anagram card.
+  const isFeatured = pathname === '/games/featured';
+  const isLeaderboard = pathname === '/games/leaderboard';
+  const isSelect = pathname === '/games/select';
+  return (
+  <div className="relative flex min-h-screen flex-col">
     <div
       aria-hidden
       className="pointer-events-none fixed inset-0 -z-10"
       style={sectionBackdropStyle}
     />
+    {/* Ambient hearts for every /games route (fixed layer, one instance). */}
+    <FloatingHearts />
+    {/* Floral frame: section-wide edges so every /games route feels bordered.
+        4126474 top-left (+ vertical-axis mirror top-right); 1748704 bottom-left
+        (+ vertical-axis mirror bottom-right). Page-specific pieces layer above. */}
+    {!isFeatured && (
+      <FloralDecor pair={3} className="left-0 top-0 w-[28rem] opacity-90 sm:w-[36rem]" />
+    )}
+    {!isSelect && (
+      <FloralDecor
+        pair={3}
+        className={
+          isFeatured
+            ? 'right-0 top-0 w-[36rem] -scale-x-100 opacity-90 sm:w-[44rem]'
+            : 'right-0 top-0 w-[28rem] -scale-x-100 opacity-90 sm:w-[36rem]'
+        }
+      />
+    )}
+    {!isFeatured && !isLeaderboard && (
+      <FloralDecor pair={1} className="bottom-0 left-0 w-[28rem] opacity-90 sm:w-[36rem]" />
+    )}
+    {!isFeatured && (
+      <FloralDecor pair={1} className="bottom-0 right-0 w-[28rem] -scale-x-100 opacity-90 sm:w-[36rem]" />
+    )}
+    {/* Scattered game glyphs for the section gutters; every /games route inherits them. */}
+    <ScatteredIcons variant="games" />
 
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur-xl">
       <div className="mx-auto max-w-7xl px-3 sm:px-6">
@@ -118,6 +156,7 @@ export const GamesLayout = () => (
       </div>
     </footer>
   </div>
-);
+  );
+};
 
 export default GamesLayout;

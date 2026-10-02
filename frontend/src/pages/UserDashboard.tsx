@@ -17,6 +17,7 @@ import { getConfessions } from '../services/api';
 
 // Import the new Navigation component
 import { Navigation } from '@/components/Navigation';
+import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 
 // Import video and image assets
@@ -243,6 +244,9 @@ export const UserDashboard = () => {
         </video>
         <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-black/70 via-black/40 to-black/70"></div>
       </div>
+
+      {/* Ambient hearts above the video, below the content. */}
+      <FloatingHearts />
 
       {/* Add top padding (pt-28) to account for the fixed navbar's height and position */}
       <div className="min-h-screen p-2 sm:p-4 pt-24 sm:pt-28 flex flex-col items-center justify-center relative z-10">

@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Heart, Mail, ShieldCheck, Clock } from 'lucide-react';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { toast } from 'sonner';
 import ConfessItWebP from '@/assets/ConfessIt.webp';
 import ConfessItWebM from '@/assets/ConfessIt.webm';
@@ -374,7 +375,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   if (!category.themed) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-muted/30">
-        <div className="w-full max-w-md z-10">
+      <div className="relative w-full max-w-md z-10">
           <Card>
             <CardHeader className="text-center space-y-3">
               <div className="mx-auto w-16 h-16 bg-muted rounded-full flex items-center justify-center">
@@ -405,6 +406,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       <div className="absolute top-0 left-0 w-full h-full z-0">
         <video
           poster={ConfessItWebP}
+          preload="auto"
           autoPlay
           loop
           muted
@@ -419,6 +421,9 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       </div>
 
       <FloatingHearts />
+      {/* Scattered keepsakes around the sign-in card; front stays above the
+          video backdrop while the card sits on top. */}
+      <ScatteredIcons variant="romance" front />
 
       <div className="w-full max-w-md z-10">
         <Card className="confession-card border-2 border-romantic/20 bg-background/80 backdrop-blur-sm">

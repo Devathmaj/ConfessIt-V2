@@ -1,11 +1,24 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Heart, Info, Users, Gamepad2, Mail, Shuffle } from 'lucide-react';
 import { Navigation } from '@/components/Navigation';
+import { FloatingHearts } from '@/components/ui/floating-hearts';
+import { FloralDecor } from '@/components/FloralDecor';
+import { ScatteredIcons } from '@/components/ScatteredIcons';
 
 export const About = () => {
   return (
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />
+      <FloatingHearts />
+      {/* Floral preview: cropped blossom, left edge centered. */}
+      <FloralDecor pair={5} className="left-0 top-1/2 w-[32rem] -translate-y-1/2 opacity-90 sm:w-[38rem]" />
+      {/* Floral edges: 1706715_top top-right; 1706715_bottom bottom-left;
+          1706715_top mirrored on the horizontal axis bottom-right. */}
+      <FloralDecor pair={6} className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />
+      <FloralDecor pair={6} className="bottom-0 right-0 w-[34rem] -scale-y-100 opacity-90 sm:w-[42rem]" />
+      {/* Scattered keepsakes for the side gutters between sections. */}
+      <ScatteredIcons variant="romance" />
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-12">
           <h1 className="text-6xl font-dancing text-romantic mb-4">About ConfessIt</h1>
