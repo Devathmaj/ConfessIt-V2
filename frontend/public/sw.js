@@ -6,16 +6,16 @@
 // content never changes without a deploy, so there is deliberately no quota
 // or eviction: bump FLORAL_CACHE below and the old cache is dropped on
 // activate. Non-floral requests are never intercepted.
-const FLORAL_CACHE = 'confessit-floral-v1';
+const FLORAL_CACHE = 'confessit-floral-v3';
 const FLORAL_ASSETS = [
-  '/floral_svgs/1706715_no_text_no_attribution.svg',
-  '/floral_svgs/1706715_top_no_text_no_attribution.svg',
-  '/floral_svgs/1706715_bottom_no_text_no_attribution.svg',
-  '/floral_svgs/1748704_cherry_blossom_no_attribution.svg',
-  '/floral_svgs/4016406_cherry_blossom_no_text_no_attribution.svg',
-  '/floral_svgs/4126474_cherry_blossom_no_attribution.svg',
-  '/floral_svgs/4536919_no_text_no_attribution.svg',
-  '/floral_svgs/cherry_blossom_cropped.svg',
+  '/floral_svgs/1706715_no_text_no_attribution.svg?v=3',
+  '/floral_svgs/1706715_top_no_text_no_attribution.svg?v=3',
+  '/floral_svgs/1706715_bottom_no_text_no_attribution.svg?v=3',
+  '/floral_svgs/1748704_cherry_blossom_no_attribution.svg?v=3',
+  '/floral_svgs/4016406_cherry_blossom_no_text_no_attribution.svg?v=3',
+  '/floral_svgs/4126474_cherry_blossom_no_attribution.svg?v=3',
+  '/floral_svgs/4536919_no_text_no_attribution.svg?v=3',
+  '/floral_svgs/cherry_blossom_cropped.svg?v=3',
 ];
 
 self.addEventListener('install', (event) => {

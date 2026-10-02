@@ -79,6 +79,14 @@ server {
         expires 1y;
         add_header Cache-Control "public, immutable" always;
         access_log off;
+        # SVG is text: gzip collapses the branches ~70-80% on the wire, which
+        # is most of the cold-load wait. (nginx:alpine needs an extra module
+        # for brotli, so gzip is the portable choice.)
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_comp_level 6;
+        gzip_types image/svg+xml;
     }
     location ~* \.(js|css|png|jpg|jpeg|gif|webp|svg|woff2?)$ {
         expires 1y;

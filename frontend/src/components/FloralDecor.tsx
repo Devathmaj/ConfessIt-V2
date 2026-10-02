@@ -1,4 +1,15 @@
+/*! @license Floral artwork (public/floral_svgs): FREE LICENSE (WITH ATTRIBUTION) — designed by Freepik - Magnific.com. Web attribution: <a href="https://www.magnific.com">designed by Freepik - Magnific.com</a> (invisible credit; the same notice is embedded in each SVG file and in index.html). */
 import { cn } from '@/lib/utils';
+
+/**
+ * Invisible artwork credit (FREE LICENSE WITH ATTRIBUTION — designed by
+ * Freepik - Magnific.com, https://www.magnific.com). A plain comment would be
+ * stripped by the production minifier, so the notice is assigned to globalThis:
+ * an observable side effect the bundler must keep, shipping the attribution in
+ * every bundle that includes this module without rendering anything to users.
+ */
+(globalThis as Record<string, unknown>).__CONFESSIT_FLORAL_CREDIT__ =
+  'Floral artwork: designed by Freepik - Magnific.com (https://www.magnific.com), FREE LICENSE (WITH ATTRIBUTION).';
 
 /**
  * Theme-aware tree-branch decoration, sourced from `public/floral_svgs`.
@@ -18,14 +29,17 @@ export interface FloralPair {
 }
 
 export const FLORAL_PAIRS: FloralPair[] = [
-  { src: '/floral_svgs/1706715_no_text_no_attribution.svg', label: 'Blossom branch' },
-  { src: '/floral_svgs/1748704_cherry_blossom_no_attribution.svg', label: 'Cherry blossom' },
-  { src: '/floral_svgs/4016406_cherry_blossom_no_text_no_attribution.svg', label: 'Cherry branch' },
-  { src: '/floral_svgs/4126474_cherry_blossom_no_attribution.svg', label: 'Blossom sprig' },
-  { src: '/floral_svgs/4536919_no_text_no_attribution.svg', label: 'Garden branch' },
-  { src: '/floral_svgs/cherry_blossom_cropped.svg', label: 'Cropped blossom' },
-  { src: '/floral_svgs/1706715_top_no_text_no_attribution.svg', label: 'Blossom branch top half' },
-  { src: '/floral_svgs/1706715_bottom_no_text_no_attribution.svg', label: 'Blossom branch bottom half' },
+  // `?v=3` marks the optimized generation: SVGO cut file weight ~43% after
+  // immutable year-long caching began, so the query busts stale entries into
+  // fetching the new bytes, which then cache hard.
+  { src: '/floral_svgs/1706715_no_text_no_attribution.svg?v=3', label: 'Blossom branch' },
+  { src: '/floral_svgs/1748704_cherry_blossom_no_attribution.svg?v=3', label: 'Cherry blossom' },
+  { src: '/floral_svgs/4016406_cherry_blossom_no_text_no_attribution.svg?v=3', label: 'Cherry branch' },
+  { src: '/floral_svgs/4126474_cherry_blossom_no_attribution.svg?v=3', label: 'Blossom sprig' },
+  { src: '/floral_svgs/4536919_no_text_no_attribution.svg?v=3', label: 'Garden branch' },
+  { src: '/floral_svgs/cherry_blossom_cropped.svg?v=3', label: 'Cropped blossom' },
+  { src: '/floral_svgs/1706715_top_no_text_no_attribution.svg?v=3', label: 'Blossom branch top half' },
+  { src: '/floral_svgs/1706715_bottom_no_text_no_attribution.svg?v=3', label: 'Blossom branch bottom half' },
 ];
 
 interface FloralDecorProps {

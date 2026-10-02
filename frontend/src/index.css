@@ -958,6 +958,9 @@
   z-index: -1;
   pointer-events: none;
   user-select: none;
+  /* Below-fold corners skip paint until scrolled near: absolute decor has no
+     layout footprint, so this only ever saves raster work, never shifts UI. */
+  content-visibility: auto;
 }
 .floral-front {
   z-index: 0;
