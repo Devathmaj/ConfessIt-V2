@@ -14,7 +14,9 @@
   /* Compatibility alias so existing `font-montserrat` classes keep working. Remove after migration. */
   --font-montserrat: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
 
-  --color-border: hsl(var(--border));
+  /* --border is a raw color (guide §4), not an HSL triplet, so it resolves
+     directly instead of through hsl(). */
+  --color-border: var(--border);
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --color-background: hsl(var(--background));
@@ -41,6 +43,19 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
+
+  /* Gradient + shadow utilities (Tailwind v4 is CSS-first: the v3
+     tailwind.config.ts backgroundImage/boxShadow section is NOT read by the
+     build, so these keys are the only thing emitting bg-gradient-* utilities.
+     Values duplicate the legacy --gradient-* token definitions and stay
+     theme-aware through their runtime vars. Shadows intentionally live only as
+     runtime tokens + arbitrary-value classes: a --shadow-* theme key would
+     self-reference the token of the same name. */
+  --background-image-gradient-romantic: linear-gradient(135deg, hsl(var(--romantic)), hsl(var(--passion)));
+  --background-image-gradient-love: linear-gradient(135deg, hsl(var(--love)), hsl(var(--romantic-light)));
+  --background-image-gradient-passion: linear-gradient(135deg, hsl(var(--passion)), hsl(var(--primary)));
+  --background-image-gradient-hero: linear-gradient(135deg, hsl(var(--romantic)) 0%, hsl(var(--passion)) 50%, hsl(var(--love-deep)) 100%);
+  --background-image-gradient-card: linear-gradient(145deg, hsl(var(--card)) 0%, hsl(var(--love)) 100%);
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -175,8 +190,9 @@
 /* Valentine's Day ConfessIt Design System */
 
 @layer base {
-  :root {
-    /* Valentine's Color Palette */
+  :root,
+  [data-theme="light"] {
+    /* Valentine's Color Palette (legacy tokens; unchanged for existing components) */
     --background: 327 100% 98%;
     --foreground: 330 15% 15%;
 
@@ -193,9 +209,9 @@
     --secondary: 320 25% 94%;
     --secondary-foreground: 330 15% 25%;
 
-    --romantic: 340 82% 67%;
+    --romantic: 342 74% 35%;
     --romantic-light: 340 82% 85%;
-    --romantic-dark: 340 82% 45%;
+    --romantic-dark: 342 75% 33%;
 
     --passion: 355 85% 63%;
     --passion-light: 355 85% 80%;
@@ -240,9 +256,130 @@
     --text-secondary-weight: 500;
     --body-tracking: 0;
     --body-leading: 1.6;
+
+    /* Color system (source of truth: ConfessIt_Color_System_Implementation_Guide.md §4).
+       Layer 1 primitives (theme-independent) + Layer 2 light theme (P1 Pink & Berry).
+       Legacy --background/--foreground/--romantic/... tokens above stay untouched.
+       NOTE: legacy --accent/--accent-foreground mean pastel tint, so the guide's
+       action role lives in --action* here (same values/roles as guide §4 --accent*). */
+    --plum-950: #181014;
+    --plum-925: #1B1016;
+    --plum-900: #211219;
+    --plum-850: #2A1122;
+    --plum-800: #321B29;
+    --wine-800: #3C132E;
+    --plum-750: #4A1B3B;
+    --mauve-700: #573047;
+
+    --coral-400: #FF7A7A;
+    --coral-300: #FF8C89;
+    --coral-500: #E86A6A;
+    --blush-300: #FFC1B6;
+    --ivory-100: #FFE7E4;
+
+    --pink-50: #FFF7FB;
+    --pink-75: #FFF3FA;
+    --pink-100: #FFE5F2;
+    --pink-125: #FFE0F0;
+    --pink-200: #FEC2E6;
+    --pink-250: #F9C9DC;
+    --pink-300: #F48BC8;
+    --berry-600: #AC326E;
+    --berry-700: #92204F;
+    --berry-750: #8E2357;
+    --berry-800: #7A1A42;
+    --berry-500: #7E4665;
+    --berry-650: #66304F;
+    --plum-text: #4A1733;
+
+    --fuchsia-brand-dark: #F43F8E;
+    --fuchsia-brand-light: #C4005A;
+    --fuchsia-avatar: #D6006B;
+
+    --red-700: #B42318;
+    --red-300: #FFA8A8;
+    --green-700: #14683A;
+    --green-300: #8CE0AE;
+    --amber-800: #7A4A00;
+    --amber-300: #FFD28A;
+
+    /* Layer 2 light (P1) */
+    color-scheme: light;
+
+    --text-primary: #4A1733;
+    --text-secondary: #7E4665;
+    --text-on-canvas: #66304F;
+    --text-placeholder: #7E4665;
+    --text-on-action: #FFFFFF;
+
+    --surface: rgba(255, 247, 251, .90);
+    --surface-solid: #FFF7FB;
+    --surface-raised: #FFFFFF;
+    --input-bg: #FFFFFF;
+    --frame-bg: rgba(255, 255, 255, .28);
+    --scrim: rgba(74, 23, 51, .45);
+
+    --action: #AC326E;
+    --action-hover: #92204F;
+    --action-pressed: #7A1A42;
+    --action-text: #FFFFFF;
+    --action-outline-text: #8E2357;
+
+    --border: rgba(172, 50, 110, .22);
+    --border-strong: #A35A80;
+    --focus: #8E2357;
+
+    --brand: #C4005A;
+    --avatar-bg: #D6006B;
+    --avatar-text: #FFFFFF;
+    --avatar-ring: #FFF7FB;
+
+    --nav-bg: rgba(255, 247, 251, .92);
+    --nav-border: rgba(172, 50, 110, .22);
+    --nav-active-bg: #FFE0F0;
+    --nav-active-text: #8E2357;
+    --nav-active-marker: #AC326E;
+
+    --chip-bg: rgba(172, 50, 110, .12);
+    --chip-text: #4A1733;
+    --chip-selected-bg: #AC326E;
+    --chip-selected-text: #FFFFFF;
+
+    --status-bg: #8E2357;
+    --status-text: #FFFFFF;
+    --status-tint-bg: rgba(255, 247, 251, .92);
+    --status-tint-text: #4A1733;
+
+    --danger: #B42318;
+    --success: #14683A;
+    --warning: #7A4A00;
+
+    --heart-color: rgba(172, 50, 110, .14);
+    --shadow-card: 0 1px 2px rgba(74, 23, 51, .06), 0 8px 24px rgba(172, 50, 110, .10);
+    --shadow-nav: 0 1px 0 rgba(172, 50, 110, .10), 0 6px 20px rgba(172, 50, 110, .10);
+
+    --page-bg:
+      radial-gradient(ellipse 72% 62% at 48% 54%, rgba(255, 120, 185, .23) 0%, transparent 72%),
+      radial-gradient(ellipse 70% 65% at 5% 95%, rgba(255, 177, 232, .40) 0%, transparent 72%),
+      linear-gradient(115deg, #FFF3FA 0%, #FFE5F2 46%, #F9C9DC 100%);
+    --card-gradient: linear-gradient(160deg, #FFF7FB 0%, #FDE3F0 100%);
+    --heading-gradient: linear-gradient(90deg, #8E2357 0%, #C4005A 100%);
+    --heading-fallback: #8E2357;
+
+    --disabled-bg: #EBD3DF;
+    --disabled-text: #86556E;
+
+    --radius-card: 16px;
+    --radius-control: 12px;
+    --radius-pill: 999px;
+    --focus-width: 3px;
+    --focus-offset: 3px;
+    --control-height: 44px;
+    --theme-transition: 150ms ease;
   }
 
-  .dark {
+  .dark,
+  [data-theme="dark"] {
     --background: 330 20% 8%;
     --foreground: 320 30% 90%;
 
@@ -300,6 +437,72 @@
     --text-secondary-weight: 450;
     --body-tracking: 0.005em;
     --body-leading: 1.65;
+
+    /* Layer 2 dark theme (D5 Plum & Coral), guide §4.3. */
+    color-scheme: dark;
+
+    --text-primary: #FFE7E4;
+    --text-secondary: #FFC1B6;
+    --text-on-canvas: #FFC1B6;
+    --text-placeholder: #FFC1B6;
+    --text-on-action: #2A1122;
+
+    --surface: rgba(50, 27, 41, .94);
+    --surface-solid: #321B29;
+    --surface-raised: #4A1B3B;
+    --input-bg: #2A1122;
+    --frame-bg: rgba(255, 255, 255, .02);
+    --scrim: rgba(0, 0, 0, .60);
+
+    --action: #FF7A7A;
+    --action-hover: #FF8C89;
+    --action-pressed: #E86A6A;
+    --action-text: #2A1122;
+    --action-outline-text: #FFC1B6;
+
+    --border: rgba(255, 193, 182, .22);
+    --border-strong: #9C6C88;
+    --focus: #FFC1B6;
+
+    --brand: #F43F8E;
+    --avatar-bg: #D6006B;
+    --avatar-text: #FFFFFF;
+    --avatar-ring: #2A1122;
+
+    --nav-bg: rgba(24, 16, 20, .88);
+    --nav-border: rgba(255, 193, 182, .18);
+    --nav-active-bg: #4A1B3B;
+    --nav-active-text: #FFC1B6;
+    --nav-active-marker: #FF7A7A;
+
+    --chip-bg: #573047;
+    --chip-text: #FFC1B6;
+    --chip-selected-bg: #FF7A7A;
+    --chip-selected-text: #2A1122;
+
+    --status-bg: #4A1B3B;
+    --status-text: #FFC1B6;
+    --status-tint-bg: rgba(50, 27, 41, .94);
+    --status-tint-text: #FFE7E4;
+
+    --danger: #FFA8A8;
+    --success: #8CE0AE;
+    --warning: #FFD28A;
+
+    --heart-color: rgba(255, 122, 122, .16);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, .40), 0 10px 28px rgba(0, 0, 0, .35);
+    --shadow-nav: 0 1px 0 rgba(255, 193, 182, .08), 0 8px 24px rgba(0, 0, 0, .40);
+
+    --page-bg:
+      radial-gradient(ellipse 70% 60% at 12% 88%, rgba(112, 17, 77, .38) 0%, transparent 72%),
+      radial-gradient(ellipse 55% 45% at 52% 55%, rgba(81, 25, 55, .20) 0%, transparent 75%),
+      linear-gradient(115deg, #181014 0%, #211219 48%, #1B1016 100%);
+    --card-gradient: linear-gradient(160deg, #3A1530 0%, #321B29 100%);
+    --heading-gradient: linear-gradient(90deg, #FF7A7A 0%, #FFC1B6 100%);
+    --heading-fallback: #FFC1B6;
+
+    --disabled-bg: #3A2433;
+    --disabled-text: #A08592;
   }
 }
 
@@ -307,6 +510,7 @@
   html {
     font-optical-sizing: auto;
     text-rendering: optimizeLegibility;
+    background: var(--surface-solid);
   }
 
   .dark {
@@ -317,23 +521,25 @@
     @apply border-border;
   }
 
+  /* App shell owns the page gradient (guide §5, Option A): one gradient on the
+     shell, never restarted on cards or sections. body IS the shell here. */
   body {
-    @apply bg-background text-foreground font-sans;
+    @apply font-sans;
+    background: var(--page-bg);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    color: var(--text-primary);
     font-size: 1rem;
     line-height: var(--body-leading);
     letter-spacing: var(--body-tracking);
-    background-image: 
-      radial-gradient(circle at 20% 80%, hsl(var(--love)) 0%, transparent 50%),
-      radial-gradient(circle at 80% 20%, hsl(var(--romantic-light)) 0%, transparent 50%),
-      radial-gradient(circle at 40% 40%, hsl(var(--passion-light)) 0%, transparent 50%);
   }
-  
-  /* Used to create a more subtle background for dark mode */
-  .dark body {
-    background-image: 
-      radial-gradient(circle at 20% 80%, hsl(var(--love) / 0.5) 0%, transparent 40%),
-      radial-gradient(circle at 80% 20%, hsl(var(--romantic-light) / 0.5) 0%, transparent 40%),
-      radial-gradient(circle at 40% 40%, hsl(var(--passion-light) / 0.5) 0%, transparent 40%);
+
+  /* Content paints above the fixed hearts layer (z-index 0): #root forms one
+     stacking context so every page, dialog and fixed nav inherits "above hearts"
+     without per-page z-index edits. Fixed positioning still anchors to the viewport. */
+  #root {
+    position: relative;
+    z-index: 1;
   }
 
   h1, h2, h3 {
@@ -350,10 +556,29 @@
     font-weight: 700;
     line-height: 1.35;
   }
+
+  /* Global keyboard focus (guide §6.12): shape + offset, never a subtle shadow. */
+  :where(a, button, input, select, textarea, [tabindex], [role="button"]):focus-visible {
+    outline: var(--focus-width) solid var(--focus);
+    outline-offset: var(--focus-offset);
+  }
+  @media (forced-colors: active) {
+    :where(a, button, input, select, textarea, [tabindex], [role="button"]):focus-visible {
+      outline: 3px solid Highlight;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .floating-hearts .heart,
+    .hearts-layer .heart {
+      animation: none !important;
+    }
+  }
 }
 
 @layer components {
-  /* Floating Hearts Animation */
+  /* Decorative hearts (guide §5.5): behind content, low-opacity theme token,
+     never intercept clicks, hidden from assistive tech in markup. */
   .floating-hearts {
     position: fixed;
     top: 0;
@@ -361,12 +586,14 @@
     width: 100%;
     height: 100%;
     pointer-events: none;
-    z-index: 1;
+    user-select: none;
+    overflow: hidden;
+    z-index: 0;
   }
 
   .heart {
     position: absolute;
-    color: hsl(var(--romantic));
+    color: var(--heart-color);
     animation: float-up 6s infinite linear;
     opacity: 0;
   }
@@ -413,12 +640,12 @@
     height: 100%;
   }
 
-  /* Confession Card Effects */
+  /* Confession Card Effects: standard card surface (guide §1.2 decision 6). */
   .confession-card {
-    background: var(--gradient-card);
-    border: 1px solid hsl(var(--border));
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: var(--shadow-romantic);
+    box-shadow: var(--shadow-card);
     transition: var(--transition-smooth);
   }
 
@@ -478,41 +705,174 @@
     100% { transform: translateY(-100%); }
   }
 
-  /* Valentine Button Variants (report §04: button label 16px/600 + 0.01em). */
+  /* Buttons (guide §6.8 + §7 state matrix). Primary = --action/--action-text:
+     plum on coral in dark (never white on coral), white on berry in light. */
+  .btn {
+    min-height: var(--control-height);
+    padding-inline: 18px;
+    border-radius: var(--radius-control);
+    font-weight: 600;
+    border: 1px solid transparent;
+    transition: background var(--theme-transition), border-color var(--theme-transition);
+  }
+
   .btn-romantic {
-    background: var(--gradient-romantic);
-    color: white;
-    border: none;
+    background: var(--action);
+    color: var(--action-text);
+    border: 1px solid transparent;
     border-radius: var(--radius);
     padding: 0.75rem 2rem;
+    min-height: var(--control-height);
     font-family: var(--font-sans);
     font-weight: 600;
     letter-spacing: 0.01em;
-    transition: var(--transition-smooth);
+    transition: background var(--theme-transition), border-color var(--theme-transition), transform var(--transition-smooth);
     box-shadow: var(--shadow-romantic);
   }
 
-  .btn-romantic:hover {
+  .btn-romantic:hover:not(:disabled) {
+    background: var(--action-hover);
     transform: translateY(-2px);
     box-shadow: var(--shadow-glow);
   }
 
+  .btn-romantic:active:not(:disabled) {
+    background: var(--action-pressed);
+  }
+
+  .btn-romantic:disabled,
+  .btn-romantic[aria-disabled="true"] {
+    background: var(--disabled-bg);
+    color: var(--disabled-text);
+    border-color: transparent;
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: none;
+  }
+
   .btn-love {
-    background: var(--gradient-love);
-    color: hsl(var(--romantic-dark));
-    border: 2px solid hsl(var(--romantic));
+    background: transparent;
+    color: var(--action-outline-text);
+    border: 2px solid var(--border-strong);
     border-radius: var(--radius);
     padding: 0.75rem 2rem;
+    min-height: var(--control-height);
     font-family: var(--font-sans);
     font-weight: 600;
     letter-spacing: 0.01em;
-    transition: var(--transition-bounce);
+    transition: background var(--theme-transition), border-color var(--theme-transition), transform var(--transition-bounce);
   }
 
-  .btn-love:hover {
-    background: var(--gradient-romantic);
-    color: white;
+  .btn-love:hover:not(:disabled) {
+    border-color: var(--action);
     transform: scale(1.05);
+  }
+
+  .btn-love:active:not(:disabled) {
+    background: var(--action-pressed);
+    color: var(--action-text);
+  }
+
+  .btn-love:disabled,
+  .btn-love[aria-disabled="true"] {
+    background: var(--disabled-bg);
+    color: var(--disabled-text);
+    border-color: transparent;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  /* Status badge + titles (guide §6.9, report top priority). Pattern A (solid badge)
+     is the robust countdown treatment; Pattern B (text on gradient) for waiting titles. */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--status-bg);
+    color: var(--status-text);
+    border-radius: var(--radius-pill);
+    padding: 6px 14px;
+    font-weight: 600;
+  }
+
+  .status-title {
+    color: var(--text-primary);
+  }
+
+  .status-hint {
+    color: var(--text-on-canvas);
+  }
+
+  /* Matchmaking frame (guide §6.5): calm solid wrapper; dashed reserved for an
+     explicit empty state. Replaces the large white dashed frames. */
+  .match-frame {
+    background: var(--frame-bg);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius-card) + 4px);
+    padding: 12px;
+  }
+  .match-frame:focus-within,
+  .match-frame.is-selected {
+    border-color: var(--action);
+  }
+  .match-frame[data-state="empty"] {
+    border-style: dashed;
+    border-color: var(--border-strong);
+  }
+
+  /* Brand (guide §6.1): saturated pink confined to identity marks; wordmark stays
+     neutral for legibility. */
+  .brand-mark {
+    color: var(--brand);
+  }
+  .brand-wordmark {
+    color: var(--text-primary);
+  }
+
+  /* Page heading (guide §6.4): gradient display text with solid fallback and
+     forced-colors support. Never pale-pink gradient on the pink canvas. */
+  .page-heading {
+    color: var(--heading-fallback);
+    background-image: var(--heading-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  @media (forced-colors: active) {
+    .page-heading {
+      background: none;
+      -webkit-text-fill-color: currentColor;
+      color: CanvasText;
+    }
+  }
+
+  /* Avatar (guide §6.6): ring is the separation mechanism, not a decorative border. */
+  .avatar {
+    background: var(--avatar-bg);
+    color: var(--avatar-text);
+    font-weight: 700;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--avatar-ring);
+  }
+
+  /* Interest chips (guide §6.7). Selection is never color-alone: checkmark + weight. */
+  .chip {
+    background: var(--chip-bg);
+    color: var(--chip-text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    padding: 4px 10px;
+  }
+  .chip[aria-pressed="true"],
+  .chip.is-selected {
+    background: var(--chip-selected-bg);
+    color: var(--chip-selected-text);
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .chip.is-selected::before {
+    content: "✓";
+    margin-inline-end: 6px;
   }
 }
 
@@ -569,4 +929,15 @@
   40% { transform: translateX(6px); }
   60% { transform: translateX(-4px); }
   80% { transform: translateX(4px); }
+}
+
+/* Light mode: the pale love gradient cannot carry white text/icons. Saturated
+   romantic/hero/passion fills keep white (verified in contrast-check.mjs); only
+   love drops to deep plum. Lives in the utilities layer so it beats text-white
+   (a components-layer rule always loses to utilities regardless of specificity).
+   Scoped to [data-theme="light"] so dark mode is untouched. */
+@layer utilities {
+  [data-theme="light"] .bg-gradient-love {
+    color: #4A1733;
+  }
 }

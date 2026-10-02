@@ -37,8 +37,11 @@ export const Navigation = () => {
 
   // Common Tailwind classes for NavLink components to ensure consistency.
   // Added w-full to maintain consistent size and prevent enlargement on active state
-  const baseLinkClass = "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors duration-200 whitespace-nowrap";
-  const activeLinkClass = "bg-pink-100 dark:bg-pink-900/50 text-pink-600 dark:text-pink-400 font-semibold";
+  // Nav states (color guide §6.2): quiet secondary text; active = visible surface +
+  // readable text + marker icon + weight (never color alone). Transparent border
+  // reserves the active border width so toggling never shifts layout.
+  const baseLinkClass = "flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-full border border-transparent transition-colors duration-200 whitespace-nowrap";
+  const activeLinkClass = "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] border-[var(--border)] font-semibold [&_svg]:text-[var(--nav-active-marker)]";
   const inactiveLinkClass = "text-foreground/70 hover:text-foreground hover:bg-secondary/50";
 
   return (
@@ -46,16 +49,16 @@ export const Navigation = () => {
     // It's fixed to the top of the viewport and has an entry animation.
     // Improved visibility on tablets and proper spacing to prevent overlap
     <nav className="fixed top-4 left-2 right-2 sm:left-4 sm:right-4 z-50 animate-fadeInUp" style={{ animation: 'fadeInUp 0.6s ease-out' }}>
-      <div className="relative max-w-7xl mx-auto rounded-xl border border-white/20 bg-background/80 backdrop-blur-xl shadow-xl">
+      <div className="relative max-w-7xl mx-auto rounded-xl border border-[var(--nav-border)] bg-[var(--nav-bg)] backdrop-blur-xl shadow-[var(--shadow-nav)]">
         <div className="flex items-center justify-between h-16 px-3 sm:px-4 lg:px-6">
           
           {/* Left side: Brand/Logo */}
           <div className="flex-shrink-0">
             <NavLink to="/dashboard" className="flex items-center gap-2 group">
-              <div className="p-2 bg-gradient-to-br from-pink-500 to-rose-500 rounded-lg group-hover:scale-110 transition-transform duration-300">
+              <div className="p-2 bg-[var(--brand)] rounded-lg group-hover:scale-110 transition-transform duration-300">
                 <Heart className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
               </div>
-              <span className="text-xl sm:text-2xl font-bold text-pink-600 dark:text-pink-400 group-hover:text-pink-500 transition-colors">
+              <span className="text-xl sm:text-2xl font-bold brand-wordmark transition-colors">
                 ConfessIt
               </span>
             </NavLink>

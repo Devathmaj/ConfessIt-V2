@@ -118,9 +118,9 @@ export const GamesFeaturedPage = () => {
         description="One mini-game takes the spotlight every day. The pick rotates at midnight."
       />
 
-      <Card className="mx-auto max-w-2xl overflow-hidden rounded-3xl border-border/60 bg-card/80 shadow-romantic backdrop-blur">
+      <Card className="mx-auto max-w-2xl overflow-hidden rounded-3xl border-border/60 bg-card/80 shadow-[var(--shadow-romantic)] backdrop-blur">
         {/* Spotlight banner */}
-        <div className="relative overflow-hidden bg-gradient-hero px-5 py-6 text-white sm:px-8 sm:py-7">
+        <div className="relative overflow-hidden bg-[var(--action)] px-5 py-6 text-white sm:px-8 sm:py-7 dark:bg-gradient-hero">
           <div className="relative z-10 flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-white/85">

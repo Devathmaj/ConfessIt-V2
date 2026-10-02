@@ -1,0 +1,30 @@
+{
+  // Color guardrails (source of truth:
+  // ConfessIt_Color_System_Implementation_Guide.md Appendix E).
+  // NOTE: not yet enforced in CI (stylelint is not installed). Run in warn
+  // mode first: legacy hsl()/gradient usages in src/index.css predate this
+  // rule and need a follow-up pass before switching to error mode.
+  // var() token references always pass: they contain no literal gradient text.
+  "rules": {
+    "color-no-hex": true,
+    "function-disallowed-list": ["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklch", "oklab"],
+    "declaration-property-value-disallowed-list": {
+      "/^(background|background-image)$/": ["/gradient\\(/"],
+      "background-attachment": ["fixed"]
+    }
+  },
+  "overrides": [
+    {
+      "files": ["**/tokens.*.css"],
+      "rules": {
+        "color-no-hex": null,
+        "function-disallowed-list": null,
+        "declaration-property-value-disallowed-list": null
+      }
+    },
+    {
+      "files": ["**/app-shell.css", "**/base.css"],
+      "rules": { "declaration-property-value-disallowed-list": null }
+    }
+  ]
+}

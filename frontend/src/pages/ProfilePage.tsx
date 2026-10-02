@@ -229,7 +229,7 @@ export const ProfilePage = () => {
                     </div>
                     <Button 
                         size="icon" 
-                        className="absolute bottom-0 right-0 rounded-full bg-gradient-romantic"
+                        className="absolute bottom-0 right-0 rounded-full"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={pictureChangeBlocked}
                         aria-label={
@@ -417,7 +417,7 @@ export const ProfilePage = () => {
                 </Button>
                 <Button 
                   onClick={handleSaveProfile}
-                  className="w-full sm:w-auto bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg"
+                  className="btn-romantic font-dancing text-lg w-full sm:w-auto"
                 >
                   <Save className="w-5 h-5 mr-2" />
                   Save Changes

@@ -193,7 +193,7 @@ export const GamesLeaderboardPage = () => {
               className={cn(
                 'inline-flex shrink-0 items-center rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
                 isActive
-                  ? 'border-transparent bg-gradient-romantic text-white shadow-romantic'
+                  ? 'border-transparent bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                   : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
               )}
             >
@@ -217,7 +217,7 @@ export const GamesLeaderboardPage = () => {
                 className={cn(
                   'inline-flex shrink-0 items-center rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
                   isActive
-                    ? 'border-transparent bg-gradient-romantic text-white shadow-romantic'
+                    ? 'border-transparent bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                     : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
                 )}
               >
@@ -343,7 +343,7 @@ export const GamesLeaderboardPage = () => {
                 className={cn(
                   'rounded-2xl border p-3 text-center sm:p-5',
                   entry.rank === 1
-                    ? 'border-romantic/60 bg-romantic/10 shadow-romantic'
+                    ? 'border-romantic/60 bg-romantic/10 shadow-[var(--shadow-romantic)]'
                     : 'border-border/60 bg-card/70 backdrop-blur',
                 )}
               >

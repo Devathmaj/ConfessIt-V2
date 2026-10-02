@@ -220,8 +220,12 @@ export const UserDashboard = () => {
 
   return (
     <div className="min-h-screen w-full text-white overflow-hidden">
-      {/* Add the Navigation component here */}
-      <Navigation />
+      {/* Dashboards always render the navbar in dark mode, regardless of the
+          user's theme: the scope below re-roots Tailwind dark: variants and the
+          semantic color tokens for the navbar subtree only. */}
+      <div className="dark" data-theme="dark">
+        <Navigation />
+      </div>
 
       {/* Background Video */}
       <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10">

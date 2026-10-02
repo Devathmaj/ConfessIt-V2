@@ -226,7 +226,7 @@ export const GamesDashboardPage = () => {
         {/* Sidebar */}
         <div className="space-y-6">
           {/* Today's featured */}
-          <Card className="rounded-2xl border-transparent bg-gradient-romantic text-white shadow-romantic">
+          <Card className="rounded-2xl border-transparent bg-[var(--action)] text-white shadow-[var(--shadow-romantic)] dark:bg-gradient-romantic">
             <CardContent className="p-5">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/90">

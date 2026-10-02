@@ -32,7 +32,7 @@ export const FloatingHearts = () => {
   }, []);
 
   return (
-    <div className="floating-hearts">
+    <div className="floating-hearts" aria-hidden="true">
       {hearts.map(heart => (
         <Heart
           key={heart.id}
@@ -41,7 +41,6 @@ export const FloatingHearts = () => {
           style={{
             left: `${heart.left}%`,
             animationDelay: `${heart.delay}s`,
-            color: Math.random() > 0.5 ? 'hsl(var(--romantic))' : 'hsl(var(--passion))'
           }}
           fill="currentColor"
         />

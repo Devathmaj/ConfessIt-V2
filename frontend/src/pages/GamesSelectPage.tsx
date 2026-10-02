@@ -133,7 +133,7 @@ export const GamesSelectPage = () => {
               className={cn(
                 'inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
                 isActive
-                  ? 'border-transparent bg-gradient-romantic text-white shadow-romantic'
+                  ? 'border-transparent bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                   : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
               )}
             >

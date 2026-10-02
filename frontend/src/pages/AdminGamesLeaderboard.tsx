@@ -143,7 +143,7 @@ export const AdminGamesLeaderboard = () => {
                   className={cn(
                     'inline-flex items-center rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all',
                     isActive
-                      ? 'border-transparent bg-gradient-romantic text-white shadow-romantic'
+                      ? 'border-transparent bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                       : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
                   )}
                 >

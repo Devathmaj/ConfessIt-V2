@@ -305,7 +305,10 @@ export const ModeratorDashboard = () => {
 
   return (
     <div className="relative min-h-screen bg-background">
-      <AdminNavigation />
+      {/* Dashboard navbar is always dark, regardless of the user's theme (see UserDashboard). */}
+      <div className="dark" data-theme="dark">
+        <AdminNavigation />
+      </div>
 
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 pb-16 pt-28">
         <header className="flex flex-col gap-6 rounded-3xl border bg-card p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">

@@ -37,10 +37,7 @@ export const ProfileAvatar = ({ src, name, className, fallbackClassName, alt }: 
       <AvatarFallback
         role="img"
         aria-label={name ?? alt ?? 'Profile picture'}
-        className={cn(
-          'bg-gradient-to-br from-pink-600 to-rose-600 font-semibold text-white',
-          fallbackClassName
-        )}
+        className={cn('avatar', fallbackClassName)}
       >
         {/* Rendered as SVG so the letter scales with whatever circle size the caller
             passes, instead of needing a matching text size at every call site. */}

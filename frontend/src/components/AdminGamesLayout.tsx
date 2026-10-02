@@ -46,7 +46,7 @@ export const AdminGamesLayout = () => (
               cn(
                 'inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:px-4 sm:text-sm',
                 isActive
-                  ? 'bg-gradient-romantic text-white shadow-romantic'
+                  ? 'bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                   : 'text-muted-foreground hover:bg-secondary/70 hover:text-foreground',
               )
             }

@@ -265,7 +265,10 @@ export const AdminDashboard = () => {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      <AdminNavigation />
+      {/* Dashboard navbar is always dark, regardless of the user's theme (see UserDashboard). */}
+      <div className="dark" data-theme="dark">
+        <AdminNavigation />
+      </div>
 
       <div className="fixed inset-0 -z-10">
         <video

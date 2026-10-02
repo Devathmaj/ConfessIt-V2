@@ -10,7 +10,8 @@
     "build:prod": "node scripts/check-prod-env.mjs && vite build --mode production && node scripts/check-prod-bundle.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "contrast": "node scripts/contrast-check.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

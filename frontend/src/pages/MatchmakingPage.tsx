@@ -886,8 +886,8 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
       <div className="max-w-7xl mx-auto mb-8 px-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
-            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">Random Matchmaking 💕</h1>
-            <p className="text-sm sm:text-base md:text-xl text-muted-foreground break-words">Find your perfect Valentine match!</p>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing page-heading mb-2 break-words">Random Matchmaking 💕</h1>
+            <p className="text-sm sm:text-base md:text-xl status-hint break-words">Find your perfect Valentine match!</p>
           </div>
           <CountdownTimer />
         </div>
@@ -896,7 +896,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
       <div className="max-w-7xl mx-auto">
         {!showChat ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
-            <div className="min-h-[400px] flex items-center justify-center bg-card rounded-lg p-4 border-2 border-dashed border-primary/20">
+            <div className="min-h-[400px] flex items-center justify-center match-frame">
                 <div className="w-full max-w-sm">{user && <UserCard profile={user} />}</div>
             </div>
 
@@ -919,13 +919,13 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                 cooldown ? (
                   <div className="text-center space-y-4">
                     <div className="text-4xl">⏳</div>
-                    <h2 className="text-2xl font-dancing text-romantic">Matchmaking on Cooldown</h2>
+                    <h2 className="text-2xl font-dancing status-title">Matchmaking on Cooldown</h2>
                     <p className="text-muted-foreground">{cooldown.message}</p>
                   </div>
                 ) : cohortBlock ? (
                   <div className="text-center space-y-4">
                     <div className="text-4xl">🔒</div>
-                    <h2 className="text-2xl font-dancing text-romantic">
+                    <h2 className="text-2xl font-dancing status-title">
                       No matchmaking slot for your cohort
                     </h2>
                     <p className="text-muted-foreground">{cohortBlock.message}</p>
@@ -935,7 +935,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                   </div>
                 ) : (
                   <div className="text-center space-y-4">
-                    <h2 className="text-2xl font-dancing text-romantic">Click the heart to find your match! 💕</h2>
+                    <h2 className="text-2xl font-dancing status-title">Click the heart to find your match! 💕</h2>
                     <p className="text-muted-foreground">Find someone special to connect with!</p>
                   </div>
                 )
@@ -944,14 +944,14 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               {matchedProfile && conversationStatus === 'terminated' && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">🚫</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Conversation Terminated</h2>
+                  <h2 className="text-2xl font-dancing status-title">Conversation Terminated</h2>
                   <p className="text-muted-foreground">
                     A moderator closed this conversation. You can still read it, but it can no
                     longer be used.
                   </p>
                   <Button
                     onClick={() => setShowConversationDialog(true)}
-                    className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+                    className="btn-romantic"
                     size="lg"
                   >
                     View Conversation
@@ -968,11 +968,11 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               {matchedProfile && hasActiveConversation && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">💬</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Conversation Active!</h2>
+                  <h2 className="text-2xl font-dancing status-title">Conversation Active!</h2>
                   <p className="text-muted-foreground">You have an active conversation with {matchedProfile.name}</p>
                   <Button 
                     onClick={() => setShowConversationDialog(true)}
-                    className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+                    className="btn-romantic"
                     size="lg"
                   >
                     Open Conversation
@@ -989,7 +989,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               {matchedProfile && conversationStatus === 'requested' && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">⏳</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Waiting for Response</h2>
+                  <h2 className="text-2xl font-dancing status-title">Waiting for Response</h2>
                   <p className="text-muted-foreground">Waiting for {matchedProfile.name} to accept your message request</p>
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
@@ -1003,7 +1003,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               {matchedProfile && conversationStatus === 'rejected' && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">❌</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Message Request Rejected</h2>
+                  <h2 className="text-2xl font-dancing status-title">Message Request Rejected</h2>
                   <p className="text-muted-foreground">{matchedProfile.name} rejected your message request</p>
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">
@@ -1017,11 +1017,11 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               {matchedProfile && conversationStatus === 'pending' && (
                 <div className="text-center space-y-4">
                   <div className="text-4xl">💕</div>
-                  <h2 className="text-2xl font-dancing text-romantic">Match Found!</h2>
+                  <h2 className="text-2xl font-dancing status-title">Match Found!</h2>
                   <p className="text-muted-foreground">You matched with {matchedProfile.name}!</p>
                   <Button 
                     onClick={handleSendMessageRequest}
-                    className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+                    className="btn-romantic"
                     size="lg"
                   >
                     Send Message Request
@@ -1037,7 +1037,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
             </div>
 
             <div className="flex flex-col items-center justify-center gap-4">
-                <div className="min-h-[400px] w-full flex items-center justify-center bg-card rounded-lg p-4 border-2 border-dashed border-primary/20">
+                <div className="min-h-[400px] w-full flex items-center justify-center match-frame">
                 {isMatching && slotMachineUser ? (
                     <div className="w-full h-full flex items-center justify-center overflow-hidden relative">
                         <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-card z-10" />
@@ -1102,11 +1102,11 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                     {conversationStatus === 'accepted' && (
                       <div className="text-center space-y-4">
                         <div className="text-2xl">💬</div>
-                        <h3 className="text-xl font-semibold text-romantic">Conversation Active!</h3>
+                        <h3 className="text-xl font-semibold status-title">Conversation Active!</h3>
                         <p className="text-muted-foreground">You can now chat with your match!</p>
                         <Button 
                           onClick={() => setShowConversationDialog(true)}
-                          className="bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600"
+                          className="btn-romantic"
                         >
                           Open Chat
                         </Button>

@@ -513,10 +513,10 @@ const filtersNarrowed = activeSearch !== '';
       <div className="max-w-7xl mx-auto mb-8">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
-            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-pink-600 dark:text-pink-400 mb-2 break-words">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing page-heading mb-2 break-words">
               Notifications 💌
             </h1>
-            <p className="text-sm sm:text-base md:text-xl text-muted-foreground break-words">
+            <p className="text-sm sm:text-base md:text-xl status-hint break-words">
               Manage your notifications and message requests
             </p>
           </div>

@@ -24,7 +24,7 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
   return (
     <Card
       className={cn(
-        'group flex flex-col rounded-2xl border-border/60 bg-card/70 backdrop-blur transition-all hover:-translate-y-1 hover:border-romantic/50 hover:shadow-romantic',
+        'group flex flex-col rounded-2xl border-border/60 bg-card/70 backdrop-blur transition-all hover:-translate-y-1 hover:border-romantic/50 hover:shadow-[var(--shadow-romantic)]',
         className,
       )}
     >

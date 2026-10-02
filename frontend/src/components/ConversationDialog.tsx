@@ -916,7 +916,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="fixed inset-0 bg-[var(--scrim)] flex items-center justify-center z-50 p-2 sm:p-4">
         <Card className="w-full max-w-4xl">
           <CardContent className="flex items-center justify-center p-6 sm:p-8">
             <Loader2 className="h-8 w-8 animate-spin" />
@@ -960,7 +960,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const quotaNotice = messageLimitNotice(quota);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4 touch-none">
+    <div className="fixed inset-0 bg-[var(--scrim)] flex items-center justify-center z-50 p-2 sm:p-4 touch-none">
       <Card className="w-full max-w-6xl h-[100vh] sm:h-[90vh] flex flex-col overflow-hidden">
         <CardHeader className="border-b flex-shrink-0 p-3 sm:p-6">
           <div className="flex justify-between items-start gap-2">

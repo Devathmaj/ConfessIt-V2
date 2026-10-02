@@ -51,8 +51,8 @@ const navItems: NavItem[] = [
   { to: "/admin/profile-review", label: "Profiles", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];
 
-const baseLink = "flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all duration-200";
-const activeLink = "bg-pink-100 text-pink-600 dark:bg-pink-900/40 dark:text-pink-300";
+const baseLink = "flex items-center gap-2 px-4 py-2 min-h-[44px] rounded-full border border-transparent text-sm transition-all duration-200";
+const activeLink = "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] border-[var(--border)] font-semibold [&_svg]:text-[var(--nav-active-marker)]";
 const inactiveLink = "text-foreground/70 hover:text-foreground hover:bg-secondary/50";
 
 /**
@@ -112,13 +112,13 @@ export const AdminNavigation = () => {
 
   return (
     <nav className="fixed top-4 left-4 right-4 z-50">
-      <div className="mx-auto flex max-w-7xl items-center justify-between rounded-2xl border border-white/10 bg-background/70 px-4 py-3 shadow-xl backdrop-blur-xl">
+      <div className="mx-auto flex max-w-7xl items-center justify-between rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] px-4 py-3 shadow-[var(--shadow-nav)] backdrop-blur-xl">
         <NavLink to={home} className="flex items-center gap-2 flex-shrink-0" onClick={() => setOpen(false)}>
-          <div className="rounded-xl bg-gradient-to-br from-pink-500 to-rose-500 p-2">
+          <div className="rounded-xl bg-[var(--brand)] p-2">
             <Heart className="h-5 w-5 text-white" />
           </div>
           <div className="leading-tight">
-            <p className="text-lg font-semibold text-pink-600 dark:text-pink-300">ConfessIt</p>
+            <p className="text-lg font-semibold brand-wordmark">ConfessIt</p>
             <p className="text-xs uppercase tracking-wide text-foreground/60">{area}</p>
           </div>
         </NavLink>
@@ -157,12 +157,12 @@ export const AdminNavigation = () => {
       </div>
 
       {open && (
-        <div className="mt-2 rounded-2xl border border-white/10 bg-background/95 p-4 shadow-xl backdrop-blur-xl md:hidden">
+        <div className="mt-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl md:hidden">
           <div className="flex flex-col gap-2">
             {visibleItems.map(renderLink)}
           </div>
           <div className="mt-4 space-y-2">
-            <div className="flex items-center justify-between rounded-xl border border-white/10 px-3 py-2">
+            <div className="flex items-center justify-between rounded-xl border border-[var(--nav-border)] px-3 py-2">
               <span className="text-sm font-medium text-foreground/80">Theme</span>
               <ModeToggle />
             </div>

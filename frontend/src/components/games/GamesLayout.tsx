@@ -60,7 +60,7 @@ export const GamesLayout = () => (
           </NavLink>
 
           <NavLink to="/games" end className="flex min-w-0 items-center gap-2">
-            <span className="rounded-xl bg-gradient-romantic p-2 shadow-romantic">
+            <span className="rounded-xl bg-gradient-romantic p-2 shadow-[var(--shadow-romantic)]">
               <Gamepad2 className="h-4 w-4 text-white sm:h-5 sm:w-5" />
             </span>
             <span className="truncate font-display text-base font-semibold tracking-tight sm:text-lg">
@@ -89,7 +89,7 @@ export const GamesLayout = () => (
                     cn(
                       'inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:px-4 sm:text-sm',
                       isActive
-                        ? 'bg-gradient-romantic text-white shadow-romantic'
+                        ? 'bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                         : 'text-muted-foreground hover:bg-secondary/70 hover:text-foreground',
                     )
                   }
