@@ -1418,7 +1418,7 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop", "two-key-escape"]
+GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop", "two-key-escape", "plot-twist", "case-closed"]
 
 
 class GameConfig(BaseModel):

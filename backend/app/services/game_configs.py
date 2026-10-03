@@ -51,6 +51,8 @@ _GAME_LOCK_KEYS: dict[str, int] = {
     "connections": 7_260_005,
     "trivia-drop": 7_260_006,
     "two-key-escape": 7_260_007,
+    "plot-twist": 7_260_008,
+    "case-closed": 7_260_009,
 }
 
 _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
@@ -61,6 +63,8 @@ _DEFAULT_CONTENT_MODE: dict[str, Optional[str]] = {
     "connections": "manual",
     "trivia-drop": None,
     "two-key-escape": None,
+    "plot-twist": None,
+    "case-closed": None,
 }
 
 # The maze edge length a fresh Two-Key Escape row starts with: 12x12 until an
@@ -217,6 +221,16 @@ def update_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reaction Time has no content mode.",
+        )
+    if game_id == "plot-twist" and content_mode is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Plot Twist has no content mode.",
+        )
+    if game_id == "case-closed" and content_mode is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Case Closed has no content mode.",
         )
     if game_id == "connections" and content_mode is not None and content_mode != "manual":
         raise HTTPException(

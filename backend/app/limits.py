@@ -301,6 +301,8 @@ GAME_IDS: tuple[str, ...] = (
     "connections",
     "trivia-drop",
     "two-key-escape",
+    "plot-twist",
+    "case-closed",
 )
 
 # The only reset cadences a game may carry. Stored as the strings below; each game

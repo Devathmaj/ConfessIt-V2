@@ -23,6 +23,8 @@ const MANAGE_ROUTES: Record<string, string> = {
   'reaction-time': '/admin/games/manage/reaction-time',
   connections: '/admin/games/manage/connections',
   'trivia-drop': '/admin/games/manage/trivia-drop',
+  'plot-twist': '/admin/games/manage/plot-twist',
+  'case-closed': '/admin/games/manage/case-closed',
 };
 
 /**

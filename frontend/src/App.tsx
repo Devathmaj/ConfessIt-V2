@@ -31,6 +31,8 @@ import { TriviaDropGamePage } from "./pages/TriviaDropGamePage";
 import { CoupleQuestionnairePage } from "./pages/CoupleQuestionnairePage";
 import { TwoKeyEscapePage } from "./pages/TwoKeyEscapePage";
 import { ReactionTimeGamePage } from "./pages/ReactionTimeGamePage";
+import { PlotTwistGamePage } from "./pages/PlotTwistGamePage";
+import { CaseClosedGamePage } from "./pages/CaseClosedGamePage";
 import { AdminGamesDashboard } from "./pages/AdminGamesDashboard";
 import { AdminGamesManage } from "./pages/AdminGamesManage";
 import { AdminFeaturedManage } from "./pages/AdminFeaturedManage";
@@ -41,6 +43,8 @@ import { AdminTwoKeyEscapeManage } from "./pages/AdminTwoKeyEscapeManage";
 import { AdminReactionTimeManage } from "./pages/AdminReactionTimeManage";
 import { AdminTriviaDropManage } from "./pages/AdminTriviaDropManage";
 import { AdminConnectionsManage } from "./pages/AdminConnectionsManage";
+import { AdminPlotTwistManage } from "./pages/AdminPlotTwistManage";
+import { AdminCaseClosedManage } from "./pages/AdminCaseClosedManage";
 import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
 import { About } from "./pages/About";
 import NotFound from "./pages/NotFound";
@@ -379,6 +383,8 @@ const AppRoutes = () => {
         <Route path="manage/reaction-time" element={<AdminReactionTimeManage />} />
         <Route path="manage/connections" element={<AdminConnectionsManage />} />
         <Route path="manage/trivia-drop" element={<AdminTriviaDropManage />} />
+        <Route path="manage/plot-twist" element={<AdminPlotTwistManage />} />
+        <Route path="manage/case-closed" element={<AdminCaseClosedManage />} />
         <Route path="leaderboard" element={<AdminGamesLeaderboard />} />
         <Route path="*" element={<Navigate to="/admin/games" replace />} />
       </Route>
@@ -454,6 +460,8 @@ const AppRoutes = () => {
         <Route path="couple-questionnaire" element={<CoupleQuestionnairePage />} />
         <Route path="two-key-escape" element={<TwoKeyEscapePage />} />
         <Route path="reaction-time" element={<ReactionTimeGamePage />} />
+        <Route path="plot-twist" element={<PlotTwistGamePage />} />
+        <Route path="case-closed" element={<CaseClosedGamePage />} />
       </Route>
       {/* The old /mini-games page is gone; deep links retire to the section that replaced
           it rather than 404ing. */}

@@ -409,6 +409,20 @@ def ensure_single_game(
         from . import trivia_service
 
         return trivia_service.release_due_questions(db, _now_utc(now))
+    if game_id in ("plot-twist", "case-closed"):
+        # Barebones couple titles: no session table and no period yet.
+        # They ride the same pass so hidden keeps skipping and the summary
+        # stays complete, but they never open sessions until gameplay lands.
+        moment = _now_utc(now)
+        with db.sessions.begin() as session:
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": game_lock_key(game_id)},
+            )
+            config = get_config(session, game_id)
+            if config.is_hidden:
+                return {"game_id": game_id, "action": "skipped_hidden"}
+        return {"game_id": game_id, "action": "coming_soon"}
     moment = _now_utc(now)
     today = moment.date()
     model = _GAME_MODELS[game_id]
@@ -853,4 +867,8 @@ def active_session_counts(db: Database) -> dict[str, int]:
             )
             or 0
         )
+        # Barebones titles hold no sessions yet; report zero like a game
+        # with no live rows so the counts stay complete per GAME_IDS.
+        out["plot-twist"] = 0
+        out["case-closed"] = 0
         return out

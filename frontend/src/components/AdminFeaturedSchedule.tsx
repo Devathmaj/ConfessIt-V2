@@ -46,6 +46,8 @@ const FEATURED_IDS = [
   'connections',
   'trivia-drop',
   'two-key-escape',
+  'plot-twist',
+  'case-closed',
 ] as const;
 
 const GAME_LABELS: Record<string, string> = {
@@ -56,6 +58,8 @@ const GAME_LABELS: Record<string, string> = {
   connections: 'Connections',
   'trivia-drop': 'Trivia Drop',
   'two-key-escape': 'Two-Key Escape',
+  'plot-twist': 'Plot Twist',
+  'case-closed': 'Case Closed',
 };
 
 /** Today as UTC `YYYY-MM-DD`, the only calendar the schedule speaks. */

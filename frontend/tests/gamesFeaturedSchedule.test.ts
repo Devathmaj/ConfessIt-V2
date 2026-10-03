@@ -120,8 +120,10 @@ describe('gamesCatalog: the rotation a day without a pick falls back to', () => 
     expect(AVAILABLE_GAMES.map((game) => game.id).sort()).toEqual(
       [
         'anagram',
+        'case-closed',
         'connections',
         'couple-questionnaire',
+        'plot-twist',
         'reaction-time',
         'trivia-drop',
         'two-key-escape',

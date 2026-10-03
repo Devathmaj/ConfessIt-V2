@@ -37,7 +37,14 @@ _GAME_NAMES = {
     "connections": "Connections",
     "trivia-drop": "Trivia Drop",
     "two-key-escape": "Two-Key Escape",
+    "plot-twist": "Plot Twist",
+    "case-closed": "Case Closed",
 }
+
+# Barebones couple titles with no session lifecycle yet: they are
+# discoverable through the same hidden/disabled switches, but they never
+# hold a session row, so they are never playable until the gameplay lands.
+_BAREBONES_GAMES = ("plot-twist", "case-closed")
 
 _SESSION_MODELS = {
     "wordle": WordleGameRecord,
@@ -90,12 +97,37 @@ def _trivia_entry(session, config, featured_id: str | None) -> GameSelectEntry |
     )
 
 
+def _barebones_entry(session, game_id: str, featured_id: str | None) -> GameSelectEntry:
+    """A session-free placeholder: hidden/disabled behave like every game,
+    but an enabled entry is listed as not yet playable until gameplay lands."""
+    config = get_config(session, game_id)
+    if not config.enabled:
+        return GameSelectEntry(
+            game_id=game_id,
+            name=_GAME_NAMES[game_id],
+            enabled=False,
+            playable=False,
+            featured=featured_id == game_id,
+            message="This game is temporarily unavailable. Please try again later.",
+        )
+    return GameSelectEntry(
+        game_id=game_id,
+        name=_GAME_NAMES[game_id],
+        enabled=True,
+        playable=False,
+        featured=featured_id == game_id,
+        message="Coming soon — gameplay is still being built. Check back later.",
+    )
+
+
 def _entry(
     session, game_id: str, today, featured_id: str | None
 ) -> GameSelectEntry | None:
     config = get_config(session, game_id)
     if config.is_hidden:
         return None
+    if game_id in _BAREBONES_GAMES:
+        return _barebones_entry(session, game_id, featured_id)
     if game_id == "trivia-drop":
         return _trivia_entry(session, config, featured_id)
     model = _SESSION_MODELS[game_id]
@@ -162,6 +194,8 @@ def game_selection(
                 "connections",
                 "trivia-drop",
                 "two-key-escape",
+                "plot-twist",
+                "case-closed",
             )
             if (entry := _entry(session, game_id, today, featured_id)) is not None
         ]

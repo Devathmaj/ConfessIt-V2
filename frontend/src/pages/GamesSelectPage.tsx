@@ -26,6 +26,8 @@ const SERVER_MANAGED_IDS = new Set([
   'connections',
   'trivia-drop',
   'two-key-escape',
+  'plot-twist',
+  'case-closed',
 ]);
 
 /**

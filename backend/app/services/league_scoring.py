@@ -43,6 +43,8 @@ INDIVIDUAL_GAMES = (
 COUPLE_GAMES = (
     "couple-questionnaire",
     "two-key-escape",
+    "plot-twist",
+    "case-closed",
 )
 
 GAME_COMPETITION_TYPES: dict[str, str] = {
