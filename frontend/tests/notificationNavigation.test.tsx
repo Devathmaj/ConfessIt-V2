@@ -175,7 +175,7 @@ describe('notification cards without a target', () => {
 
     // No `role` and no `tabindex`: an inert card that still takes focus is worse than one that
     // is visibly not a control, because it promises an action it cannot perform.
-    const card = screen.getByText('Content Removed').closest('.rounded-lg');
+    const card = screen.getByText('Content Removed').closest('[data-slot="card"]');
     expect(card).not.toHaveAttribute('tabindex');
     expect(card).not.toHaveAttribute('role');
   });

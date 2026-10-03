@@ -11,6 +11,8 @@ import {
   getIndividualLeaderboard,
   getCouplesLeaderboard,
   getMyLeagueStanding,
+  type GameCategoryBoard,
+  type GameCategoryInfo,
 } from '@/services/api';
 
 vi.mock('@/services/api', () => ({
@@ -33,13 +35,13 @@ vi.mock('sonner', () => ({
   Toaster: () => null,
 }));
 
-const categories = [
+const categories: GameCategoryInfo[] = [
   { id: 'performance', label: 'Performance', description: 'Cross-session.', scope: 'period', is_default: true },
   { id: 'most_solved', label: 'Most Solved', description: 'Most solves.', scope: 'period', is_default: false },
   { id: 'fastest_solve', label: 'Fastest Solve', description: 'All-time record.', scope: 'record', is_default: false },
 ];
 
-const mostSolvedBoard = {
+const mostSolvedBoard: GameCategoryBoard = {
   game_id: 'wordle',
   category: 'most_solved',
   scope: 'period',

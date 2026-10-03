@@ -25,6 +25,11 @@
     "noImplicitAny": false,
     "noFallthroughCasesInSwitch": false,
 
+    // Host-run tests (observability wiring reads repo files from disk) import
+    // Node builtins. @types/node is installed but not otherwise in this
+    // compilation's graph, so name it explicitly per the compiler's own hint.
+    "types": ["node"],
+
     "paths": {
       "@/*": ["./src/*"]
     }

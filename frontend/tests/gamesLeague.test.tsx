@@ -205,7 +205,7 @@ describe('GamesDashboardPage: the league teaser', () => {
 
     expect(await screen.findByText('Ada')).toBeInTheDocument();
     expect(screen.getByText('#1')).toBeInTheDocument();
-    const board = within(screen.getByText('Top players').closest('.rounded-2xl')!);
+    const board = within(screen.getByText('Top players').closest('[data-slot="card"]')!);
     expect(board.getByText('Bo')).toBeInTheDocument();
   });
 });

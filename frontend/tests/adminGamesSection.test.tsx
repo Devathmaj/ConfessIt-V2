@@ -284,7 +284,7 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 const puzzleCard = (title: 'Wordle' | 'Anagram') => {
   const headings = screen.getAllByRole('heading', { name: title });
   for (const heading of headings) {
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (card) return card as HTMLElement;
   }
   throw new Error(`The ${title} card could not be found from its heading.`);
@@ -295,7 +295,7 @@ const anagramCard = () => puzzleCard('Anagram');
 
 const withinFeaturedCard = () => {
   const heading = screen.getByRole('heading', { name: 'Featured game' });
-  const card = heading.closest('.rounded-2xl');
+  const card = heading.closest('[data-slot="card"]');
   if (!card) {
     throw new Error('The Featured game card could not be found from its heading.');
   }
@@ -473,7 +473,7 @@ describe('AdminFeaturedManage: the dedicated schedule', () => {
   it('features a span from start to end', async () => {
     renderSection('/admin/games/manage/featured');
     const heading = await screen.findByRole('heading', { name: 'Feature a span' });
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (!card) throw new Error('The span card could not be found from its heading.');
     const scope = within(card as HTMLElement);
 
@@ -498,7 +498,7 @@ describe('AdminFeaturedManage: the dedicated schedule', () => {
   it('refuses a span longer than a week without calling the server', async () => {
     renderSection('/admin/games/manage/featured');
     const heading = await screen.findByRole('heading', { name: 'Feature a span' });
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (!card) throw new Error('The span card could not be found from its heading.');
     const scope = within(card as HTMLElement);
 
@@ -517,7 +517,7 @@ describe('AdminFeaturedManage: the dedicated schedule', () => {
   it('keeps the server’s overlong-chain refusal on the screen', async () => {
     renderSection('/admin/games/manage/featured');
     const heading = await screen.findByRole('heading', { name: 'Feature a span' });
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (!card) throw new Error('The span card could not be found from its heading.');
     const scope = within(card as HTMLElement);
 
@@ -548,7 +548,7 @@ describe('AdminFeaturedManage: the dedicated schedule', () => {
     vi.mocked(getFeaturedGames).mockResolvedValue(held);
     renderSection('/admin/games/manage/featured');
     const heading = await screen.findByRole('heading', { name: 'Feature a span' });
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (!card) throw new Error('The span card could not be found from its heading.');
     const scope = within(card as HTMLElement);
 
@@ -579,7 +579,7 @@ describe('AdminGamesManage: the spotlight front door', () => {
   it('sets the chosen game as featured for today', async () => {
     renderSection('/admin/games/manage');
     const heading = await screen.findByRole('heading', { name: 'Featured spotlight' });
-    const card = heading.closest('.rounded-2xl');
+    const card = heading.closest('[data-slot="card"]');
     if (!card) throw new Error('The spotlight card could not be found from its heading.');
     const scope = within(card as HTMLElement);
     expect(await scope.findByText(/No game holds today/)).toBeInTheDocument();
@@ -647,7 +647,7 @@ describe('AdminReactionTimeManage: the Reaction Time editor page', () => {
   const reactionCard = () => {
     const headings = screen.getAllByRole('heading', { name: 'Reaction Time' });
     for (const heading of headings) {
-      const card = heading.closest('.rounded-2xl');
+      const card = heading.closest('[data-slot="card"]');
       if (card) return card as HTMLElement;
     }
     throw new Error('The Reaction Time card could not be found from its heading.');
@@ -1301,7 +1301,7 @@ describe('AdminTwoKeyEscapeManage: the maze size', () => {
   const twoKeyCard = () => {
     const headings = screen.getAllByRole('heading', { name: 'Two-Key Escape' });
     for (const heading of headings) {
-      const card = heading.closest('.rounded-2xl');
+      const card = heading.closest('[data-slot="card"]');
       if (card) return card as HTMLElement;
     }
     throw new Error('The Two-Key Escape card could not be found from its heading.');
