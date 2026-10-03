@@ -11,8 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useContext } from 'react';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
-import { useAuth } from '@/contexts/AuthContext';
+import { AuthContext } from '@/contexts/AuthContext';
 import {
   ALL_GAMES_FILTER,
   LEAGUE_COMPETITIONS,
@@ -96,7 +97,10 @@ const formatScore = (score: number): string =>
   score.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 export const GamesLeaderboardPage = () => {
-  const { user } = useAuth();
+  // Tolerant read (not useAuth): the page is also rendered in contexts without
+  // a provider (tests), where the hook's throw would take the whole board down.
+  // Without a viewer there is simply no board row to fall back to.
+  const user = useContext(AuthContext)?.user ?? null;
   const [competition, setCompetition] = useState<LeagueCompetitionType>('individual');
   const [period, setPeriod] = useState<LeaguePeriod>('weekly');
   const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
@@ -178,7 +182,25 @@ export const GamesLeaderboardPage = () => {
     void fetchBoard(0, false);
   }, [fetchBoard]);
 
-  const summary = standing?.entries[0] ?? null;
+  // The viewer's row on the board currently on screen, matched by identity
+  // (never by display name: two accounts can share "Test User MA2"). On a
+  // per-game board this is the game-specific standing `/me` cannot answer,
+  // since that endpoint is global-only.
+  const boardRowForViewer = user
+    ? (entries.find((entry) =>
+        isCoupleEntry(entry)
+          ? entry.member_a_id === user.id || entry.member_b_id === user.id
+          : entry.user_id === user.id,
+      ) ?? null)
+    : null;
+  // The card promises "Your standing here follows the filters selected
+  // above": on a per-game board the visible row is the truth; on the combined
+  // board the `/me` answer comes first (it holds the global rank even when
+  // the viewer sits past the loaded page) with the visible row as fallback.
+  const summary =
+    gameId === ALL_GAMES_FILTER
+      ? (standing?.entries[0] ?? boardRowForViewer)
+      : (boardRowForViewer ?? standing?.entries[0] ?? null);
   const topThree = entries.slice(0, 3);
   const remainingRows = entries.slice(3);
   const canLoadMore = entries.length < total;
