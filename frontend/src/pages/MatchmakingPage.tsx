@@ -887,7 +887,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
           lower part clips off-screen. Single item only. */}
       <FloralDecor pair={2} className="left-1/2 bottom-[-14rem] w-[130rem] max-w-none -translate-x-1/2 opacity-90" />
       
-      <div className="max-w-7xl mx-auto mb-8 px-4">
+      <div className="relative z-10 max-w-7xl mx-auto mb-8 px-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="text-center lg:text-left">
             <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing page-heading mb-2 break-words">Random Matchmaking 💕</h1>
@@ -924,7 +924,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                   <div className="text-center space-y-4">
                     <div className="text-4xl">⏳</div>
                     <h2 className="text-2xl font-dancing status-title">Matchmaking on Cooldown</h2>
-                    <p className="text-muted-foreground">{cooldown.message}</p>
+                    <p className="page-subtitle text-base">{cooldown.message}</p>
                   </div>
                 ) : cohortBlock ? (
                   <div className="text-center space-y-4">

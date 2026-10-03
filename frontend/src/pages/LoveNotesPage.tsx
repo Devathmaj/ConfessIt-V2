@@ -748,8 +748,9 @@ setSearchTerm('');
             <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 overflow-x-hidden relative">
                 <Navigation />
                 <FloatingHearts />
-                {/* Floral preview: 4536919 centered behind the header box. */}
-                <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-90" />
+                {/* Floral preview: 4536919 centered behind the header box (softened so the
+                    heading + subtitle stay legible over it in both themes). */}
+                <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-60" />
                 {/* Floral edges: cropped blossom mirrored top-right;
                     1706715_bottom bottom-left (+ vertical-axis mirror
                     bottom-right). */}
@@ -763,10 +764,10 @@ setSearchTerm('');
                 <div className="relative z-10 max-w-7xl mx-auto mb-6 sm:mb-8 px-2 sm:px-4">
                     <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 sm:gap-6">
                         <div className="text-center lg:text-left">
-                            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">
+                            <h1 className="header-halo text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 break-words">
                                 Love Notes & Cards 💌
                             </h1>
-                            <p className="text-sm sm:text-base md:text-xl text-muted-foreground px-2 break-words">
+                            <p className="page-subtitle text-sm sm:text-base md:text-xl px-2 break-words">
                                 Create and share beautiful digital love notes
                             </p>
                         </div>

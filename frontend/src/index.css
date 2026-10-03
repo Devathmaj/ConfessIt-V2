@@ -802,6 +802,38 @@
 
   .status-hint {
     color: var(--text-on-canvas);
+    font-weight: 500;
+    /* Floral branches render directly behind page headers (Inbox/LoveNotes pair 4
+       is centered on the header). An opaque surface halo knocks the art out
+       locally so the subtitle survives in both themes. */
+    text-shadow:
+      0 1px 2px var(--surface-solid),
+      0 0 16px var(--surface-solid),
+      0 0 32px var(--surface-solid);
+  }
+
+  /* Secondary header copy that currently uses `text-muted-foreground` over floral
+     art (Games headers, Message Box, Love Notes, Confessions subtitles). Muted is
+     designed for quiet metadata on a clean surface — over busy blossoms it drops
+     below readable contrast. This keeps the secondary hierarchy but renders it in
+     the primary ink at reduced opacity with the same halo as .status-hint. */
+  .page-subtitle {
+    color: var(--text-primary);
+    opacity: 0.82;
+    font-weight: 500;
+    text-shadow:
+      0 1px 2px var(--surface-solid),
+      0 0 16px var(--surface-solid),
+      0 0 32px var(--surface-solid);
+  }
+
+  /* Solid-ink header titles/eyebrows over floral art. Pair with the title element
+     itself (not its wrapper) so the halo hugs the glyphs. */
+  .header-halo {
+    text-shadow:
+      0 1px 2px var(--surface-solid),
+      0 0 16px var(--surface-solid),
+      0 0 32px var(--surface-solid);
   }
 
   /* Matchmaking frame (guide §6.5): calm solid wrapper; dashed reserved for an
@@ -838,6 +870,12 @@
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
+    /* Gradient text uses transparent fill, so text-shadow would bleed through the
+       glyphs. A drop-shadow filter hugs the rendered shape instead and lifts the
+       heading off the floral art centered behind it. */
+    filter:
+      drop-shadow(0 1px 6px var(--surface-solid))
+      drop-shadow(0 0 18px var(--surface-solid));
   }
   @media (forced-colors: active) {
     .page-heading {

@@ -824,12 +824,12 @@ export const ConfessionsPage = () => {
           and `role="status"` means it is announced without stealing focus mid-read.
         */}
         {isOnCooldown && (
-          <div role="status" className="mb-4 sm:mb-6 rounded-lg border border-romantic/30 bg-romantic/5 px-4 py-3">
-            <p className="flex items-center gap-2 text-sm sm:text-base text-foreground">
+          <div role="status" className="relative z-10 mb-4 sm:mb-6 rounded-xl border border-romantic/40 bg-card/90 px-4 py-3 shadow-[var(--shadow-card)] backdrop-blur">
+            <p className="flex items-center gap-2 text-sm font-medium sm:text-base text-foreground">
               <Clock className="w-4 h-4 shrink-0 text-romantic" />
               <span>
                 {cooldown?.message ?? 'You can post one confession every 2 hours.'}{' '}
-                <span className="font-medium tabular-nums">
+                <span className="font-bold tabular-nums">
                   {formatCooldownRemaining(secondsUntilEligible)}
                 </span>{' '}
                 remaining.
@@ -840,11 +840,11 @@ export const ConfessionsPage = () => {
         <div className="flex items-center gap-2 sm:gap-4 mb-4 sm:mb-6">
           <CountdownTimer />
         </div>
-        <div className="text-center mb-6 sm:mb-8 px-2">
-          <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 sm:mb-4 break-words">
+        <div className="relative z-10 text-center mb-6 sm:mb-8 px-2">
+          <h1 className="header-halo text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 sm:mb-4 break-words">
             Anonymous Confessions 💌
           </h1>
-          <p className="text-sm sm:text-base md:text-xl text-muted-foreground px-2 break-words">
+          <p className="page-subtitle text-sm sm:text-base md:text-xl px-2 break-words">
             Share your heart safely and anonymously
           </p>
         </div>
@@ -895,13 +895,13 @@ export const ConfessionsPage = () => {
                 /* Repeated here as well as above the trigger: the dialog is reachable from
                    the feed's own state and the wait has to be explained where the Share
                    button is, not only where the person decided to press it. */
-                <div role="status" className="rounded-lg border border-romantic/30 bg-romantic/5 px-3 py-2 text-sm text-foreground">
+                <div role="status" className="rounded-xl border border-romantic/40 bg-card/90 px-3 py-2 text-sm font-medium text-foreground shadow-[var(--shadow-card)]">
                   <p className="flex items-center gap-2">
                     <Clock className="w-4 h-4 shrink-0 text-romantic" />
                     <span>{cooldown?.message ?? 'You can post one confession every 2 hours.'}</span>
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Time left: <span className="font-medium text-foreground tabular-nums">{formatCooldownRemaining(secondsUntilEligible)}</span>
+                  <p className="mt-1 text-xs font-medium text-foreground/80">
+                    Time left: <span className="font-bold text-foreground tabular-nums">{formatCooldownRemaining(secondsUntilEligible)}</span>
                   </p>
                 </div>
               )}

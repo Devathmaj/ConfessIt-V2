@@ -511,8 +511,9 @@ const filtersNarrowed = activeSearch !== '';
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
       <Navigation />
       <FloatingHearts />
-      {/* Floral preview: 4536919 centered behind the header box. */}
-      <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-90" />
+      {/* Floral preview: 4536919 centered behind the header box (softened so the
+          heading + subtitle stay legible over it in both themes). */}
+      <FloralDecor pair={4} className="left-1/2 top-80 w-[64rem] max-w-[98vw] -translate-x-1/2 -translate-y-1/2 opacity-60" />
       {/* Floral edges: 1706715_bottom bottom-left; 1748704 mirrored on the
           vertical axis bottom-right. */}
       <FloralDecor pair={7} className="bottom-0 left-0 w-[34rem] opacity-90 sm:w-[42rem]" />

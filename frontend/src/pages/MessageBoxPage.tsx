@@ -392,14 +392,14 @@ export const MessageBoxPage = () => {
       <FloralSplit half="top" className="right-0 top-0 w-[34rem] opacity-90 sm:w-[42rem]" />
       <FloralDecor pair={5} className="bottom-0 right-0 w-[32rem] -scale-x-100 -scale-y-100 opacity-90 sm:w-[38rem]" />
 
-      <div className="max-w-7xl mx-auto mb-8">
+      <div className="relative z-10 max-w-7xl mx-auto mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-2 flex items-center gap-2 sm:gap-3 break-words">
+            <h1 className="header-halo text-2xl sm:text-3xl md:text-4xl font-bold mb-2 flex items-center gap-2 sm:gap-3 break-words">
               <MessageCircle className="w-6 h-6 sm:w-8 sm:h-8 flex-shrink-0" />
               <span>Message Box</span>
             </h1>
-            <p className="text-sm sm:text-base text-muted-foreground break-words">
+            <p className="page-subtitle text-sm sm:text-base break-words">
               {showAllConversations
                 ? 'Your conversations and message requests'
                 : 'Your active conversations'}
