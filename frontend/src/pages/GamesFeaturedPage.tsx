@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
-import { categoryLabel, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
+import { gameTypeLabel, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
 import { getFeaturedToday } from '@/services/api';
 
 /**
@@ -131,8 +131,8 @@ export const GamesFeaturedPage = () => {
                 {game.name}
               </h2>
               <div className="mt-2 flex flex-wrap gap-2">
-                <Badge className="border-transparent bg-white/20 text-white hover:bg-white/30">
-                  {categoryLabel(game.category)}
+                <Badge className="border-transparent bg-white/20 capitalize text-white hover:bg-white/30">
+                  {gameTypeLabel(game.type)}
                 </Badge>
                 <Badge className="border-transparent bg-white/20 text-white hover:bg-white/30">
                   {game.difficulty}

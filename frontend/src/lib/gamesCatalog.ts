@@ -76,6 +76,13 @@ export interface GameCategory {
   label: string;
 }
 
+/**
+ * Genre buckets (Icebreakers, Party, ...). No longer surfaced in the UI: the
+ * selection page groups by `GAME_TYPES` (Single vs Couple) and cards badge the
+ * type. Kept on the definition for backward compatibility only.
+ *
+ * @deprecated Use `GAME_TYPES` / `game.type` for all UI grouping and labels.
+ */
 export const GAME_CATEGORIES: GameCategory[] = [
   { id: 'icebreaker', label: 'Icebreakers' },
   { id: 'party', label: 'Party' },

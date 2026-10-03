@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   ALL_GAMES_FILTER,
   LEAGUE_COMPETITIONS,
@@ -95,6 +96,7 @@ const formatScore = (score: number): string =>
   score.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 export const GamesLeaderboardPage = () => {
+  const { user } = useAuth();
   const [competition, setCompetition] = useState<LeagueCompetitionType>('individual');
   const [period, setPeriod] = useState<LeaguePeriod>('weekly');
   const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
@@ -145,12 +147,21 @@ export const GamesLeaderboardPage = () => {
         setTotal(board.total);
         setOpportunityCount(board.opportunity_count ?? null);
         if (!append) {
-          setStanding(
-            await getMyLeagueStanding(competition, {
-              period,
-              ...(period === 'all_time' ? {} : { anchor }),
-            }),
-          );
+          // The standing read must never clear the board: it answers a
+          // different question (the viewer's own rows) and a failure here
+          // used to wipe the standings the reader was already looking at.
+          // It is also global-only (no game_id), so on a per-game board the
+          // card below falls back to the viewer's row on the visible board.
+          try {
+            setStanding(
+              await getMyLeagueStanding(competition, {
+                period,
+                ...(period === 'all_time' ? {} : { anchor }),
+              }),
+            );
+          } catch {
+            setStanding(null);
+          }
         }
       } catch (fetchError) {
         if (!append) setEntries([]);

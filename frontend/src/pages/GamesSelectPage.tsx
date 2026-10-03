@@ -9,9 +9,9 @@ import { FloralDecor } from '@/components/FloralDecor';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import {
   AVAILABLE_GAMES,
-  GAME_CATEGORIES,
-  type GameCategoryId,
+  GAME_TYPES,
   type GameDefinition,
+  type GameTypeId,
 } from '@/lib/gamesCatalog';
 import { cn } from '@/lib/utils';
 import { getGameSelection, type GameSelectEntry } from '@/services/api';
@@ -36,11 +36,11 @@ const SERVER_MANAGED_IDS = new Set([
  * screen behind its route.
  */
 
-type CategoryFilter = 'all' | GameCategoryId;
+type TypeFilter = 'all' | GameTypeId;
 
 export const GamesSelectPage = () => {
   const navigate = useNavigate();
-  const [filter, setFilter] = useState<CategoryFilter>('all');
+  const [filter, setFilter] = useState<TypeFilter>('all');
   const { isEnabled } = useGamesConfig();
   const [serverStatus, setServerStatus] = useState<Map<string, GameSelectEntry> | null>(null);
 
@@ -84,11 +84,11 @@ export const GamesSelectPage = () => {
   );
 
   const counts = useMemo(() => {
-    const map = new Map<CategoryFilter, number>([['all', liveGames.length]]);
-    GAME_CATEGORIES.forEach((category) => {
+    const map = new Map<TypeFilter, number>([['all', liveGames.length]]);
+    GAME_TYPES.forEach((entry) => {
       map.set(
-        category.id,
-        liveGames.filter((game) => game.category === category.id).length,
+        entry.id,
+        liveGames.filter((game) => game.type === entry.id).length,
       );
     });
     return map;
@@ -98,19 +98,17 @@ export const GamesSelectPage = () => {
     () =>
       filter === 'all'
         ? liveGames
-        : liveGames.filter((game) => game.category === filter),
+        : liveGames.filter((game) => game.type === filter),
     [filter, liveGames],
   );
 
-  const chips: Array<{ id: CategoryFilter; label: string }> = [
+  const chips: Array<{ id: TypeFilter; label: string }> = [
     { id: 'all', label: 'All games' },
-    ...GAME_CATEGORIES.map((category) => ({ id: category.id, label: category.label })),
+    ...GAME_TYPES.map((entry) => ({ id: entry.id, label: entry.label })),
   ];
 
-  const activeCategoryLabel =
-    filter === 'all'
-      ? null
-      : GAME_CATEGORIES.find((category) => category.id === filter)?.label ?? null;
+  const activeTypeLabel =
+    filter === 'all' ? null : (GAME_TYPES.find((entry) => entry.id === filter)?.label ?? null);
 
   return (
     <div className="relative">
@@ -119,10 +117,10 @@ export const GamesSelectPage = () => {
       <GamesPageHeader
         eyebrow="Games"
         title="Select a Game"
-        description="Pick a title to play. New games drop into this list as they ship — the page itself never changes."
+        description="Pick a title to play — solo on your own or together as a couple. New games drop into this list as they ship."
       />
 
-      {/* Category chips */}
+      {/* Type chips: Single vs Couple */}
       <div className="no-scrollbar -mx-3 mb-5 flex gap-2 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
         {chips.map((chip) => {
           const count = counts.get(chip.id) ?? 0;
@@ -157,9 +155,9 @@ export const GamesSelectPage = () => {
       {visibleGames.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
           <SearchX className="mx-auto h-8 w-8 text-muted-foreground" />
-          <p className="mt-3 text-base font-bold">Nothing in this category yet</p>
+          <p className="mt-3 text-base font-bold">Nothing here yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-            {activeCategoryLabel} games haven&apos;t landed in the library — check back soon.
+            {activeTypeLabel} games haven&apos;t landed in the library — check back soon.
           </p>
           <Button
             type="button"

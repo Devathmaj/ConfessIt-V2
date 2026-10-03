@@ -2,7 +2,7 @@ import { Gamepad2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { categoryLabel, type GameDefinition } from '@/lib/gamesCatalog';
+import { gameTypeLabel, type GameDefinition } from '@/lib/gamesCatalog';
 import { cn } from '@/lib/utils';
 
 /**
@@ -39,7 +39,7 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
             <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
           </span>
           <Badge variant="secondary" className="shrink-0 capitalize">
-            {categoryLabel(game.category)}
+            {gameTypeLabel(game.type)}
           </Badge>
         </div>
         <CardTitle className="mt-3 text-lg font-bold leading-snug">{game.name}</CardTitle>
