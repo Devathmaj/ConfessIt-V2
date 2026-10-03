@@ -4,6 +4,7 @@ import { Gamepad2, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { gameTypeLabel, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
@@ -52,10 +53,13 @@ const useResetCountdown = () => {
 export const GamesFeaturedPage = () => {
   const navigate = useNavigate();
   const countdown = useResetCountdown();
-  // The server's spotlight for today (UTC). Falls back to the shared local
-  // configuration when the request fails, so the page also works standalone.
+  // The server's spotlight for today (UTC). `undefined` while the request is
+  // in flight, the game id (or null when nothing is featured) once it lands,
+  // plus a separate failure flag so "server said nothing" stays distinct from
+  // "request failed" (offline standalone mode falls back to local config).
   const { featured } = useGamesConfig();
   const [serverGameId, setServerGameId] = useState<string | null | undefined>(undefined);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,19 +68,46 @@ export const GamesFeaturedPage = () => {
         if (!cancelled) setServerGameId(response.game_id);
       })
       .catch(() => {
-        if (!cancelled) setServerGameId(null);
+        if (!cancelled) {
+          setServerGameId(null);
+          setLoadFailed(true);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const game =
-    serverGameId === undefined
-      ? featured?.game
-      : serverGameId
-        ? (getGameById(serverGameId) ?? featured?.game)
-        : undefined;
+  // While the spotlight is loading, render a skeleton -- never the local
+  // fallback game. Rendering `featured?.game` here flashed a (usually wrong)
+  // game for a split second before the server answered.
+  if (serverGameId === undefined) {
+    return (
+      <div>
+        <GamesPageHeader
+          eyebrow="Today's featured"
+          title="Game of the Day"
+          description="One mini-game takes the spotlight every day. The pick rotates at 00:01 UTC."
+        />
+        <Card className="mx-auto max-w-2xl overflow-hidden">
+          <div role="status" aria-label="Loading today's featured game">
+            <Skeleton className="h-44 w-full sm:h-52" />
+            <CardContent className="space-y-4 p-5 sm:p-8">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-11 w-full" />
+            </CardContent>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  const game = serverGameId
+    ? (getGameById(serverGameId) ?? undefined)
+    : loadFailed
+      ? (featured?.game ?? undefined)
+      : undefined;
 
   const notifyPlay = (current: GameDefinition) => {
     navigate(current.route);
