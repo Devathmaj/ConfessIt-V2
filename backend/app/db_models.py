@@ -2545,6 +2545,130 @@ class GameScoreAwardRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# Staff notifications (role-based, categorized)
+# ---------------------------------------------------------------------------
+# Participant notices live in ``notifications`` and are addressed to one regno.
+# Staff notices are different in exactly one way: they are addressed to a *role*,
+# not to a person. A report filed at 2am is news to every moderator on duty, not
+# to whoever happened to be signed in when it was filed, so the row names the
+# audience (``admin``, ``moderator`` or ``all``) instead of a recipient regno.
+#
+# Three categories, and they are the whole vocabulary:
+#
+# * ``report`` -- a confession/comment, love-note or chat-message report was filed.
+# * ``love_note`` -- a love note arrived and waits for approval/rejection.
+# * ``game`` -- an admin-feedable game needs its content (a pending manual-mode
+#   session, a Connections puzzle, a Trivia Drop question) or no featured game
+#   is set for today. Game alerts are *computed live* on every read rather than
+#   stored, so they clear themselves the moment an admin fixes them; only
+#   ``report`` and ``love_note`` rows are stored here.
+#
+# Read state is per account, not per row: ``StaffNotificationReadRecord`` records
+# which staff account has seen which row, so one moderator reading a notice does
+# not mark it read for the next one. Preferences are per account too -- three
+# boolean switches (reports, love notes, games) for an admin, two for a
+# moderator -- and are deliberately *not* wired to delivery: the list endpoint
+# returns every notice regardless, and the switches are stored intent for a
+# future delivery layer.
+
+
+class StaffNotificationRecord(Base):
+    """One stored staff notice, addressed to a role rather than a person."""
+
+    __tablename__ = "staff_notifications"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    # Who this is news to: ``admin``, ``moderator`` or ``all`` (both roles).
+    # Report and love-note events are ``all``; game events are admin-only and
+    # are computed live rather than stored (see staff_notification_service).
+    audience: Mapped[str] = mapped_column(String(16), index=True)
+    # One of ``report``, ``love_note`` or ``game``. Stored rows only ever carry
+    # the first two; the ``game`` value exists so a future stored game event
+    # does not need a migration to be writable.
+    category: Mapped[str] = mapped_column(String(16), index=True)
+    heading: Mapped[str] = mapped_column(String(120))
+    body: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    target_kind: Mapped[Optional[str]] = mapped_column(String(40))
+    target_id: Mapped[Optional[str]] = mapped_column(String(100))
+    # Idempotency key (e.g. ``report:<report_id>``, ``love-note:<note_id>``).
+    # Unique when present so a retried filing cannot double-notify; NULL when
+    # the event has no natural identity.
+    dedup_key: Mapped[Optional[str]] = mapped_column(String(160), unique=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "audience IN ('admin', 'moderator', 'all')",
+            name="ck_staff_notifications_audience_known",
+        ),
+        CheckConstraint(
+            "category IN ('report', 'love_note', 'game')",
+            name="ck_staff_notifications_category_known",
+        ),
+    )
+
+
+class StaffNotificationReadRecord(Base):
+    """Which staff account has marked which stored staff notice as read.
+
+    The account is named by table plus primary key, because a regno alone is
+    not an identity across the three account tables and a staff row has no row
+    in ``users`` to point at. No foreign keys for the same reason the report
+    tables carry reviewer regnos as plain text: the row may live in ``admin``
+    or ``moderator``, and a key into one table would reject the other.
+    """
+
+    __tablename__ = "staff_notification_reads"
+
+    notification_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False),
+        ForeignKey("staff_notifications.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    account_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    account_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"account_type IN ({_ACCOUNT_TYPE_SQL_LIST})",
+            name="ck_staff_notification_reads_account_type_known",
+        ),
+    )
+
+
+class StaffNotificationPreferenceRecord(Base):
+    """One staff account's notification switches: which categories it wants.
+
+    One row per staff account, created on first write with everything on.
+    ``games_enabled`` is meaningful for admins only; a moderator's row keeps
+    the column so both roles share one shape, and the update path refuses to
+    write it for a moderator rather than the schema forbidding it per role.
+    """
+
+    __tablename__ = "staff_notification_preferences"
+
+    account_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    account_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    reports_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    love_notes_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    games_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            f"account_type IN ({_ACCOUNT_TYPE_SQL_LIST})",
+            name="ck_staff_notification_prefs_account_type_known",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Cross-table account lookup
 # ---------------------------------------------------------------------------
 # A regno or an id is unique *within* one account table, not across all three. Login says

@@ -240,6 +240,16 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
             detail="Could not send the love note."
         )
 
+    # Staff-facing notice (role-based, best-effort): a note awaiting approval is
+    # news to every moderator and admin, and a failed write here must never
+    # unwind the note that was just committed.
+    try:
+        from .staff_notification_service import notify_love_note_pending
+
+        notify_love_note_pending(db, note_id=note_id)
+    except Exception:
+        logger.warning("Failed to queue staff notification for love note %s", note_id)
+
     return {
         "message": "Love note sent successfully for review.",
         "note_id": note_id,
@@ -524,6 +534,18 @@ def report_love_note_service(
         record_report_filed(session, kind=LOVE_NOTE, author_user_id=note.sender_id)
 
     logger.info(f"Love note {note_id} reported by {reporter.regno} for: {reason}")
+
+    # Staff-facing notice (role-based, best-effort): a failed write here must
+    # never unwind the report that was just committed.
+    try:
+        from .staff_notification_service import notify_report_filed
+
+        notify_report_filed(
+            db, kind="love note", report_id=report_id,
+            summary=f"A love note was reported by {reporter.regno}. Open Reports review to rule on it.",
+        )
+    except Exception:
+        logger.warning("Failed to queue staff notification for love note report %s", note_id)
 
     return {"id": report_id, "message": "Love note reported successfully"}
 

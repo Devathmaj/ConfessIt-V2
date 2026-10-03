@@ -2762,3 +2762,107 @@ export const finalizeLeagueOpportunity = async (
     return response.data;
 };
 
+
+/* --- Staff Notifications (admin + moderator) --- */
+
+/** One staff notice: a stored report/love-note row or a live game alert. */
+export interface StaffNotification {
+    id: string;
+    audience: string;
+    category: 'report' | 'love_note' | 'game';
+    heading: string;
+    body: string;
+    created_at: string;
+    is_read: boolean;
+    /** True for computed game alerts (no read state, clear when fixed). */
+    is_live: boolean;
+    target_kind: string | null;
+    target_id: string | null;
+}
+
+export interface StaffNotificationPreferences {
+    reports_enabled: boolean;
+    love_notes_enabled: boolean;
+    games_enabled: boolean;
+}
+
+export interface StaffNotificationsPage {
+    notifications: StaffNotification[];
+    total: number;
+    skip: number;
+    limit: number;
+    preferences: StaffNotificationPreferences;
+    notifications_enabled: boolean;
+    categories: string[];
+}
+
+/** One page of this staff account's notices, newest first, with switches beside it. */
+export const getStaffNotifications = async (params?: {
+    skip?: number;
+    limit?: number;
+    q?: string;
+    category?: string;
+    unread_only?: boolean;
+}): Promise<StaffNotificationsPage> => {
+    const response = await axios.get(`${API_URL}/staff/notifications`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.q ? { q: params.q } : {}),
+            ...(params?.category ? { category: params.category } : {}),
+            ...(params?.unread_only ? { unread_only: true } : {}),
+        },
+    });
+    return response.data;
+};
+
+export const getStaffUnreadCount = async (): Promise<{
+    unread: number;
+    by_category: Record<string, number>;
+}> => {
+    const response = await axios.get(`${API_URL}/staff/notifications/unread-count`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const getStaffNotificationPreferences = async (): Promise<{
+    preferences: StaffNotificationPreferences;
+    notifications_enabled: boolean;
+}> => {
+    const response = await axios.get(`${API_URL}/staff/notifications/preferences`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+export const updateStaffNotificationPreferences = async (payload: Partial<StaffNotificationPreferences>): Promise<{
+    preferences: StaffNotificationPreferences;
+}> => {
+    const response = await axios.put(`${API_URL}/staff/notifications/preferences`, payload, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** Flip this staff account's own notifications_enabled (the Enable button). */
+export const setStaffNotificationsEnabled = async (enabled: boolean): Promise<{
+    notifications_enabled: boolean;
+}> => {
+    const response = await axios.put(
+        `${API_URL}/staff/notifications/enabled`,
+        { enabled },
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+export const markStaffNotificationRead = async (notificationId: string) => {
+    const response = await axios.put(
+        `${API_URL}/staff/notifications/${notificationId}/read`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};

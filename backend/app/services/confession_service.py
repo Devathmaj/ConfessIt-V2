@@ -763,9 +763,12 @@ class ConfessionService:
         if duplicate:
             return None
         with self.sessions.begin() as session:
-            session.add(ReportRecord(comment_id=str(comment_id), reported_by_id=user_id,
+            report_row = ReportRecord(comment_id=str(comment_id), reported_by_id=user_id,
                 reported_by_name=user.name, reason=report_data.reason,
-                created_at=datetime.datetime.now(datetime.timezone.utc)))
+                created_at=datetime.datetime.now(datetime.timezone.utc))
+            session.add(report_row)
+            session.flush()
+            comment_report_id = str(report_row.id)
             comment_row = session.get(ConfessionCommentRecord, str(comment_id))
             if comment_row:
                 comment_row.report_count += 1
@@ -779,6 +782,17 @@ class ConfessionService:
             )
 
         logger.info(f"User {user_id} reported comment {comment_id}")
+        # Staff-facing notice (role-based, best-effort): a failed write here must
+        # never unwind the report that was just committed.
+        try:
+            from .staff_notification_service import notify_report_filed
+
+            notify_report_filed(
+                self.client, kind="comment", report_id=comment_report_id,
+                summary=f"A comment was reported by {user.name}. Open Reports review to rule on it.",
+            )
+        except Exception:
+            logger.warning("Failed to queue staff notification for comment report %s", comment_id)
         with self.sessions() as session:
             row = session.get(ConfessionCommentRecord, str(comment_id))
             author = session.get(UserRecord, row.user_id) if row else None
@@ -810,9 +824,12 @@ class ConfessionService:
         if duplicate:
             return None
         with self.sessions.begin() as session:
-            session.add(ReportRecord(confession_id=str(confession_id), reported_by_id=user_id,
+            confession_report_row = ReportRecord(confession_id=str(confession_id), reported_by_id=user_id,
                 reported_by_name=user.name, reason=report_data.reason,
-                created_at=datetime.datetime.now(datetime.timezone.utc)))
+                created_at=datetime.datetime.now(datetime.timezone.utc))
+            session.add(confession_report_row)
+            session.flush()
+            confession_report_id = str(confession_report_row.id)
             confession_row = session.get(ConfessionRecord, str(confession_id))
             if confession_row:
                 confession_row.report_count += 1
@@ -823,4 +840,15 @@ class ConfessionService:
             )
 
         logger.info(f"User {user_id} reported confession {confession_id}")
+        # Staff-facing notice (role-based, best-effort): a failed write here must
+        # never unwind the report that was just committed.
+        try:
+            from .staff_notification_service import notify_report_filed
+
+            notify_report_filed(
+                self.client, kind="confession", report_id=confession_report_id,
+                summary=f"A confession was reported by {user.name}. Open Reports review to rule on it.",
+            )
+        except Exception:
+            logger.warning("Failed to queue staff notification for confession report %s", confession_id)
         return self.get_confession(confession_id, user_id)

@@ -49,6 +49,7 @@ import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ReportsReview } from "./pages/ReportsReview";
 import { ProfileReview } from "./pages/ProfileReview";
+import { StaffNotificationsPage } from "./pages/StaffNotificationsPage";
 import { AppConfiguration } from "./pages/AppConfiguration";
 
 const queryClient = new QueryClient({
@@ -331,6 +332,25 @@ const AppRoutes = () => {
         element={
           <CapabilityRoute capability={CAPABILITIES.USERS_REVIEW}>
             <ProfileReview />
+          </CapabilityRoute>
+        }
+      />
+      {/* One notification inbox per staff role. The admin's is console-gated
+          (it carries game alerts); the moderator's is hub-gated and shows
+          reports plus love notes awaiting approval. */}
+      <Route
+        path="/admin/notifications"
+        element={
+          <CapabilityRoute capability={CAPABILITIES.STATS_READ}>
+            <StaffNotificationsPage />
+          </CapabilityRoute>
+        }
+      />
+      <Route
+        path="/moderation/notifications"
+        element={
+          <CapabilityRoute capability={CAPABILITIES.REPORTS_REVIEW} without={CAPABILITIES.STATS_READ}>
+            <StaffNotificationsPage />
           </CapabilityRoute>
         }
       />

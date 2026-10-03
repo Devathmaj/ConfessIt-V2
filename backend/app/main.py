@@ -22,7 +22,7 @@ from .config import (
     validate_public_base_url,
     validate_transport_security,
 )
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, staff_notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -775,6 +775,7 @@ app.include_router(love_notes.router)
 app.include_router(conversations.router)
 app.include_router(messages.router)
 app.include_router(notifications.router)
+app.include_router(staff_notifications.router)
 app.include_router(admin.router)
 app.include_router(admin_love_notes.router)
 app.include_router(admin_wordle.router)

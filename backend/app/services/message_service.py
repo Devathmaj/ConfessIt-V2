@@ -590,7 +590,19 @@ class MessageService:
             )
         
         logger.info(f"Message {message_id} reported by {reporter.regno} for: {reason}")
-        
+
+        # Staff-facing notice (role-based, best-effort): a failed write here must
+        # never unwind the report that was just committed.
+        try:
+            from .staff_notification_service import notify_report_filed
+
+            notify_report_filed(
+                db, kind="chat message", report_id=report_id,
+                summary=f"A chat message was reported by {reporter.regno}. Open Reports review to rule on it.",
+            )
+        except Exception:
+            logger.warning("Failed to queue staff notification for message report %s", message_id)
+
         return {
             "id": report_id,
             "message": "Message reported successfully"

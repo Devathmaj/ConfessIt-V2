@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, ClipboardCheck, LogOut, Gamepad2 } from "lucide-react";
+import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, ClipboardCheck, LogOut, Gamepad2, Bell } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -46,12 +46,23 @@ const navItems: NavItem[] = [
   // exactly what the section is, so a moderator is never offered a link they would be refused.
   { to: "/admin/games", label: "Games", icon: Gamepad2, capability: CAPABILITIES.STATS_READ },
   { to: "/admin/reports", label: "Reports", icon: Flag, capability: CAPABILITIES.REPORTS_REVIEW },
+  // One inbox per role, like the Dashboard/Moderation pair above: an admin's
+  // notices live under the console path and a moderator's under the hub path,
+  // and the route guards refuse each account the other's URL.
+  { to: "/admin/notifications", label: "Alerts", icon: Bell, capability: CAPABILITIES.STATS_READ },
+  {
+    to: "/moderation/notifications",
+    label: "Alerts",
+    icon: Bell,
+    capability: CAPABILITIES.REPORTS_REVIEW,
+    without: CAPABILITIES.STATS_READ,
+  },
   { to: "/admin/confessions", label: "Confessions", icon: ShieldQuestion, capability: CAPABILITIES.CONFESSIONS_REVIEW },
   { to: "/admin/love-notes", label: "Notes", icon: MessageCircleHeart, capability: CAPABILITIES.LOVE_NOTES_REVIEW },
   { to: "/admin/profile-review", label: "Profiles", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];
 
-const baseLink = "flex items-center gap-2 px-4 py-2 min-h-[44px] rounded-full border border-transparent text-sm transition-all duration-200";
+const baseLink = "flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2 min-h-[44px] rounded-full border border-transparent text-sm transition-all duration-200";
 const activeLink = "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] border-[var(--border)] font-semibold [&_svg]:text-[var(--nav-active-marker)]";
 const inactiveLink = "text-foreground/70 hover:text-foreground hover:bg-secondary/50";
 
@@ -123,13 +134,19 @@ export const AdminNavigation = () => {
           </div>
         </NavLink>
 
-        <div className="flex-1 flex justify-center">
-          <div className="hidden items-center gap-2 md:flex">
+        {/* The middle row owns the leftover width and may shrink to nothing: without
+            `min-w-0` a flex child refuses to go narrower than its content, which is what
+            pushed the pills past the bar's right edge once the Alerts link made eight. */}
+        <div className="flex-1 flex justify-center min-w-0">
+          {/* Full pill row only from `xl` up: eight pills plus the wordmark and actions
+              need ~1200px, so at `md`/`lg` the bar shows the hamburger instead of
+              overflowing the container to the right. */}
+          <div className="hidden items-center gap-2 xl:flex">
             {visibleItems.map(renderLink)}
           </div>
         </div>
 
-        <div className="hidden items-center gap-2 md:flex flex-shrink-0">
+        <div className="hidden items-center gap-2 xl:flex flex-shrink-0">
           <ModeToggle />
           {isAuthenticated && (
             <button
@@ -145,7 +162,7 @@ export const AdminNavigation = () => {
           )}
         </div>
 
-        <div className="flex-shrink-0 md:hidden">
+        <div className="flex-shrink-0 xl:hidden">
           <button
             onClick={() => setOpen((prev) => !prev)}
             className="flex items-center justify-center rounded-md p-2 text-foreground/70 hover:bg-secondary"
@@ -157,7 +174,7 @@ export const AdminNavigation = () => {
       </div>
 
       {open && (
-        <div className="mt-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl md:hidden">
+        <div className="mt-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl xl:hidden">
           <div className="flex flex-col gap-2">
             {visibleItems.map(renderLink)}
           </div>
