@@ -2706,6 +2706,103 @@ export const getMyLeagueStanding = async (
     return response.data;
 };
 
+// --- Per-game leaderboard categories ---
+//
+// Metric rankings across sessions (solves, attempts, milliseconds, words
+// placed, predictions correct). Record-scope categories answer all-time
+// history regardless of the rolling window. Nothing here feeds global
+// scores; `metrics` keys are documented per category on the component side.
+
+/** One selectable leaderboard view for one game. */
+export interface GameCategoryInfo {
+    id: string;
+    label: string;
+    description: string;
+    /** 'period': selected UTC window. 'record': all-time personal record. */
+    scope: 'period' | 'record';
+    is_default: boolean;
+}
+
+/** One ranked row: identity plus the category's metrics and detail records. */
+export interface GameCategoryEntry {
+    rank: number;
+    user_id?: string | null;
+    display_name?: string | null;
+    member_a_id?: string | null;
+    member_b_id?: string | null;
+    member_a_name?: string | null;
+    member_b_name?: string | null;
+    metrics: Record<string, number | boolean | string | null>;
+    records: Array<Record<string, number | boolean | string | string[] | null>>;
+}
+
+export interface GameCategoryBoard {
+    game_id: string;
+    category: string;
+    scope: 'period' | 'record';
+    period: string;
+    anchor?: string | null;
+    total: number;
+    entries: GameCategoryEntry[];
+}
+
+export interface GameCategoryMe {
+    game_id: string;
+    category: string;
+    scope: 'period' | 'record';
+    entries: GameCategoryEntry[];
+}
+
+export interface GameCategoryQuery {
+    period?: LeaguePeriod;
+    anchor?: string;
+    skip?: number;
+    limit?: number;
+}
+
+const gameCategoryParams = (query: GameCategoryQuery): Record<string, string | number> => {
+    const params: Record<string, string | number> = {};
+    if (query.period) params.period = query.period;
+    if (query.anchor) params.anchor = query.anchor;
+    if (query.skip !== undefined) params.skip = query.skip;
+    if (query.limit !== undefined) params.limit = query.limit;
+    return params;
+};
+
+/** Selectable leaderboard views for one game. */
+export const getGameCategories = async (gameId: string): Promise<GameCategoryInfo[]> => {
+    const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}/categories`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/** One game's category leaderboard, ranked over the full filtered set. */
+export const getGameCategoryBoard = async (
+    gameId: string,
+    category: string,
+    query: GameCategoryQuery = {},
+): Promise<GameCategoryBoard> => {
+    const response = await axios.get(
+        `${API_URL}/leaderboards/games/${gameId}/boards/${category}`,
+        { headers: getAuthHeaders(), params: gameCategoryParams(query) },
+    );
+    return response.data;
+};
+
+/** The caller's own rows on one category board, with full-dataset ranks. */
+export const getGameCategoryMe = async (
+    gameId: string,
+    category: string,
+    query: GameCategoryQuery = {},
+): Promise<GameCategoryMe> => {
+    const response = await axios.get(
+        `${API_URL}/leaderboards/games/${gameId}/boards/${category}/me`,
+        { headers: getAuthHeaders(), params: gameCategoryParams(query) },
+    );
+    return response.data;
+};
+
 /**
  * Ranked individual standings for the games console.
  *

@@ -2476,6 +2476,22 @@ class GameScoreAwardRecord(Base):
     persisted values are exact decimals, never floats. ``superseded_at`` is
     NULL on live awards; a correction marks the original row and issues a
     replacement, and leaderboard queries read live rows only.
+
+    Split scores (absolute-global vs placement-relative game paths):
+
+    * ``global_base_points`` / ``global_points``: the absolute-performance
+      award (policy v2, see ``league_global_scoring``) feeding the combined
+      global boards. Never uses rank, field size, or other subjects.
+    * ``game_base_points`` / ``game_points``: the placement-relative award
+      (policy v1, unchanged behavior) feeding per-game boards.
+    * ``global_scoring_version`` / ``game_scoring_version`` stamp which
+      policy produced each half, so history stays explainable.
+    * Legacy ``base_points`` / ``awarded_points`` / ``scoring_version`` are
+      retained for backward compatibility and now mirror the *global* path
+      on newly written rows. Rows predating the split (both new version
+      columns NULL) hold v1-relative values in the legacy columns; board
+      aggregation falls back to them, documented as the cutover in
+      ``league_boards``.
     """
 
     __tablename__ = "game_score_awards"
@@ -2493,6 +2509,12 @@ class GameScoreAwardRecord(Base):
     base_points: Mapped[Any] = mapped_column(Numeric(8, 2))
     featured_multiplier: Mapped[int] = mapped_column(SmallInteger, default=1, server_default=text("1"))
     awarded_points: Mapped[Any] = mapped_column(Numeric(8, 2))
+    global_base_points: Mapped[Optional[Any]] = mapped_column(Numeric(8, 2))
+    game_base_points: Mapped[Optional[Any]] = mapped_column(Numeric(8, 2))
+    global_points: Mapped[Optional[Any]] = mapped_column(Numeric(8, 2))
+    game_points: Mapped[Optional[Any]] = mapped_column(Numeric(8, 2))
+    global_scoring_version: Mapped[Optional[int]] = mapped_column(Integer)
+    game_scoring_version: Mapped[Optional[int]] = mapped_column(Integer)
     is_featured_snapshot: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     competition_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     scoring_version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))

@@ -2,15 +2,22 @@
 
 Aggregation rules (one place, shared by every endpoint):
 
-* A subject's game-period score is the average of that subject's awarded
-  points over the game's finalized opportunities in the window. Awarded
-  points already carry the featured multiplier, so featured results lift
-  the average before it is taken. Missed eligible opportunities contribute
-  zero through the denominator, which counts every finalized opportunity
-  whether the subject played it or not. Games with no finalized
-  opportunity in the window contribute nothing and impose no penalty.
+* A subject's game-period score is the average of that subject's finalized
+  points over the game's finalized opportunities in the window, read from
+  the matching award half: ``global_points`` (absolute performance) on
+  global boards, ``game_points`` (placement-relative) on per-game boards.
+  Finalized points already carry the featured multiplier, so featured
+  results lift the average before it is taken. Missed eligible
+  opportunities contribute zero through the denominator, which counts
+  every finalized opportunity whether the subject played it or not. Games
+  with no finalized opportunity in the window contribute nothing and
+  impose no penalty.
 * A global score sums the applicable game-period contributions, never
   mixing individual games into couple standings or vice versa.
+* Cutover: awards predating the score split (both version columns NULL)
+  fall back to their legacy ``awarded_points`` (v1 placement-relative).
+  Reprocessing an opportunity recomputes both halves under the current
+  policies while preserving the superseded rows.
 * Daily/weekly/monthly boards normalize over their own window -- they are
   not sums of daily display scores.
 * The all-time board accumulates finalized *weekly* game-period
@@ -48,6 +55,30 @@ def _live_awards():
     return GameScoreAwardRecord.superseded_at.is_(None)
 
 
+# Which award half each board family aggregates. Global boards read the
+# absolute-performance half; per-game boards read the placement-relative
+# half that preserves each game's established comparison rules.
+GLOBAL_SCORE_FIELD = "global"
+GAME_SCORE_FIELD = "game"
+
+
+def _score_value(row, score_field: str) -> Decimal:
+    """One award row's finalized points for the requesting board family.
+
+    Falls back to the legacy ``awarded_points`` for rows predating the
+    score split (both halves NULL): those carry the v1 placement-relative
+    policy, documented as the cutover in the model. Never invents a score
+    for a row that has neither.
+    """
+    if score_field == GAME_SCORE_FIELD:
+        value = row.game_points
+    else:
+        value = row.global_points
+    if value is None:
+        value = row.awarded_points
+    return Decimal(str(value))
+
+
 def _window_filter(start: Optional[date], end: Optional[date]):
     if start is None or end is None:
         return None
@@ -75,6 +106,8 @@ def _award_rows(
             GameScoreAwardRecord.member_b_id,
             GameScoreAwardRecord.awarded_points,
             GameScoreAwardRecord.base_points,
+            GameScoreAwardRecord.global_points,
+            GameScoreAwardRecord.game_points,
             GameScoreAwardRecord.is_featured_snapshot,
             GameScoreAwardRecord.competition_at,
             GameScoreAwardRecord.raw_metrics,
@@ -101,10 +134,13 @@ def _subject_key(row, competition_type: str) -> tuple:
     return (str(row.user_id),)
 
 
-def _game_period_scores(rows, competition_type: str) -> dict:
+def _game_period_scores(rows, competition_type: str, score_field: str = GLOBAL_SCORE_FIELD) -> dict:
     """Per (game, subject) normalized contribution over the rows' window.
 
     Returns ``{game_id: {"opportunities": {opp_ids}, "scores": {subject: avg}}}``.
+    ``score_field`` selects the award half (``global`` or ``game``); the
+    denominator -- every finalized opportunity in the window -- is identical
+    for both halves.
     """
     by_game: dict[str, dict] = {}
     for row in rows:
@@ -113,7 +149,7 @@ def _game_period_scores(rows, competition_type: str) -> dict:
         )
         game["opportunities"].add(str(row.opportunity_id))
         key = _subject_key(row, competition_type)
-        game["earned"][key] = game["earned"].get(key, Decimal("0")) + Decimal(str(row.awarded_points))
+        game["earned"][key] = game["earned"].get(key, Decimal("0")) + _score_value(row, score_field)
     result = {}
     for game_id, game in by_game.items():
         count = len(game["opportunities"])
@@ -228,21 +264,32 @@ def game_board(
     anchor: Optional[date] = None,
     skip: int = 0,
     limit: int = 50,
+    score: str = GAME_SCORE_FIELD,
 ) -> dict:
-    """One game's normalized leaderboard for one period."""
+    """One game's normalized leaderboard for one period.
+
+    Per-game boards aggregate the ``game`` half: placement-relative for
+    Wordle, Anagram and Reaction Time (preserving their established
+    comparison rules, including Reaction Time's relative comparison),
+    absolute-profile for Trivia Drop, Connections, Couple Questionnaire
+    and Two-Key Escape (whose board rules credit absolute performance:
+    correctness plus speed, partial progress, proportional accuracy, and
+    binary escape success).
+    """
     validate_board_request(game_id, competition_type, period)
     bounds = period_bounds(period, anchor)
     start, end = bounds if bounds is not None else (None, None)
     with db.sessions() as session:
         if period == PERIOD_ALL_TIME:
             return _all_time_game_board(
-                session, game_id, competition_type, skip=skip, limit=limit
+                session, game_id, competition_type, skip=skip, limit=limit,
+                score=score,
             )
         rows = _award_rows(
             session, competition_type=competition_type,
             game_ids=[game_id], start=start, end=end,
         )
-        per_game = _game_period_scores(rows, competition_type)
+        per_game = _game_period_scores(rows, competition_type, score)
         game = per_game.get(game_id, {"opportunity_count": 0, "scores": {}})
         scored = list(game["scores"].items())
         # Ranks are competition ranks over the full set, so ranking stays
@@ -258,10 +305,10 @@ def game_board(
         )
         entries = [
             _subject_entry(
-                competition_type, subject, names, rank, score,
+                competition_type, subject, names, rank, subject_score,
                 natives.get(subject, _EMPTY_NATIVE), None,
             )
-            for rank, (subject, score) in page
+            for rank, (subject, subject_score) in page
         ]
         return {
             "game_id": game_id,
@@ -273,9 +320,12 @@ def game_board(
         }
 
 
-def _all_time_game_board(session, game_id: str, competition_type: str, skip: int, limit: int) -> dict:
+def _all_time_game_board(
+    session, game_id: str, competition_type: str, skip: int, limit: int,
+    score: str = GAME_SCORE_FIELD,
+) -> dict:
     rows = _award_rows(session, competition_type=competition_type, game_ids=[game_id])
-    totals = _accumulate_all_time(rows, competition_type, [game_id])
+    totals = _accumulate_all_time(rows, competition_type, [game_id], score)
     game = totals.get(game_id, {})
     scored = list(game.items())
     ranked = _competition_ranks(scored)
@@ -285,10 +335,10 @@ def _all_time_game_board(session, game_id: str, competition_type: str, skip: int
     names = _display_names(session, {part for _, item in page for part in item[0]})
     entries = [
         _subject_entry(
-            competition_type, subject, names, rank, score,
+            competition_type, subject, names, rank, subject_score,
             natives.get(subject, _EMPTY_NATIVE), None,
         )
-        for rank, (subject, score) in page
+        for rank, (subject, subject_score) in page
     ]
     return {
         "game_id": game_id,
@@ -300,7 +350,10 @@ def _all_time_game_board(session, game_id: str, competition_type: str, skip: int
     }
 
 
-def _accumulate_all_time(rows, competition_type: str, game_ids: list[str]) -> dict:
+def _accumulate_all_time(
+    rows, competition_type: str, game_ids: list[str],
+    score: str = GLOBAL_SCORE_FIELD,
+) -> dict:
     """All-time per-game scores: sum of finalized weekly contributions."""
     weeks: dict = {}
     for row in rows:
@@ -310,14 +363,17 @@ def _accumulate_all_time(rows, competition_type: str, game_ids: list[str]) -> di
         weeks.setdefault(monday, []).append(row)
     totals: dict[str, dict] = {game_id: {} for game_id in game_ids}
     for week_rows in weeks.values():
-        per_game = _game_period_scores(week_rows, competition_type)
+        per_game = _game_period_scores(week_rows, competition_type, score)
         for game_id in game_ids:
             game = per_game.get(game_id)
             if not game:
                 continue
-            for subject, score in game["scores"].items():
+            # Named subject_score (not score): rebinding the score-field
+            # parameter here fed Decimals into the next week's
+            # _game_period_scores call, silently switching award halves.
+            for subject, subject_score in game["scores"].items():
                 totals[game_id][subject] = (
-                    totals[game_id].get(subject, Decimal("0")) + score
+                    totals[game_id].get(subject, Decimal("0")) + subject_score
                 )
     return {
         game_id: {
@@ -343,13 +399,16 @@ def global_board(
     skip: int = 0,
     limit: int = 50,
     only_user_id: Optional[str] = None,
+    score: str = GLOBAL_SCORE_FIELD,
 ) -> dict:
     """The combined normalized standings across a competition type's games.
 
-    ``only_user_id`` narrows entry materialisation to one user's subjects
-    (used by :func:`my_standing`): ranks are still computed over the whole
-    board first, so a caller's rank stays its global rank rather than its rank
-    among itself.
+    Global boards aggregate the absolute-performance ``global`` half, so
+    equal native results contribute equally no matter the field around
+    them. ``only_user_id`` narrows entry materialisation to one user's
+    subjects (used by :func:`my_standing`): ranks are still computed over
+    the whole board first, so a caller's rank stays its global rank rather
+    than its rank among itself.
     """
     validate_board_request(None, competition_type, period)
     game_ids = (
@@ -365,9 +424,9 @@ def global_board(
             game_ids=game_ids, start=start, end=end,
         )
         if period == PERIOD_ALL_TIME:
-            per_game_totals = _accumulate_all_time(rows, competition_type, game_ids)
+            per_game_totals = _accumulate_all_time(rows, competition_type, game_ids, score)
         else:
-            per_game = _game_period_scores(rows, competition_type)
+            per_game = _game_period_scores(rows, competition_type, score)
             per_game_totals = {
                 game_id: per_game.get(game_id, {"scores": {}})["scores"]
                 for game_id in game_ids
@@ -375,18 +434,22 @@ def global_board(
         combined: dict[tuple, Decimal] = {}
         breakdown: dict[tuple, dict] = {}
         for game_id in game_ids:
-            for subject, score in per_game_totals.get(game_id, {}).items():
-                combined[subject] = combined.get(subject, Decimal("0")) + score
-                breakdown.setdefault(subject, {})[game_id] = score
+            for subject, subject_score in per_game_totals.get(game_id, {}).items():
+                combined[subject] = combined.get(subject, Decimal("0")) + subject_score
+                breakdown.setdefault(subject, {})[game_id] = subject_score
         combined = {
             subject: quantize_points(total) for subject, total in combined.items()
         }
         ranked = _competition_ranks(list(combined.items()))
         total = len(ranked)
         if only_user_id is not None:
+            # Ranked items are (rank, (subject, score)): match on the
+            # subject, not the pair. Passing item[1] here compared the
+            # (subject, score) pair and never matched, which emptied every
+            # /me response.
             ranked = [
                 item for item in ranked
-                if _subject_matches_user(item[1], competition_type, only_user_id)
+                if _subject_matches_user(item[1][0], competition_type, only_user_id)
             ]
         page = ranked[skip:skip + limit]
         natives = _native_by_subject(rows, competition_type)
@@ -394,14 +457,14 @@ def global_board(
             session, {part for _, item in page for part in item[0]}
         )
         entries = []
-        for rank, (subject, score) in page:
+        for rank, (subject, subject_score) in page:
             per_game_scores = {
                 game_id: float(breakdown[subject].get(game_id, Decimal("0")))
                 for game_id in game_ids
                 if subject in breakdown and game_id in breakdown[subject]
             }
             entries.append(_subject_entry(
-                competition_type, subject, names, rank, score,
+                competition_type, subject, names, rank, subject_score,
                 natives.get(subject, _EMPTY_NATIVE), per_game_scores,
             ))
         return {

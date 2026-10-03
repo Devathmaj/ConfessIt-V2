@@ -1,19 +1,22 @@
 # app/routers/leaderboards.py
 
 from datetime import date
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, Query
 
 from ..dependencies import get_db
 from ..models import (
+    GameCategoryBoard,
+    GameCategoryInfo,
+    GameCategoryMe,
     LeagueCoupleBoard,
     LeagueIndividualBoard,
     LeagueMyStanding,
     UserDetails,
 )
 from ..postgres import Database
-from ..services import league_boards
+from ..services import league_boards, league_game_boards
 from ..services.authorization import require_participant
 from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
 
@@ -140,3 +143,75 @@ def my_standing(
         period=period, anchor=anchor,
     )
     return LeagueMyStanding(**board)
+
+
+@router.get(
+    "/games/{game_id}/categories",
+    response_model=List[GameCategoryInfo],
+)
+def game_categories(
+    game_id: str,
+    user: UserDetails = Depends(require_participant),
+) -> List[GameCategoryInfo]:
+    """The selectable leaderboard views for one game.
+
+    Each category names its scope: ``period`` aggregates the selected UTC
+    window, ``record`` is an all-time personal record across all finalized
+    history. Unknown games are refused.
+    """
+    del user
+    return [
+        GameCategoryInfo(**info)
+        for info in league_game_boards.list_categories(game_id)
+    ]
+
+
+@router.get(
+    "/games/{game_id}/boards/{category}",
+    response_model=GameCategoryBoard,
+)
+def game_category_board(
+    game_id: str,
+    category: str,
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> GameCategoryBoard:
+    """One game's category leaderboard, ranked over the full filtered set.
+
+    Categories rank finalized native results by their own metric -- never
+    session placements -- and never feed the global leaderboard. Record
+    categories answer all-time history regardless of the rolling window.
+    """
+    del user
+    board = league_game_boards.category_board(
+        db, game_id=game_id, category=category,
+        period=period, anchor=anchor, skip=skip, limit=limit,
+    )
+    return GameCategoryBoard(**board)
+
+
+@router.get(
+    "/games/{game_id}/boards/{category}/me",
+    response_model=GameCategoryMe,
+)
+def game_category_me(
+    game_id: str,
+    category: str,
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> GameCategoryMe:
+    """The caller's own rows on one category board, with full-dataset ranks.
+
+    For couples, every canonical pair the caller belongs to is returned.
+    """
+    board = league_game_boards.category_me(
+        db, game_id=game_id, category=category, user_id=user.id,
+        period=period, anchor=anchor,
+    )
+    return GameCategoryMe(**board)

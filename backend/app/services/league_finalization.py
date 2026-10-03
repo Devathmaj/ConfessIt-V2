@@ -6,9 +6,14 @@ An official scoring opportunity flows through two durable steps:
    the canonical timestamp and whether the game held the featured spotlight
    that day. Later featured changes never touch this row.
 2. **Finalize** (at closure): eligible finalized native results are ranked
-   with the game's own comparison, placements become base points, the
-   snapshotted multiplier is applied once, and one award row per subject is
-   written.
+   with the game's own comparison (ranks and participant counts, kept for
+   display and audit), scored for the ``game`` half (placement-relative for
+   Wordle, Anagram and Reaction Time; the absolute profiles for Trivia
+   Drop, Connections, Couple Questionnaire and Two-Key Escape, whose
+   board rules are absolute), and independently scored against the
+   absolute global profiles (the ``global`` half: native result to 0-100).
+   The snapshotted multiplier is applied once to each half, and one award
+   row per subject is written carrying both halves with their versions.
 
 Finalization is idempotent: an advisory lock serializes concurrent runs on
 one opportunity, and partial unique indexes refuse a second live award for
@@ -30,6 +35,11 @@ from ..db_models import GameScoreAwardRecord, GameScoreOpportunityRecord
 from ..limits import GAME_IDS
 from ..postgres import Database
 from . import league_adapters as adapters
+from .league_global_scoring import (
+    GAME_SCORING_VERSION,
+    GLOBAL_SCORING_VERSION,
+    global_base_for,
+)
 from .league_scoring import (
     COMPETITION_COUPLE,
     SCORING_VERSION,
@@ -110,8 +120,33 @@ def snapshot_opened_safely(session, *, game_id: str, opportunity_id: str) -> Non
         )
 
 
-def _ranked_awards(subjects: list, is_featured: bool) -> list[dict]:
-    """Order subjects best-first, share tied positions' averaged points."""
+# Games whose individual-game boards are absolute-performance boards, not
+# placement boards: their game half is scored by the versioned absolute
+# profiles (computed independently from the global half), because their
+# intended board rules -- partial-progress credit, proportional couple
+# accuracy, binary escape success, correctness-plus-speed trivia -- are
+# absolute rules. Wordle, Anagram and Reaction Time keep placement-relative
+# game halves (their established ordering rules, including Reaction Time's
+# relative comparison).
+ABSOLUTE_GAME_HALVES = frozenset({
+    "trivia-drop",
+    "connections",
+    "couple-questionnaire",
+    "two-key-escape",
+})
+
+
+def _ranked_awards(subjects: list, is_featured: bool, game_id: str) -> list[dict]:
+    """Order subjects best-first, share tied positions' averaged points.
+
+    Each award carries two independently calculated halves: the ``game``
+    half (per-game-board behavior: placement-relative for Wordle, Anagram
+    and Reaction Time; absolute-profile for Trivia Drop, Connections,
+    Couple Questionnaire and Two-Key Escape, whose board rules are absolute)
+    and the ``global`` half (absolute-performance base from the versioned
+    profiles, never rank or field size). The featured multiplier applies
+    once to each half; neither half is derived from the other.
+    """
     ordered = sorted(subjects, key=lambda item: item.order_key, reverse=True)
     total = len(ordered)
     awards: list[dict] = []
@@ -123,21 +158,37 @@ def _ranked_awards(subjects: list, is_featured: bool) -> list[dict]:
             group.append(ordered[index + len(group)])
         positions = list(range(index + 1, index + len(group) + 1))
         if len(group) == 1 and total == 1:
-            base = base_points_for_rank(1, 1)
+            relative_base = base_points_for_rank(1, 1)
         elif len(group) == 1:
-            base = base_points_for_rank(positions[0], total)
+            relative_base = base_points_for_rank(positions[0], total)
         else:
-            base = averaged_tie_points(positions, total)
-        final, multiplier = awarded_points(base, is_featured)
+            relative_base = averaged_tie_points(positions, total)
+        # The multiplier is placement-independent (1 or 2 for the whole
+        # opportunity), so one computation serves both halves.
+        _, multiplier = awarded_points(relative_base, is_featured)
         for item in group:
+            if game_id in ABSOLUTE_GAME_HALVES:
+                # Absolute board rule: score the native result, not the
+                # placement. Each half invokes the profile separately so
+                # the game half never reuses the global half's number.
+                item_game_base = global_base_for(game_id, item.raw_metrics)
+            else:
+                item_game_base = relative_base
+            global_base = global_base_for(game_id, item.raw_metrics)
+            global_final, _ = awarded_points(global_base, is_featured)
+            item_game_final, _ = awarded_points(item_game_base, is_featured)
             awards.append(
                 {
                     "subject": item.subject,
                     "rank": positions[0],
                     "participant_count": total,
-                    "base_points": base,
+                    "base_points": global_base,
                     "multiplier": multiplier,
-                    "awarded_points": final,
+                    "awarded_points": global_final,
+                    "game_base_points": item_game_base,
+                    "game_points": item_game_final,
+                    "global_base_points": global_base,
+                    "global_points": global_final,
                     "raw_metrics": item.raw_metrics,
                 }
             )
@@ -163,7 +214,7 @@ def _write_awards(session, game_id: str, opportunity_id: str, snapshot) -> dict:
             "awards": 0,
             "participants": 0,
         }
-    computed = _ranked_awards(subjects, bool(snapshot.is_featured_snapshot))
+    computed = _ranked_awards(subjects, bool(snapshot.is_featured_snapshot), game_id)
     written = 0
     for entry in computed:
         values: dict = {
@@ -176,6 +227,12 @@ def _write_awards(session, game_id: str, opportunity_id: str, snapshot) -> dict:
             "base_points": entry["base_points"],
             "featured_multiplier": entry["multiplier"],
             "awarded_points": entry["awarded_points"],
+            "global_base_points": entry["global_base_points"],
+            "game_base_points": entry["game_base_points"],
+            "global_points": entry["global_points"],
+            "game_points": entry["game_points"],
+            "global_scoring_version": GLOBAL_SCORING_VERSION,
+            "game_scoring_version": GAME_SCORING_VERSION,
             "is_featured_snapshot": bool(snapshot.is_featured_snapshot),
             "competition_at": snapshot.competition_at,
             "scoring_version": SCORING_VERSION,

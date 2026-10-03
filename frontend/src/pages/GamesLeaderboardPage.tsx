@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 import { useContext } from 'react';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { GameCategorySection } from '@/components/games/GameCategorySection';
 import { AuthContext } from '@/contexts/AuthContext';
 import {
   ALL_GAMES_FILTER,
@@ -127,8 +128,16 @@ export const GamesLeaderboardPage = () => {
       ? 'All games'
       : scopeGames.find((game) => game.id === gameId)?.name ?? 'All games';
 
+  // One game selected: the category section below owns that view, so the
+  // combined/score fetch stands down instead of loading a board nobody shows.
+  const gameSelected = gameId !== ALL_GAMES_FILTER;
+
   const fetchBoard = useCallback(
     async (offset: number, append: boolean) => {
+      if (gameId !== ALL_GAMES_FILTER) {
+        setLoading(false);
+        return;
+      }
       if (append) {
         setLoadingMore(true);
       } else {
@@ -300,11 +309,26 @@ export const GamesLeaderboardPage = () => {
 
       <p className="mb-5 text-xs text-muted-foreground">
         {activePeriod?.hint} · showing {selectedGameName.toLowerCase()}
-        {opportunityCount !== null && opportunityCount > 0
+        {!gameSelected && opportunityCount !== null && opportunityCount > 0
           ? ` · ${opportunityCount} ${opportunityCount === 1 ? 'event' : 'events'} scored`
           : ''}
       </p>
 
+      {gameSelected ? (
+        <>
+          <GameCategorySection
+            gameId={gameId}
+            gameName={selectedGameName}
+            period={period}
+            anchor={anchor}
+          />
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Category boards rank finalized results by their own metric — never
+            session placements — and never feed global scores.
+          </p>
+        </>
+      ) : (
+      <>
       {/* Your rank */}
       <Card className="mb-6 rounded-2xl border-romantic/40 bg-romantic/10">
         <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
@@ -440,9 +464,12 @@ export const GamesLeaderboardPage = () => {
       )}
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
-        League points, averaged per game so frequent releases cannot dominate. A
-        featured event awards double.
+        Global points reward absolute performance (0–100 per event, same result
+        always earns the same), averaged per game so frequent releases cannot
+        dominate. A featured event awards double.
       </p>
+      </>
+      )}
     </div>
   );
 };

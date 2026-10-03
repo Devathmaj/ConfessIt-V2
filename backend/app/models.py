@@ -2242,6 +2242,60 @@ class LeagueMyStanding(BaseModel):
     entries: List[Any]
 
 
+class GameCategoryInfo(BaseModel):
+    """One selectable leaderboard view for one game."""
+
+    id: str
+    label: str
+    description: str
+    # 'period': aggregates the selected UTC window. 'record': all-time
+    # personal record across all finalized history (rolling window ignored).
+    scope: str
+    is_default: bool = False
+
+
+class GameCategoryEntry(BaseModel):
+    """One ranked row on a category board.
+
+    Identity is individual (user_id) or canonical couple (member pair).
+    ``metrics`` carries the category's documented ranking and supporting
+    values (counts, averages, bests -- never an ambiguous mixed `score`);
+    ``records`` carries the underlying finalized detail rows (words, times,
+    questions) where the category defines them.
+    """
+
+    rank: int
+    user_id: Optional[str] = None
+    display_name: Optional[str] = None
+    member_a_id: Optional[str] = None
+    member_b_id: Optional[str] = None
+    member_a_name: Optional[str] = None
+    member_b_name: Optional[str] = None
+    metrics: Dict[str, Any] = {}
+    records: List[Dict[str, Any]] = []
+
+
+class GameCategoryBoard(BaseModel):
+    """A ranked category board with pagination totals."""
+
+    game_id: str
+    category: str
+    scope: str
+    period: str
+    anchor: Optional[str] = None
+    total: int
+    entries: List[GameCategoryEntry]
+
+
+class GameCategoryMe(BaseModel):
+    """The caller's own rows on one category board, with full-dataset ranks."""
+
+    game_id: str
+    category: str
+    scope: str
+    entries: List[GameCategoryEntry]
+
+
 class LeagueFinalizeRequest(BaseModel):
     """Finalize one closed event's league awards (idempotent repair path)."""
 

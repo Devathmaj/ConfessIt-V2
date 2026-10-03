@@ -2,17 +2,21 @@
 
 Covers the scoring contract end to end:
 
-* placement math (first 100, last 0, proportional middles, averaged ties,
-  solo 50, deterministic rounding, exact decimals);
-* the featured 2x multiplier (snapshot semantics, no stacking, couples
-  multiplied once);
+* split awards: the placement-relative game half (first 100, last 0,
+  proportional middles, averaged ties, solo 50, deterministic rounding,
+  exact decimals) feeding per-game boards, and the absolute-performance
+  global half (fixed versioned profiles per game, 0-100, never rank or
+  field size) feeding global boards; legacy columns mirror the global
+  half with per-half policy versions;
+* the featured 2x multiplier on each half independently (snapshot
+  semantics, no stacking, couples multiplied once);
 * individual/couple separation with canonical pair identity;
 * UTC daily/weekly/monthly/all-time aggregation with frequency
   normalization, missed opportunities as zero, and late finalization
   attributed to the official event;
 * idempotent finalization, the scheduler closure hook, explicit
-  correction, endpoint auth/validation/pagination, and no leakage of
-  native secrets through leaderboard responses.
+  correction, endpoint auth/validation/pagination, /me consistency, and
+  no leakage of native secrets through leaderboard responses.
 
 Fixtures insert ended sessions directly with dates relative to the real
 UTC today, so the suite cannot rot as the calendar moves. The one
@@ -268,13 +272,23 @@ class TestWordleFinalization:
         assert outcome["action"] == "finalized"
         awards = {str(a.user_id): a for a in live_awards(db, game_id="wordle")}
         assert [awards[u.id].rank for u in users] == [1, 2, 3, 4]
-        assert awards[users[0].id].base_points == Decimal("100.00")
-        assert awards[users[1].id].base_points == Decimal("66.67")
-        assert awards[users[2].id].base_points == Decimal("33.33")
-        assert awards[users[3].id].base_points == Decimal("0.00")
+        # Game half: placement-relative, unchanged behavior.
+        assert awards[users[0].id].game_base_points == Decimal("100.00")
+        assert awards[users[1].id].game_base_points == Decimal("66.67")
+        assert awards[users[2].id].game_base_points == Decimal("33.33")
+        assert awards[users[3].id].game_base_points == Decimal("0.00")
+        # Global half: absolute attempts table (2/3/5 solves, one failure).
+        assert awards[users[0].id].global_base_points == Decimal("90")
+        assert awards[users[1].id].global_base_points == Decimal("80")
+        assert awards[users[2].id].global_base_points == Decimal("60")
+        assert awards[users[3].id].global_base_points == Decimal("0")
+        # Legacy columns mirror the global path; versions stamp each half.
         assert all(a.participant_count == 4 for a in awards.values())
         assert all(a.featured_multiplier == 1 for a in awards.values())
-        assert all(a.awarded_points == a.base_points for a in awards.values())
+        assert all(a.awarded_points == a.global_points for a in awards.values())
+        assert all(a.base_points == a.global_base_points for a in awards.values())
+        assert all(a.global_scoring_version == 2 for a in awards.values())
+        assert all(a.game_scoring_version == 1 for a in awards.values())
         # Period attribution follows the session, and no secret travels.
         assert awards[users[0].id].competition_at == midnight(day)
         assert "cigar" not in str(awards[users[0].id].raw_metrics)
@@ -291,11 +305,17 @@ class TestWordleFinalization:
         league_finalization.finalize_opportunity(db, "wordle", session_id)
 
         awards = {str(a.user_id): a for a in live_awards(db, game_id="wordle")}
-        assert awards[users[0].id].base_points == Decimal("75.00")
-        assert awards[users[1].id].base_points == Decimal("75.00")
+        # Game half: the tie still shares averaged placement points.
+        assert awards[users[0].id].game_base_points == Decimal("75.00")
+        assert awards[users[1].id].game_base_points == Decimal("75.00")
+        # Global half: identical native results earn identical absolute
+        # scores -- no tie averaging on this path.
+        assert awards[users[0].id].global_base_points == Decimal("80")
+        assert awards[users[1].id].global_base_points == Decimal("80")
         assert awards[users[0].id].rank == 1
         assert awards[users[1].id].rank == 1
-        assert awards[users[2].id].base_points == Decimal("0.00")
+        assert awards[users[2].id].game_base_points == Decimal("0.00")
+        assert awards[users[2].id].global_base_points == Decimal("0")
 
     def test_repeat_finalization_settles_on_the_same_rows(self, db):
         day = today() - timedelta(days=3)
@@ -360,11 +380,19 @@ class TestFeaturedMultiplier:
         league_finalization.finalize_opportunity(db, "wordle", session_id)
 
         awards = {str(a.user_id): a for a in live_awards(db, game_id="wordle")}
-        assert awards[users[0].id].base_points == Decimal("100.00")
-        assert awards[users[0].id].awarded_points == Decimal("200.00")
+        # Game half keeps the relative rule (winner 100, loser 0), doubled once.
+        assert awards[users[0].id].game_base_points == Decimal("100.00")
+        assert awards[users[0].id].game_points == Decimal("200.00")
+        assert awards[users[1].id].game_points == Decimal("0.00")
+        # Global half: absolute attempts table (90 / 60), doubled once.
+        assert awards[users[0].id].global_base_points == Decimal("90")
+        assert awards[users[0].id].global_points == Decimal("180.00")
+        assert awards[users[1].id].global_points == Decimal("120.00")
+        # Legacy columns mirror the global half.
+        assert awards[users[0].id].base_points == Decimal("90")
+        assert awards[users[0].id].awarded_points == Decimal("180.00")
         assert awards[users[0].id].featured_multiplier == 2
         assert awards[users[0].id].is_featured_snapshot is True
-        assert awards[users[1].id].awarded_points == Decimal("0.00")
 
     def test_later_featured_changes_do_not_rewrite_history(self, db):
         day = today() - timedelta(days=2)
@@ -380,7 +408,10 @@ class TestFeaturedMultiplier:
 
         awards = live_awards(db, game_id="wordle")
         assert len(awards) == 1
-        assert awards[0].awarded_points == before == Decimal("50.00")
+        # Solo solve in 2: global absolute 90 (the old relative solo 50
+        # lives on only in the game half now).
+        assert awards[0].awarded_points == before == Decimal("90.00")
+        assert awards[0].game_points == Decimal("50.00")
         assert awards[0].featured_multiplier == 1
 
     def test_spotlight_for_another_game_does_not_apply(self, db):
@@ -520,7 +551,11 @@ class TestNativeComparisons:
         assert set(awards) == {users[0].id, users[1].id}
         assert awards[users[0].id].rank == 1
         assert awards[users[0].id].raw_metrics["best_ms"] == 190
-        assert awards[users[1].id].base_points == Decimal("0.00")
+        # Game half keeps the relative rule; global half is absolute ms.
+        assert awards[users[0].id].game_base_points == Decimal("100.00")
+        assert awards[users[1].id].game_base_points == Decimal("0.00")
+        assert awards[users[0].id].global_base_points == Decimal("90")
+        assert awards[users[1].id].global_base_points == Decimal("80")
 
 
 _BANK = 0
@@ -648,10 +683,17 @@ class TestCoupleGames:
         by_pair = {(a.member_a_id, a.member_b_id): a for a in awards}
         first = by_pair[canonical_couple(a1.id, b1.id)]
         second = by_pair[canonical_couple(a2.id, b2.id)]
-        assert first.base_points == Decimal("100.00")
-        assert second.base_points == Decimal("0.00")
-        assert first.raw_metrics == {"correct_predictions": 9}
-        assert second.raw_metrics == {"correct_predictions": 5}
+        # Both halves are absolute here: the couple board rule is the
+        # proportional accuracy itself (9/10 and 5/10 of the session's
+        # scoreable questions), not a placement/duel between the pairs.
+        assert first.game_base_points == Decimal("90.00")
+        assert second.game_base_points == Decimal("50.00")
+        assert first.global_base_points == Decimal("90.00")
+        assert second.global_base_points == Decimal("50.00")
+        assert first.base_points == Decimal("90.00")
+        assert second.base_points == Decimal("50.00")
+        assert first.raw_metrics == {"correct_predictions": 9, "total_questions": 10}
+        assert second.raw_metrics == {"correct_predictions": 5, "total_questions": 10}
         assert first.user_id is None
 
     def test_incomplete_pair_sessions_are_not_ranked(self, db):
@@ -751,8 +793,13 @@ class TestCoupleGames:
         awards = live_awards(db, game_id="two-key-escape")
         assert len(awards) == 2
         by_pair = {(a.member_a_id, a.member_b_id): a for a in awards}
-        assert by_pair[canonical_couple(fast_a.id, fast_b.id)].base_points == Decimal("100.00")
-        assert by_pair[canonical_couple(slow_a.id, slow_b.id)].base_points == Decimal("0.00")
+        # Both halves pay every completed escape the same 100: no time
+        # bonus on either path, and the slower pair is not zeroed for
+        # losing a duel it was never supposed to run.
+        assert by_pair[canonical_couple(fast_a.id, fast_b.id)].game_base_points == Decimal("100")
+        assert by_pair[canonical_couple(slow_a.id, slow_b.id)].game_base_points == Decimal("100")
+        assert by_pair[canonical_couple(fast_a.id, fast_b.id)].global_base_points == Decimal("100")
+        assert by_pair[canonical_couple(slow_a.id, slow_b.id)].global_base_points == Decimal("100")
 
 
 # ---------------------------------------------------------------------------
@@ -844,9 +891,12 @@ class TestPeriodAggregation:
             period="daily", anchor=day,
         )
         scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
-        # Each won one question and lost one: (100 + 0) / 2 either way.
-        assert scores[speedy.id] == 50.0
-        assert scores[steady.id] == 50.0
+        # Game boards score correctness plus absolute speed here, not
+        # placement: speedy (99.60 + 0) / 2, steady (96.60 + 99.40) / 2.
+        # (These legacy questions carry no option rows, so accuracy falls
+        # back to the stored server-side exact-match verdict.)
+        assert scores[speedy.id] == 49.8
+        assert scores[steady.id] == 98.0
 
     def test_all_time_accumulates_weekly_contributions(self, db):
         week_one = week_start(today()) - timedelta(days=14)
@@ -894,8 +944,10 @@ class TestPeriodAggregation:
         couples = league_boards.global_board(
             db, competition_type="couple", period="weekly", anchor=day,
         )
-        assert individual["entries"][0]["per_game"] == {"wordle": 50.0}
-        assert individual["entries"][0]["score"] == 50.0
+        # Solo solve in 2: absolute global 90 (relative solo 50 survives
+        # only on per-game boards).
+        assert individual["entries"][0]["per_game"] == {"wordle": 90.0}
+        assert individual["entries"][0]["score"] == 90.0
         assert couples["entries"] == []
 
     def test_featured_doubles_before_the_average(self, db):
@@ -946,10 +998,18 @@ class TestCorrection:
             assert sum(1 for row in rows if row.superseded_at is None) == 2
             assert sum(1 for row in rows if row.superseded_at is not None) == 2
         live = live_awards(db, game_id="wordle")
+        # Legacy columns mirror the global half: absolute 2-guess (90) and
+        # 4-guess (70) scores, unchanged by the reprocess itself.
         assert {str(a.user_id): a.awarded_points for a in live} == {
+            users[0].id: Decimal("90.00"),
+            users[1].id: Decimal("70.00"),
+        }
+        assert {str(a.user_id): a.game_points for a in live} == {
             users[0].id: Decimal("100.00"),
             users[1].id: Decimal("0.00"),
         }
+        assert all(a.global_scoring_version == 2 for a in live)
+        assert all(a.game_scoring_version == 1 for a in live)
 
     def test_reprocess_without_awards_is_refused(self, db):
         day = today() - timedelta(days=3)
@@ -1049,10 +1109,12 @@ class TestPublishTimeFinalization:
         assert updated.status_code == 201, updated.text
 
         # No reset run involved: the Update itself finalized the session it
-        # ended, and snapshotted the one it opened.
+        # ended, and snapshotted the one it opened. One winning guess:
+        # absolute global 100 (relative solo 50 on the game half).
         awards = live_awards(db, game_id="wordle", opportunity_id=session_id)
         assert len(awards) == 1
-        assert awards[0].awarded_points == Decimal("50.00")
+        assert awards[0].awarded_points == Decimal("100.00")
+        assert awards[0].game_points == Decimal("50.00")
         with db.sessions() as session:
             assert (
                 session.scalar(
@@ -1084,7 +1146,9 @@ class TestSchedulerHook:
         assert summary["wordle"]["action"] in ("created", "current")
         awards = live_awards(db, game_id="wordle", opportunity_id=session_id)
         assert len(awards) == 1
-        assert awards[0].awarded_points == Decimal("50.00")
+        # Solo solve in 2: absolute global 90 (relative solo 50 on game half).
+        assert awards[0].awarded_points == Decimal("90.00")
+        assert awards[0].game_points == Decimal("50.00")
 
         new_id = summary["wordle"].get("session_id")
         assert new_id and new_id != session_id
@@ -1144,7 +1208,8 @@ class TestLeaderboardEndpoints:
         entry = body["entries"][0]
         assert entry["user_id"] == user.id
         assert entry["rank"] == 1
-        assert entry["score"] == 50.0
+        # Solo solve in 2: absolute global 90 on the combined board.
+        assert entry["score"] == 90.0
         assert "mango" not in response.text
 
     def test_game_board_and_me(self, db):
@@ -1262,3 +1327,752 @@ class TestLeaderboardEndpoints:
         assert (
             client.get("/admin/leaderboards/games/wordle").status_code == 403
         )
+
+
+# ---------------------------------------------------------------------------
+# Absolute global profiles (pure unit tests: same result, same score)
+# ---------------------------------------------------------------------------
+
+class TestGlobalProfiles:
+    def test_wordle_table_and_invariants(self):
+        from app.services.league_global_scoring import wordle_global_base
+
+        assert wordle_global_base({"solved": True, "attempts": 1}) == Decimal("100")
+        assert wordle_global_base({"solved": True, "attempts": 4}) == Decimal("70")
+        assert wordle_global_base({"solved": True, "attempts": 5}) == Decimal("60")
+        assert wordle_global_base({"solved": True, "attempts": 6}) == Decimal("50")
+        assert wordle_global_base({"solved": False, "attempts": 6}) == Decimal("0")
+        assert wordle_global_base({"solved": False, "attempts": 1}) == Decimal("0")
+        # Fewer always beats more; solving always beats failing.
+        assert wordle_global_base({"solved": True, "attempts": 4}) > wordle_global_base(
+            {"solved": True, "attempts": 5}
+        )
+
+    def test_anagram_tiers_never_overlap(self):
+        from app.services.league_global_scoring import anagram_global_base
+
+        # Slowest 4-attempt solve still beats the fastest 5-attempt solve.
+        assert anagram_global_base(
+            {"solved": True, "attempts": 4, "active_time_seconds": 10_000}
+        ) == Decimal("61")
+        assert anagram_global_base(
+            {"solved": True, "attempts": 5, "active_time_seconds": 1}
+        ) == Decimal("60")
+        assert anagram_global_base(
+            {"solved": True, "attempts": 1, "active_time_seconds": 10}
+        ) == Decimal("100")
+        assert anagram_global_base(
+            {"solved": False, "attempts": 1, "active_time_seconds": 5}
+        ) == Decimal("0")
+
+    def test_reaction_is_monotonic_in_absolute_ms(self):
+        from app.services.league_global_scoring import reaction_global_base
+
+        times = [150, 190, 250, 280, 330, 380, 450, 600, 750, 900, 5_000]
+        scores = [reaction_global_base({"best_ms": ms}) for ms in times]
+        assert scores == sorted(scores, reverse=True)
+        assert scores[0] == Decimal("100")
+        assert all(score >= Decimal("1") for score in scores)
+        assert reaction_global_base({}) == Decimal("0")
+
+    def test_trivia_accuracy_plus_fixed_speed(self):
+        from app.services.league_global_scoring import trivia_global_base
+
+        assert trivia_global_base({"accuracy": 1.0, "response_time_ms": 0}) == Decimal("100")
+        # Slow correct keeps its 80 accuracy points, no speed bonus.
+        assert trivia_global_base({"accuracy": 1.0, "response_time_ms": 60_000}) == Decimal("80")
+        assert trivia_global_base({"accuracy": 0.0, "response_time_ms": 100}) == Decimal("0")
+        # Half credit, instant: 40 + 10.
+        assert trivia_global_base({"accuracy": 0.5, "response_time_ms": 0}) == Decimal("50")
+
+    def test_connections_partial_progress(self):
+        from app.services.league_global_scoring import connections_global_base
+
+        assert connections_global_base({"correct_words": 1, "correct_groups": 0}) == Decimal("4")
+        assert connections_global_base({"correct_words": 4, "correct_groups": 1}) == Decimal("25")
+        assert connections_global_base({"correct_words": 16, "correct_groups": 4}) == Decimal("100")
+        assert connections_global_base({"correct_words": 0, "correct_groups": 0}) == Decimal("0")
+
+    def test_couple_proportion_and_two_key_binary(self):
+        from app.services.league_global_scoring import (
+            couple_global_base,
+            two_key_escape_global_base,
+        )
+
+        assert couple_global_base({"correct_predictions": 1, "total_questions": 10}) == Decimal("10")
+        assert couple_global_base({"correct_predictions": 7, "total_questions": 10}) == Decimal("70")
+        assert couple_global_base({"correct_predictions": 0, "total_questions": 10}) == Decimal("0")
+        assert couple_global_base({"correct_predictions": 3, "total_questions": 0}) == Decimal("0")
+        assert two_key_escape_global_base({"elapsed_seconds": 95.5}) == Decimal("100")
+        assert two_key_escape_global_base({"elapsed_seconds": 9_999.0}) == Decimal("100")
+
+    def test_unknown_game_is_refused_not_invented(self):
+        import pytest
+
+        from app.services.league_global_scoring import global_base_for
+
+        with pytest.raises(Exception):
+            global_base_for("no-such-game", {"solved": True})
+
+
+class TestTriviaAccuracy:
+    """The anti-select-all safeguard across key distributions."""
+
+    def test_all_selected_single_correct_scores_zero(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([0, 1, 2, 3], [2], [0, 1, 2, 3]) == 0.0
+
+    def test_all_selected_three_correct_scores_zero(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        # The reported loophole: (3 - 1) / 3 = 0.667 under the old formula.
+        assert trivia_accuracy([0, 1, 2, 3], [0, 1, 2], [0, 1, 2, 3]) == 0.0
+
+    def test_exact_match_is_full_credit(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([1], [1], [0, 1, 2, 3]) == 1.0
+        assert trivia_accuracy([0, 2], [0, 2], [0, 1, 2, 3]) == 1.0
+        # Selecting every option of an all-correct key is an exact match.
+        assert trivia_accuracy([0, 1], [0, 1], [0, 1]) == 1.0
+
+    def test_partial_without_wrong_picks_keeps_credit(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([0], [0, 1], [0, 1, 2, 3]) == 0.5
+
+    def test_partial_with_wrong_pick_is_reduced(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([0, 2], [0, 1], [0, 1, 2, 3]) == 0.0
+        # Adding the wrong pick lowered 0.5 to 0; wrong picks never raise.
+        assert trivia_accuracy([0, 2], [0, 1], [0, 1, 2, 3]) <= trivia_accuracy(
+            [0], [0, 1], [0, 1, 2, 3]
+        )
+
+    def test_empty_selection_scores_zero(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([], [1], [0, 1, 2, 3]) == 0.0
+        assert trivia_accuracy(None, [1], [0, 1, 2, 3]) == 0.0
+
+    def test_wrong_single_answer_scores_zero(self):
+        from app.services.league_global_scoring import trivia_accuracy
+
+        assert trivia_accuracy([3], [1], [0, 1, 2, 3]) == 0.0
+
+    def test_speed_never_pays_for_wrong_answers(self):
+        from app.services.league_global_scoring import trivia_global_base
+
+        assert trivia_global_base({"accuracy": 0.0, "response_time_ms": 0}) == Decimal("0")
+
+    def test_identical_answers_differ_only_by_speed(self):
+        from app.services.league_global_scoring import trivia_global_base
+
+        fast = trivia_global_base({"accuracy": 1.0, "response_time_ms": 500})
+        slow = trivia_global_base({"accuracy": 1.0, "response_time_ms": 15_000})
+        assert fast == Decimal("99.60")
+        assert slow == Decimal("90.00")
+        assert fast > slow
+
+    def test_slow_correct_keeps_correctness_points(self):
+        from app.services.league_global_scoring import trivia_global_base
+
+        assert trivia_global_base({"accuracy": 1.0, "response_time_ms": 120_000}) == Decimal("80")
+
+    def test_all_selected_end_to_end_scores_zero(self, db):
+        from app.db_models import TriviaDropOptionRecord
+
+        day = today() - timedelta(days=4)
+        blanket = make_user(db, "BL")
+        released = midnight(day)
+        with db.sessions.begin() as session:
+            row = TriviaDropQuestionRecord(
+                question_text="pick three", status="ended",
+                released_at=released, ended_at=released + timedelta(hours=1),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            question_id = str(row.id)
+            for index, correct in [(0, True), (1, True), (2, True), (3, False)]:
+                session.add(
+                    TriviaDropOptionRecord(
+                        question_id=question_id, option_index=index,
+                        option_text=f"opt{index}", is_correct=correct,
+                    )
+                )
+            session.flush()
+            session.add(
+                TriviaDropSubmissionRecord(
+                    question_id=question_id, user_id=blanket.id,
+                    selected_options=[0, 1, 2, 3], is_correct=False,
+                    submitted_at=released, response_time_ms=100,
+                )
+            )
+        league_finalization.finalize_opportunity(db, "trivia-drop", question_id)
+
+        awards = live_awards(db, game_id="trivia-drop")
+        assert len(awards) == 1
+        assert awards[0].raw_metrics["accuracy"] == 0.0
+        assert awards[0].global_base_points == Decimal("0")
+        assert awards[0].game_base_points == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Absolute global boards (integration: fields, not ranks, decide)
+# ---------------------------------------------------------------------------
+
+class TestAbsoluteGlobalBoards:
+    def test_worse_rank_can_outscore_better_rank_globally(self, db):
+        # The spec's example: a 4-guess last place beats a 5-guess first
+        # place on the global board, while game boards keep the ranks.
+        # Separate weeks so each weekly contribution is undiluted.
+        week_a = week_start(today()) - timedelta(days=14)
+        week_b = week_start(today()) - timedelta(days=7)
+        lone = make_user(db, "G5")
+        first_session = add_wordle_session(db, week_a)
+        add_wordle_result(db, first_session, lone.id, 5, True)
+        rivals = [make_user(db, f"G4{i}") for i in range(2)]
+        second_session = add_wordle_session(db, week_b)
+        add_wordle_result(db, second_session, rivals[0].id, 2, True)
+        add_wordle_result(db, second_session, rivals[1].id, 4, True)
+        league_finalization.finalize_due_opportunities(db, ["wordle"])
+
+        Kate = league_boards.global_board(
+            db, competition_type="individual", period="all_time",
+        )
+        scores = {entry["user_id"]: entry["score"] for entry in Kate["entries"]}
+        assert scores[lone.id] == 60.0
+        assert scores[rivals[1].id] == 70.0
+        assert scores[rivals[0].id] == 90.0
+
+        game = league_boards.game_board(
+            db, game_id="wordle", competition_type="individual",
+            period="all_time",
+        )
+        ranks = {entry["user_id"]: entry["rank"] for entry in game["entries"]}
+        assert ranks[rivals[0].id] == 1
+        assert ranks[lone.id] == 2
+        assert ranks[rivals[1].id] == 3
+
+    def test_same_result_same_global_score_across_fields(self, db):
+        week_a = week_start(today()) - timedelta(days=14)
+        week_b = week_start(today()) - timedelta(days=7)
+        users = [make_user(db, f"EQ{i}") for i in range(2)]
+        for user, monday in zip(users, (week_a, week_b)):
+            session_id = add_wordle_session(db, monday)
+            add_wordle_result(db, session_id, user.id, 4, True)
+        league_finalization.finalize_due_opportunities(db, ["wordle"])
+
+        board = league_boards.global_board(
+            db, competition_type="individual", period="all_time",
+        )
+        scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
+        # Identical 4-guess solves in different fields and weeks: equal.
+        assert scores[users[0].id] == 70.0
+        assert scores[users[1].id] == 70.0
+
+    def test_equal_global_weight_across_games(self, db):
+        day = today() - timedelta(days=4)
+        user = make_user(db, "W8")
+        wordle_id = add_wordle_session(db, day)
+        add_wordle_result(db, wordle_id, user.id, 3, True)
+        with db.sessions.begin() as session:
+            row = ReactionTimeGameRecord(
+                game_date=day, status="ended",
+                period_start_date=day, period_end_date=day + timedelta(days=1),
+                started_at=midnight(day), ended_at=midnight(day + timedelta(days=1)),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            reaction_id = str(row.id)
+            moment = at(day)
+            session.add(
+                ReactionTimeSubmissionRecord(
+                    reaction_time_game_id=reaction_id, user_id=user.id,
+                    attempt_number=1, status="valid",
+                    reaction_time_ms=250, elapsed_ms=250,
+                    started_at=moment, green_at=moment, clicked_at=moment,
+                )
+            )
+        league_finalization.finalize_due_opportunities(db, ["wordle", "reaction-time"])
+
+        board = league_boards.global_board(
+            db, competition_type="individual", period="daily", anchor=day,
+        )
+        entry = board["entries"][0]
+        # 3-guess wordle and 250ms reaction both map to 80: one performance
+        # language, two games.
+        assert entry["per_game"] == {"wordle": 80.0, "reaction-time": 80.0}
+        assert entry["score"] == 160.0
+
+    def test_missed_opportunities_dilute_the_global_average(self, db):
+        monday = week_start(today()) - timedelta(days=7)
+        day_one, day_two = monday, monday + timedelta(days=2)
+        alice, bob = make_user(db, "GA1"), make_user(db, "GA2")
+        first = add_wordle_session(db, day_one)
+        add_wordle_result(db, first, alice.id, 2, True)
+        second = add_wordle_session(db, day_two)
+        add_wordle_result(db, second, alice.id, 2, True)
+        add_wordle_result(db, second, bob.id, 5, True)
+        league_finalization.finalize_due_opportunities(db, ["wordle"])
+
+        board = league_boards.global_board(
+            db, competition_type="individual", period="weekly", anchor=day_two,
+        )
+        scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
+        assert scores[alice.id] == 90.0
+        assert scores[bob.id] == 30.0
+
+    def test_partial_couple_session_keeps_earned_credit(self, db):
+        from app.db_models import (
+            CoupleGameSessionAnswerRecord,
+            CoupleGameSessionPredictionRecord,
+        )
+
+        start = today() - timedelta(days=10)
+        a, b = make_user(db, "PC1"), make_user(db, "PC2")
+        _glob, pair_id = add_couple_session(db, start, a, b, 0, 0)
+        # The session draws 5 shared questions (10 prediction
+        # opportunities), but the couple submits a single original answer
+        # and one correct prediction before the event closes. The
+        # denominator still counts the whole drawn set.
+        with db.sessions.begin() as session:
+            questions = session.scalars(
+                select(CoupleGameSessionQuestionRecord).where(
+                    CoupleGameSessionQuestionRecord.session_id == pair_id
+                )
+            ).all()
+            assert len(questions) == 5
+            session.add(
+                CoupleGameSessionAnswerRecord(
+                    session_id=pair_id, session_question_id=str(questions[0].id),
+                    user_id=a.id, selected_option_index=0,
+                )
+            )
+            session.flush()
+            session.add(
+                CoupleGameSessionPredictionRecord(
+                    session_id=pair_id, session_question_id=str(questions[0].id),
+                    predictor_user_id=b.id, predicted_option_index=0,
+                    is_correct=True,
+                )
+            )
+            session.get(CoupleGameSessionRecord, pair_id).status = "completed"
+        glob = session_id_for_pair(db, pair_id)
+        league_finalization.finalize_opportunity(db, "couple-questionnaire", glob)
+
+        awards = live_awards(db, game_id="couple-questionnaire")
+        assert len(awards) == 1
+        # 1 of 10 opportunities: partial credit survives, the rest are zero.
+        assert awards[0].global_base_points == Decimal("10.00")
+        assert awards[0].game_base_points == Decimal("10.00")
+        assert awards[0].raw_metrics == {"correct_predictions": 1, "total_questions": 10}
+
+    def test_couple_seven_of_ten_scores_seventy(self, db):
+        start = today() - timedelta(days=10)
+        a, b = make_user(db, "P71"), make_user(db, "P72")
+        glob, pair_id = add_couple_session(db, start, a, b, 0, 0)
+        answer_and_predict(db, pair_id, a, b, 4, 3)
+        league_finalization.finalize_opportunity(db, "couple-questionnaire", glob)
+
+        awards = live_awards(db, game_id="couple-questionnaire")
+        assert len(awards) == 1
+        assert awards[0].global_base_points == Decimal("70.00")
+        assert awards[0].raw_metrics == {"correct_predictions": 7, "total_questions": 10}
+
+    def test_couple_no_valid_answers_scores_zero(self, db):
+        start = today() - timedelta(days=10)
+        a, b = make_user(db, "P01"), make_user(db, "P02")
+        glob, pair_id = add_couple_session(db, start, a, b, 0, 0)
+        answer_and_predict(db, pair_id, a, b, 0, 0)
+        league_finalization.finalize_opportunity(db, "couple-questionnaire", glob)
+
+        awards = live_awards(db, game_id="couple-questionnaire")
+        assert len(awards) == 1
+        assert awards[0].global_base_points == Decimal("0")
+        assert awards[0].game_base_points == Decimal("0")
+
+    def test_reversed_partner_order_is_one_couple(self, db):
+        start = today() - timedelta(days=10)
+        a, b = make_user(db, "RV1"), make_user(db, "RV2")
+        _glob, pair_id = add_couple_session(db, start, a, b, 0, 0)
+        # Swap the stored member order away from canonical; the adapter
+        # still resolves one canonical identity and issues one award.
+        with db.sessions.begin() as session:
+            pair = session.get(CoupleGameSessionRecord, pair_id)
+            pair.user_a_id, pair.user_b_id = pair.user_b_id, pair.user_a_id
+        answer_and_predict(db, pair_id, a, b, 5, 5)
+        glob = session_id_for_pair(db, pair_id)
+        league_finalization.finalize_opportunity(db, "couple-questionnaire", glob)
+
+        awards = live_awards(db, game_id="couple-questionnaire")
+        assert len(awards) == 1
+        assert (awards[0].member_a_id, awards[0].member_b_id) == canonical_couple(a.id, b.id)
+        assert awards[0].global_base_points == Decimal("100.00")
+
+    def test_multi_answer_trivia_partial_credit(self, db):
+        from app.db_models import TriviaDropOptionRecord
+
+        day = today() - timedelta(days=4)
+        partial, greedy, wrong = (make_user(db, f"MP{i}") for i in range(3))
+        released = midnight(day)
+        with db.sessions.begin() as session:
+            row = TriviaDropQuestionRecord(
+                question_text="pick two", status="ended",
+                released_at=released, ended_at=released + timedelta(hours=1),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            question_id = str(row.id)
+            for index, correct in [(0, True), (1, True), (2, False), (3, False)]:
+                session.add(
+                    TriviaDropOptionRecord(
+                        question_id=question_id, option_index=index,
+                        option_text=f"opt{index}", is_correct=correct,
+                    )
+                )
+            session.flush()
+            moment = released
+            session.add_all([
+                # One of two correct, instantly: 0.5 accuracy -> 40 + 10.
+                TriviaDropSubmissionRecord(
+                    question_id=question_id, user_id=partial.id,
+                    selected_options=[0], is_correct=False,
+                    submitted_at=moment, response_time_ms=0,
+                ),
+                # Selecting everything: hits cancelled by false picks -> 0.
+                TriviaDropSubmissionRecord(
+                    question_id=question_id, user_id=greedy.id,
+                    selected_options=[0, 1, 2, 3], is_correct=False,
+                    submitted_at=moment, response_time_ms=0,
+                ),
+                # Entirely incorrect -> 0.
+                TriviaDropSubmissionRecord(
+                    question_id=question_id, user_id=wrong.id,
+                    selected_options=[2], is_correct=False,
+                    submitted_at=moment, response_time_ms=0,
+                ),
+            ])
+        league_finalization.finalize_opportunity(db, "trivia-drop", question_id)
+
+        awards = {str(a.user_id): a for a in live_awards(db, game_id="trivia-drop")}
+        assert awards[partial.id].global_base_points == Decimal("50.00")
+        assert awards[greedy.id].global_base_points == Decimal("0")
+        assert awards[wrong.id].global_base_points == Decimal("0")
+
+    def test_legacy_rows_fall_back_to_awarded_points(self, db):
+        from sqlalchemy import text as sql_text
+
+        day = today() - timedelta(days=3)
+        user = make_user(db, "LB")
+        session_id = add_wordle_session(db, day)
+        add_wordle_result(db, session_id, user.id, 2, True)
+        league_finalization.finalize_opportunity(db, "wordle", session_id)
+        # Simulate a pre-split row: halves and versions wiped, legacy stays.
+        with db.engine.begin() as connection:
+            connection.execute(
+                sql_text(
+                    "UPDATE game_score_awards SET global_base_points = NULL,"
+                    " game_base_points = NULL, global_points = NULL,"
+                    " game_points = NULL, global_scoring_version = NULL,"
+                    " game_scoring_version = NULL"
+                    " WHERE game_id = 'wordle'"
+                )
+            )
+
+        board = league_boards.global_board(
+            db, competition_type="individual", period="daily", anchor=day,
+        )
+        assert board["entries"][0]["score"] == 90.0
+        game = league_boards.game_board(
+            db, game_id="wordle", competition_type="individual",
+            period="daily", anchor=day,
+        )
+        assert game["entries"][0]["score"] == 90.0
+
+
+def session_id_for_pair(db, pair_id: str) -> str:
+    """The global (opportunity) id owning a couple pair session."""
+    with db.sessions() as session:
+        pair = session.get(CoupleGameSessionRecord, pair_id)
+        return str(pair.couple_game_id)
+
+
+# ---------------------------------------------------------------------------
+# Individual-game boards follow their intended board rules
+# ---------------------------------------------------------------------------
+
+class TestIndividualGameBoards:
+    def test_trivia_game_board_credits_correct_even_when_last(self, db):
+        day = today() - timedelta(days=4)
+        quick, slow, wrong = (make_user(db, f"GB{i}") for i in range(3))
+        released = midnight(day)
+        with db.sessions.begin() as session:
+            row = TriviaDropQuestionRecord(
+                question_text="?", status="ended",
+                released_at=released, ended_at=released + timedelta(hours=1),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            question_id = str(row.id)
+            for user, correct, ms in [(quick, True, 500), (slow, True, 9000), (wrong, False, 100)]:
+                session.add(
+                    TriviaDropSubmissionRecord(
+                        question_id=question_id, user_id=user.id,
+                        selected_options=[0] if correct else [1], is_correct=correct,
+                        submitted_at=released + timedelta(milliseconds=ms),
+                        response_time_ms=ms,
+                    )
+                )
+        league_finalization.finalize_opportunity(db, "trivia-drop", question_id)
+
+        board = league_boards.game_board(
+            db, game_id="trivia-drop", competition_type="individual",
+            period="daily", anchor=day,
+        )
+        scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
+        ranks = {entry["user_id"]: entry["rank"] for entry in board["entries"]}
+        # Absolute correctness-plus-speed: every correct answer pays, the
+        # wrong one is zero, and placement order still holds here.
+        assert scores[quick.id] == 99.6
+        assert scores[slow.id] == 94.0
+        assert scores[wrong.id] == 0.0
+        assert [ranks[quick.id], ranks[slow.id], ranks[wrong.id]] == [1, 2, 3]
+
+    def test_connections_game_board_pays_partial_progress(self, db):
+        day = today() - timedelta(days=4)
+        user = make_user(db, "GP")
+        with db.sessions.begin() as session:
+            row = ConnectionsGameRecord(
+                game_date=day, status="ended",
+                period_start_date=day, period_end_date=day + timedelta(days=1),
+                started_at=midnight(day), ended_at=midnight(day + timedelta(days=1)),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            session_id = str(row.id)
+            session.add(
+                ConnectionsSubmissionRecord(
+                    connections_game_id=session_id, user_id=user.id,
+                    groups=[], correct_groups=0, correct_words=1,
+                    submitted_at=at(day),
+                )
+            )
+        league_finalization.finalize_opportunity(db, "connections", session_id)
+
+        board = league_boards.game_board(
+            db, game_id="connections", competition_type="individual",
+            period="daily", anchor=day,
+        )
+        # One placed word with no complete group: 4 points, not a solo 50
+        # and not a placement zero.
+        assert board["entries"][0]["score"] == 4.0
+
+    def test_couple_game_board_is_proportional_not_a_duel(self, db):
+        start = today() - timedelta(days=10)
+        a1, b1 = make_user(db, "GD1"), make_user(db, "GD2")
+        a2, b2 = make_user(db, "GD3"), make_user(db, "GD4")
+        glob1, pair1 = add_couple_session(db, start, a1, b1, 0, 0)
+        glob2, pair2 = add_couple_session(db, start, a2, b2, 0, 0)
+        answer_and_predict(db, pair1, a1, b1, 5, 4)
+        answer_and_predict(db, pair2, a2, b2, 3, 2)
+        with db.sessions.begin() as session:
+            session.get(CoupleGameSessionRecord, pair2).couple_game_id = glob1
+        with db.sessions.begin() as session:
+            session.delete(session.get(CoupleGameRecord, glob2))
+        league_finalization.finalize_opportunity(db, "couple-questionnaire", glob1)
+
+        board = league_boards.game_board(
+            db, game_id="couple-questionnaire", competition_type="couple",
+            period="all_time",
+        )
+        scores = {
+            (entry["member_a_id"], entry["member_b_id"]): entry["score"]
+            for entry in board["entries"]
+        }
+        assert scores[canonical_couple(a1.id, b1.id)] == 90.0
+        assert scores[canonical_couple(a2.id, b2.id)] == 50.0
+
+    def test_two_key_game_board_pays_every_escape(self, db):
+        start = today() - timedelta(days=10)
+        fast_a, fast_b = make_user(db, "GE1"), make_user(db, "GE2")
+        slow_a, slow_b = make_user(db, "GE3"), make_user(db, "GE4")
+        _glob, fast_pair = add_couple_session(db, start, fast_a, fast_b, 0, 0)
+        _glob, slow_pair = add_couple_session(db, start, slow_a, slow_b, 0, 0)
+        with db.sessions.begin() as session:
+            game = TwoKeyEscapeGameRecord(
+                game_date=start, status="ended",
+                period_start_date=start, period_end_date=start + timedelta(days=1),
+                started_at=midnight(start), ended_at=midnight(start + timedelta(days=1)),
+                created_by="TEST",
+                grid_size=12, maze_seed="seed",
+                start_row=0, start_col=0, exit_row=11, exit_col=11,
+                walls=[], locked_cells=[], key_mapping={}, gate_indexes=[],
+            )
+            session.add(game)
+            session.flush()
+            game_id = str(game.id)
+            moment = at(start)
+            for pair_id, elapsed in [(fast_pair, 95.5), (slow_pair, 210.0)]:
+                pair = session.get(CoupleGameSessionRecord, pair_id)
+                member_a, member_b = canonical_couple(str(pair.user_a_id), str(pair.user_b_id))
+                session.add(
+                    TwoKeyEscapeSessionRecord(
+                        two_key_escape_game_id=game_id, couple_session_id=pair_id,
+                        user_a_id=member_a, user_b_id=member_b,
+                        player_row=0, player_col=0,
+                        total_moves=10, total_keys=2,
+                        elapsed_seconds=elapsed, completed=True,
+                        completed_at=moment,
+                    )
+                )
+        league_finalization.finalize_opportunity(db, "two-key-escape", game_id)
+
+        board = league_boards.game_board(
+            db, game_id="two-key-escape", competition_type="couple",
+            period="all_time",
+        )
+        assert len(board["entries"]) == 2
+        assert {entry["score"] for entry in board["entries"]} == {100.0}
+        assert {entry["rank"] for entry in board["entries"]} == {1}
+
+    def test_wordle_game_board_keeps_relative_placement(self, db):
+        day = today() - timedelta(days=3)
+        users = [make_user(db, f"GR{i}") for i in range(3)]
+        session_id = add_wordle_session(db, day)
+        add_wordle_result(db, session_id, users[0].id, 2, True)
+        add_wordle_result(db, session_id, users[1].id, 4, True)
+        add_wordle_result(db, session_id, users[2].id, 6, False)
+        league_finalization.finalize_opportunity(db, "wordle", session_id)
+
+        board = league_boards.game_board(
+            db, game_id="wordle", competition_type="individual",
+            period="daily", anchor=day,
+        )
+        ranks = {entry["user_id"]: entry["rank"] for entry in board["entries"]}
+        scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
+        # Fewer guesses outranks more; unsolved trails; points stay relative.
+        assert [ranks[users[0].id], ranks[users[1].id], ranks[users[2].id]] == [1, 2, 3]
+        assert scores[users[0].id] == 100.0
+        assert scores[users[1].id] == 50.0
+        assert scores[users[2].id] == 0.0
+
+    def test_reaction_game_board_keeps_relative_comparison(self, db):
+        day = today() - timedelta(days=4)
+        users = [make_user(db, f"GH{i}") for i in range(2)]
+        with db.sessions.begin() as session:
+            row = ReactionTimeGameRecord(
+                game_date=day, status="ended",
+                period_start_date=day, period_end_date=day + timedelta(days=1),
+                started_at=midnight(day), ended_at=midnight(day + timedelta(days=1)),
+                created_by="TEST",
+            )
+            session.add(row)
+            session.flush()
+            session_id = str(row.id)
+            moment = at(day)
+            for user, ms in [(users[0], 190), (users[1], 900)]:
+                session.add(
+                    ReactionTimeSubmissionRecord(
+                        reaction_time_game_id=session_id, user_id=user.id,
+                        attempt_number=1, status="valid",
+                        reaction_time_ms=ms, elapsed_ms=ms,
+                        started_at=moment, green_at=moment, clicked_at=moment,
+                    )
+                )
+        league_finalization.finalize_opportunity(db, "reaction-time", session_id)
+
+        board = league_boards.game_board(
+            db, game_id="reaction-time", competition_type="individual",
+            period="daily", anchor=day,
+        )
+        scores = {entry["user_id"]: entry["score"] for entry in board["entries"]}
+        # Relative duel on the game board (100/0) while the global halves
+        # are absolute (90 for 190ms, 10 for 900ms): no leakage either way.
+        assert scores[users[0].id] == 100.0
+        assert scores[users[1].id] == 0.0
+        awards = {str(a.user_id): a for a in live_awards(db, game_id="reaction-time")}
+        assert awards[users[0].id].global_base_points == Decimal("90")
+        assert awards[users[1].id].global_base_points == Decimal("10")
+
+
+# ---------------------------------------------------------------------------
+# Cross-game calibration: documented representatives on one scale
+# ---------------------------------------------------------------------------
+
+class TestCalibrationTable:
+    """Each row names the intended meaning; bands are the common scale.
+
+    0 failing/unsuccessful, 1-20 minimal, 21-40 low, 41-60 moderate,
+    61-80 strong, 81-100 excellent. These tests pin the profiles to their
+    documented meanings -- they do not derive thresholds from live data and
+    would fail if any profile silently changed.
+    """
+
+    def test_representatives_hit_their_bands(self):
+        from app.services.league_global_scoring import (
+            anagram_global_base,
+            connections_global_base,
+            couple_global_base,
+            reaction_global_base,
+            trivia_global_base,
+            two_key_escape_global_base,
+            wordle_global_base,
+        )
+
+        representatives = [
+            ("wordle 2-guess solve is excellent", wordle_global_base({"solved": True, "attempts": 2}), 81, 100),
+            ("anagram 2-attempt quick solve is excellent", anagram_global_base({"solved": True, "attempts": 2, "active_time_seconds": 25}), 81, 100),
+            ("reaction 250ms is strong", reaction_global_base({"best_ms": 250}), 61, 80),
+            ("trivia instant correct is excellent", trivia_global_base({"accuracy": 1.0, "response_time_ms": 200}), 81, 100),
+            ("connections half progress is moderate", connections_global_base({"correct_words": 8, "correct_groups": 2}), 41, 60),
+            ("couple 7/10 is strong", couple_global_base({"correct_predictions": 7, "total_questions": 10}), 61, 80),
+            ("escape success is excellent", two_key_escape_global_base({}), 81, 100),
+        ]
+        for label, value, low, high in representatives:
+            assert low <= int(value) <= high, label
+
+    def test_profiles_are_deterministic_and_field_free(self):
+        from app.services.league_global_scoring import global_base_for
+
+        first = global_base_for("wordle", {"solved": True, "attempts": 4})
+        second = global_base_for("wordle", {"solved": True, "attempts": 4})
+        assert first == second == Decimal("70")
+        # No participant-count/rank argument exists to vary: the signature
+        # takes only the finalized native metrics.
+        import inspect
+
+        for name in (
+            "wordle_global_base", "anagram_global_base", "reaction_global_base",
+            "trivia_global_base", "connections_global_base", "couple_global_base",
+            "two_key_escape_global_base",
+        ):
+            params = list(inspect.signature(getattr(
+                __import__("app.services.league_global_scoring", fromlist=[name]), name
+            )).parameters)
+            assert params == ["raw"], name
+
+    def test_unsuccessful_outcomes_cannot_score(self):
+        from app.services.league_global_scoring import (
+            anagram_global_base,
+            connections_global_base,
+            couple_global_base,
+            reaction_global_base,
+            trivia_global_base,
+            wordle_global_base,
+        )
+
+        assert wordle_global_base({"solved": False, "attempts": 1}) == Decimal("0")
+        assert anagram_global_base({"solved": False, "attempts": 1, "active_time_seconds": 1}) == Decimal("0")
+        assert trivia_global_base({"accuracy": 0.0, "response_time_ms": 0}) == Decimal("0")
+        assert connections_global_base({"correct_words": 0, "correct_groups": 0}) == Decimal("0")
+        assert couple_global_base({"correct_predictions": 0, "total_questions": 10}) == Decimal("0")
+        assert couple_global_base({"correct_predictions": 5, "total_questions": 0}) == Decimal("0")
+        assert reaction_global_base({}) == Decimal("0")

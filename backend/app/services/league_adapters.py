@@ -29,10 +29,12 @@ from ..db_models import (
     ConnectionsSubmissionRecord,
     CoupleGameRecord,
     CoupleGameSessionPredictionRecord,
+    CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
     FeaturedGameRecord,
     ReactionTimeGameRecord,
     ReactionTimeSubmissionRecord,
+    TriviaDropOptionRecord,
     TriviaDropQuestionRecord,
     TriviaDropSubmissionRecord,
     TwoKeyEscapeGameRecord,
@@ -323,23 +325,65 @@ def connections_results(session, opportunity_id: str) -> list[RankedSubject]:
 
 
 def trivia_results(session, opportunity_id: str) -> list[RankedSubject]:
-    """Correct first, then faster -- mirroring the native results order."""
+    """Correct first, then faster -- mirroring the native results order.
+
+    ``raw_metrics`` additionally carries the inputs the absolute global
+    profile needs: the submitted selection, the key size, the option count,
+    and the resulting ``accuracy`` in 0..1 (via the shared
+    ``trivia_accuracy`` helper, including its anti-select-all rule). The
+    key itself (which options are correct) is read from the persisted
+    options at finalization and never stored on the award, so native
+    answer content stays out of the ledger.
+    """
     rows = session.scalars(
         select(TriviaDropSubmissionRecord).where(
             TriviaDropSubmissionRecord.question_id == opportunity_id
         )
     ).all()
+    option_rows = session.execute(
+        select(
+            TriviaDropOptionRecord.option_index,
+            TriviaDropOptionRecord.is_correct,
+        ).where(TriviaDropOptionRecord.question_id == opportunity_id)
+    ).all()
+    universe = {int(option) for option, _ in option_rows}
+    key = {int(option) for option, correct in option_rows if correct}
+    # Imported lazily: league_global_scoring imports this module's
+    # competition_type_for lazily in turn, so a top-level import would cycle.
+    from .league_global_scoring import trivia_accuracy
+
     subjects = []
     for row in rows:
         user_id = str(row.user_id)
         correct = 1 if row.is_correct else 0
         elapsed = int(row.response_time_ms)
+        if not universe and not key:
+            # Degraded data path: real questions always carry their four
+            # options, but legacy rows may predate them. The stored
+            # is_correct verdict was computed server-side at submit time
+            # under exact-match semantics, so it doubles as single-answer
+            # accuracy rather than zeroing a correct answer for missing key
+            # data no scoring function may invent.
+            accuracy = 1.0 if row.is_correct else 0.0
+        else:
+            accuracy = trivia_accuracy(row.selected_options, key, universe)
+        try:
+            picked = sorted({int(option) for option in (row.selected_options or [])})
+        except (TypeError, ValueError):
+            picked = []
         subjects.append(
             RankedSubject(
                 subject=(user_id,),
                 tie_key=(correct, -elapsed),
                 order_key=(correct, -elapsed, _completed_at_iso(row.submitted_at), user_id),
-                raw_metrics={"is_correct": bool(row.is_correct), "response_time_ms": elapsed},
+                raw_metrics={
+                    "is_correct": bool(row.is_correct),
+                    "response_time_ms": elapsed,
+                    "selected_options": picked,
+                    "correct_count": len(key),
+                    "total_options": len(universe),
+                    "accuracy": accuracy,
+                },
             )
         )
     return subjects
@@ -386,6 +430,16 @@ def couple_results(session, opportunity_id: str) -> list[RankedSubject]:
     Only ``completed`` sessions qualify; the couple score is the total
     correct predictions across both partners. No question text, options or
     selections travel into the metrics.
+
+    ``raw_metrics`` additionally carries ``total_questions``: the session's
+    eligible question set, i.e. every prediction opportunity the couple had
+    -- two per shared question (one original per partner) plus one per
+    exclusive question -- read from the session's drawn question rows, not
+    from submissions. The absolute profiles divide correct predictions by
+    this total, so unanswered or never-submitted questions count as zero
+    without shrinking the denominator to "only what was answered". The
+    model has no invalidation flag, so every drawn session question is
+    scoreable; a session with no question rows scores zero.
     """
     pair_rows = session.scalars(
         select(CoupleGameSessionRecord).where(
@@ -395,6 +449,7 @@ def couple_results(session, opportunity_id: str) -> list[RankedSubject]:
     ).all()
     if not pair_rows:
         return []
+    session_ids = [str(row.id) for row in pair_rows]
     correct_counts = dict(
         session.execute(
             select(
@@ -402,23 +457,44 @@ def couple_results(session, opportunity_id: str) -> list[RankedSubject]:
                 func.count().filter(CoupleGameSessionPredictionRecord.is_correct.is_(True)),
             )
             .where(
-                CoupleGameSessionPredictionRecord.session_id.in_(
-                    [str(row.id) for row in pair_rows]
-                )
+                CoupleGameSessionPredictionRecord.session_id.in_(session_ids)
             )
             .group_by(CoupleGameSessionPredictionRecord.session_id)
         ).all()
     )
+    # Scoreable opportunities from the drawn question set: shared questions
+    # yield one prediction per partner (two), exclusive questions one.
+    # Questions the couple never answered stay in the denominator.
+    question_counts: dict[str, dict[str, int]] = {}
+    for session_id, assignment, count in session.execute(
+        select(
+            CoupleGameSessionQuestionRecord.session_id,
+            CoupleGameSessionQuestionRecord.assignment,
+            func.count(),
+        )
+        .where(CoupleGameSessionQuestionRecord.session_id.in_(session_ids))
+        .group_by(
+            CoupleGameSessionQuestionRecord.session_id,
+            CoupleGameSessionQuestionRecord.assignment,
+        )
+    ).all():
+        question_counts.setdefault(str(session_id), {})[str(assignment)] = int(count)
     subjects = []
     for row in pair_rows:
         member_a, member_b = canonical_couple(str(row.user_a_id), str(row.user_b_id))
         correct = int(correct_counts.get(str(row.id), 0))
+        assignments = question_counts.get(str(row.id), {})
+        total = (
+            2 * assignments.get("shared", 0)
+            + assignments.get("user_a", 0)
+            + assignments.get("user_b", 0)
+        )
         subjects.append(
             RankedSubject(
                 subject=(member_a, member_b),
                 tie_key=(correct,),
                 order_key=(correct, _completed_at_iso(row.completed_at), member_a, member_b),
-                raw_metrics={"correct_predictions": correct},
+                raw_metrics={"correct_predictions": correct, "total_questions": total},
             )
         )
     return subjects
