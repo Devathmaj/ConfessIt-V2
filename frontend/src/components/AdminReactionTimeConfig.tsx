@@ -45,7 +45,7 @@ export const AdminReactionTimeConfig = () => {
   }, [refresh]);
 
   return (
-    <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+    <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
@@ -75,7 +75,7 @@ export const AdminReactionTimeConfig = () => {
             </p>
           )}
           {session && (
-            <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
+            <p className="[border-radius:var(--edge-card-sm)] border border-border/60 bg-muted/40 p-3 text-sm">
               Current session period:{' '}
               <span className="font-mono font-medium">
                 {session.period_start_date ?? '—'}

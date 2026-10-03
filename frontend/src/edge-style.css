@@ -1,0 +1,358 @@
+/* Romantic edge restyle — one edge layer.
+ * Phase 0 defaults equal today's values, so merging changes nothing visually.
+ * Presets switch via data-edge on <html>. Only radius / border-style /
+ * border-width / clip-path / outline / ornament layout live here.
+ * No colors, fonts, gradients, shadows, blur, transitions or animations. */
+
+:root {
+  --edge-card: var(--radius);
+  --edge-card-sm: 12px;
+  --edge-control: 14px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 12px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+/* ---------- presets: radius + line style only ---------- */
+
+[data-edge="petal"] {
+  --edge-card: 28px;
+  --edge-card-sm: 20px;
+  --edge-control: 999px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 50%;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+[data-edge="leaf"] {
+  --edge-card: 30px 6px 30px 6px;
+  --edge-card-sm: 20px 5px 20px 5px;
+  --edge-control: 18px 4px 18px 4px;
+  --edge-pill: 999px;
+  --edge-chip: 12px 3px 12px 3px;
+  --edge-icon: 18px 4px 18px 4px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+[data-edge="tag"] {
+  --edge-card: 16px;
+  --edge-card-sm: 12px;
+  --edge-control: 12px;
+  --edge-pill: 999px;
+  --edge-chip: 8px;
+  --edge-icon: 8px;
+  --edge-avatar: 50%;
+  --edge-line: dashed;
+}
+
+[data-edge="parchment"] {
+  --edge-card: 6px;
+  --edge-card-sm: 6px;
+  --edge-control: 4px;
+  --edge-pill: 999px;
+  --edge-chip: 4px;
+  --edge-icon: 4px;
+  --edge-avatar: 6px;
+  --edge-line: solid;
+}
+
+[data-edge="envelope"] {
+  --edge-card: 3px;
+  --edge-card-sm: 3px;
+  --edge-control: 999px;
+  --edge-pill: 999px;
+  --edge-chip: 2px;
+  --edge-icon: 3px;
+  --edge-avatar: 3px;
+  --edge-line: solid;
+}
+
+[data-edge="stamp"] {
+  --edge-card: 6px;
+  --edge-card-sm: 4px;
+  --edge-control: 3px;
+  --edge-pill: 3px;
+  --edge-chip: 2px;
+  --edge-icon: 2px;
+  --edge-avatar: 2px;
+  --edge-line: dotted;
+}
+
+[data-edge="note"] {
+  --edge-card: 3px;
+  --edge-card-sm: 3px;
+  --edge-control: 255px 14px 225px 14px;
+  --edge-pill: 999px;
+  --edge-chip: 14px 225px 14px 255px;
+  --edge-icon: 5px 2px 6px 2px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+[data-edge="cameo"] {
+  --edge-card: 34px 34px 8px 8px;
+  --edge-card-sm: 24px 24px 6px 6px;
+  --edge-control: 14px 14px 4px 4px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 50% 50% 12px 12px;
+  --edge-avatar: 50% 50% 50% 50% / 38% 38% 62% 62%;
+  --edge-line: solid;
+}
+
+[data-edge="candy"] {
+  --edge-card: 22px;
+  --edge-card-sm: 16px;
+  --edge-control: 16px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 16px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+[data-edge="chat"] {
+  --edge-card: 20px 20px 20px 4px;
+  --edge-card-sm: 16px 16px 16px 4px;
+  --edge-control: 999px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 12px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+[data-edge="polaroid"] {
+  --edge-card: 2px;
+  --edge-card-sm: 2px;
+  --edge-control: 8px;
+  --edge-pill: 999px;
+  --edge-chip: 999px;
+  --edge-icon: 2px;
+  --edge-avatar: 2px;
+  --edge-line: solid;
+}
+
+[data-edge="brackets"] {
+  --edge-card: 0;
+  --edge-card-sm: 0;
+  --edge-control: 0;
+  --edge-pill: 0;
+  --edge-chip: 0;
+  --edge-icon: 0;
+  --edge-avatar: 0;
+  --edge-line: solid;
+}
+
+[data-edge="ribbon"] {
+  --edge-card: 10px;
+  --edge-card-sm: 8px;
+  --edge-control: 10px;
+  --edge-pill: 10px;
+  --edge-chip: 10px;
+  --edge-icon: 8px;
+  --edge-avatar: 50%;
+  --edge-line: solid;
+}
+
+/* ---------- preset-only field treatments (shape only) ---------- */
+
+/* parchment: underline-only fields */
+[data-edge="parchment"] :is(input, textarea, select, [data-edge-field]) {
+  border-width: 0 0 1.5px;
+}
+
+/* envelope: dashed fields + chips, tiny chip radius handled by var */
+[data-edge="envelope"] :is(input, textarea, select, [data-edge-field]) {
+  border-style: dashed;
+}
+[data-edge="envelope"] :is(.chip, [data-edge-chip]) {
+  border-style: dashed;
+}
+/* envelope buttons stay pill via --edge-control */
+
+/* stamp: dotted card already via --edge-line; force fields/buttons dotted */
+[data-edge="stamp"] :is(input, textarea, select, button, [data-edge-field]) {
+  border-style: dotted;
+}
+
+/* polaroid: dashed fields */
+[data-edge="polaroid"] :is(input, textarea, select, [data-edge-field]) {
+  border-style: dashed;
+}
+
+/* note: keep hand-drawn control radius, cards stay near-square */
+[data-edge="note"] :is(.confession-card, [data-edge-card]) {
+  border-style: solid;
+}
+
+/* candy: extra 2px outline ring using existing token */
+[data-edge="candy"] :is(.confession-card, [data-edge-card]) {
+  outline: 2px solid var(--border);
+  outline-offset: 2px;
+}
+
+/* cameo: dotted lace bottom edge on cards */
+[data-edge="cameo"] :is(.confession-card, [data-edge-card])::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 6px;
+  border-bottom: 2px dotted var(--border-strong);
+  pointer-events: none;
+}
+[data-edge="cameo"] :is(.confession-card, [data-edge-card]) {
+  position: relative;
+}
+
+/* polaroid: slight rotation (static only, hover lift still applies) */
+[data-edge="polaroid"] :is(.confession-card, [data-edge-card]) {
+  rotate: -0.6deg;
+}
+
+/* chat: sent variant mirrors the tail corner */
+[data-edge="chat"] [data-chat="sent"] {
+  border-radius: 20px 20px 4px 20px;
+}
+
+/* brackets: diamond avatars via clip-path (non-interactive shape only) */
+[data-edge="brackets"] :is(.avatar, [data-edge-avatar]) {
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* candy: heart-shaped avatar via clip-path (badges/avatas only) */
+[data-edge="candy"] :is(.avatar, [data-edge-avatar]) {
+  clip-path: path("M12 21s-7.5-4.9-10-9.3C.4 8.6 2.4 5 5.8 5c2 0 3.4 1.1 4.2 2.3h4c.8-1.2 2.2-2.3 4.2-2.3 3.4 0 5.4 3.6 3.8 6.7C19.5 16.1 12 21 12 21z");
+}
+
+/* ribbon: swallowtail chip shape (non-interactive badges only) */
+[data-edge="ribbon"] :is(.chip, [data-edge-chip]) {
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 0 100%);
+}
+
+/* parchment: inner frame via ::after inset (never outline, keeps focus ring) */
+[data-edge="parchment"] :is(.confession-card, [data-edge-card]) {
+  position: relative;
+}
+[data-edge="parchment"] :is(.confession-card, [data-edge-card])::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid var(--border-strong);
+  pointer-events: none;
+}
+
+/* ---------- ornaments: hidden by default, shown per preset ---------- */
+
+.edge-ornament {
+  display: none;
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.edge-has-ornament {
+  position: relative;
+}
+
+[data-edge="tag"] .edge-ornament[data-ornament="heart"],
+[data-edge="parchment"] .edge-ornament[data-ornament="seal"],
+[data-edge="envelope"] .edge-ornament[data-ornament="flap"],
+[data-edge="note"] .edge-ornament[data-ornament="tape"],
+[data-edge="polaroid"] .edge-ornament[data-ornament="tape"],
+[data-edge="ribbon"] .edge-ornament[data-ornament="ribbon"],
+[data-edge="stamp"] .edge-ornament[data-ornament="postmark"],
+[data-edge="candy"] .edge-ornament[data-ornament="sticker"],
+[data-edge="brackets"] .edge-ornament[data-ornament="brackets"],
+[data-edge="chat"] .edge-ornament[data-ornament="tail"] {
+  display: block;
+}
+
+/* ornament placements (layout only) */
+.edge-ornament[data-ornament="tape"] {
+  top: -10px;
+  left: 50%;
+  width: 96px;
+  height: 24px;
+  transform: translateX(-50%) rotate(-3deg);
+  border-left: 2px dashed var(--border-strong);
+  border-right: 2px dashed var(--border-strong);
+}
+
+.edge-ornament[data-ornament="seal"] {
+  right: 14px;
+  bottom: 14px;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.edge-ornament[data-ornament="flap"] {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
+  border-bottom: 1.5px dashed var(--border-strong);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.edge-ornament[data-ornament="ribbon"] {
+  top: -12px;
+  left: 24px;
+  width: 10px;
+  height: 34px;
+  border-left: 5px solid var(--border-strong);
+  border-right: 5px solid var(--border-strong);
+}
+
+.edge-ornament[data-ornament="postmark"] {
+  top: 10px;
+  right: 10px;
+  width: 64px;
+  height: 64px;
+  border: 2px dotted var(--border-strong);
+  border-radius: 50%;
+}
+
+.edge-ornament[data-ornament="sticker"] {
+  top: -10px;
+  right: 16px;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.edge-ornament[data-ornament="heart"] {
+  top: -12px;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translateX(-50%);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.edge-ornament[data-ornament="brackets"] {
+  inset: 6px;
+  width: auto;
+  height: auto;
+  border: 1.5px solid var(--border-strong);
+}
+
+.edge-ornament[data-ornament="tail"] {
+  bottom: -6px;
+  left: 22px;
+  width: 14px;
+  height: 14px;
+  border-right: 1.5px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}

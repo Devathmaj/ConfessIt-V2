@@ -1013,10 +1013,10 @@ setSearchTerm('');
                                     {receivedNotes.map((note) => (
                                         <Card
                                             key={note.id}
-                                            className="confession-card hover:scale-105 transition-all duration-300"
+                                            className="confession-card hover:scale-105 transition-all duration-300 overflow-hidden"
                                         >
                                             <CardContent className="p-0">
-                                                <div className="relative overflow-hidden rounded-t-lg">
+                                                <div className="relative overflow-hidden">
                                                     <img 
                                                         src={note.image_url} 
                                                         alt="Love note" 
@@ -1312,7 +1312,7 @@ setSearchTerm('');
                                 <X className="w-5 h-5" />
                             </Button>
 
-                            <Card>
+                            <Card className="overflow-hidden">
                                 <CardContent className="p-0">
                                     <div className="relative">
                                         <img 
@@ -1320,7 +1320,7 @@ setSearchTerm('');
                                             alt="Love note" 
                                             // Non-expiring signed bearer URL: no referrer, as above.
                                             referrerPolicy="no-referrer"
-                                            className="w-full h-auto rounded-t-lg"
+                                            className="w-full h-auto"
                                         />
                                     </div>
                                     <div className="p-8 space-y-4">

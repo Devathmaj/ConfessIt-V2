@@ -108,7 +108,7 @@ export const AdminSetFeaturedCard = ({
 
   return (
     <>
-      <Card className="rounded-2xl border-amber-500/40 bg-amber-500/5 backdrop-blur">
+      <Card className="[border-radius:var(--edge-card)] border-amber-500/40 bg-amber-500/5 backdrop-blur">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">

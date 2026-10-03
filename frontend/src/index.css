@@ -644,8 +644,8 @@
   /* Confession Card Effects: standard card surface (guide §1.2 decision 6). */
   .confession-card {
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: 1px var(--edge-line) var(--border);
+    border-radius: var(--edge-card);
     box-shadow: var(--shadow-card);
     transition: var(--transition-smooth);
   }
@@ -711,7 +711,7 @@
   .btn {
     min-height: var(--control-height);
     padding-inline: 18px;
-    border-radius: var(--radius-control);
+    border-radius: var(--edge-control);
     font-weight: 600;
     border: 1px solid transparent;
     transition: background var(--theme-transition), border-color var(--theme-transition);
@@ -721,7 +721,7 @@
     background: var(--action);
     color: var(--action-text);
     border: 1px solid transparent;
-    border-radius: var(--radius);
+    border-radius: var(--edge-control);
     padding: 0.75rem 2rem;
     min-height: var(--control-height);
     font-family: var(--font-sans);
@@ -755,7 +755,7 @@
     background: transparent;
     color: var(--action-outline-text);
     border: 2px solid var(--border-strong);
-    border-radius: var(--radius);
+    border-radius: var(--edge-control);
     padding: 0.75rem 2rem;
     min-height: var(--control-height);
     font-family: var(--font-sans);
@@ -791,7 +791,7 @@
     gap: 8px;
     background: var(--status-bg);
     color: var(--status-text);
-    border-radius: var(--radius-pill);
+    border-radius: var(--edge-chip);
     padding: 6px 14px;
     font-weight: 600;
   }
@@ -841,7 +841,7 @@
   .match-frame {
     background: var(--frame-bg);
     border: 1px solid var(--border);
-    border-radius: calc(var(--radius-card) + 4px);
+    border-radius: var(--edge-card);
     padding: 12px;
   }
   .match-frame:focus-within,
@@ -890,7 +890,7 @@
     background: var(--avatar-bg);
     color: var(--avatar-text);
     font-weight: 700;
-    border-radius: 50%;
+    border-radius: var(--edge-avatar);
     box-shadow: 0 0 0 3px var(--avatar-ring);
   }
 
@@ -898,8 +898,8 @@
   .chip {
     background: var(--chip-bg);
     color: var(--chip-text);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-pill);
+    border: 1px var(--edge-line) var(--border);
+    border-radius: var(--edge-chip);
     padding: 4px 10px;
   }
   .chip[aria-pressed="true"],

@@ -105,7 +105,7 @@ export const AdminTwoKeyEscapeConfig = () => {
   };
 
   return (
-    <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+    <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">

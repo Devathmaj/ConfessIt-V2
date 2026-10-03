@@ -118,7 +118,7 @@ export const AdminGameStatusControls = ({
     <div
       role="group"
       aria-label={`${gameName} status and reset`}
-      className="space-y-3 rounded-xl border border-border/60 bg-muted/40 p-3"
+      className="space-y-3 [border-radius:var(--edge-card-sm)] border border-border/60 bg-muted/40 p-3"
     >
       {loadError && (
         <p role="alert" className="text-sm font-medium text-destructive">

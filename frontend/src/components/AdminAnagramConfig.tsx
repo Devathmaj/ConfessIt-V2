@@ -310,7 +310,7 @@ export const AdminAnagramConfig = () => {
   const readyToSave = formMode === 'custom' ? word.trim().length > 0 : drawn !== null;
 
   return (
-    <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+    <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
@@ -337,7 +337,7 @@ export const AdminAnagramConfig = () => {
         <AdminGameStatusControls gameId="anagram" gameName="Anagram" />
 
         {current && (
-          <p className="rounded-xl border border-border/60 bg-muted/40 p-3 text-sm">
+          <p className="[border-radius:var(--edge-card-sm)] border border-border/60 bg-muted/40 p-3 text-sm">
             Current session:{' '}
             <span className="font-mono font-medium uppercase">
               {current.answer ?? 'no word yet'}
@@ -375,7 +375,7 @@ export const AdminAnagramConfig = () => {
           {hasUnsavedMode && stagedMode !== null && (
             <div
               role="status"
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-500/10 p-3"
+              className="flex flex-wrap items-center justify-between gap-3 [border-radius:var(--edge-card-sm)] border border-amber-500/50 bg-amber-500/10 p-3"
             >
               <p className="text-sm">
                 <span className="font-semibold">Unsaved changes</span> — Anagram will run on{' '}
@@ -432,7 +432,7 @@ export const AdminAnagramConfig = () => {
               </p>
             </div>
           ) : drawn ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 [border-radius:var(--edge-card-sm)] border border-border/60 bg-muted/40 p-4">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-wide text-muted-foreground">
                   Word for today
@@ -544,7 +544,7 @@ export const AdminAnagramConfig = () => {
               {scheduled.map((entry) => (
                 <li
                   key={entry.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3 text-sm"
+                  className="flex items-center justify-between gap-3 [border-radius:var(--edge-card-sm)] border border-border/60 p-3 text-sm"
                 >
                   <span>
                     <span className="font-mono font-medium">{entry.target_date}</span>
@@ -611,7 +611,7 @@ export const AdminAnagramConfig = () => {
             <ul className="flex flex-col gap-2">
               {games.map((game) => (
                 <li key={game.id}>
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3">
+                  <div className="flex items-center justify-between gap-3 [border-radius:var(--edge-card-sm)] border border-border/60 p-3">
                     <button
                       type="button"
                       onClick={() => void openDetail(game.id)}
@@ -654,7 +654,7 @@ export const AdminAnagramConfig = () => {
           )}
 
           {historyOpen && detail && (
-            <div className="rounded-xl border border-border/60 bg-muted/40 p-4 text-sm">
+            <div className="[border-radius:var(--edge-card-sm)] border border-border/60 bg-muted/40 p-4 text-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
                   <p className="font-semibold">Session for {detail.game_date}</p>

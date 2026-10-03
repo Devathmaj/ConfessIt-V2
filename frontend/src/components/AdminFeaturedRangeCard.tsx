@@ -170,7 +170,7 @@ export const AdminFeaturedRangeCard = ({ onChanged }: { onChanged: () => void })
 
   return (
     <>
-      <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+      <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -261,7 +261,7 @@ export const AdminFeaturedRangeCard = ({ onChanged }: { onChanged: () => void })
               {confirmConflicts.length === 1 ? 'pick' : 'picks'}:
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded-xl border border-border/60 p-3 text-sm">
+          <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto [border-radius:var(--edge-card-sm)] border border-border/60 p-3 text-sm">
             {confirmConflicts.map((entry) => (
               <li key={entry.game_date} className="flex items-center gap-2">
                 <span className="font-mono font-medium">{entry.game_date}</span>

@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { HeartDivider } from '@/components/edge/EdgeOrnament';
 import { Heart, Info, Users, Gamepad2, Mail, Shuffle } from 'lucide-react';
 import { Navigation } from '@/components/Navigation';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
@@ -56,6 +57,10 @@ export const About = () => {
           </CardContent>
         </Card>
 
+        <div className="my-8" aria-hidden>
+          <HeartDivider />
+        </div>
+
         <div className="space-y-8">
           <h2 className="text-4xl font-dancing text-romantic text-center mb-8">Features Guide</h2>
 
@@ -106,6 +111,10 @@ export const About = () => {
               <p>Break the ice in the Games section: pick from a growing library of mini-games, chase daily featured picks and climb the leaderboards. Play with your matches and get to know them in a fun and relaxed way — Truth or Dare, Compatibility Quiz and more are waiting.</p>
             </CardContent>
           </Card>
+        </div>
+
+        <div className="mt-8" aria-hidden>
+          <HeartDivider />
         </div>
       </div>
     </div>

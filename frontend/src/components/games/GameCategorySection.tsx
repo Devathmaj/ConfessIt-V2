@@ -175,7 +175,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
               aria-selected={isActive}
               onClick={() => setCategoryId(entry.id)}
               className={cn(
-                'inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm',
+                'inline-flex shrink-0 items-center gap-2 border px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all sm:text-sm [border-radius:var(--edge-chip)]',
                 isActive
                   ? 'border-transparent bg-gradient-romantic text-white shadow-[var(--shadow-romantic)]'
                   : 'border-border/70 bg-card/60 text-muted-foreground hover:border-romantic/50 hover:text-foreground',
@@ -185,7 +185,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
               {entry.scope === 'record' && (
                 <span
                   className={cn(
-                    'rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase',
+                    'px-1.5 py-0.5 text-[10px] font-bold uppercase [border-radius:var(--edge-chip)]',
                     isActive ? 'bg-white/25 text-white' : 'bg-secondary text-muted-foreground',
                   )}
                 >
@@ -206,7 +206,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
 
       {/* Viewer's standing in this view */}
       {me && (
-        <Card className="mb-4 rounded-2xl border-romantic/40 bg-romantic/10">
+        <Card className="mb-4 border-romantic/40 bg-romantic/10 [border-radius:var(--edge-card)]">
           <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold">
               <Medal className="h-4 w-4 text-romantic" />
@@ -222,21 +222,21 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
       {loading ? (
         <p className="py-14 text-center text-sm text-muted-foreground">Loading standings…</p>
       ) : error ? (
-        <div className="rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
+        <div className="border border-dashed border-border/70 px-6 py-14 text-center [border-radius:var(--edge-card)]">
           <p className="text-base font-bold">Standings are unavailable</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">{error}</p>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="mt-5 rounded-full"
+            className="mt-5 [border-radius:var(--edge-pill)]"
             onClick={() => void fetchBoard(0, false)}
           >
             Try again
           </Button>
         </div>
       ) : !board || board.entries.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
+        <div className="border border-dashed border-border/70 px-6 py-14 text-center [border-radius:var(--edge-card)]">
           <Inbox className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="mt-3 text-base font-bold">No standings yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
@@ -244,7 +244,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
           </p>
         </div>
       ) : (
-        <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+        <Card className="border-border/60 bg-card/70 backdrop-blur [border-radius:var(--edge-card)]">
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-bold">
               {activeCategory?.label ?? 'Standings'}
@@ -257,7 +257,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
               return (
                 <div
                   key={key}
-                  className="rounded-xl border border-border/50 bg-background/40 p-3"
+                  className="border border-border/50 bg-background/40 p-3 [border-radius:var(--edge-card-sm)]"
                 >
                   <div className="flex items-center gap-3">
                     <span className="w-8 shrink-0 text-center text-sm font-extrabold tabular-nums text-muted-foreground">
@@ -288,7 +288,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
                         aria-expanded={isOpen}
                         aria-label={`${isOpen ? 'Hide' : 'Show'} records for ${categoryEntryName(entry)}`}
                         onClick={() => toggleExpanded(key)}
-                        className="shrink-0 rounded-full border border-border/70 p-1.5 text-muted-foreground transition-colors hover:border-romantic/50 hover:text-foreground"
+                        className="shrink-0 border border-border/70 p-1.5 text-muted-foreground transition-colors hover:border-romantic/50 hover:text-foreground [border-radius:var(--edge-pill)]"
                       >
                         <ChevronDown
                           className={cn('h-4 w-4 transition-transform', isOpen && 'rotate-180')}
@@ -314,7 +314,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
                       {entry.records.map((record, index) => (
                         <dl
                           key={index}
-                          className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-secondary/40 p-2.5 text-xs sm:grid-cols-3"
+                          className="grid grid-cols-2 gap-x-4 gap-y-1 bg-secondary/40 p-2.5 text-xs sm:grid-cols-3 [border-radius:var(--edge-card-sm)]"
                         >
                           {Object.entries(record)
                             // Internal identifier: useful on the wire, never shown.
@@ -348,7 +348,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
             type="button"
             variant="outline"
             size="sm"
-            className="rounded-full"
+            className="[border-radius:var(--edge-pill)]"
             disabled={loadingMore}
             onClick={() => void fetchBoard(board?.entries.length ?? 0, true)}
           >

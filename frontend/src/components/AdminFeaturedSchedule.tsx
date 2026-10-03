@@ -187,7 +187,7 @@ export const AdminFeaturedSchedule = () => {
   const runs = useMemo(() => runsByDate(featured), [featured]);
 
   return (
-    <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+    <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
@@ -294,7 +294,7 @@ export const AdminFeaturedSchedule = () => {
                 return (
                 <li
                   key={entry.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3"
+                  className="flex items-center justify-between gap-3 [border-radius:var(--edge-card-sm)] border border-border/60 p-3"
                 >
                   <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
                     <span className="font-mono font-medium">{entry.game_date}</span>

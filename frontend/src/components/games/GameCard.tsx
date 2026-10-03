@@ -24,7 +24,7 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
   return (
     <Card
       className={cn(
-        'group flex flex-col rounded-2xl border-border/60 bg-card/70 backdrop-blur transition-all hover:-translate-y-1 hover:border-romantic/50 hover:shadow-[var(--shadow-romantic)]',
+        'group flex flex-col border-border/60 bg-card/70 backdrop-blur transition-all hover:-translate-y-1 hover:border-romantic/50 hover:shadow-[var(--shadow-romantic)] [border-radius:var(--edge-card)]',
         className,
       )}
     >
@@ -32,7 +32,7 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
         <div className="flex items-start justify-between gap-2">
           <span
             className={cn(
-              'flex h-12 w-12 items-center justify-center rounded-xl text-white transition-transform duration-300 group-hover:scale-105 sm:h-14 sm:w-14',
+              'flex h-12 w-12 items-center justify-center text-white transition-transform duration-300 group-hover:scale-105 sm:h-14 sm:w-14 [border-radius:var(--edge-icon)]',
               game.accent,
             )}
           >
@@ -58,7 +58,7 @@ export const GameCard = ({ game, onPlay, playLabel, className }: GameCardProps) 
           type="button"
           size="sm"
           variant="default"
-          className="w-full rounded-full font-semibold"
+          className="w-full font-semibold [border-radius:var(--edge-pill)]"
           onClick={() => onPlay?.(game)}
         >
           <Gamepad2 />

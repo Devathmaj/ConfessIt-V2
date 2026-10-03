@@ -40,7 +40,7 @@ export const Navigation = () => {
   // Nav states (color guide §6.2): quiet secondary text; active = visible surface +
   // readable text + marker icon + weight (never color alone). Transparent border
   // reserves the active border width so toggling never shifts layout.
-  const baseLinkClass = "flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-full border border-transparent transition-colors duration-200 whitespace-nowrap";
+  const baseLinkClass = "flex items-center gap-2 px-3 py-2 min-h-[44px] border border-transparent transition-colors duration-200 whitespace-nowrap [border-radius:var(--edge-pill)]";
   const activeLinkClass = "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] border-[var(--border)] font-semibold [&_svg]:text-[var(--nav-active-marker)]";
   const inactiveLinkClass = "text-foreground/70 hover:text-foreground hover:bg-secondary/50";
 
@@ -49,13 +49,13 @@ export const Navigation = () => {
     // It's fixed to the top of the viewport and has an entry animation.
     // Improved visibility on tablets and proper spacing to prevent overlap
     <nav className="fixed top-4 left-2 right-2 sm:left-4 sm:right-4 z-50 animate-fadeInUp" style={{ animation: 'fadeInUp 0.6s ease-out' }}>
-      <div className="relative max-w-7xl mx-auto rounded-xl border border-[var(--nav-border)] bg-[var(--nav-bg)] backdrop-blur-xl shadow-[var(--shadow-nav)]">
+      <div className="relative max-w-7xl mx-auto border border-[var(--nav-border)] bg-[var(--nav-bg)] backdrop-blur-xl shadow-[var(--shadow-nav)] [border-radius:var(--edge-card-sm)]">
         <div className="flex items-center justify-between h-16 px-3 sm:px-4 lg:px-6">
           
           {/* Left side: Brand/Logo */}
           <div className="flex-shrink-0">
             <NavLink to="/dashboard" className="flex items-center gap-2 group">
-              <div className="p-2 bg-[var(--brand)] rounded-lg group-hover:scale-110 transition-transform duration-300">
+              <div className="p-2 bg-[var(--brand)] group-hover:scale-110 transition-transform duration-300 [border-radius:var(--edge-icon)]">
                 <Heart className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
               </div>
               <span className="text-xl sm:text-2xl font-bold brand-wordmark transition-colors">
@@ -83,7 +83,7 @@ export const Navigation = () => {
             <ModeToggle />
             <NavLink
               to="/profile"
-              className={({ isActive }) => `p-2 rounded-full transition-colors duration-200 ${isActive ? activeLinkClass : inactiveLinkClass}`}
+              className={({ isActive }) => `p-2 transition-colors duration-200 [border-radius:var(--edge-pill)] ${isActive ? activeLinkClass : inactiveLinkClass}`}
               aria-label="Profile"
             >
               <User className="h-5 w-5" />
@@ -94,7 +94,7 @@ export const Navigation = () => {
                 onClick={handleLogout}
                 aria-label="Logout"
                 title="Logout"
-                className="p-2 rounded-full text-foreground/70 hover:text-destructive hover:bg-secondary/50 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="p-2 text-foreground/70 hover:text-destructive hover:bg-secondary/50 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring [border-radius:var(--edge-pill)]"
               >
                 <LogOut className="h-5 w-5" />
               </button>
@@ -106,7 +106,7 @@ export const Navigation = () => {
             <button
               onClick={() => setIsOpen(!isOpen)}
               type="button"
-              className="inline-flex items-center justify-center p-2 rounded-md text-foreground/80 hover:text-foreground hover:bg-secondary focus:outline-none"
+              className="inline-flex items-center justify-center p-2 text-foreground/80 hover:text-foreground hover:bg-secondary focus:outline-none [border-radius:var(--edge-control)]"
               aria-controls="mobile-menu"
               aria-expanded={isOpen}
             >

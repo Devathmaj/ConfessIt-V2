@@ -62,7 +62,7 @@ const navItems: NavItem[] = [
   { to: "/admin/profile-review", label: "Profiles", icon: UsersRound, capability: CAPABILITIES.USERS_REVIEW },
 ];
 
-const baseLink = "flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2 min-h-[44px] rounded-full border border-transparent text-sm transition-all duration-200";
+const baseLink = "flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-2 min-h-[44px] [border-radius:var(--edge-pill)] border border-transparent text-sm transition-all duration-200";
 const activeLink = "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] border-[var(--border)] font-semibold [&_svg]:text-[var(--nav-active-marker)]";
 const inactiveLink = "text-foreground/70 hover:text-foreground hover:bg-secondary/50";
 
@@ -123,9 +123,9 @@ export const AdminNavigation = () => {
 
   return (
     <nav className="fixed top-4 left-4 right-4 z-50">
-      <div className="mx-auto flex max-w-7xl items-center justify-between rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] px-4 py-3 shadow-[var(--shadow-nav)] backdrop-blur-xl">
+      <div className="mx-auto flex max-w-7xl items-center justify-between [border-radius:var(--edge-card)] border border-[var(--nav-border)] bg-[var(--nav-bg)] px-4 py-3 shadow-[var(--shadow-nav)] backdrop-blur-xl">
         <NavLink to={home} className="flex items-center gap-2 flex-shrink-0" onClick={() => setOpen(false)}>
-          <div className="rounded-xl bg-[var(--brand)] p-2">
+          <div className="[border-radius:var(--edge-icon)] bg-[var(--brand)] p-2">
             <Heart className="h-5 w-5 text-white" />
           </div>
           <div className="leading-tight">
@@ -154,7 +154,7 @@ export const AdminNavigation = () => {
               onClick={handleLogout}
               aria-label="Logout"
               title="Logout"
-              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-destructive transition-all duration-200 hover:bg-destructive/10"
+              className="flex items-center gap-2 [border-radius:var(--edge-card)] px-3 py-2 text-sm text-destructive transition-all duration-200 hover:bg-destructive/10"
             >
               <LogOut className="h-4 w-4" />
               Logout
@@ -165,7 +165,7 @@ export const AdminNavigation = () => {
         <div className="flex-shrink-0 xl:hidden">
           <button
             onClick={() => setOpen((prev) => !prev)}
-            className="flex items-center justify-center rounded-md p-2 text-foreground/70 hover:bg-secondary"
+            className="flex items-center justify-center [border-radius:var(--edge-control)] p-2 text-foreground/70 hover:bg-secondary"
           >
             <span className="sr-only">Toggle navigation</span>
             {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -174,12 +174,12 @@ export const AdminNavigation = () => {
       </div>
 
       {open && (
-        <div className="mt-2 rounded-2xl border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl xl:hidden">
+        <div className="mt-2 [border-radius:var(--edge-card)] border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl xl:hidden">
           <div className="flex flex-col gap-2">
             {visibleItems.map(renderLink)}
           </div>
           <div className="mt-4 space-y-2">
-            <div className="flex items-center justify-between rounded-xl border border-[var(--nav-border)] px-3 py-2">
+            <div className="flex items-center justify-between [border-radius:var(--edge-card-sm)] border border-[var(--nav-border)] px-3 py-2">
               <span className="text-sm font-medium text-foreground/80">Theme</span>
               <ModeToggle />
             </div>
@@ -187,7 +187,7 @@ export const AdminNavigation = () => {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-destructive transition-colors hover:bg-destructive/10"
+                className="flex w-full items-center gap-2 [border-radius:var(--edge-card-sm)] px-3 py-2 text-sm text-destructive transition-colors hover:bg-destructive/10"
               >
                 <LogOut className="h-4 w-4" />
                 Logout
