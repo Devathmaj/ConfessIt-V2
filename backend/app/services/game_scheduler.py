@@ -655,10 +655,11 @@ def _open_period(
         }
     if game_id == "plot-twist":
         # Plot Twist: a new global period pinning the newest published story
-        # package. Couples play that pinned version for the whole period;
-        # later publications never rewrite it. Per-couple sessions are
-        # created lazily on entering, so nothing rolls over. With no
-        # published package there is nothing playable to open.
+        # package. Couples play that pinned version for the whole period.
+        # (Publishing also rotates the event immediately onto the new package;
+        # this boundary path only matters at cadence rollover.) Per-couple
+        # sessions are created lazily on entering, so nothing rolls over.
+        # With no published package there is nothing playable to open.
         from ..db_models import PlotTwistPackageRecord
 
         published = session.scalar(

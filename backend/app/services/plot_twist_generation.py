@@ -23,11 +23,12 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
-from ..db_models import PlotTwistBlueprintRecord, PlotTwistPackageRecord
+from ..db_models import PlotTwistBlueprintRecord, PlotTwistGameRecord, PlotTwistPackageRecord
 from ..limits import (
     PLOT_TWIST_ENDING_TYPES,
     PLOT_TWIST_MAX_BATCH_SCENES,
     PLOT_TWIST_MAX_REPAIR_ATTEMPTS,
+    PLOT_TWIST_SESSION_LOCK_KEY,
 )
 from ..postgres import Database
 from . import plot_twist_validation
@@ -84,31 +85,18 @@ def _stage_a_system() -> str:
         "cooperative storytelling game for couples. Respond with a single JSON "
         "object honouring the provided schema and nothing else. Keep every id "
         "short, unique and machine-readable (lowercase letters, digits, "
-        "dashes). State variables must be bounded integers with "
-        "min/max/initial, or flag collections holding string tokens "
-        "(initial is a list of strings, never a number or boolean; flag "
-        "values elsewhere are short lowercase strings such as 'silent' or "
-        "'map', never 1/0/true/false). Endings need explicit "
-        "machine-evaluable conditions over declared variables, with distinct "
-        "priorities and mutually exclusive outcomes so different play styles "
-        "reach different endings. Reward tiers must be one of participation, "
-        "bronze, silver, gold. Two-sidedness is a hard rule, and the "
-        "constraints you write must say so: turns strictly alternate, so the "
-        "large majority of decision scenes belong to exactly one participant "
-        "(participant_one or participant_two in alternation, never the same "
-        "participant twice running); either/joint scenes are rare, genuinely "
-        "shared moments only. The main path is the spine of the story: list "
-        "its beats in order. Interchangeable slots are optional side "
-        "variations only -- never steps of the main path, never reused for "
-        "two different main beats. Also write these design constraints "
-        "verbatim into constraints so Stage B must honour them: "
-        "'main-path scenes use slot core only; opening and every terminal "
-        "scene use slot core', 'every decision scene offers at least two "
-        "choices leading to different next scenes (no unanimous convergence)', "
-        "'choices are tradeoffs with real costs, never one obviously-correct "
-        "good option versus an obviously-wrong bad option leading to the same "
-        "place', 'every choice carries a specific consequence_text distinct "
-        "within its scene', 'initial_state covers every declared variable'."
+        "dashes). State variables are bounded integers (min/max/initial) or "
+        "flag token lists (initial is a string list; flag values are short "
+        "lowercase strings, never 1/0/true/false). Endings need explicit "
+        "conditions over declared variables, distinct priorities, mutually "
+        "exclusive outcomes. Reward tiers: participation, bronze, silver, "
+        "gold. Constraints must state: turns strictly alternate "
+        "(participant_one/participant_two in alternation, never same twice; "
+        "either/joint only for rare shared moments); main-path beats use slot "
+        "core only (opening and terminals always core); interchangeable slots "
+        "are side alternatives for one moment, never sequential beats; "
+        "choices are tradeoffs with distinct targets, never polar good-vs-bad "
+        "converging on one scene; initial_state covers every variable."
     )
 
 
@@ -133,20 +121,13 @@ def _stage_a_user(config: GenerationConfig) -> str:
         + ("allowed; include optional discoveries." if config.allow_treasure else "not wanted.")
     )
     lines.append(
-        "Define the title, description, premise, narrative rules, characters, "
-        "world details, initial state variables with ranges, the main "
-        "narrative path as an ordered list of beats, interchangeable scene "
-        "slots with compatibility rules, required modules, encounter "
-        "categories, ending definitions with conditions and priorities, "
-        "reward tiers, and constraints later scenes must follow. "
-        "Slot discipline: the main path beats are always slot core; "
-        "interchangeable slots each hold alternative versions of ONE side "
-        "moment, never two sequential main beats sharing one slot. "
-        "State discipline: every declared variable needs an initial within "
-        "range (flag initials are lists of strings); ending conditions must "
-        "be jointly achievable through play (e.g. trust thresholds within "
-        "reach of the planned increments) and mutually exclusive across "
-        "endings."
+        "Define title, description, premise, rules, characters, world, state "
+        "vars with ranges/initials, ordered main path, slot rules, modules, "
+        "encounter categories, endings with conditions/priorities, reward "
+        "tiers, constraints. Main path is slot core; side slots are "
+        "alternatives for one moment, never sequential beats. Every var needs "
+        "an in-range initial (flags: string lists); endings achievable and "
+        "mutually exclusive."
     )
     return "\n".join(lines)
 
@@ -154,49 +135,23 @@ def _stage_a_user(config: GenerationConfig) -> str:
 def _stage_b_system() -> str:
     return (
         "You write complete playable Plot Twist story packages. Respond with "
-        "a single JSON object honouring the provided schema and nothing "
-        "else -- no prose, no summaries, no markdown. Shape rules that always "
-        "hold: `scenes` is an array of full scene objects (never strings, "
-        "never ids); every scene needs a unique id, unique title, unique "
-        "narrative_text (2-4 vivid sentences grounded in the blueprint world, "
-        "never generic filler such as 'A quiet moment where trust can deepen', "
-        "never reused across scenes), type (opening, encounter, "
-        "connector, discovery or ending), actor "
-        "(participant_one, participant_two, either or joint), slot, "
-        "compatibility tags, choices with safe state changes (set, "
-        "increment, decrement, add_flag, remove_flag over declared variables "
-        "only -- flag values are short lowercase strings, never numbers or "
-        "booleans), and valid next_scene_id transitions naming another scene's "
-        "id. Non-terminal scenes need at least two choices; terminal scenes "
-        "carry an ending_id and no choices. `endings` is an array of full "
-        "ending objects with id, type, title, narrative, conditions, "
-        "priority, rewards, success and reward_tier. Never invent variables, "
-        "tags, endings or tiers outside the blueprint and schema. "
-        "Slot discipline is a hard rule: the opening scene and every terminal "
-        "scene use slot core; every main-path decision scene uses slot core; "
-        "a non-core slot holds only interchangeable alternatives for ONE side "
-        "moment -- never two sequential story beats sharing one slot, never "
-        "the opening. Two-sidedness "
-        "is a hard rule: the large majority of decision scenes belong strictly "
-        "to participant_one or participant_two in alternation along every path "
-        "(never the same participant twice running); either/joint only for rare "
-        "genuinely shared moments. Every loop of scenes must offer a choice "
-        "leading out toward an ending, or the package will be rejected. "
-        "Choice design is a hard rule and the most common rejection reason: "
-        "every decision scene must branch -- its choices lead to DIFFERENT "
-        "next_scene_id targets, never all converging on one scene. Choices "
-        "are dilemmas with real tradeoffs (trust versus secrets, safety "
-        "versus treasure, speed versus care), never a polar good-versus-bad "
-        "pair where one option is conventionally correct ('share/open/solve/"
-        "reassure/join' gaining trust) and the other is conventionally wrong "
-        "('ignore/leave/give up/stay/reject' losing trust) leading to the same "
-        "place. Same-target choices are rejected. Each choice needs its own "
-        "specific consequence_text (what this choice costs and changes, "
-        "distinct within the scene, never generic like 'You follow the trail, "
-        "curiosity drives you'). State changes must differ across the choices "
-        "of a scene and matter: gate later choices and endings on them, keep "
-        "initial_state complete for every declared variable, and make each "
-        "ending reachable by a distinct play style."
+        "a single JSON object honouring the provided schema and nothing else. "
+        "`scenes` holds full scene objects (never ids): unique id/title, "
+        "vivid 2-4 sentence narrative_text grounded in the blueprint (no "
+        "filler, no reuse), type, actor, slot, tags, choices with safe state "
+        "changes over declared variables only (flag values are short strings, "
+        "never numbers/booleans), valid next_scene_id targets. Terminals carry "
+        "ending_id and no choices. Never invent variables, tags, endings, tiers. "
+        "Slots: opening, terminals and main-path scenes are slot core; side "
+        "slots hold alternatives for one moment, never sequential beats. "
+        "Turns alternate participant_one/participant_two along every path "
+        "(never same twice); either/joint rarely. Loops must offer an exit to "
+        "an ending. Branching is the top rejection reason: multi-choice scenes "
+        "must use DIFFERENT next_scene_id targets, never unanimous convergence; "
+        "choices are tradeoffs (trust vs secrets/safety vs treasure), never polar "
+        "good-vs-bad to the same scene. Each choice needs distinct specific "
+        "consequence_text. State changes differ per choice and gate endings; "
+        "initial_state covers every variable; each ending fits a play style."
     )
 
 
@@ -208,20 +163,12 @@ def _stage_b_user(blueprint: dict, config: GenerationConfig) -> str:
         f"(story_id: {blueprint.get('title', 'plot-twist-story')}).\n\n"
         f"BLUEPRINT:\n{_json.dumps(blueprint)}\n\n"
         f"Difficulty: {config.difficulty}. "
-        f"Aim for about {config.decision_count} decision points and "
-        f"{config.interchangeable_count} interchangeable encounters within "
-        f"{config.max_scenes} scenes. Include the opening scene (slot core), "
-        "the core story path in slot core only, decision scenes with real "
-        "branches, interchangeable modules as side alternatives (one moment "
-        "per slot, never sequential beats sharing a slot), optional "
-        "discoveries, connectors, specific consequence_text and divergent "
-        "state changes for every choice, explicit achievable ending "
-        "conditions, reward definitions and compatibility rules. "
-        "Before returning, self-check: no two choices of one scene share a "
-        "next_scene_id; no good-vs-bad polar pair leading to the same scene; "
-        "no repeated titles or narrative_text; initial_state sets every "
-        "declared variable (flags as string lists); flag values are strings; "
-        "each ending is reachable by a different play style."
+        f"Aim for about {config.decision_count} decisions and "
+        f"{config.interchangeable_count} side encounters within "
+        f"{config.max_scenes} scenes (opening core, core path core, side slots "
+        "one moment each). Self-check: distinct targets per scene, no polar "
+        "same-target pair, unique titles, complete initial_state, string flag "
+        "values, distinct reachable endings."
     )
 
 
@@ -261,17 +208,10 @@ def _batch_user(blueprint: dict, slot: str, existing_summary: str) -> str:
     import json as _json
 
     return (
-        f"Generate interchangeable scenes for slot {slot!r} of this approved "
-        "blueprint. These are alternative versions of ONE side moment, not "
-        "sequential story beats: they must be mutually substitutable, with "
-        "unique titles and narrative_text that do not duplicate any existing "
-        "scene. Return a single JSON object with the slot name and its "
-        "scenes, where every scene is a full scene object (id, type, title, "
-        "narrative_text, actor, slot, tags, choices with valid "
-        "next_scene_id transitions and divergent targets) -- never a string "
-        "or an id. Each scene still branches (choices lead to different next "
-        "scenes) and still offers tradeoffs, never a polar good-vs-bad pair "
-        "converging on one scene.\n\n"
+        f"Generate interchangeable scenes for slot {slot!r}: alternatives for "
+        "ONE side moment, mutually substitutable, unique titles/narratives. "
+        "Return one JSON object with slot and full scene objects (choices use "
+        "distinct targets, tradeoffs not polar same-target pairs).\n\n"
         f"BLUEPRINT (essentials):\n{_json.dumps(_minimized_blueprint(blueprint))}\n\n"
         f"EXISTING SCENES (summaries, do not duplicate):\n{existing_summary}"
     )
@@ -730,8 +670,122 @@ def regenerate_scene(
     return get_package(db, package_id)
 
 
+def _rotate_event_to_package(db: Database, package_id: str) -> dict:
+    """End the live Plot Twist period and open a fresh one on ``package_id``.
+
+    Terminate-then-create, like a Wordle/Anagram Update: the current global
+    row (if any) is stamped ended and a new active row pinned to the just
+    published package opens for today under the game's reset cadence. An
+    update at 23:58 does not buy a fresh 24 hours -- the period still runs
+    under the cadence.
+
+    Per-couple sessions belong to their global id, so every couple starts
+    fresh on the new story (created lazily on entering); unfinished sessions
+    of the ended period stay unfinished and score nothing at finalization
+    (only ``completed`` sessions rank). The ended period's awards finalize
+    now rather than waiting for the next reset run, as with wordle updates.
+    """
+    import uuid as _uuid_mod
+    from sqlalchemy import text as _text
+    from sqlalchemy.exc import IntegrityError
+
+    from . import game_periods
+    from .game_configs import game_lock_key, get_config
+
+    try:
+        with db.sessions.begin() as session:
+            # ENG-001 order: lifecycle lock before the pair lock, as in
+            # gameplay submits, so a publish racing a choice cannot deadlock
+            # it and cannot leave two live global rows.
+            session.execute(
+                _text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": game_lock_key("plot-twist")},
+            )
+            session.execute(
+                _text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": PLOT_TWIST_SESSION_LOCK_KEY},
+            )
+            moment = _now()
+            today = moment.date()
+            config = get_config(session, "plot-twist")
+            live = session.scalars(
+                select(PlotTwistGameRecord).where(
+                    PlotTwistGameRecord.status.in_(("active", "pending"))
+                )
+            ).all()
+            for row in live:
+                row.status = "ended"
+                row.ended_at = moment
+            start, end = game_periods.period_for_start(today, config.reset_cadence)
+            opened = PlotTwistGameRecord(
+                game_date=today,
+                status="active",
+                period_start_date=start,
+                period_end_date=end,
+                story_package_id=package_id,
+                seed=_uuid_mod.uuid4().hex,
+                started_at=moment,
+                created_by="publish",
+            )
+            session.add(opened)
+            session.flush()
+            opened_id = str(opened.id)
+            from . import league_finalization
+
+            league_finalization.snapshot_opened_safely(
+                session, game_id="plot-twist", opportunity_id=opened_id
+            )
+            summary = {
+                "game_id": "plot-twist",
+                "action": "rotated",
+                "session_id": opened_id,
+                "story_package_id": package_id,
+                "period_start": start.isoformat(),
+                "period_end": end.isoformat(),
+            }
+    except IntegrityError as exc:
+        # A concurrent publish won the insert past the lock and the partial
+        # unique index refused the duplicate: the package is still published,
+        # so settle on the surviving live row instead of failing the publish.
+        from psycopg.errors import UniqueViolation
+
+        if not isinstance(exc.orig, UniqueViolation):
+            raise
+        with db.sessions() as session:
+            winner = session.scalar(
+                select(PlotTwistGameRecord)
+                .where(PlotTwistGameRecord.status.in_(("active", "pending")))
+                .limit(1)
+            )
+            return {
+                "game_id": "plot-twist",
+                "action": "current",
+                "session_id": str(winner.id) if winner is not None else None,
+            }
+    # The rotation deliberately closed the previous period, so its awards
+    # finalize now rather than waiting for the next reset run. Best-effort:
+    # the due scan retries anything this misses on its next pass.
+    try:
+        from . import league_finalization
+
+        league_finalization.finalize_game_safely(db, "plot-twist")
+    except Exception as exc:
+        logger.warning("Plot Twist rotation could not finalize the ended period: %s", exc)
+    logger.info(
+        "Plot Twist publish rotated the event",
+        extra={"package_id": package_id, "scheduler": summary.get("action")},
+    )
+    return summary
+
+
 def publish_package(db: Database, package_id: str) -> dict:
-    """Publish a validated package version: the immutable version sessions pin."""
+    """Publish a validated package version and rotate the live event onto it.
+
+    Publishing ends the current global period (if any) and opens a fresh one
+    pinned to this package, like a Wordle/Anagram Update: couples start the
+    new story from scratch and unfinished playthroughs of the old story stay
+    unfinished, scoring nothing. Retrying a publish is safe and idempotent.
+    """
     with db.sessions() as session:
         row = session.get(PlotTwistPackageRecord, package_id)
         if row is None:
@@ -765,20 +819,12 @@ def publish_package(db: Database, package_id: str) -> dict:
         row.validation_errors = []
         row.published_at = _now()
     published = get_package(db, package_id)
-    # Publishing opens the event: the scheduler pins the newest published
-    # version into a live period (or leaves the current one playing its own
-    # pinned version). Best-effort -- the reset loop and the manual trigger
-    # are the backstops -- so a scheduler fault never fails a good publish.
-    try:
-        from . import game_scheduler
-
-        summary = game_scheduler.ensure_single_game(db, "plot-twist")
-        logger.info(
-            "Plot Twist publish opened the event",
-            extra={"package_id": package_id, "scheduler": summary.get("action")},
-        )
-    except Exception as exc:
-        logger.warning("Plot Twist publish could not open the event: %s", exc)
+    # Publishing rotates the event onto this package (terminate-then-create).
+    # Rotation errors propagate -- unlike a scheduler fault, a failed rotation
+    # would leave the new story unpublished-in-effect -- and retrying the
+    # publish is safe: the package stays published and the rotation converges
+    # on the surviving live row.
+    _rotate_event_to_package(db, package_id)
     return published
 
 

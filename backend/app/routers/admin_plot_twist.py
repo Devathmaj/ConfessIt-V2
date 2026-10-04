@@ -163,7 +163,12 @@ def publish_package(
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
 ) -> PlotTwistPackageView:
-    """Publish a validated package version; sessions pin this version."""
+    """Publish a validated package version and rotate the live event onto it.
+
+    Ends the current global period (if any) and opens a fresh one pinned to
+    this package, like a Wordle/Anagram Update: couples start the new story
+    from scratch and unfinished playthroughs score nothing.
+    """
     published = plot_twist_generation.publish_package(db, package_id)
     return PlotTwistPackageView(**published)
 

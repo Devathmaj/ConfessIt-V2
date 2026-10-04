@@ -498,6 +498,76 @@ def test_provider_selection_is_config_only():
         select_provider(LLMConfig(base_url="https://x/v1", model="m", provider="watson"))
 
 
+def test_groq_sampling_params_follow_model():
+    from app.services.llm_client import _groq_sampling_params
+
+    assert _groq_sampling_params("qwen/qwen3.8-27b") == {
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "reasoning_effort": "default",
+    }
+    assert _groq_sampling_params("QWEN/qwen3.8-27b ") == {
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "reasoning_effort": "default",
+    }
+    assert _groq_sampling_params("openai/gpt-oss-20b") == {
+        "reasoning_effort": "medium"
+    }
+    assert _groq_sampling_params(None) == {"reasoning_effort": "medium"}
+
+
+def test_groq_qwen_create_uses_qwen_decoding_params(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from app.services import llm_client
+
+    calls: dict = {}
+
+    class _Message:
+        content = '{"ok": true}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Groq:
+        def __init__(self, **kwargs):
+            calls["client_kwargs"] = kwargs
+
+        chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "groq", SimpleNamespace(Groq=_Groq))
+    config = llm_client.LLMConfig(
+        base_url="https://api.groq.com/openai/v1",
+        model="qwen/qwen3.8-27b",
+        provider="groq",
+        api_key="test-key",
+    )
+    payload, used_fallback = llm_client._generate_via_groq(
+        config, "system", "user", {"type": "object"}, "test_schema",
+        "op-1", 30, 2048,
+    )
+    assert payload == {"ok": True}
+    assert used_fallback is False
+    assert calls["model"] == "qwen/qwen3.8-27b"
+    assert calls["temperature"] == 0.6
+    assert calls["top_p"] == 0.95
+    assert calls["reasoning_effort"] == "default"
+    assert calls["max_completion_tokens"] == 2048
+
+
 def test_strict_schema_transform_satisfies_strict_mode():
     from app.services.plot_twist_schemas import (
         package_json_schema,
@@ -1115,7 +1185,17 @@ def test_publish_opens_the_event_immediately(db):
         ).all()
         assert len(live) == 1
         assert str(live[0].story_package_id) == v2_id
-    # Publishing v3 while the period is live keeps v2 playing undisturbed.
+    # Publishing v3 while the period is live rotates onto v3 immediately,
+    # wordle-style: the v2 period ends and a fresh period pinned to v3 opens.
+    v2_game_id = None
+    with db.sessions() as session:
+        v2_game_id = str(
+            session.scalars(
+                select(PlotTwistGameRecord).where(
+                    PlotTwistGameRecord.status.in_(("active", "pending"))
+                )
+            ).one().id
+        )
     v3_id = _stage_ready_version(db, seed, 3)
     plot_twist_generation.publish_package(db, v3_id)
     with db.sessions() as session:
@@ -1125,7 +1205,66 @@ def test_publish_opens_the_event_immediately(db):
             )
         ).all()
         assert len(live) == 1
+        assert str(live[0].story_package_id) == v3_id
+        assert str(live[0].id) != v2_game_id
+        assert session.get(PlotTwistGameRecord, v2_game_id).status == "ended"
+
+
+def test_publish_rotates_mid_story_and_unfinished_scores_nothing(http, db, players):
+    # A couple one decision into the story: publishing ends their period and
+    # opens a fresh one on the new package. They start over; the abandoned
+    # playthrough finalizes with zero awards instead of lingering.
+    seed = seed_published(db)
+    client_a, client_b = pair(db, http, players)
+    state_a = client_a.get("/games/plot-twist").json()
+    assert state_a["stage"] == "awaiting_you"
+    moved = client_a.post(
+        "/games/plot-twist/choices",
+        json={"choice_id": "c_loading", "state_version": state_a["state_version"]},
+    )
+    assert moved.status_code == 200, moved.text
+    with db.sessions() as session:
+        old_game_id = str(
+            session.scalars(
+                select(PlotTwistGameRecord).where(
+                    PlotTwistGameRecord.status.in_(("active", "pending"))
+                )
+            ).one().id
+        )
+    v2_id = _stage_ready_version(db, seed, 2)
+    plot_twist_generation.publish_package(db, v2_id)
+    with db.sessions() as session:
+        assert session.get(PlotTwistGameRecord, old_game_id).status == "ended"
+        live = session.scalars(
+            select(PlotTwistGameRecord).where(
+                PlotTwistGameRecord.status.in_(("active", "pending"))
+            )
+        ).all()
+        assert len(live) == 1
         assert str(live[0].story_package_id) == v2_id
+    # No session under the new period yet: the pair keeps each other and
+    # re-enters through the normal start, with a clean history.
+    fresh = client_a.get("/games/plot-twist").json()
+    assert fresh["stage"] == "selecting_partner"
+    assert fresh["partner"] is not None
+    assert fresh.get("session_id") is None
+    started = client_a.post("/games/plot-twist/start")
+    assert started.status_code == 200, started.text
+    assert started.json()["stage"] == "awaiting_you"
+    assert started.json()["decisions_made"] == 0
+    # The abandoned story settles with no awards: unfinished couples score 0.
+    result = league_finalization.finalize_opportunity(db, "plot-twist", old_game_id)
+    assert result["awards"] == 0
+    with db.sessions() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(GameScoreAwardRecord).where(
+                    GameScoreAwardRecord.game_id == "plot-twist",
+                    GameScoreAwardRecord.opportunity_id == old_game_id,
+                )
+            )
+            == 0
+        )
 
 
 def test_admin_blueprint_requires_approval_before_package(http, db, players):

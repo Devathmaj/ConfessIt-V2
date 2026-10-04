@@ -19,8 +19,10 @@ Provider-specific differences that require configuration changes (not code):
 * Groq serves Structured Outputs (strict JSON Schema) through its own SDK
   for the current models; the same strict payload sent through a generic
   OpenAI client is refused, so the Groq SDK is the Groq path. Reasoning
-  models take ``reasoning_effort="medium"``. Set ``LLM_MODEL`` to the Groq
-  model id (initial development: ``openai/gpt-oss-120b``).
+  models take ``reasoning_effort="medium"``, except ``qwen/qwen3.8-27b``
+  (and Qwen chat models generally), which take ``temperature=0.6``,
+  ``top_p=0.95`` and ``reasoning_effort="default"``. Set ``LLM_MODEL`` to
+  the Groq model id (initial development: ``openai/gpt-oss-120b``).
 * Microsoft Foundry serves an OpenAI-compatible chat-completions surface,
   but the base URL is deployment-specific
   (``https://<resource>.openai.azure.com/openai/v1`` or the Foundry
@@ -52,6 +54,24 @@ logger = get_logger(__name__)
 # documented usage. Fixed, not configurable: story determinism comes from
 # the schema and validation, not from sampling knobs.
 _GROQ_REASONING_EFFORT = "medium"
+
+
+def _groq_sampling_params(model: Optional[str]) -> dict[str, Any]:
+    """Decoding params for one Groq model id.
+
+    ``qwen/qwen3.8-27b`` (and Qwen chat models generally) use their documented
+    setup -- temperature 0.6, top_p 0.95, reasoning_effort "default" -- while
+    gpt-oss reasoning models take reasoning_effort "medium" with provider
+    defaults otherwise. Token budget and timeout always come from the caller,
+    never from here: a fixed 2048-token cap would truncate story packages.
+    Streaming is likewise not used: generation must return one parsed JSON
+    document for local validation, so the equivalent non-streaming call is
+    made with the same sampling params.
+    """
+    name = (model or "").strip().lower()
+    if name == "qwen/qwen3.8-27b" or name.startswith("qwen/"):
+        return {"temperature": 0.6, "top_p": 0.95, "reasoning_effort": "default"}
+    return {"reasoning_effort": _GROQ_REASONING_EFFORT}
 
 # Strict-mode attempts per request. Content mismatches (the model emitting
 # JSON that fails the enforced schema) are stochastic: the same prompt
@@ -125,9 +145,19 @@ def _is_content_mismatch(exc: Exception) -> bool:
     fallback. Content mismatches mean the model fumbled one document --
     retrying the same strict request usually succeeds, and the fallback
     below still applies when retries run out.
+
+    Matched broadly on purpose: SDK versions render the same Groq 400
+    differently (some include the ``json_validate_failed`` code, others only
+    the ``Failed to validate JSON ... failed_generation`` message). Any
+    variant must retry/fall back, never surface as a caller-facing 400.
     """
     message = str(exc).lower()
-    return "json_validate_failed" in message or "does not match the expected schema" in message
+    return (
+        "json_validate_failed" in message
+        or "does not match the expected schema" in message
+        or "failed to validate json" in message
+        or "failed_generation" in message
+    )
 
 
 def _is_schema_unsupported(exc: Exception) -> bool:
@@ -266,6 +296,7 @@ def _generate_via_groq(
     if base_url.lower().endswith("/openai/v1"):
         base_url = base_url[: -len("/openai/v1")]
     client = Groq(api_key=config.api_key, base_url=base_url or None)
+    sampling = _groq_sampling_params(config.model)
     base_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -276,9 +307,9 @@ def _generate_via_groq(
                 model=config.model,
                 messages=base_messages,  # type: ignore[arg-type]
                 response_format=_strict_format(schema_name, json_schema),  # type: ignore[arg-type]
-                reasoning_effort=_GROQ_REASONING_EFFORT,  # type: ignore[arg-type]
                 max_completion_tokens=max_tokens,
                 timeout=timeout_s,
+                **sampling,  # type: ignore[arg-type]
             )
             return _parse_json_content(response.choices[0].message.content), False
         except LLMError:
@@ -308,9 +339,9 @@ def _generate_via_groq(
             model=config.model,
             messages=fallback_messages,  # type: ignore[arg-type]
             response_format={"type": "json_object"},  # type: ignore[arg-type]
-            reasoning_effort=_GROQ_REASONING_EFFORT,  # type: ignore[arg-type]
             max_completion_tokens=max_tokens,
             timeout=timeout_s,
+            **sampling,  # type: ignore[arg-type]
         )
     except Exception as exc:
         raise _classify_provider_error(exc) from exc

@@ -2815,10 +2815,12 @@ class PlotTwistGameRecord(Base):
     """One Plot Twist global period: the calendar window couples play in.
 
     The row pins the published story package version in force when the
-    period opened (``story_package_id``): later publications never rewrite
-    it, so every couple in the period plays the same version. Sessions are
-    opened by the reset loop under the game's own cadence exactly like the
-    other period games; with no published package the loop opens nothing.
+    period opened (``story_package_id``), so every couple in the period
+    plays the same version. Publishing a package rotates the event
+    (terminate-then-create, like a Wordle/Anagram Update): the live row ends
+    and a fresh row pinned to the new package opens. The reset loop also
+    opens periods under the game's own cadence; with no published package
+    the loop opens nothing.
     """
 
     __tablename__ = "plot_twist_games"
@@ -2854,8 +2856,10 @@ class PlotTwistSessionRecord(Base):
     """One couple's playthrough of a pinned story package version.
 
     ``story_package_id`` is denormalized from the global game at creation so
-    the session keeps playing its original version even after newer versions
-    publish. ``selected_scenes`` is the deterministic module selection for
+    the session's history and scoring stay bound to the version it played:
+    publishing ends the live period and opens a fresh one, so couples start
+    the new story from scratch while unfinished sessions of the ended period
+    stay unfinished and score nothing. ``selected_scenes`` is the deterministic module selection for
     this couple (ordered scene ids plus the seed), persisted before the first
     decision and never reshuffled. ``state`` is the current variable snapshot;
     ``current_scene_id`` plus ``assigned_actor`` name whose turn it is.
