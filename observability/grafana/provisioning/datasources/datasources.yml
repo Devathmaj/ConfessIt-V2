@@ -15,10 +15,15 @@
 # secret -- it is already written literally in otel-collector-config.yml and
 # promtail-config.yml. The Prometheus password is never written here either: it
 # arrives through the `$__file{}` pointer below, which Grafana resolves from the
-# mounted gitignored observability/.rw-password at start-up. (The doubled `$$`
-# escapes the provisioning loader's own environment variable expansion, so the
-# pointer survives into the datasource as a literal -- same mechanism as the
-# `$${__value.raw}` below.) Grafana's own admin login stays in the root .env
+# mounted gitignored observability/.rw-password at start-up. Single `$`, not `$$`:
+# Grafana's provisioning expander treats an unescaped `$__file{path}` as a file
+# macro and reads the file; a doubled `$$` escapes to a literal `$`, which would
+# store the text `$__file{...}` itself as the password and every query would keep
+# failing authentication (Prometheus answers 401, Grafana surfaces 400) no matter
+# how often the container restarts. (The doubled `$$` in `$${__value.raw}` below
+# is the opposite case on purpose: that placeholder must survive provisioning as
+# a literal for the frontend's template engine to fill in at query time.)
+# Grafana's own admin login stays in the root .env
 # via GF_SECURITY_ADMIN_*.
 apiVersion: 1
 
@@ -47,7 +52,7 @@ datasources:
       timeInterval: 15s
     # The password is read from the mounted file, not tracked here.
     secureJsonData:
-      basicAuthPassword: $$__file{/etc/grafana/rw-password}
+      basicAuthPassword: $__file{/etc/grafana/rw-password}
     editable: false
 
   - name: Loki

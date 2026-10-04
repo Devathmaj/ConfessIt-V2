@@ -389,8 +389,13 @@ class Settings(BaseSettings):
 
     # --- LLM ---
     #
-    # Loaded here so deployments that inject these variables boot instead of
-    # failing on `extra="forbid"`. Nothing reads them yet.
+    # Story-generation provider configuration (Plot Twist pre-publication
+    # generation only; gameplay never touches the provider). ``LLM_PROVIDER``
+    # selects the SDK: ``groq`` for Groq's own SDK (Strict Structured
+    # Outputs), ``openai`` for any OpenAI-compatible surface such as
+    # Microsoft Foundry, ``auto`` (the default) picks Groq when the base URL
+    # names it. Switching providers is configuration, never a code change.
+    LLM_PROVIDER: str = "auto"
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str | None = None
     LLM_MODEL: str | None = None

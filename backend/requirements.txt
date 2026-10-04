@@ -13,10 +13,12 @@ httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
 redis==8.1.0
-# Plot Twist story generation talks to an OpenAI-compatible chat-completions
-# surface (Groq today, Microsoft Foundry later) through this SDK; gameplay
-# never touches it. Pinned like the rest of the tree.
+# Plot Twist story generation talks to the configured provider through one of
+# these SDKs: Groq's own SDK when LLM_PROVIDER is groq (Strict Structured
+# Outputs), the OpenAI SDK for OpenAI-compatible surfaces such as Microsoft
+# Foundry. Gameplay never touches either. Pinned like the rest of the tree.
 openai==1.99.5
+groq==1.7.0
 # websockets removed: never imported -- WebSockets are served by Starlette/FastAPI
 # (see routers/messages.py websocket_endpoint), so the pin was dead weight.
 opentelemetry-api==1.45.1

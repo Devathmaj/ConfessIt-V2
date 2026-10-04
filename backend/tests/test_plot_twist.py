@@ -484,6 +484,87 @@ def test_provider_failure_is_admin_safe_and_unpublished(db, monkeypatch):
         assert "gsk" not in str(row.validation_errors).lower()
 
 
+def test_provider_selection_is_config_only():
+    from app.services.llm_client import LLMConfig, select_provider
+
+    groq = LLMConfig(base_url="https://api.groq.com/openai/v1", model="m", provider="auto")
+    assert select_provider(groq) == "groq"
+    assert select_provider(LLMConfig(base_url="https://x.openai.azure.com/openai/v1", model="d", provider="auto")) == "openai"
+    assert select_provider(LLMConfig(base_url="https://api.groq.com/openai/v1", model="m", provider="openai")) == "openai"
+    assert select_provider(LLMConfig(base_url="https://other/v1", model="m", provider="groq")) == "groq"
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        select_provider(LLMConfig(base_url="https://x/v1", model="m", provider="watson"))
+
+
+def test_strict_schema_transform_satisfies_strict_mode():
+    from app.services.plot_twist_schemas import (
+        package_json_schema,
+        scene_batch_json_schema,
+        blueprint_json_schema,
+    )
+
+    def check(node):
+        if isinstance(node, list):
+            for item in node:
+                check(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for choice in node.get("anyOf") or []:
+            assert not (isinstance(choice, dict) and choice.get("type") == "null"), node
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            assert set(node.get("required") or []) >= set(properties), node
+            for value in properties.values():
+                check(value)
+        if node.get("type") == "object" or "properties" in node:
+            assert node.get("additionalProperties") is False, node
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                check(value)
+
+    for schema_fn in (blueprint_json_schema, package_json_schema, scene_batch_json_schema):
+        check(schema_fn())
+
+
+def test_rate_limit_detection_covers_groq_tpm_refusals():
+    from app.services import llm_client
+
+    class FakeResponse:
+        headers = {"retry-after-ms": "1500"}
+
+    class GroqTpmError(Exception):
+        def __init__(self):
+            super().__init__(
+                "Error code: 413 - {'type': 'tokens', 'code': 'rate_limit_exceeded', "
+                "'message': 'Request too large ... on tokens per minute (TPM): Limit 8000'}"
+            )
+            self.response = FakeResponse()
+
+    assert llm_client._is_rate_limited(GroqTpmError()) is True
+    assert llm_client._is_rate_limited(TimeoutError("timed out")) is False
+    assert llm_client._retry_after_seconds(GroqTpmError()) == 1.5
+    assert llm_client._retry_after_seconds(RuntimeError("nope")) is None
+    classified = llm_client._classify_provider_error(GroqTpmError())
+    assert classified.code == "rate_limited"
+    assert "gsk" not in classified.detail.lower()
+
+
+def test_minimized_blueprint_drops_prose_but_keeps_contract():
+    from app.services.plot_twist_generation import _minimized_blueprint
+
+    minimized = _minimized_blueprint(BLUEPRINT)
+    assert minimized["title"] == BLUEPRINT["title"]
+    assert minimized["state_vars"][0]["name"] == "courage"
+    assert "min_value" in minimized["state_vars"][0]
+    assert minimized["slots"][0]["name"] == "side"
+    assert minimized["endings"][0]["id"] == "e_escape"
+    dumped = str(minimized)
+    assert "A one-night auditorium escape." not in dumped
+
+
 def test_llm_error_classification():
     from app.services.llm_client import _classify_provider_error
 

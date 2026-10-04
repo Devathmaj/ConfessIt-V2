@@ -213,19 +213,54 @@ class SceneBatchDef(BaseModel):
     )
 
 
+def _strict_node(node: Any) -> Any:
+    """Rewrite one schema node for strict Structured Outputs.
+
+    Strict mode requires ``required`` to name every property, and refuses
+    ``anyOf`` optionality: ``Optional[X]`` (``anyOf: [X, null]``) collapses
+    to ``X``. Local Pydantic validation still enforces the real models
+    afterwards, so this only tightens what the provider is asked to emit.
+    """
+    if isinstance(node, list):
+        return [_strict_node(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    choices = node.get("anyOf")
+    if isinstance(choices, list):
+        non_null = [c for c in choices if not (isinstance(c, dict) and c.get("type") == "null")]
+        if len(non_null) == len(choices) - 1 and len(non_null) == 1:
+            return _strict_node(non_null[0])
+    out = {
+        key: (_strict_node(value) if isinstance(value, (dict, list)) else value)
+        for key, value in node.items()
+    }
+    if isinstance(out.get("properties"), dict):
+        out["required"] = sorted(out["properties"].keys())
+    if out.get("type") == "object" or "properties" in out:
+        out["additionalProperties"] = False
+    return out
+
+
+def strict_schema_for(model: Any) -> dict:
+    """The provider-facing strict JSON Schema for a Pydantic model."""
+    import copy
+
+    return _strict_node(copy.deepcopy(model.model_json_schema()))
+
+
 def blueprint_json_schema() -> dict:
     """The strict JSON Schema sent to the provider for Stage A."""
-    return BlueprintDef.model_json_schema()
+    return strict_schema_for(BlueprintDef)
 
 
 def package_json_schema() -> dict:
     """The strict JSON Schema sent to the provider for Stage B."""
-    return StoryPackageDef.model_json_schema()
+    return strict_schema_for(StoryPackageDef)
 
 
 def scene_batch_json_schema() -> dict:
     """The strict JSON Schema for interchangeable batch requests."""
-    return SceneBatchDef.model_json_schema()
+    return strict_schema_for(SceneBatchDef)
 
 
 # Re-export vocabularies so prompts and validators share one source.
@@ -251,4 +286,5 @@ __all__ = [
     "blueprint_json_schema",
     "package_json_schema",
     "scene_batch_json_schema",
+    "strict_schema_for",
 ]

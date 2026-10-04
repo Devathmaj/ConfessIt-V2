@@ -122,14 +122,19 @@ def _stage_b_system() -> str:
     return (
         "You write complete playable Plot Twist story packages. Respond with "
         "a single JSON object honouring the provided schema and nothing "
-        "else. Every scene needs an id, type, title, narrative text, actor "
+        "else -- no prose, no summaries, no markdown. Shape rules that always "
+        "hold: `scenes` is an array of full scene objects (never strings, "
+        "never ids); every scene needs an id, type (opening, encounter, "
+        "connector, discovery or ending), title, narrative_text, actor "
         "(participant_one, participant_two, either or joint), slot, "
         "compatibility tags, choices with safe state changes (set, "
         "increment, decrement, add_flag, remove_flag over declared variables "
-        "only), and valid next_scene_id transitions. Non-terminal scenes "
-        "need at least one choice; terminal scenes carry an ending_id and no "
-        "choices. Never invent variables, tags, endings or tiers outside the "
-        "blueprint and schema."
+        "only), and valid next_scene_id transitions naming another scene's "
+        "id. Non-terminal scenes need at least one choice; terminal scenes "
+        "carry an ending_id and no choices. `endings` is an array of full "
+        "ending objects with id, type, title, narrative, conditions, "
+        "priority, rewards, success and reward_tier. Never invent variables, "
+        "tags, endings or tiers outside the blueprint and schema."
     )
 
 
@@ -151,19 +156,57 @@ def _stage_b_user(blueprint: dict, config: GenerationConfig) -> str:
     )
 
 
+def _minimized_blueprint(blueprint: dict) -> dict:
+    """The contract essentials for follow-up requests, without the prose.
+
+    Full blueprint narratives cost thousands of tokens per request against
+    small provider budgets; follow-up calls need names, ranges, slots and
+    rules -- not the prose they already generated from.
+    """
+    return {
+        "title": blueprint.get("title"),
+        "difficulty": blueprint.get("difficulty"),
+        "state_vars": [
+            {
+                "name": var.get("name"),
+                "kind": var.get("kind"),
+                "min_value": var.get("min_value"),
+                "max_value": var.get("max_value"),
+            }
+            for var in (blueprint.get("state_vars") or [])
+        ],
+        "slots": [
+            {"name": slot.get("name"), "accepts_tags": slot.get("accepts_tags")}
+            for slot in (blueprint.get("slots") or [])
+        ],
+        "endings": [
+            {"id": ending.get("id"), "type": ending.get("type")}
+            for ending in (blueprint.get("endings") or [])
+        ],
+        "constraints": list(blueprint.get("constraints") or []),
+    }
+
+
 def _batch_user(blueprint: dict, slot: str, existing_summary: str) -> str:
     import json as _json
 
     return (
         f"Generate interchangeable scenes for slot {slot!r} of this approved "
         "blueprint. Return a single JSON object with the slot name and its "
-        "scenes.\n\n"
-        f"BLUEPRINT:\n{_json.dumps(blueprint)}\n\n"
+        "scenes, where every scene is a full scene object (id, type, title, "
+        "narrative_text, actor, slot, tags, choices with valid "
+        "next_scene_id transitions) -- never a string or an id.\n\n"
+        f"BLUEPRINT (essentials):\n{_json.dumps(_minimized_blueprint(blueprint))}\n\n"
         f"EXISTING SCENES (summaries, do not duplicate):\n{existing_summary}"
     )
 
 
-def _repair_user(invalid: dict, errors: list[dict], schema_hint: str) -> str:
+def _repair_user(
+    invalid: dict,
+    errors: list[dict],
+    schema_hint: str,
+    blueprint: Optional[dict] = None,
+) -> str:
     import json as _json
 
     lines = [
@@ -177,6 +220,8 @@ def _repair_user(invalid: dict, errors: list[dict], schema_hint: str) -> str:
     ]
     for err in errors:
         lines.append(f"- [{err.get('code')}] {err.get('message')}")
+    if blueprint:
+        lines += ["", f"BLUEPRINT CONTRACT (essentials):\n{_json.dumps(_minimized_blueprint(blueprint))}"]
     lines += ["", f"SCHEMA AND CONSTRAINTS:\n{schema_hint}"]
     return "\n".join(lines)
 
@@ -425,7 +470,10 @@ def generate_package(
     except Exception as exc:
         raise _as_http(exc)
 
-    payload.setdefault("blueprint_ref", blueprint_id)
+    # Identity is assigned server-side, never trusted from the model: a
+    # drifted blueprint_ref would detach the package from its contract.
+    payload["blueprint_ref"] = blueprint_id
+    payload["difficulty"] = config.difficulty
     payload.setdefault("story_id", f"plot-twist-{uuid.uuid4().hex[:8]}")
 
     # Batch interchangeable scenes for large stories.
@@ -450,7 +498,10 @@ def generate_package(
                 user=_repair_user(
                     payload,
                     [err.model_dump() for err in report.errors],
-                    "Regenerate the full story package object honouring its schema.",
+                    "Regenerate the full story package object honouring its schema. "
+                    "Every scene is a full object with id, type, title, "
+                    "narrative_text, actor, slot, tags and choices.",
+                    blueprint=blueprint,
                 ),
                 json_schema=package_json_schema(),
                 schema_name="plot_twist_package",
@@ -461,7 +512,8 @@ def generate_package(
             )
         except Exception as exc:
             raise _as_http(exc)
-        repaired.setdefault("blueprint_ref", blueprint_id)
+        repaired["blueprint_ref"] = blueprint_id
+        repaired["difficulty"] = config.difficulty
         repaired.setdefault("story_id", payload.get("story_id"))
         payload = repaired
         report = plot_twist_validation.validate_package(
