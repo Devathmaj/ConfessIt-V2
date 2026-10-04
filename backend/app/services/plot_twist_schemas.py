@@ -194,6 +194,10 @@ class StoryPackageDef(BaseModel):
     tone: Optional[str] = None
     difficulty: str = "medium"
     blueprint_ref: str = Field(min_length=1, max_length=64)
+    # The decision budget for one playthrough: reaching it on a
+    # non-terminal scene concludes the story at the best qualifying ending,
+    # so no unnoticed loop can run past it.
+    max_decisions: int = Field(default=24, ge=5, le=40)
     initial_state: dict[str, Any] = Field(default_factory=dict)
     state_vars: list[StateVarDef] = Field(default_factory=list)
     opening_scene_id: str = Field(min_length=1, max_length=64)

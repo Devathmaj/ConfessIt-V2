@@ -374,6 +374,49 @@ def validate_package(
                 scene.id,
             )
 
+    # Two-sidedness: turns strictly alternate at runtime, so the package
+    # must read that way too -- mostly individual scenes, and never two
+    # consecutive scenes for the same member.
+    non_terminal = [scene for scene in package.scenes if not scene.is_terminal]
+    if non_terminal:
+        shared = [
+            scene for scene in non_terminal if (scene.actor or "either") in ("either", "joint")
+        ]
+        from ..limits import PLOT_TWIST_SHARED_SCENE_FRACTION
+
+        if len(shared) / len(non_terminal) > PLOT_TWIST_SHARED_SCENE_FRACTION:
+            _err(
+                errors,
+                "shared_scene_heavy",
+                f"{len(shared)} of {len(non_terminal)} decision scenes are shared "
+                "(either/joint): most decisions must belong to one participant, "
+                "with shared moments as the exception.",
+            )
+    for scene in package.scenes:
+        if scene.is_terminal or not scene.choices:
+            continue
+        for choice in scene.choices:
+            target = by_scene.get(choice.next_scene_id)
+            if target is None or target.is_terminal:
+                continue
+            if (scene.actor or "either") in ("participant_one", "participant_two") and (
+                target.actor or "either"
+            ) == scene.actor:
+                _err(
+                    errors,
+                    "repeated_strict_actor",
+                    f"Choice {choice.id!r} hands {scene.actor} a second consecutive "
+                    "scene: turns must alternate, so consecutive scenes must not "
+                    "name the same participant.",
+                    scene.id,
+                )
+
+    # Inescapable cycles: a strongly connected set of scenes with no choice
+    # leading out toward an ending replays forever. Edges are the authored
+    # transitions (module selection may redirect inside a slot, but never
+    # invents an exit the author did not write).
+    _check_escapable_cycles(by_scene, errors)
+
     # Graph traversal from the opening: reachability + forward progress.
     if package.opening_scene_id in by_scene:
         reachable: set[str] = set()
@@ -410,6 +453,81 @@ def validate_package(
         _check_livelock(errors, by_scene, package.opening_scene_id)
 
     return ValidationReport(ok=not errors, errors=errors)
+
+
+def _check_escapable_cycles(by_scene: dict, errors: list[ValidationMessage]) -> None:
+    """Flag scene loops with no authored way out toward an ending."""
+    edges: dict[str, list[str]] = {}
+    for scene_id, scene in by_scene.items():
+        edges[scene_id] = [
+            choice.next_scene_id
+            for choice in (scene.choices or [])
+            if choice.next_scene_id in by_scene
+        ]
+    # Nodes that can reach a terminal scene (reverse walk from terminals).
+    can_finish: set[str] = set()
+    queue: deque[str] = deque(
+        [sid for sid, scene in by_scene.items() if scene.is_terminal]
+    )
+    reverse: dict[str, list[str]] = {sid: [] for sid in by_scene}
+    for sid, outs in edges.items():
+        for target in outs:
+            reverse[target].append(sid)
+    while queue:
+        current = queue.popleft()
+        if current in can_finish:
+            continue
+        can_finish.add(current)
+        queue.extend(reverse[current])
+    # Strongly connected components (Tarjan): loops are components with
+    # more than one scene, or one scene pointing at itself.
+    index_of: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    counter = [0]
+
+    def strongconnect(node: str) -> None:
+        index_of[node] = low[node] = counter[0]
+        counter[0] += 1
+        stack.append(node)
+        on_stack.add(node)
+        for target in edges.get(node, []):
+            if target not in index_of:
+                strongconnect(target)
+                low[node] = min(low[node], low[target])
+            elif target in on_stack:
+                low[node] = min(low[node], index_of[target])
+        if low[node] == index_of[node]:
+            component = []
+            while True:
+                member = stack.pop()
+                on_stack.discard(member)
+                component.append(member)
+                if member == node:
+                    break
+            cyclic = len(component) > 1 or node in edges.get(node, [])
+            if not cyclic:
+                return
+            exits = sorted(
+                {
+                    target
+                    for member in component
+                    for target in edges.get(member, [])
+                    if target not in component and target in can_finish
+                }
+            )
+            if not exits:
+                _err(
+                    errors,
+                    "inescapable_cycle",
+                    f"Scenes {sorted(component)} loop with no choice leading "
+                    "toward an ending: the couple would replay them forever.",
+                )
+
+    for scene_id in by_scene:
+        if scene_id not in index_of:
+            strongconnect(scene_id)
 
 
 def _check_livelock(

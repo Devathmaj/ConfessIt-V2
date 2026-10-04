@@ -25,9 +25,17 @@ canonical order with a unique constraint. Creation runs under the
 per-game advisory lock first and the pair lock second (ENG-001 order),
 so concurrent enters serialize into exactly one session.
 
-**Turns are assigned by the package.** ``participant_one`` means user_a,
-``participant_two`` means user_b, and ``either``/``joint`` means either
-member may submit -- first committed submit wins. Anything else is a 403.
+**Turns strictly alternate between the two members.** ``participant_one``
+means user_a and ``participant_two`` means user_b; ``either``/``joint``
+scenes resolve to whoever's turn it is, so they never let one side answer
+twice in a row either. Anything else is a 403: a participant answers only
+on their own turn, and only after their partner has answered theirs.
+
+**Loops cannot run forever.** A choice leading back to a scene the couple
+has already seen twice is no longer offered -- the least-visited way
+forward always remains, so the story funnels out instead of stranding.
+Past the package's decision budget (default 24), a non-terminal scene
+concludes the story at the best qualifying ending rather than playing on.
 
 **Submits are atomic and idempotent.** The session row is locked
 ``FOR UPDATE``; the choice is re-validated inside the transaction;
@@ -59,6 +67,8 @@ from ..db_models import (
     UserRecord,
 )
 from ..limits import (
+    PLOT_TWIST_DEFAULT_MAX_DECISIONS,
+    PLOT_TWIST_MAX_SCENE_VISITS,
     PLOT_TWIST_REWARD_TIERS,
     PLOT_TWIST_SESSION_LOCK_KEY,
     PLOT_TWIST_TREASURE_BONUS_EACH,
@@ -251,18 +261,53 @@ def _package_for(session, story_package_id: str) -> dict:
     return dict(row.package or {})
 
 
-def _assignee_for_scene(scene: dict, row: PlotTwistSessionRecord, decisions_made: int) -> Optional[str]:
-    """The user id whose turn a scene is, or None when either may submit."""
-    actor = scene.get("actor") or "either"
+def _member_for_role(row: PlotTwistSessionRecord, role: str) -> str:
+    """The member id holding a ``user_a``/``user_b`` turn role."""
+    return str(row.user_a_id) if role == "user_a" else str(row.user_b_id)
+
+
+def _role_for_actor(
+    actor: Optional[str],
+    user_a_id: str,
+    last_actor_id: Optional[str],
+) -> str:
+    """Whose turn a scene is, as a ``user_a``/``user_b`` role.
+
+    Strict actors name their member; shared (``either``/``joint``) scenes
+    resolve to whoever's turn it is -- the member who did *not* act last
+    (user_a opens). The alternation guard below never lets one side answer
+    twice running: a strict scene naming the member who just acted flips to
+    the other member instead. Validation refuses such packages at publish
+    time, so the flip only ever rescues stories published before the rule;
+    stranding the couple instead would be worse.
+    """
+    role = "user_a"
     if actor == "participant_one":
-        return str(row.user_a_id)
-    if actor == "participant_two":
-        return str(row.user_b_id)
-    if actor == "either":
-        # Alternating default so turns visibly pass back and forth, while
-        # the submit path still accepts either member (async-friendly).
-        return str(row.user_a_id) if decisions_made % 2 == 0 else str(row.user_b_id)
-    return None  # joint: either member may submit
+        role = "user_a"
+    elif actor == "participant_two":
+        role = "user_b"
+    elif last_actor_id is not None:
+        role = "user_b" if str(last_actor_id) == str(user_a_id) else "user_a"
+    if last_actor_id is not None:
+        last_role = "user_a" if str(last_actor_id) == str(user_a_id) else "user_b"
+        if role == last_role:
+            role = "user_b" if role == "user_a" else "user_a"
+    return role
+
+
+def _assignee_member(
+    row: PlotTwistSessionRecord, scene: dict, last_actor_id: Optional[str]
+) -> str:
+    """The member id whose turn the current scene is.
+
+    New rows store the resolved role directly; rows written before roles
+    existed (``assigned_actor == "either"``) resolve through the same rule
+    so in-flight stories keep alternating without a migration.
+    """
+    role = row.assigned_actor if row.assigned_actor in ("user_a", "user_b") else None
+    if role is None:
+        role = _role_for_actor(scene.get("actor"), str(row.user_a_id), last_actor_id)
+    return _member_for_role(row, role)
 
 
 def _scene_view(
@@ -354,6 +399,7 @@ def _assemble_state(session, user: UserDetails) -> PlotTwistCurrentState:
         decisions_made=len(decisions),
         history=history,
     )
+    last_actor_id = str(decisions[-1].actor_user_id) if decisions else None
     if row.status == "completed":
         ending = endings.get(row.ending_id or "")
         return PlotTwistCurrentState(
@@ -371,20 +417,16 @@ def _assemble_state(session, user: UserDetails) -> PlotTwistCurrentState:
             ),
             **base,
         )
-    assignee = _assignee_for_scene(scene, row, len(decisions))
-    if assignee is not None and assignee != user.id and row.assigned_actor != "either":
-        stage = "awaiting_partner"
-    elif assignee is None or assignee == user.id or row.assigned_actor == "either":
-        # either/joint scenes read as your turn for whoever opens them first
-        # once the strict assignee has been served; the submit path decides.
-        stage = "awaiting_you" if _may_submit(row, scene, user.id) else "awaiting_partner"
-    else:
-        stage = "awaiting_partner"
-    offered = _offered_choices(scene, dict(row.state or {}))
+    # Strict alternation: exactly one member holds this turn, so the other
+    # side always waits. Shared scenes resolve to whoever's turn it is.
+    assignee = _assignee_member(row, scene, last_actor_id)
+    stage = "awaiting_you" if _may_submit(row, assignee, user.id) else "awaiting_partner"
+    targets = _choice_targets(package, dict(row.selected_scenes or {}), scene)
+    offered = _offered_choices(scene, dict(row.state or {}), targets, _visited_counts(row))
     visited = sum(1 for v in (row.visited_scenes or []) if v == row.current_scene_id)
     return PlotTwistCurrentState(
         stage=stage,  # type: ignore[arg-type]
-        scene=_scene_view(scene, user.id, assignee if row.assigned_actor != "either" else None, False, offered, visited),
+        scene=_scene_view(scene, user.id, assignee, False, offered, visited),
         **base,
     )
 
@@ -412,30 +454,79 @@ def _choice_consequence(scene: dict, choice_id: str) -> Optional[str]:
     return None
 
 
-def _offered_choices(scene: dict, state: dict) -> list[dict]:
-    """Choices whose conditions hold -- anything else is never rendered."""
-    offered = []
+def _offered_choices(
+    scene: dict,
+    state: dict,
+    targets: Optional[dict[str, Optional[str]]] = None,
+    visited_counts: Optional[dict[str, int]] = None,
+) -> list[dict]:
+    """Choices the engine offers: conditions held, loops funnelled out.
+
+    ``targets`` maps each choice id to its resolved next scene (through the
+    couple's module selection) and ``visited_counts`` counts prior visits.
+    A choice leading back to a scene seen ``PLOT_TWIST_MAX_SCENE_VISITS``
+    times or more is withheld -- replaying the same loop stops being an
+    option -- while the least-visited way forward always remains, so
+    filtering can never strand the couple on a choiceless scene.
+    """
+    eligible = []
     for choice in scene.get("choices") or []:
         if not check_conditions(choice.get("conditions") or [], state):
             continue
-        offered.append(
-            {
-                "choice_id": str(choice.get("id")),
-                "text": str(choice.get("text")),
-                "consequence_text": choice.get("consequence_text"),
-                "reward_tier": choice.get("reward_tier"),
-            }
+        eligible.append(choice)
+    if targets is not None and visited_counts is not None and eligible:
+        fresh = [
+            choice
+            for choice in eligible
+            if visited_counts.get(targets.get(str(choice.get("id")), "") or "", 0)
+            < PLOT_TWIST_MAX_SCENE_VISITS
+        ]
+        if fresh:
+            eligible = fresh
+        else:
+            eligible = [
+                min(
+                    eligible,
+                    key=lambda c: (
+                        visited_counts.get(targets.get(str(c.get("id")), "") or "", 0),
+                        str(c.get("id")),
+                    ),
+                )
+            ]
+    return [
+        {
+            "choice_id": str(choice.get("id")),
+            "text": str(choice.get("text")),
+            "consequence_text": choice.get("consequence_text"),
+            "reward_tier": choice.get("reward_tier"),
+        }
+        for choice in eligible
+    ]
+
+
+def _choice_targets(
+    package: dict, selection: dict, scene: dict
+) -> dict[str, Optional[str]]:
+    """Each choice id to its resolved next scene for this couple."""
+    targets: dict[str, Optional[str]] = {}
+    for choice in scene.get("choices") or []:
+        resolved = _resolve_scene(package, selection, choice.get("next_scene_id"))
+        targets[str(choice.get("id"))] = (
+            str(resolved.get("id")) if resolved else None
         )
-    return offered
+    return targets
 
 
-def _may_submit(row: PlotTwistSessionRecord, scene: dict, user_id: str) -> bool:
-    actor = scene.get("actor") or "either"
-    if actor == "participant_one":
-        return str(row.user_a_id) == user_id
-    if actor == "participant_two":
-        return str(row.user_b_id) == user_id
-    return user_id in (str(row.user_a_id), str(row.user_b_id))
+def _visited_counts(row: PlotTwistSessionRecord) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for scene_id in row.visited_scenes or []:
+        counts[str(scene_id)] = counts.get(str(scene_id), 0) + 1
+    return counts
+
+
+def _may_submit(row: PlotTwistSessionRecord, assignee_id: str, user_id: str) -> bool:
+    """Only the member holding this turn may submit it."""
+    return str(assignee_id) == str(user_id)
 
 
 def current_state(db: Database, user: UserDetails) -> PlotTwistCurrentState:
@@ -540,15 +631,6 @@ def _resolve_scene(package: dict, selection: dict, scene_id: str) -> dict:
     return target
 
 
-def _initial_actor(scene: dict) -> str:
-    actor = scene.get("actor") or "either"
-    if actor == "participant_one":
-        return "user_a"
-    if actor == "participant_two":
-        return "user_b"
-    return "either"
-
-
 def _get_or_create_session(session, game: PlotTwistGameRecord, couple) -> PlotTwistSessionRecord:
     user_a_id, user_b_id = sorted([str(couple.user_a_id), str(couple.user_b_id)])
     existing = session.scalar(
@@ -572,6 +654,10 @@ def _get_or_create_session(session, game: PlotTwistGameRecord, couple) -> PlotTw
         )
     state = dict(package.get("initial_state") or {})
     tags = list(opening.get("provides_tags") or [])
+    # The opening turn resolves like every other: strict actors name their
+    # member, shared openings start with user_a. The stored role is always
+    # a member role from here on, never "either".
+    opening_role = _role_for_actor(opening.get("actor"), user_a_id, None)
     row = PlotTwistSessionRecord(
         plot_twist_game_id=str(game.id),
         story_package_id=str(game.story_package_id),
@@ -580,17 +666,13 @@ def _get_or_create_session(session, game: PlotTwistGameRecord, couple) -> PlotTw
         current_scene_id=str(opening.get("id")),
         state=state,
         tags=tags,
-        assigned_actor=_initial_actor(opening),
-        status="awaiting_user_a" if _initial_actor(opening) == "user_a" else (
-            "awaiting_user_b" if _initial_actor(opening) == "user_b" else "awaiting_user_a"
-        ),
+        assigned_actor=opening_role,
+        status="awaiting_user_a" if opening_role == "user_a" else "awaiting_user_b",
         selected_scenes=selection,
         visited_scenes=[str(opening.get("id"))],
         treasures=[],
         state_version=0,
     )
-    # either/joint openings wait on whoever arrives first; the stored status
-    # names user_a only as a placeholder the read path interprets.
     session.add(row)
     try:
         session.flush()
@@ -689,21 +771,40 @@ def submit_choice(
         else:
             replay = False
         if not replay:
-            if not _may_submit(row, scene, user.id):
+            assignee = _assignee_member(row, scene, _last_actor(session, row))
+            if not _may_submit(row, assignee, user.id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="This decision belongs to the other participant.",
+                    detail="Wait for your partner: decisions strictly alternate.",
                 )
-            _apply_choice(session, row, user, scene, scenes, endings, var_map, package, choice_id)
+            _apply_choice(
+                session, row, user, scene, scenes, endings, var_map, package,
+                choice_id, assignee,
+            )
     with db.sessions() as session:
         return _assemble_state(session, user)
 
 
-def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, choice_id) -> None:
+def _last_actor(session, row: PlotTwistSessionRecord) -> Optional[str]:
+    """The member id that made the latest recorded decision, if any."""
+    latest = session.scalar(
+        select(PlotTwistDecisionRecord.actor_user_id)
+        .where(PlotTwistDecisionRecord.session_id == row.id)
+        .order_by(PlotTwistDecisionRecord.seq.desc())
+        .limit(1)
+    )
+    return str(latest) if latest is not None else None
+
+
+def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, choice_id, assignee) -> None:
     """The write half of submit_choice, inside the caller's transaction."""
-    _ = scenes  # scene lookup already done by the caller; kept for symmetry
+    _ = (scenes, assignee)  # scene lookup and turn check done by the caller
     state = dict(row.state or {})
-    offered = {c.get("choice_id") for c in _offered_choices(scene, state)}
+    targets = _choice_targets(package, dict(row.selected_scenes or {}), scene)
+    offered = {
+        c.get("choice_id")
+        for c in _offered_choices(scene, state, targets, _visited_counts(row))
+    }
     if choice_id not in offered:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -755,23 +856,47 @@ def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, 
     visited.append(str(resolved.get("id")))
     row.visited_scenes = visited
     row.state_version = int(row.state_version) + 1
+    try:
+        max_decisions = int(package.get("max_decisions") or PLOT_TWIST_DEFAULT_MAX_DECISIONS)
+    except (TypeError, ValueError):
+        max_decisions = PLOT_TWIST_DEFAULT_MAX_DECISIONS
     if resolved.get("is_terminal"):
         ending = _resolve_ending(endings, resolved.get("ending_id"), state_after)
         row.ending_id = ending.get("id") if ending else resolved.get("ending_id")
         row.status = "completed"
         row.completed_at = _now()
-        row.assigned_actor = "either"
-    else:
-        nxt_assigned = _initial_actor(resolved)
-        row.assigned_actor = nxt_assigned
-        if nxt_assigned == "user_a":
-            row.status = "awaiting_user_a"
-        elif nxt_assigned == "user_b":
-            row.status = "awaiting_user_b"
+        row.assigned_actor = _member_role(row, user.id)
+    elif seq >= max_decisions:
+        # Decision budget reached on a non-terminal scene: conclude at the
+        # best qualifying ending rather than letting a loop run past it.
+        ending = _resolve_ending(endings, None, state_after)
+        if ending is not None:
+            row.ending_id = ending.get("id")
+            row.status = "completed"
+            row.completed_at = _now()
+            row.assigned_actor = _member_role(row, user.id)
         else:
-            # either/joint: keep the turn with whoever has acted less
-            # recently -- the read path presents it to the right viewer.
-            row.status = "awaiting_user_a" if seq % 2 == 0 else "awaiting_user_b"
+            _advance_turn(row, resolved, user.id)
+    else:
+        _advance_turn(row, resolved, user.id)
+
+
+def _member_role(row: PlotTwistSessionRecord, user_id: str) -> str:
+    """The turn role (``user_a``/``user_b``) of one member."""
+    return "user_a" if str(user_id) == str(row.user_a_id) else "user_b"
+
+
+def _advance_turn(row: PlotTwistSessionRecord, resolved: dict, actor_id: str) -> None:
+    """Pass the turn to the member who did not just act.
+
+    Strict scene actors are honoured when they agree with alternation; a
+    scene naming the member who just acted flips to the other member
+    instead (see :func:`_role_for_actor`), so one side can never answer
+    twice running no matter what the package authors.
+    """
+    role = _role_for_actor(resolved.get("actor"), str(row.user_a_id), str(actor_id))
+    row.assigned_actor = role
+    row.status = "awaiting_user_a" if role == "user_a" else "awaiting_user_b"
 
 
 def _resolve_ending(

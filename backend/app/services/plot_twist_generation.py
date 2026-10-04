@@ -83,7 +83,12 @@ def _stage_a_system() -> str:
         "dashes). State variables must be integers with min/max/initial or "
         "boolean flags. Endings need explicit machine-evaluable conditions "
         "over declared variables. Reward tiers must be one of participation, "
-        "bronze, silver, gold."
+        "bronze, silver, gold. Two-sidedness is a hard rule, and the "
+        "constraints you write must say so: turns strictly alternate, so the "
+        "large majority of decision scenes belong to exactly one participant "
+        "(participant_one or participant_two in alternation, never the same "
+        "participant twice running); either/joint scenes are rare, genuinely "
+        "shared moments only."
     )
 
 
@@ -134,7 +139,12 @@ def _stage_b_system() -> str:
         "carry an ending_id and no choices. `endings` is an array of full "
         "ending objects with id, type, title, narrative, conditions, "
         "priority, rewards, success and reward_tier. Never invent variables, "
-        "tags, endings or tiers outside the blueprint and schema."
+        "tags, endings or tiers outside the blueprint and schema. Two-sidedness "
+        "is a hard rule: the large majority of decision scenes belong strictly "
+        "to participant_one or participant_two in alternation along every path "
+        "(never the same participant twice running); either/joint only for rare "
+        "genuinely shared moments. Every loop of scenes must offer a choice "
+        "leading out toward an ending, or the package will be rejected."
     )
 
 

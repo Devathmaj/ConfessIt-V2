@@ -486,6 +486,20 @@ PLOT_TWIST_SESSION_STATUSES: tuple[str, ...] = (
 )
 PLOT_TWIST_MAX_SCENES = 40
 PLOT_TWIST_MAX_DECISIONS = 24
+# How often one couple may revisit the same scene through choices. Reached
+# over and over, a loop of compatible scenes plays forever instead of
+# ending: past this many visits the choice leading back is no longer
+# offered (the least-visited way forward always remains, so the story can
+# never strand). Linear stories never notice -- every scene is seen once.
+PLOT_TWIST_MAX_SCENE_VISITS = 2
+# The decision budget when a package does not name its own: reaching it on
+# a non-terminal scene concludes the story at the best qualifying ending
+# rather than letting an unnoticed loop run past it.
+PLOT_TWIST_DEFAULT_MAX_DECISIONS = 24
+# The large majority of decision scenes must belong to one participant:
+# past this fraction of shared (either/joint) scenes a package reads as a
+# solo story with an audience, not a two-sided one.
+PLOT_TWIST_SHARED_SCENE_FRACTION = 0.5
 PLOT_TWIST_MAX_INTERCHANGEABLE_PER_SLOT = 6
 PLOT_TWIST_MAX_REPAIR_ATTEMPTS = 3
 PLOT_TWIST_MAX_BATCH_SCENES = 8

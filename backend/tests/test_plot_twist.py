@@ -649,6 +649,166 @@ def test_async_handoff_between_participants(http, db, players):
         assert len(result["history"]) == 2
 
 
+def test_turns_strictly_alternate_even_on_shared_scenes(http, db, players):
+    package = story_package()
+    # The dock becomes a shared moment: whoever's turn it is answers, and
+    # the turn still passes to the other member afterwards.
+    package["scenes"][1]["actor"] = "either"
+    assert validate_package(package).ok
+    seed_published(db, package=package)
+    client_a, client_b = pair(db, http, players)
+    state_a = client_a.get("/games/plot-twist").json()
+    assert state_a["stage"] == "awaiting_you"
+    moved = client_a.post(
+        "/games/plot-twist/choices",
+        json={"choice_id": "c_loading", "state_version": state_a["state_version"]},
+    )
+    assert moved.status_code == 200, moved.text
+    # Same member cannot answer twice running, even on a shared scene.
+    again = client_a.post(
+        "/games/plot-twist/choices",
+        json={"choice_id": "c_careful", "state_version": moved.json()["state_version"]},
+    )
+    assert again.status_code == 403, again.text
+    # The partner holds the shared turn and sees the choices.
+    state_b = client_b.get("/games/plot-twist").json()
+    assert state_b["stage"] == "awaiting_you"
+    assert {c["choice_id"] for c in state_b["scene"]["choices"]} == {"c_careful", "c_force"}
+    done = client_b.post(
+        "/games/plot-twist/choices",
+        json={"choice_id": "c_force", "state_version": state_b["state_version"]},
+    )
+    assert done.status_code == 200, done.text
+    assert done.json()["stage"] == "completed"
+    # Both sides read the same settled outcome.
+    assert client_a.get("/games/plot-twist").json()["stage"] == "completed"
+
+
+def test_repeated_loops_funnel_out_instead_of_repeating(http, db, players):
+    package = story_package()
+    # A visible loop with an exit: dock <-> side room, plus side -> caught.
+    package["scenes"][1]["choices"].append(
+        {"id": "c_back", "text": "Check the side room.", "conditions": [],
+         "state_changes": [], "next_scene_id": "s_side"}
+    )
+    package["scenes"].append({
+        "id": "s_side", "type": "encounter", "title": "Side Room",
+        "narrative_text": "Dusty shelves.", "actor": "either", "slot": "core",
+        "requires_tags": [], "provides_tags": [], "forbidden_tags": [],
+        "entry_conditions": [], "is_terminal": False,
+        "choices": [
+            {"id": "c_return", "text": "Return to the dock.", "conditions": [],
+             "state_changes": [], "next_scene_id": "s_dock"},
+            {"id": "c_out", "text": "Climb out the window.", "conditions": [],
+             "state_changes": [], "next_scene_id": "s_caught"},
+        ],
+    })
+    assert validate_package(package).ok
+    seed_published(db, package=package)
+    client_a, client_b = pair(db, http, players)
+
+    def act(client, choice_id):
+        state = client.get("/games/plot-twist").json()
+        assert state["stage"] == "awaiting_you", state
+        response = client.post(
+            "/games/plot-twist/choices",
+            json={"choice_id": choice_id, "state_version": state["state_version"]},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    act(client_a, "c_loading")  # s_dock, visits: dock 1
+    act(client_b, "c_back")  # s_side, visits: side 1
+    act(client_a, "c_return")  # s_dock, visits: dock 2
+    act(client_b, "c_back")  # s_side, visits: side 2
+    # The side room has been seen twice: going back to the dock is withheld
+    # and only the way out remains.
+    state_a = client_a.get("/games/plot-twist").json()
+    assert state_a["stage"] == "awaiting_you"
+    assert {c["choice_id"] for c in state_a["scene"]["choices"]} == {"c_out"}
+    done = act(client_a, "c_out")
+    assert done["stage"] == "completed"
+
+
+def test_decision_budget_concludes_runaway_stories(http, db, players):
+    # A long straight corridor: no loops, so only the budget can end it.
+    package = story_package(max_decisions=5)
+    chain = ["s_open", "s_m1", "s_m2", "s_m3", "s_m4", "s_m5"]
+    actors = ["participant_one", "participant_two", "participant_one",
+              "participant_two", "participant_one", "participant_two"]
+    scenes = []
+    for index, scene_id in enumerate(chain):
+        nxt = chain[index + 1] if index + 1 < len(chain) else "s_free"
+        scenes.append({
+            "id": scene_id, "type": "opening" if index == 0 else "encounter",
+            "title": f"Step {index}", "narrative_text": "Onward.",
+            "actor": actors[index], "slot": "core",
+            "requires_tags": [], "provides_tags": [], "forbidden_tags": [],
+            "entry_conditions": [], "is_terminal": False,
+            "choices": [{"id": "c_on", "text": "Press on.", "conditions": [],
+                         "state_changes": [], "next_scene_id": nxt}],
+        })
+    package["scenes"] = scenes + [
+        s for s in package["scenes"] if s.get("id") == "s_free"
+    ]
+    package["opening_scene_id"] = "s_open"
+    assert validate_package(package).ok
+    seed_published(db, package=package)
+    client_a, client_b = pair(db, http, players)
+
+    def act(client):
+        state = client.get("/games/plot-twist").json()
+        assert state["stage"] == "awaiting_you", state
+        response = client.post(
+            "/games/plot-twist/choices",
+            json={"choice_id": "c_on", "state_version": state["state_version"]},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    act(client_a)
+    act(client_b)
+    act(client_a)
+    act(client_b)
+    done = act(client_a)
+    assert done["stage"] == "completed"
+    assert done["result"]["decisions_made"] == 5
+    # Best qualifying ending wins: silver escape over participation failure.
+    assert done["result"]["ending_id"] == "e_escape"
+
+
+def test_validation_refuses_unalternating_and_solo_packages():
+    package = story_package()
+    package["scenes"][1]["actor"] = "participant_one"
+    report = validate_package(package)
+    assert not report.ok
+    assert any(e.code == "repeated_strict_actor" for e in report.errors)
+
+    shared = story_package()
+    for scene in shared["scenes"]:
+        if not scene.get("is_terminal"):
+            scene["actor"] = "joint"
+    report = validate_package(shared)
+    assert not report.ok
+    assert any(e.code == "shared_scene_heavy" for e in report.errors)
+
+
+def test_validation_refuses_inescapable_cycles():
+    package = story_package()
+    # Prune every exit: the dock and lobby only point at each other.
+    package["scenes"][1]["choices"] = [
+        {"id": "c_back", "text": "To the lobby.", "conditions": [],
+         "state_changes": [], "next_scene_id": "s_alarm"}
+    ]
+    package["scenes"][2]["choices"] = [
+        {"id": "c_return", "text": "To the dock.", "conditions": [],
+         "state_changes": [], "next_scene_id": "s_dock"}
+    ]
+    report = validate_package(package)
+    assert not report.ok
+    assert any(e.code == "inescapable_cycle" for e in report.errors)
+
+
 def test_wrong_participant_cannot_submit(http, db, players):
     seed_published(db)
     client_a, client_b = pair(db, http, players)
