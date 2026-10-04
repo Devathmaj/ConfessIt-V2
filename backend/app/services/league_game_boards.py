@@ -47,6 +47,8 @@ from ..db_models import (
     ConnectionsSubmissionRecord,
     CoupleGameRecord,
     CoupleGameSessionRecord,
+    PlotTwistGameRecord,
+    PlotTwistSessionRecord,
     ReactionTimeGameRecord,
     ReactionTimeSubmissionRecord,
     TriviaDropOptionRecord,
@@ -122,10 +124,14 @@ CATEGORIES: dict[str, list[CategoryDef]] = {
         CategoryDef("escape_performance", "Escape Performance", "Successful-escape performance in the window.", "period", True),
         CategoryDef("fastest_escape", "Fastest Escape", "Quickest successful escape on record (all-time).", "record"),
     ],
+    "plot-twist": [
+        CategoryDef("score", "Score", "Story outcome performance.", "period", True),
+        CategoryDef("most_treasures", "Most Treasures", "Most discoveries in the window.", "period"),
+    ],
 }
 
 # Games whose categories rank canonical couples rather than users.
-COUPLE_CATEGORY_GAMES = frozenset({"couple-questionnaire", "two-key-escape"})
+COUPLE_CATEGORY_GAMES = frozenset({"couple-questionnaire", "two-key-escape", "plot-twist"})
 
 
 def list_categories(game_id: str) -> list[dict]:
@@ -1090,6 +1096,77 @@ def _build_two_key(session, category: str, start: Optional[date], end: Optional[
     return items
 
 
+# ---------------------------------------------------------------------------
+# Plot Twist (completed stories only; unfinished runs are absent)
+# ---------------------------------------------------------------------------
+
+def _plot_twist_rows(session, start: Optional[date], end: Optional[date]) -> list[dict]:
+    rows = session.execute(
+        select(
+            PlotTwistSessionRecord.user_a_id,
+            PlotTwistSessionRecord.user_b_id,
+            PlotTwistSessionRecord.treasures,
+            PlotTwistSessionRecord.ending_id,
+            PlotTwistSessionRecord.completed_at,
+            PlotTwistSessionRecord.plot_twist_game_id,
+            PlotTwistGameRecord.game_date,
+            PlotTwistGameRecord.period_start_date,
+        )
+        .join(
+            PlotTwistGameRecord,
+            PlotTwistGameRecord.id == PlotTwistSessionRecord.plot_twist_game_id,
+        )
+        .where(
+            PlotTwistGameRecord.status == "ended",
+            PlotTwistSessionRecord.status == "completed",
+        )
+    ).all()
+    results = []
+    for row in rows:
+        day = row.period_start_date or row.game_date
+        if not _window(start, end, day):
+            continue
+        member_a, member_b = canonical_couple(str(row.user_a_id), str(row.user_b_id))
+        results.append(
+            {
+                "couple": (member_a, member_b),
+                "treasures": len(list(row.treasures or [])),
+                "ending_id": row.ending_id,
+                "completed_at": row.completed_at,
+                "date": (row.game_date.isoformat() if row.game_date else None),
+                "opportunity_id": str(row.plot_twist_game_id),
+            }
+        )
+    return results
+
+
+def _build_plot_twist(session, category: str, start: Optional[date], end: Optional[date]):
+    rows = _plot_twist_rows(session, start, end)
+    by_couple: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        by_couple.setdefault(row["couple"], []).append(row)
+    items = []
+    for couple, stories in by_couple.items():
+        if category == "most_treasures":
+            total = sum(s["treasures"] for s in stories)
+            order = (-total, -len(stories), couple)
+            tie = (total, len(stories))
+            metrics = {"treasures": total, "stories": len(stories)}
+            records = [
+                {
+                    "treasures": s["treasures"],
+                    "ending_id": s["ending_id"],
+                    "date": s["date"],
+                    "opportunity_id": s["opportunity_id"],
+                }
+                for s in stories
+            ]
+        else:
+            raise ValueError(category)
+        items.append((order, tie, {"couple": couple, "metrics": metrics, "records": records}))
+    return items
+
+
 _BUILDERS = {
     "wordle": _build_wordle,
     "anagram": _build_anagram,
@@ -1097,6 +1174,7 @@ _BUILDERS = {
     "connections": _build_connections,
     "trivia-drop": _build_trivia,
     "two-key-escape": _build_two_key,
+    "plot-twist": _build_plot_twist,
 }
 
 
@@ -1138,7 +1216,7 @@ def _ranked_items(db, game_id: str, category: str, period: str, anchor: Optional
     from . import league_boards
 
     definition = validate_category_request(game_id, category, period)
-    if game_id == "couple-questionnaire":
+    if game_id in ("couple-questionnaire", "plot-twist") and definition.id == "score":
         # Single score category: the absolute game board, mapped into the
         # category shape. No second query path for the same ranking.
         board = league_boards.game_board(
@@ -1149,15 +1227,19 @@ def _ranked_items(db, game_id: str, category: str, period: str, anchor: Optional
         for entry in board["entries"]:
             native = entry.get("native") or {}
             couple = (entry["member_a_id"], entry["member_b_id"])
-            payload = {
-                "couple": couple,
-                "metrics": {
+            if game_id == "plot-twist":
+                metrics = {
+                    "score": entry["score"],
+                    "treasures": native.get("treasure_count"),
+                    "decisions": native.get("decisions_made"),
+                }
+            else:
+                metrics = {
                     "score": entry["score"],
                     "correct": native.get("correct_predictions"),
                     "total": native.get("total_questions"),
-                },
-                "records": [],
-            }
+                }
+            payload = {"couple": couple, "metrics": metrics, "records": []}
             ranked.append((entry["rank"], payload))
         return definition, ranked
     if definition.scope == "record":

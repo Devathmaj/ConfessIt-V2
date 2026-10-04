@@ -4,12 +4,12 @@ import { AdminSetFeaturedCard } from '@/components/AdminSetFeaturedCard';
 import { AdminPlotTwistConfig } from '@/components/AdminPlotTwistConfig';
 
 /**
- * The Plot Twist console: its own page under /admin/games/manage,
- * mirroring the Reaction Time editor.
+ * The Plot Twist console: its own page under /admin/games/manage.
  *
- * All Plot Twist configuration lives here -- availability and the reset
- * cadence. The manage overview only links here with title, short description
- * and an Open Editor option.
+ * Story generation, review, validation and publication all live here --
+ * availability, the reset cadence and the current session alongside them.
+ * The manage overview only links here with title, short description and an
+ * Open Editor option.
  */
 export const AdminPlotTwistManage = () => {
   return (
@@ -24,8 +24,9 @@ export const AdminPlotTwistManage = () => {
         </NavLink>
         <h1 className="text-3xl font-semibold">Plot Twist</h1>
         <p className="text-sm text-muted-foreground">
-          A couple game — gameplay lands soon. Availability rolls through the
-          same hidden/disabled switches as every other title.
+          A branching story couples write together — generated before play,
+          executed deterministically. Configure the event, generate and review
+          stories, then publish a validated version.
         </p>
       </header>
 

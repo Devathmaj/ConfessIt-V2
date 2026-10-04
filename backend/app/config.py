@@ -387,6 +387,14 @@ class Settings(BaseSettings):
     # --- Feature flags ---
     ENABLE_DEBUG_ENDPOINTS: bool = False
 
+    # --- LLM ---
+    #
+    # Loaded here so deployments that inject these variables boot instead of
+    # failing on `extra="forbid"`. Nothing reads them yet.
+    LLM_API_KEY: str | None = None
+    LLM_BASE_URL: str | None = None
+    LLM_MODEL: str | None = None
+
     # --- Host allowlist ---
     #
     # Comma-separated hostnames the app answers for, checked per request before routing.

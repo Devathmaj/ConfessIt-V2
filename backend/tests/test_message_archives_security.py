@@ -320,6 +320,37 @@ def test_archive_run_moves_only_old_rows_and_counts_match(db, tmp_path, monkeypa
     assert _message_count(db) == 1
 
 
+def test_broken_bind_mount_fails_with_the_mount_named(tmp_path, monkeypatch):
+    # A bind mount whose host source vanished answers "exists" to mkdir yet
+    # "missing" to stat -- the exact split os.makedirs checks before raising
+    # FileExistsError despite exist_ok=True. The service must not crash-loop
+    # on the bare errno: it waits briefly for the mount to settle, then says
+    # which mount to fix.
+    monkeypatch.setattr(archival_module.os, "makedirs", lambda *args, **kwargs: (_ for _ in ()).throw(FileExistsError(17, "File exists")))
+    monkeypatch.setattr(archival_module.os.path, "isdir", lambda path: False)
+    monkeypatch.setattr(archival_module.time, "sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError) as exc_info:
+        MessageArchivalService(archive_dir=str(tmp_path / "archives"))
+    assert "./archives bind mount" in str(exc_info.value)
+
+
+def test_mount_settling_recovers_without_an_error(tmp_path, monkeypatch):
+    # The same split, but the mount settles mid-retry: construction succeeds
+    # and the directory is usable afterwards.
+    monkeypatch.setattr(archival_module.os, "makedirs", lambda *args, **kwargs: (_ for _ in ()).throw(FileExistsError(17, "File exists")))
+    calls = {"n": 0}
+
+    def flaky_isdir(path):
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    monkeypatch.setattr(archival_module.os.path, "isdir", flaky_isdir)
+    monkeypatch.setattr(archival_module.time, "sleep", lambda seconds: None)
+    service = MessageArchivalService.__new__(MessageArchivalService)
+    service.archive_dir = str(tmp_path / "archives")
+    service._ensure_archive_dir()  # must not raise
+
+
 def test_failed_write_aborts_the_delete(db, tmp_path, monkeypatch):
     # Files before deletes: when the write fails the rows must stay where a
     # retry will find them, or the delete silently drops unarchived history.

@@ -309,6 +309,25 @@ def two_key_escape_global_base(raw: dict[str, Any]) -> Decimal:
 
 
 # ---------------------------------------------------------------------------
+# Plot Twist: tiered. The ending's validated reward tier sets the base and
+# each discovered treasure adds a bounded bonus, capped at 100. Unfinished
+# stories never reach an award row. The adapter precomputes the base with
+# the same rule (plot_twist_gameplay.score_for_outcome) and carries it in
+# ``base_points``; this profile clamps it so AI-authored tiers can never
+# bypass the ceiling even if a stored row predates a tier change.
+# ---------------------------------------------------------------------------
+
+
+def plot_twist_global_base(raw: dict[str, Any]) -> Decimal:
+    """Clamp the session's deterministic base into the 0-100 scale."""
+    try:
+        base = int(raw.get("base_points") if raw.get("base_points") is not None else 0)
+    except (TypeError, ValueError):
+        base = 0
+    return quantize_points(Decimal(str(max(0, min(100, base)))))
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -320,6 +339,7 @@ _GLOBAL_BASE_FUNCTIONS = {
     "connections": connections_global_base,
     "couple-questionnaire": couple_global_base,
     "two-key-escape": two_key_escape_global_base,
+    "plot-twist": plot_twist_global_base,
 }
 
 

@@ -1526,6 +1526,290 @@ export const submitCouplePrediction = async (
     return response.data;
 };
 
+// --- Plot Twist: asynchronous cooperative storytelling for couples ---
+//
+// The story executes a published, versioned package deterministically --
+// generation happens on the admin side, never during gameplay.
+
+export type PlotTwistStage =
+  | 'no_game'
+  | 'selecting_partner'
+  | 'awaiting_you'
+  | 'awaiting_partner'
+  | 'completed';
+
+export interface PlotTwistChoiceOption {
+  choice_id: string;
+  text: string;
+  consequence_text?: string | null;
+  reward_tier?: string | null;
+}
+
+export interface PlotTwistSceneState {
+  scene_id: string;
+  scene_type: string;
+  title: string;
+  narrative_text: string;
+  actor: string;
+  choices: PlotTwistChoiceOption[];
+  is_terminal: boolean;
+  visited_count: number;
+}
+
+export interface PlotTwistDecisionEntry {
+  seq: number;
+  scene_id: string;
+  scene_title?: string | null;
+  actor_user_id: string;
+  actor_name?: string | null;
+  choice_id: string;
+  choice_text?: string | null;
+  consequence_text?: string | null;
+  created_at: string;
+}
+
+export interface PlotTwistResultState {
+  ending_id?: string | null;
+  ending_type?: string | null;
+  ending_title?: string | null;
+  narrative?: string | null;
+  success: boolean;
+  treasures: string[];
+  decisions_made: number;
+  completed_at?: string | null;
+}
+
+export interface PlotTwistState {
+  stage: PlotTwistStage;
+  game_id: string | null;
+  session_id: string | null;
+  my_selection: { selected_user_id: string; selected_user_name: string } | null;
+  partner: { id: string; name: string } | null;
+  scene: PlotTwistSceneState | null;
+  state_version: number;
+  decisions_made: number;
+  history: PlotTwistDecisionEntry[];
+  result: PlotTwistResultState | null;
+}
+
+/** The caller's place in the active Plot Twist event. Never creates gameplay rows. */
+export const getPlotTwistState = async (): Promise<PlotTwistState> => {
+  const response = await axios.get(`${API_URL}/games/plot-twist`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+/** Every participant the caller may choose, excluding only themselves. */
+export const getPlotTwistPartners = async (): Promise<CouplePartnerCandidate[]> => {
+  const response = await axios.get(`${API_URL}/games/plot-twist/partners`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+/** Record the caller's partner choice through the shared selection. */
+export const selectPlotTwistPartner = async (
+  selectedUserId: string
+): Promise<PlotTwistState> => {
+  const response = await axios.post(
+    `${API_URL}/games/plot-twist/selection`,
+    { selected_user_id: selectedUserId },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+/** Submit the assigned decision. Retries of a recorded turn answer the stored outcome. */
+export const submitPlotTwistChoice = async (
+  choiceId: string,
+  stateVersion: number
+): Promise<PlotTwistState> => {
+  const response = await axios.post(
+    `${API_URL}/games/plot-twist/choices`,
+    { choice_id: choiceId, state_version: stateVersion },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export interface PlotTwistBlueprint {
+  id: string;
+  title: string;
+  difficulty: string;
+  config: Record<string, unknown>;
+  blueprint: Record<string, unknown>;
+  status: string;
+  validation_errors: Array<{ scene_id?: string | null; code: string; message: string }>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlotTwistPackage {
+  id: string;
+  blueprint_id: string;
+  version: number;
+  title: string;
+  package: Record<string, unknown>;
+  status: string;
+  validation_errors: Array<{ scene_id?: string | null; code: string; message: string }>;
+  published_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlotTwistSimulation {
+  steps: Array<Record<string, unknown>>;
+  ending_id: string | null;
+  ending_title: string | null;
+  final_state: Record<string, unknown>;
+  treasures: string[];
+  valid: boolean;
+  error: string | null;
+}
+
+/** Store the generation parameters (difficulty plus optional overrides) as a draft. */
+export const createPlotTwistBlueprint = async (
+  payload: Record<string, unknown>
+): Promise<PlotTwistBlueprint> => {
+  const response = await axios.post(`${API_URL}/admin/plot-twist/blueprints`, payload, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const getPlotTwistBlueprints = async (): Promise<PlotTwistBlueprint[]> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/blueprints`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const getPlotTwistBlueprint = async (blueprintId: string): Promise<PlotTwistBlueprint> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/blueprints/${blueprintId}`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+/** Run Stage A blueprint generation (bounded repair included). */
+export const generatePlotTwistBlueprint = async (
+  blueprintId: string
+): Promise<PlotTwistBlueprint> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/blueprints/${blueprintId}/generate`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const approvePlotTwistBlueprint = async (
+  blueprintId: string
+): Promise<PlotTwistBlueprint> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/blueprints/${blueprintId}/approve`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+/** Run Stage B story-package generation as a new version. */
+export const generatePlotTwistPackage = async (
+  blueprintId: string
+): Promise<PlotTwistPackage> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/blueprints/${blueprintId}/packages`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const getPlotTwistPackages = async (
+  blueprintId?: string
+): Promise<PlotTwistPackage[]> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/packages`, {
+    headers: getAuthHeaders(),
+    params: blueprintId ? { blueprint_id: blueprintId } : {},
+  });
+  return response.data;
+};
+
+export const getPlotTwistPackage = async (packageId: string): Promise<PlotTwistPackage> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/packages/${packageId}`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+/** Regenerate one scene in place; a failed repair keeps the prior draft. */
+export const regeneratePlotTwistScene = async (
+  packageId: string,
+  sceneId: string
+): Promise<PlotTwistPackage> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/packages/${packageId}/scenes/${sceneId}/regenerate`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+/** Manually edit supported story fields; re-validates, published is immutable. */
+export const updatePlotTwistPackage = async (
+  packageId: string,
+  storyPackage: Record<string, unknown>
+): Promise<PlotTwistPackage> => {
+  const response = await axios.put(
+    `${API_URL}/admin/plot-twist/packages/${packageId}`,
+    { package: storyPackage },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+/** Walk choice ids from the opening and inspect the outcome, without playing. */
+export const simulatePlotTwistPackage = async (
+  packageId: string,
+  choiceIds: string[]
+): Promise<PlotTwistSimulation> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/packages/${packageId}/simulate`,
+    { choice_ids: choiceIds },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+/** Publish a validated package version; sessions pin this version. */
+export const publishPlotTwistPackage = async (
+  packageId: string
+): Promise<PlotTwistPackage> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/packages/${packageId}/publish`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const getCurrentAdminPlotTwistSession = async (): Promise<{
+  id: string;
+  period_start_date: string | null;
+  period_end_date: string | null;
+  story_package_id: string | null;
+  status: string;
+}> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/session`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
 // --- Game configuration, featured spotlight, scheduling and selection ---
 //
 // The separated model: per-game availability/cadence, the one-spotlight-per-day

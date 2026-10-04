@@ -421,6 +421,90 @@ def two_key_escape_key_charges(grid_size: int) -> int:
     return TWO_KEY_ESCAPE_KEY_CHARGES[grid_size]
 
 
+# Plot Twist. An asynchronous cooperative storytelling game for couples.
+# Stories are AI-generated into versioned packages before play; the engine
+# executes published packages deterministically and never calls the model
+# during gameplay. The bounds below keep generated packages playable and
+# scores bounded: scene/decision ceilings bound validation and the UI, the
+# repair cap bounds generation loops, and reward tiers map endings to the
+# 0-100 league base every other game honours.
+PLOT_TWIST_SCENE_TYPES: tuple[str, ...] = (
+    "opening",
+    "encounter",
+    "connector",
+    "discovery",
+    "ending",
+)
+PLOT_TWIST_ACTORS: tuple[str, ...] = (
+    "participant_one",
+    "participant_two",
+    "either",
+    "joint",
+)
+PLOT_TWIST_STATE_OPS: tuple[str, ...] = (
+    "set",
+    "increment",
+    "decrement",
+    "add_flag",
+    "remove_flag",
+)
+PLOT_TWIST_CONDITION_OPS: tuple[str, ...] = (
+    "eq",
+    "gte",
+    "lte",
+    "has_flag",
+    "missing_flag",
+)
+PLOT_TWIST_DIFFICULTIES: tuple[str, ...] = ("easy", "medium", "hard")
+PLOT_TWIST_ENDING_TYPES: tuple[str, ...] = (
+    "escape",
+    "failure",
+    "treasure",
+    "capture",
+    "mystery_solved",
+    "twist",
+)
+PLOT_TWIST_PACKAGE_STATUSES: tuple[str, ...] = (
+    "draft",
+    "generating",
+    "validation_failed",
+    "ready_for_review",
+    "published",
+    "generation_failed",
+)
+PLOT_TWIST_BLUEPRINT_STATUSES: tuple[str, ...] = (
+    "draft",
+    "generating",
+    "ready_for_review",
+    "approved",
+    "generation_failed",
+)
+PLOT_TWIST_SESSION_STATUSES: tuple[str, ...] = (
+    "awaiting_user_a",
+    "awaiting_user_b",
+    "completed",
+)
+PLOT_TWIST_MAX_SCENES = 40
+PLOT_TWIST_MAX_DECISIONS = 24
+PLOT_TWIST_MAX_INTERCHANGEABLE_PER_SLOT = 6
+PLOT_TWIST_MAX_REPAIR_ATTEMPTS = 3
+PLOT_TWIST_MAX_BATCH_SCENES = 8
+# Reward tiers map an ending to league base points. The engine caps the final
+# base at 100 however the tiers combine, so AI values can never bypass it.
+PLOT_TWIST_REWARD_TIERS: dict[str, int] = {
+    "participation": 40,
+    "bronze": 60,
+    "silver": 80,
+    "gold": 100,
+}
+PLOT_TWIST_TREASURE_BONUS_EACH = 5
+PLOT_TWIST_TREASURE_BONUS_MAX = 15
+# Generation transport: per-request timeout and overall attempt caps so a
+# stalled provider fails visibly instead of hanging an admin request.
+PLOT_TWIST_LLM_TIMEOUT_SECONDS = 120
+PLOT_TWIST_SESSION_LOCK_KEY = 7_250_003
+
+
 # How old an open timing segment may be before it is treated as dead rather than played.
 #
 # The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``

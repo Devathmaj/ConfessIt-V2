@@ -193,7 +193,7 @@ export const AVAILABLE_GAMES: GameDefinition[] = [
   {
     id: 'plot-twist',
     name: 'Plot Twist',
-    tagline: 'A couple game — gameplay lands soon.',
+    tagline: 'A branching story you and your partner write together.',
     category: 'party',
     type: 'couple',
     difficulty: 'medium',

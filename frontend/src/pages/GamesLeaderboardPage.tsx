@@ -89,6 +89,13 @@ const nativeSummary = (gameId: string | null, entry: BoardEntry): string | null 
       const elapsed = num(native.elapsed_seconds);
       return elapsed !== null ? `${elapsed}s escape` : null;
     }
+    case 'plot-twist': {
+      const treasures = num(native.treasure_count);
+      const decisions = num(native.decisions_made);
+      if (treasures !== null && decisions !== null) return `${treasures} treasures · ${decisions} decisions`;
+      if (treasures !== null) return `${treasures} treasures`;
+      return null;
+    }
     default:
       return null;
   }

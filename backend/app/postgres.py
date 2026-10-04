@@ -739,6 +739,7 @@ class PostgresClient:
                 "reaction_time_games",
                 "connections_games",
                 "two_key_escape_games",
+                "plot_twist_games",
             ):
                 present = {
                     row[0]

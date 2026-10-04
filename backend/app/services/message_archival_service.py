@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import HTTPException, status
@@ -48,6 +49,23 @@ _DELETE_ID_CHUNK = 1000
 _ARCHIVE_FILE_MODE = 0o600
 _ARCHIVE_DIR_MODE = 0o700
 
+# How long _ensure_archive_dir waits for a flaky bind mount to settle before
+# giving up with an actionable error. Short: a healthy filesystem answers the
+# first poll, and a genuinely broken mount should fail fast rather than hang
+# the boot.
+_ARCHIVE_DIR_SETTLE_SECONDS = 5.0
+
+
+def _await_usable_dir(path: str, timeout: float = _ARCHIVE_DIR_SETTLE_SECONDS) -> bool:
+    """Poll until ``path`` stats as a directory, or the timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if os.path.isdir(path):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
 
 class MessageArchivalService:
     """Service for archiving old messages to compressed JSON files"""
@@ -66,7 +84,22 @@ class MessageArchivalService:
         writes that follow will fail loudly on their own if the directory is
         truly unusable.
         """
-        os.makedirs(self.archive_dir, mode=_ARCHIVE_DIR_MODE, exist_ok=True)
+        try:
+            os.makedirs(self.archive_dir, mode=_ARCHIVE_DIR_MODE, exist_ok=True)
+        except FileExistsError:
+            # A bind mount whose host source vanished (or a transiently
+            # inconsistent network share) can answer "exists" to mkdir yet
+            # "missing" to stat -- the exact split os.makedirs checks. Poll
+            # briefly for the mount to settle, then fail loudly naming the
+            # mount: a bare Errno 17 crash-loops the process with no hint
+            # about the actual cause.
+            if not _await_usable_dir(self.archive_dir):
+                raise RuntimeError(
+                    f"Archive directory {self.archive_dir!r} is not a usable "
+                    "directory. In local Compose it is the ./archives bind "
+                    "mount: recreate the host directory and restart the "
+                    "backend container."
+                ) from None
         try:
             os.chmod(self.archive_dir, _ARCHIVE_DIR_MODE)
         except OSError as e:

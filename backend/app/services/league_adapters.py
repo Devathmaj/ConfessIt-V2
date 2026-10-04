@@ -32,6 +32,10 @@ from ..db_models import (
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
     FeaturedGameRecord,
+    PlotTwistDecisionRecord,
+    PlotTwistGameRecord,
+    PlotTwistPackageRecord,
+    PlotTwistSessionRecord,
     ReactionTimeGameRecord,
     ReactionTimeSubmissionRecord,
     TriviaDropOptionRecord,
@@ -138,6 +142,8 @@ def pending_opportunities(session, game_id: str, known: set[str]) -> list[str]:
         return _ended_session_ids(session, CoupleGameRecord, game_id, known)
     if game_id == "two-key-escape":
         return _ended_session_ids(session, TwoKeyEscapeGameRecord, game_id, known)
+    if game_id == "plot-twist":
+        return _ended_session_ids(session, PlotTwistGameRecord, game_id, known)
     if game_id == "trivia-drop":
         rows = session.scalars(
             select(TriviaDropQuestionRecord.id).where(
@@ -169,6 +175,9 @@ def opportunity_info(session, game_id: str, opportunity_id: str) -> Optional[Opp
         start = _period_start(row) if row is not None else None
     elif game_id == "two-key-escape":
         row = session.get(TwoKeyEscapeGameRecord, opportunity_id)
+        start = _period_start(row) if row is not None else None
+    elif game_id == "plot-twist":
+        row = session.get(PlotTwistGameRecord, opportunity_id)
         start = _period_start(row) if row is not None else None
     elif game_id == "trivia-drop":
         row = session.get(TriviaDropQuestionRecord, opportunity_id)
@@ -212,6 +221,7 @@ def is_event_closed(session, game_id: str, opportunity_id: str) -> bool:
         "reaction-time": ReactionTimeGameRecord,
         "couple-questionnaire": CoupleGameRecord,
         "two-key-escape": TwoKeyEscapeGameRecord,
+        "plot-twist": PlotTwistGameRecord,
     }[game_id]
     row = session.get(model, opportunity_id)
     return row is not None and row.status == "ended"
@@ -534,6 +544,65 @@ def two_key_escape_results(session, opportunity_id: str) -> list[RankedSubject]:
     return subjects
 
 
+def plot_twist_results(session, opportunity_id: str) -> list[RankedSubject]:
+    """Completed story sessions ranked by outcome, then treasure, then pace.
+
+    Only ``completed`` sessions qualify; unfinished stories at finalization
+    are missed opportunities worth zero, not ranked participants. The
+    deterministic base comes from the pinned package's ending tier plus
+    bounded treasure bonuses (plot_twist_gameplay.score_for_outcome), so
+    the adapter and the result screen agree on the number.
+    """
+    from .plot_twist_gameplay import score_for_outcome
+
+    rows = session.scalars(
+        select(PlotTwistSessionRecord).where(
+            PlotTwistSessionRecord.plot_twist_game_id == opportunity_id,
+            PlotTwistSessionRecord.status == "completed",
+        )
+    ).all()
+    if not rows:
+        return []
+    package_ids = {str(row.story_package_id) for row in rows}
+    packages = {
+        str(pkg.id): dict(pkg.package or {})
+        for pkg in session.scalars(
+            select(PlotTwistPackageRecord).where(
+                PlotTwistPackageRecord.id.in_(package_ids)
+            )
+        ).all()
+    }
+    subjects = []
+    for row in rows:
+        member_a, member_b = canonical_couple(str(row.user_a_id), str(row.user_b_id))
+        package = packages.get(str(row.story_package_id), {})
+        endings = {e.get("id"): e for e in (package.get("endings") or [])}
+        ending = endings.get(row.ending_id or "")
+        decisions = session.scalar(
+            select(func.count())
+            .select_from(PlotTwistDecisionRecord)
+            .where(PlotTwistDecisionRecord.session_id == row.id)
+        ) or 0
+        treasures = list(row.treasures or [])
+        base = score_for_outcome(ending, treasures, int(decisions))
+        subjects.append(
+            RankedSubject(
+                subject=(member_a, member_b),
+                tie_key=(int(base), len(treasures), -int(decisions)),
+                order_key=(base, len(treasures), -int(decisions),
+                           _completed_at_iso(row.completed_at), member_a, member_b),
+                raw_metrics={
+                    "base_points": int(base),
+                    "success": bool((ending or {}).get("success", False)),
+                    "ending_type": (ending or {}).get("type"),
+                    "treasure_count": len(treasures),
+                    "decisions_made": int(decisions),
+                },
+            )
+        )
+    return subjects
+
+
 RESULT_FETCHERS: dict[str, Callable] = {
     "wordle": wordle_results,
     "anagram": anagram_results,
@@ -542,6 +611,7 @@ RESULT_FETCHERS: dict[str, Callable] = {
     "reaction-time": reaction_time_results,
     "couple-questionnaire": couple_results,
     "two-key-escape": two_key_escape_results,
+    "plot-twist": plot_twist_results,
 }
 
 

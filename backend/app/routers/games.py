@@ -9,6 +9,7 @@ from ..db_models import (
     AnagramGameRecord,
     ConnectionsGameRecord,
     CoupleGameRecord,
+    PlotTwistGameRecord,
     ReactionTimeGameRecord,
     TriviaDropQuestionRecord,
     TwoKeyEscapeGameRecord,
@@ -44,7 +45,7 @@ _GAME_NAMES = {
 # Barebones couple titles with no session lifecycle yet: they are
 # discoverable through the same hidden/disabled switches, but they never
 # hold a session row, so they are never playable until the gameplay lands.
-_BAREBONES_GAMES = ("plot-twist", "case-closed")
+_BAREBONES_GAMES = ("case-closed",)
 
 _SESSION_MODELS = {
     "wordle": WordleGameRecord,
@@ -53,6 +54,7 @@ _SESSION_MODELS = {
     "reaction-time": ReactionTimeGameRecord,
     "connections": ConnectionsGameRecord,
     "two-key-escape": TwoKeyEscapeGameRecord,
+    "plot-twist": PlotTwistGameRecord,
 }
 
 

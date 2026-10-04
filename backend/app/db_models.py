@@ -2739,6 +2739,202 @@ def resolve_account_by_regno(session, regno: Optional[str]) -> Optional[tuple[st
     return None
 
 
+class PlotTwistBlueprintRecord(Base):
+    """One AI-generated story blueprint awaiting approval.
+
+    The blueprint is the approved contract every later scene request must
+    follow: generation prompts carry it explicitly rather than depending on
+    hidden conversation history. ``blueprint`` holds the validated
+    BlueprintDef; ``status`` moves draft -> generating -> ready_for_review ->
+    approved (or generation_failed). Approval never edits history in place:
+    publishing always snapshots a new package version.
+    """
+
+    __tablename__ = "plot_twist_blueprints"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String(200), default="", server_default=text("''"))
+    difficulty: Mapped[str] = mapped_column(String(16), default="medium", server_default=text("'medium'"))
+    config: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    blueprint: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default=text("'draft'"), index=True)
+    validation_errors: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'generating', 'ready_for_review', 'approved', 'generation_failed')",
+            name="ck_plot_twist_blueprints_status_known",
+        ),
+    )
+
+
+class PlotTwistPackageRecord(Base):
+    """One versioned, validated story package generated from a blueprint.
+
+    ``package`` holds the validated StoryPackageDef: scenes, choices,
+    endings and rewards. ``status`` moves draft -> generating ->
+    validation_failed -> ready_for_review -> published (or
+    generation_failed). Publishing is append-only: edits and regeneration
+    create a new row with a bumped version, so sessions already assigned to
+    a published version keep playing exactly what they started.
+    """
+
+    __tablename__ = "plot_twist_packages"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    blueprint_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("plot_twist_blueprints.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    title: Mapped[str] = mapped_column(String(200), default="", server_default=text("''"))
+    package: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default=text("'draft'"), index=True)
+    validation_errors: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("blueprint_id", "version"),
+        CheckConstraint(
+            "status IN ('draft', 'generating', 'validation_failed', 'ready_for_review', 'published', 'generation_failed')",
+            name="ck_plot_twist_packages_status_known",
+        ),
+    )
+
+
+class PlotTwistGameRecord(Base):
+    """One Plot Twist global period: the calendar window couples play in.
+
+    The row pins the published story package version in force when the
+    period opened (``story_package_id``): later publications never rewrite
+    it, so every couple in the period plays the same version. Sessions are
+    opened by the reset loop under the game's own cadence exactly like the
+    other period games; with no published package the loop opens nothing.
+    """
+
+    __tablename__ = "plot_twist_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    story_package_id: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("plot_twist_packages.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    seed: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_plot_twist_games_status_known",
+        ),
+    )
+
+
+class PlotTwistSessionRecord(Base):
+    """One couple's playthrough of a pinned story package version.
+
+    ``story_package_id`` is denormalized from the global game at creation so
+    the session keeps playing its original version even after newer versions
+    publish. ``selected_scenes`` is the deterministic module selection for
+    this couple (ordered scene ids plus the seed), persisted before the first
+    decision and never reshuffled. ``state`` is the current variable snapshot;
+    ``current_scene_id`` plus ``assigned_actor`` name whose turn it is.
+    ``state_version`` is optimistic concurrency: every accepted choice bumps
+    it, and a stale submit is refused.
+    """
+
+    __tablename__ = "plot_twist_sessions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    plot_twist_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("plot_twist_games.id", ondelete="CASCADE"), index=True
+    )
+    story_package_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("plot_twist_packages.id", ondelete="CASCADE"), index=True
+    )
+    user_a_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    user_b_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    current_scene_id: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
+    state: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    tags: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    assigned_actor: Mapped[str] = mapped_column(String(16), default="either", server_default=text("'either'"))
+    status: Mapped[str] = mapped_column(String(20), default="awaiting_user_a", server_default=text("'awaiting_user_a'"), index=True)
+    selected_scenes: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    visited_scenes: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    ending_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    treasures: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    state_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    score_awarded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("plot_twist_game_id", "user_a_id", "user_b_id"),
+        CheckConstraint("user_a_id != user_b_id", name="ck_plot_twist_sessions_distinct_users"),
+        CheckConstraint(
+            "status IN ('awaiting_user_a', 'awaiting_user_b', 'completed')",
+            name="ck_plot_twist_sessions_status_known",
+        ),
+    )
+
+
+class PlotTwistDecisionRecord(Base):
+    """One recorded decision: who chose what, and what it changed.
+
+    Insert-only and seq-numbered server-side from the stored count, so a
+    retry or duplicate submit for the same turn resolves to the stored row
+    instead of applying consequences twice.
+    """
+
+    __tablename__ = "plot_twist_decisions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("plot_twist_sessions.id", ondelete="CASCADE"), index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer)
+    scene_id: Mapped[str] = mapped_column(String(64), index=True)
+    actor_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    choice_id: Mapped[str] = mapped_column(String(64))
+    next_scene_id: Mapped[str] = mapped_column(String(64))
+    state_before: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    state_after: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq"),
+    )
+
+
 def resolve_account_by_id(session, account_id: Optional[str]) -> Optional[tuple[str, Any]]:
     """Find the account with this primary key, as ``(account_type, row)`` or None."""
     if not _is_account_id(account_id):

@@ -46,6 +46,7 @@ from ..db_models import (
     CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
+    PlotTwistGameRecord,
     ReactionTimeGameRecord,
     ScheduledGameContentRecord,
     TwoKeyEscapeGameRecord,
@@ -68,6 +69,7 @@ _GAME_MODELS: dict[str, Any] = {
     "reaction-time": ReactionTimeGameRecord,
     "connections": ConnectionsGameRecord,
     "two-key-escape": TwoKeyEscapeGameRecord,
+    "plot-twist": PlotTwistGameRecord,
 }
 
 
@@ -409,10 +411,10 @@ def ensure_single_game(
         from . import trivia_service
 
         return trivia_service.release_due_questions(db, _now_utc(now))
-    if game_id in ("plot-twist", "case-closed"):
-        # Barebones couple titles: no session table and no period yet.
-        # They ride the same pass so hidden keeps skipping and the summary
-        # stays complete, but they never open sessions until gameplay lands.
+    if game_id == "case-closed":
+        # Barebones couple title: no session table and no period yet. It
+        # rides the same pass so hidden keeps skipping and the summary
+        # stays complete, but it never opens sessions until gameplay lands.
         moment = _now_utc(now)
         with db.sessions.begin() as session:
             session.execute(
@@ -651,6 +653,45 @@ def _open_period(
             "period_start": start.isoformat(),
             "period_end": end.isoformat(),
         }
+    if game_id == "plot-twist":
+        # Plot Twist: a new global period pinning the newest published story
+        # package. Couples play that pinned version for the whole period;
+        # later publications never rewrite it. Per-couple sessions are
+        # created lazily on entering, so nothing rolls over. With no
+        # published package there is nothing playable to open.
+        from ..db_models import PlotTwistPackageRecord
+
+        published = session.scalar(
+            select(PlotTwistPackageRecord)
+            .where(PlotTwistPackageRecord.status == "published")
+            .order_by(PlotTwistPackageRecord.published_at.desc())
+            .limit(1)
+        )
+        if published is None:
+            return {"game_id": game_id, "action": "coming_soon"}
+        import uuid as _uuid_mod
+
+        opened = PlotTwistGameRecord(
+            game_date=start,
+            status="active",
+            period_start_date=start,
+            period_end_date=end,
+            story_package_id=str(published.id),
+            seed=_uuid_mod.uuid4().hex,
+            started_at=moment,
+            created_by="scheduler",
+        )
+        session.add(opened)
+        session.flush()
+        return {
+            "game_id": game_id,
+            "action": "created",
+            "session_id": str(opened.id),
+            "status": opened.status,
+            "story_package_id": str(published.id),
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        }
     # Couple Questionnaire: a new global period, then a fresh pair session per
     # existing couple with a fresh question set each.
     opened = CoupleGameRecord(
@@ -869,6 +910,5 @@ def active_session_counts(db: Database) -> dict[str, int]:
         )
         # Barebones titles hold no sessions yet; report zero like a game
         # with no live rows so the counts stay complete per GAME_IDS.
-        out["plot-twist"] = 0
         out["case-closed"] = 0
         return out

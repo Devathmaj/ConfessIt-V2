@@ -142,6 +142,23 @@ export const CATEGORY_UI: Record<string, CategoryUI> = {
   },
 };
 
+/** Plot Twist boards: outcome score plus treasure counts. */
+CATEGORY_UI['score_plot-twist'] = {
+  columns: [
+    { key: 'score', label: 'Score', format: 'num' },
+    { key: 'treasures', label: 'Treasures', format: 'int' },
+    { key: 'decisions', label: 'Decisions', format: 'int' },
+  ],
+  primary: { key: 'score', label: 'score', format: 'num' },
+};
+CATEGORY_UI['most_treasures'] = {
+  columns: [
+    { key: 'treasures', label: 'Treasures', format: 'int' },
+    { key: 'stories', label: 'Stories', format: 'int' },
+  ],
+  primary: { key: 'treasures', label: 'treasures', format: 'int' },
+};
+
 /** Anagram boards share shapes with Wordle's but different metric keys. */
 CATEGORY_UI['performance_anagram'] = {
   columns: [

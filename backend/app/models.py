@@ -1656,6 +1656,171 @@ class ReactionTimeCompleteRequest(BaseModel):
     clicked_at: Optional[datetime] = None
 
 
+# --- Plot Twist -------------------------------------------------------------------
+#
+# The participant side and the admin side of the asynchronous cooperative
+# storytelling game. Admin models describe generation (blueprint config,
+# approval, package publication); player models describe one couple's place
+# in the published story (current scene, whose turn, history, outcome).
+# Scores and leaderboard subjects travel through the existing league
+# service, never through these models.
+
+PlotTwistStage = Literal[
+    "no_game",
+    "selecting_partner",
+    "awaiting_you",
+    "awaiting_partner",
+    "completed",
+]
+
+
+class PlotTwistGenerationConfig(BaseModel):
+    """Parameters for Stage A blueprint generation.
+
+    Only ``difficulty`` is required -- and the only knob the admin UI
+    offers. Everything else is optional so tests and power users may pin
+    it while the console stays a single difficulty picker.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    theme: Optional[str] = None
+    premise: Optional[str] = None
+    genre: Optional[str] = None
+    tone: Optional[str] = None
+    decision_count: Optional[int] = None
+    interchangeable_count: Optional[int] = None
+    ending_types: Optional[List[str]] = None
+    allow_treasure: Optional[bool] = None
+    max_scenes: Optional[int] = None
+
+
+class PlotTwistBlueprintView(BaseModel):
+    id: str
+    title: str
+    difficulty: str
+    config: dict = {}
+    blueprint: dict = {}
+    status: str
+    validation_errors: list = []
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlotTwistPackageView(BaseModel):
+    id: str
+    blueprint_id: str
+    version: int
+    title: str
+    package: dict = {}
+    status: str
+    validation_errors: list = []
+    published_at: Optional[datetime] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlotTwistSceneView(BaseModel):
+    """One scene as the participant assigned to it sees it."""
+
+    scene_id: str
+    scene_type: str
+    title: str
+    narrative_text: str
+    actor: str
+    choices: List[dict] = []
+    is_terminal: bool = False
+    visited_count: int = 0
+
+
+class PlotTwistChoiceView(BaseModel):
+    choice_id: str
+    text: str
+    consequence_text: Optional[str] = None
+    reward_tier: Optional[str] = None
+
+
+class PlotTwistDecisionView(BaseModel):
+    seq: int
+    scene_id: str
+    scene_title: Optional[str] = None
+    actor_user_id: str
+    actor_name: Optional[str] = None
+    choice_id: str
+    choice_text: Optional[str] = None
+    consequence_text: Optional[str] = None
+    created_at: datetime
+
+
+class PlotTwistResultView(BaseModel):
+    ending_id: Optional[str] = None
+    ending_type: Optional[str] = None
+    ending_title: Optional[str] = None
+    narrative: Optional[str] = None
+    success: bool = False
+    treasures: List[str] = []
+    decisions_made: int = 0
+    completed_at: Optional[datetime] = None
+
+
+class PlotTwistCurrentState(BaseModel):
+    """This caller's place in Plot Twist, as the page opens.
+
+    Reading never creates gameplay rows: partner selection reuses the
+    questionnaire's mutual-selection storage, and the session row is created
+    on entering the event or submitting the first choice. Hidden future
+    scenes and the other participant's pending choice never travel here --
+    only the current scene, whose turn it is, and settled history.
+    """
+
+    stage: PlotTwistStage
+    game_id: Optional[str] = None
+    session_id: Optional[str] = None
+    my_selection: Optional[CoupleSelectionView] = None
+    partner: Optional[CouplePartnerView] = None
+    scene: Optional[PlotTwistSceneView] = None
+    state_version: int = 0
+    decisions_made: int = 0
+    history: List[PlotTwistDecisionView] = []
+    result: Optional[PlotTwistResultView] = None
+
+
+class PlotTwistChoiceSubmitRequest(BaseModel):
+    """Submitting the assigned turn's choice.
+
+    ``state_version`` is optimistic concurrency: it must match the stored
+    version, so a stale screen cannot overwrite newer game state. A repeat
+    submit of an already-recorded turn resolves to the stored outcome
+    instead of applying consequences twice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    choice_id: str
+    state_version: int
+
+
+class PlotTwistSimulateRequest(BaseModel):
+    """An admin preview walk: choice ids applied in order from the opening."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    choice_ids: List[str] = Field(default_factory=list, max_length=24)
+
+
+class PlotTwistSimulateResponse(BaseModel):
+    steps: List[dict] = []
+    ending_id: Optional[str] = None
+    ending_title: Optional[str] = None
+    final_state: dict = {}
+    treasures: List[str] = []
+    valid: bool = True
+    error: Optional[str] = None
+
+
 # --- Connections configuration --------------------------------------------------
 #
 # Admin-side only, and the same boundary the Wordle models hold: these describe a
