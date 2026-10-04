@@ -88,6 +88,14 @@ def _check_condition(
             f"{where} uses flag comparison {cond.op!r} on integer {cond.variable!r}.",
             scene_id,
         )
+    if cond.op in ("has_flag", "missing_flag") and not isinstance(cond.value, str):
+        _err(
+            errors,
+            "flag_value_type",
+            f"{where} uses flag comparison with non-string value "
+            f"{cond.value!r}; flag tokens must be short strings.",
+            scene_id,
+        )
 
 
 def _check_state_change(
@@ -123,6 +131,15 @@ def _check_state_change(
             errors,
             "state_change_type_mismatch",
             f"{where} applies flag op {change.op!r} to integer {change.variable!r}.",
+            scene_id,
+        )
+        return
+    if change.op in ("add_flag", "remove_flag") and not isinstance(change.value, str):
+        _err(
+            errors,
+            "flag_value_type",
+            f"{where} uses flag op {change.op!r} with non-string value "
+            f"{change.value!r}; flag tokens must be short strings.",
             scene_id,
         )
         return
@@ -241,6 +258,15 @@ def validate_package(
                 "it must be 'opening'.",
                 opening.id,
             )
+        if (opening.slot or "core") != "core":
+            _err(
+                errors,
+                "opening_not_core",
+                f"Opening scene {opening.id!r} uses slot {opening.slot!r}; "
+                "the opening must use slot 'core' so every couple starts "
+                "the same story instead of a slot-collapsed loop.",
+                opening.id,
+            )
 
     ending_ids = [ending.id for ending in package.endings]
     if len(set(ending_ids)) != len(ending_ids):
@@ -253,6 +279,44 @@ def validate_package(
     for name, value in package.initial_state.items():
         if name not in var_map:
             _err(errors, "initial_state_unknown_var", f"Initial state sets undeclared variable {name!r}.")
+    for var_name, var in var_map.items():
+        if var_name not in package.initial_state:
+            _err(
+                errors,
+                "missing_initial_state",
+                f"Initial state omits declared variable {var_name!r}; "
+                "gameplay would start it from zero instead of its designed initial.",
+            )
+            continue
+        value = package.initial_state[var_name]
+        if var.kind == "int":
+            if not isinstance(value, int) or isinstance(value, bool):
+                _err(
+                    errors,
+                    "initial_state_bad_type",
+                    f"Initial state sets integer {var_name!r} to non-integer {value!r}.",
+                )
+            elif (var.min_value is not None and value < var.min_value) or (
+                var.max_value is not None and value > var.max_value
+            ):
+                _err(
+                    errors,
+                    "initial_state_out_of_range",
+                    f"Initial state sets {var_name!r} to {value}, outside "
+                    f"[{var.min_value}, {var.max_value}].",
+                )
+        else:
+            if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+                _err(
+                    errors,
+                    "initial_state_bad_type",
+                    f"Initial state sets flag {var_name!r} to {value!r}; "
+                    "flag state must be a list of string tokens.",
+                )
+
+    # Content variety: repeated titles or narratives play as deja vu, the
+    # exact complaint behind looped histories.
+    _check_content_variety(package, errors, by_scene)
 
     # Per-scene checks.
     for scene in package.scenes:
@@ -288,6 +352,15 @@ def validate_package(
                     "Terminal scene must not offer choices.",
                     scene.id,
                 )
+            if (scene.slot or "core") != "core":
+                _err(
+                    errors,
+                    "terminal_not_core",
+                    f"Terminal scene {scene.id!r} uses slot {scene.slot!r}; "
+                    "terminals must use slot 'core' so module selection can "
+                    "never shadow or duplicate an ending.",
+                    scene.id,
+                )
             continue
         if not scene.choices:
             _err(errors, "dead_end", "Non-terminal scene offers no choices.", scene.id)
@@ -295,6 +368,27 @@ def validate_package(
         choice_ids = [choice.id for choice in scene.choices]
         if len(set(choice_ids)) != len(choice_ids):
             _err(errors, "duplicate_choice_id", "Choice ids must be unique within a scene.", scene.id)
+        if len(scene.choices) >= 2:
+            targets = {choice.next_scene_id for choice in scene.choices}
+            if len(targets) == 1:
+                _err(
+                    errors,
+                    "convergent_choices",
+                    f"All {len(scene.choices)} choices lead to "
+                    f"{next(iter(targets))!r}: a decision with one outcome is "
+                    "not a decision. Branch to different next scenes with "
+                    "different tradeoffs instead of a polar good-vs-bad pair "
+                    "converging on the same place.",
+                    scene.id,
+                )
+            texts = [str(choice.text).strip().lower() for choice in scene.choices]
+            if len(set(texts)) != len(texts):
+                _err(
+                    errors,
+                    "duplicate_choice_text",
+                    "Choice texts must be distinct within a scene.",
+                    scene.id,
+                )
         for choice in scene.choices:
             where = f"Choice {choice.id!r}"
             if choice.next_scene_id not in by_scene:
@@ -373,6 +467,13 @@ def validate_package(
                 f"Scene requires tags {missing}, which no scene in the package provides.",
                 scene.id,
             )
+
+    # Slot-collapse guard: two scenes sharing one non-core slot must be
+    # alternatives for the same moment, never sequential beats. If one can
+    # reach the other, per-couple module selection collapses the whole path
+    # into a loop (the Echoes of Trust failure: slot-1 held scene-1 and
+    # scene-5, so every couple replayed 4 scenes 11 times).
+    _check_slot_reuse_on_path(by_scene, errors)
 
     # Two-sidedness: turns strictly alternate at runtime, so the package
     # must read that way too -- mostly individual scenes, and never two
@@ -453,6 +554,74 @@ def validate_package(
         _check_livelock(errors, by_scene, package.opening_scene_id)
 
     return ValidationReport(ok=not errors, errors=errors)
+
+
+def _check_content_variety(package: Any, errors: list[ValidationMessage], by_scene: dict) -> None:
+    """Flag copy-paste stories: duplicate titles read as loops in histories.
+
+    Narrative text is deliberately not enforced here: synthetic engine tests
+    reuse short placeholders like "Onward." across corridor scenes, while the
+    prompt already asks the model for distinct vivid beats. Titles are what
+    the history screen repeats, so they stay a hard rule.
+    """
+    titles: dict[str, list[str]] = {}
+    for scene in package.scenes:
+        key = str(scene.title or "").strip().lower()
+        if key:
+            titles.setdefault(key, []).append(scene.id)
+    for key, ids in titles.items():
+        if len(ids) > 1:
+            _err(
+                errors,
+                "duplicate_scene_title",
+                f"Scenes {sorted(ids)} share the title {key!r}; every scene "
+                "needs its own moment so histories do not repeat.",
+            )
+
+
+def _reachable_from(by_scene: dict, start_id: str) -> set[str]:
+    """All scene ids reachable from ``start_id`` via authored transitions."""
+    seen: set[str] = set()
+    queue: deque[str] = deque([start_id])
+    while queue:
+        current = queue.popleft()
+        if current in seen or current not in by_scene:
+            continue
+        seen.add(current)
+        scene = by_scene[current]
+        if scene.is_terminal:
+            continue
+        for choice in scene.choices or []:
+            if choice.next_scene_id in by_scene:
+                queue.append(choice.next_scene_id)
+    return seen
+
+
+def _check_slot_reuse_on_path(by_scene: dict, errors: list[ValidationMessage]) -> None:
+    """Flag non-core slots reused for sequential beats (selection collapse)."""
+    by_slot: dict[str, list[str]] = {}
+    for scene_id, scene in by_scene.items():
+        slot = scene.slot or "core"
+        if slot == "core":
+            continue
+        by_slot.setdefault(slot, []).append(scene_id)
+    for slot, ids in by_slot.items():
+        if len(ids) < 2:
+            continue
+        for source in ids:
+            reachable = _reachable_from(by_scene, source) - {source}
+            collided = sorted(set(ids) & reachable)
+            if collided:
+                _err(
+                    errors,
+                    "slot_reuse_on_path",
+                    f"Slot {slot!r} holds scenes {sorted(ids)} where "
+                    f"{source!r} can reach {collided}: interchangeable "
+                    "alternatives must never be sequential beats, or module "
+                    "selection collapses the story into a repeating loop.",
+                    source,
+                )
+                break
 
 
 def _check_escapable_cycles(by_scene: dict, errors: list[ValidationMessage]) -> None:

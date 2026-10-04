@@ -619,6 +619,87 @@ def _get_my_session_for_update(session, game_id: str, user_a_id: str, user_b_id:
     )
 
 
+def _initial_state_with_defaults(package: dict) -> dict:
+    """The starting state with declared initials filled in.
+
+    Legacy packages (e.g. Echoes of Trust v1) shipped ``initial_state`` as
+    ``{}`` while declaring ``trust: 5``: gameplay then started trust from 0
+    and no ending condition could ever hold on schedule. Filling missing
+    variables from their declared initials keeps old stories playable and
+    new stories honest. Flag initials normalize to string lists.
+    """
+    state = dict(package.get("initial_state") or {})
+    for var in package.get("state_vars") or []:
+        name = var.get("name")
+        if not name or name in state:
+            continue
+        initial = var.get("initial")
+        if (var.get("kind") or "int") == "flag":
+            if isinstance(initial, list):
+                state[name] = [str(v) for v in initial if isinstance(v, str)]
+            elif isinstance(initial, str):
+                state[name] = [initial]
+            else:
+                state[name] = []
+        elif isinstance(initial, int) and not isinstance(initial, bool):
+            state[name] = _clamp(var, initial)
+    return state
+
+
+def _authored_reachable_ids(package: dict, start_id: str) -> set[str]:
+    """Scene ids reachable from ``start_id`` through authored transitions."""
+    scenes = {s.get("id"): s for s in (package.get("scenes") or [])}
+    seen: set[str] = set()
+    queue = [start_id]
+    while queue:
+        current = queue.pop()
+        if current in seen or current not in scenes:
+            continue
+        seen.add(current)
+        scene = scenes[current]
+        if scene.get("is_terminal"):
+            continue
+        for choice in scene.get("choices") or []:
+            nxt = choice.get("next_scene_id")
+            if nxt in scenes and nxt not in seen:
+                queue.append(nxt)
+    return seen
+
+
+def _selection_is_safe(package: dict) -> bool:
+    """Whether per-couple module selection can apply without collapsing.
+
+    Safe means: the opening and every terminal live in slot ``core``, and no
+    non-core slot holds two scenes where one can reach the other. When a
+    package violates this (Echoes of Trust v1 put its linear beats in
+    slot-1..slot-4 twice), resolving every transition through the selection
+    folds distinct beats onto one scene and replays 4 scenes forever. An
+    unsafe package plays on its authored graph instead: every transition
+    uses its named target.
+    """
+    scenes = {s.get("id"): s for s in (package.get("scenes") or [])}
+    opening = scenes.get(package.get("opening_scene_id") or "")
+    if not opening or (opening.get("slot") or "core") != "core":
+        return False
+    for scene in scenes.values():
+        if scene.get("is_terminal") and (scene.get("slot") or "core") != "core":
+            return False
+    by_slot: dict[str, list[str]] = {}
+    for scene_id, scene in scenes.items():
+        slot = scene.get("slot") or "core"
+        if slot == "core":
+            continue
+        by_slot.setdefault(slot, []).append(scene_id)
+    for ids in by_slot.values():
+        if len(ids) < 2:
+            continue
+        for source in ids:
+            others = set(ids) - {source}
+            if others & _authored_reachable_ids(package, source):
+                return False
+    return True
+
+
 def _select_modules(package: dict, seed: str) -> dict:
     """Deterministic per-couple interchangeable selection, persisted once.
 
@@ -626,8 +707,12 @@ def _select_modules(package: dict, seed: str) -> dict:
     scenes with a seed combining the global seed, the couple and the
     package version. Scenes in slots with ``allow_repeat`` may recur;
     all other slots resolve to their single selected scene for the whole
-    session and are never reshuffled.
+    session and are never reshuffled. Packages that misuse slots for
+    sequential beats select nothing: they play on the authored graph so a
+    legacy story cannot collapse into a loop.
     """
+    if not _selection_is_safe(package):
+        return {"seed": seed, "slots": {}}
     by_slot: dict[str, list[dict]] = {}
     for scene in package.get("scenes") or []:
         slot = scene.get("slot") or "core"
@@ -650,12 +735,17 @@ def _resolve_scene(package: dict, selection: dict, scene_id: str) -> dict:
 
     A transition naming any scene of an interchangeable slot resolves to
     the couple's selected alternative for that slot, so every couple plays
-    a compatible variation of the same published story.
+    a compatible variation of the same published story. Packages whose slots
+    are unsafe (sequential beats sharing one slot) ignore the selection and
+    use the authored target, so legacy stories play linearly instead of
+    looping.
     """
     scenes = {s.get("id"): s for s in (package.get("scenes") or [])}
     target = scenes.get(scene_id)
     if target is None:
         return {}
+    if not _selection_is_safe(package):
+        return target
     slot = target.get("slot") or "core"
     if slot == "core":
         return target
@@ -686,7 +776,7 @@ def _get_or_create_session(session, game: PlotTwistGameRecord, couple) -> PlotTw
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="The published story has no playable opening scene.",
         )
-    state = dict(package.get("initial_state") or {})
+    state = _initial_state_with_defaults(package)
     tags = list(opening.get("provides_tags") or [])
     # The opening turn resolves like every other: strict actors name their
     # member, shared openings start with user_a. The stored role is always
@@ -901,9 +991,13 @@ def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, 
         row.completed_at = _now()
         row.assigned_actor = _member_role(row, user.id)
     elif seq >= max_decisions:
-        # Decision budget reached on a non-terminal scene: conclude at the
-        # best qualifying ending rather than letting a loop run past it.
-        ending = _resolve_ending(endings, None, state_after)
+        # Decision budget reached on a non-terminal scene: conclude now
+        # rather than letting a loop run past it. Prefer the best qualifying
+        # ending, but never strand: with no qualifier the highest-priority
+        # ending still settles the story instead of playing forever (the old
+        # code advanced the turn here, so unqualified budgets looped past
+        # the cap until some state happened to qualify).
+        ending = _resolve_ending(endings, None, state_after) or _best_effort_ending(endings)
         if ending is not None:
             row.ending_id = ending.get("id")
             row.status = "completed"
@@ -913,6 +1007,14 @@ def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, 
             _advance_turn(row, resolved, user.id)
     else:
         _advance_turn(row, resolved, user.id)
+
+
+def _best_effort_ending(endings: dict[str, dict]) -> Optional[dict]:
+    """Highest-priority ending when the budget hits with no qualifier."""
+    if not endings:
+        return None
+    ranked = sorted(endings.values(), key=lambda e: (-int(e.get("priority") or 0), str(e.get("id"))))
+    return ranked[0]
 
 
 def _member_role(row: PlotTwistSessionRecord, user_id: str) -> str:

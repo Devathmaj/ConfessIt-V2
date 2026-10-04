@@ -84,15 +84,31 @@ def _stage_a_system() -> str:
         "cooperative storytelling game for couples. Respond with a single JSON "
         "object honouring the provided schema and nothing else. Keep every id "
         "short, unique and machine-readable (lowercase letters, digits, "
-        "dashes). State variables must be integers with min/max/initial or "
-        "boolean flags. Endings need explicit machine-evaluable conditions "
-        "over declared variables. Reward tiers must be one of participation, "
+        "dashes). State variables must be bounded integers with "
+        "min/max/initial, or flag collections holding string tokens "
+        "(initial is a list of strings, never a number or boolean; flag "
+        "values elsewhere are short lowercase strings such as 'silent' or "
+        "'map', never 1/0/true/false). Endings need explicit "
+        "machine-evaluable conditions over declared variables, with distinct "
+        "priorities and mutually exclusive outcomes so different play styles "
+        "reach different endings. Reward tiers must be one of participation, "
         "bronze, silver, gold. Two-sidedness is a hard rule, and the "
         "constraints you write must say so: turns strictly alternate, so the "
         "large majority of decision scenes belong to exactly one participant "
         "(participant_one or participant_two in alternation, never the same "
         "participant twice running); either/joint scenes are rare, genuinely "
-        "shared moments only."
+        "shared moments only. The main path is the spine of the story: list "
+        "its beats in order. Interchangeable slots are optional side "
+        "variations only -- never steps of the main path, never reused for "
+        "two different main beats. Also write these design constraints "
+        "verbatim into constraints so Stage B must honour them: "
+        "'main-path scenes use slot core only; opening and every terminal "
+        "scene use slot core', 'every decision scene offers at least two "
+        "choices leading to different next scenes (no unanimous convergence)', "
+        "'choices are tradeoffs with real costs, never one obviously-correct "
+        "good option versus an obviously-wrong bad option leading to the same "
+        "place', 'every choice carries a specific consequence_text distinct "
+        "within its scene', 'initial_state covers every declared variable'."
     )
 
 
@@ -122,7 +138,15 @@ def _stage_a_user(config: GenerationConfig) -> str:
         "narrative path as an ordered list of beats, interchangeable scene "
         "slots with compatibility rules, required modules, encounter "
         "categories, ending definitions with conditions and priorities, "
-        "reward tiers, and constraints later scenes must follow."
+        "reward tiers, and constraints later scenes must follow. "
+        "Slot discipline: the main path beats are always slot core; "
+        "interchangeable slots each hold alternative versions of ONE side "
+        "moment, never two sequential main beats sharing one slot. "
+        "State discipline: every declared variable needs an initial within "
+        "range (flag initials are lists of strings); ending conditions must "
+        "be jointly achievable through play (e.g. trust thresholds within "
+        "reach of the planned increments) and mutually exclusive across "
+        "endings."
     )
     return "\n".join(lines)
 
@@ -133,22 +157,46 @@ def _stage_b_system() -> str:
         "a single JSON object honouring the provided schema and nothing "
         "else -- no prose, no summaries, no markdown. Shape rules that always "
         "hold: `scenes` is an array of full scene objects (never strings, "
-        "never ids); every scene needs an id, type (opening, encounter, "
-        "connector, discovery or ending), title, narrative_text, actor "
+        "never ids); every scene needs a unique id, unique title, unique "
+        "narrative_text (2-4 vivid sentences grounded in the blueprint world, "
+        "never generic filler such as 'A quiet moment where trust can deepen', "
+        "never reused across scenes), type (opening, encounter, "
+        "connector, discovery or ending), actor "
         "(participant_one, participant_two, either or joint), slot, "
         "compatibility tags, choices with safe state changes (set, "
         "increment, decrement, add_flag, remove_flag over declared variables "
-        "only), and valid next_scene_id transitions naming another scene's "
-        "id. Non-terminal scenes need at least one choice; terminal scenes "
+        "only -- flag values are short lowercase strings, never numbers or "
+        "booleans), and valid next_scene_id transitions naming another scene's "
+        "id. Non-terminal scenes need at least two choices; terminal scenes "
         "carry an ending_id and no choices. `endings` is an array of full "
         "ending objects with id, type, title, narrative, conditions, "
         "priority, rewards, success and reward_tier. Never invent variables, "
-        "tags, endings or tiers outside the blueprint and schema. Two-sidedness "
+        "tags, endings or tiers outside the blueprint and schema. "
+        "Slot discipline is a hard rule: the opening scene and every terminal "
+        "scene use slot core; every main-path decision scene uses slot core; "
+        "a non-core slot holds only interchangeable alternatives for ONE side "
+        "moment -- never two sequential story beats sharing one slot, never "
+        "the opening. Two-sidedness "
         "is a hard rule: the large majority of decision scenes belong strictly "
         "to participant_one or participant_two in alternation along every path "
         "(never the same participant twice running); either/joint only for rare "
         "genuinely shared moments. Every loop of scenes must offer a choice "
-        "leading out toward an ending, or the package will be rejected."
+        "leading out toward an ending, or the package will be rejected. "
+        "Choice design is a hard rule and the most common rejection reason: "
+        "every decision scene must branch -- its choices lead to DIFFERENT "
+        "next_scene_id targets, never all converging on one scene. Choices "
+        "are dilemmas with real tradeoffs (trust versus secrets, safety "
+        "versus treasure, speed versus care), never a polar good-versus-bad "
+        "pair where one option is conventionally correct ('share/open/solve/"
+        "reassure/join' gaining trust) and the other is conventionally wrong "
+        "('ignore/leave/give up/stay/reject' losing trust) leading to the same "
+        "place. Same-target choices are rejected. Each choice needs its own "
+        "specific consequence_text (what this choice costs and changes, "
+        "distinct within the scene, never generic like 'You follow the trail, "
+        "curiosity drives you'). State changes must differ across the choices "
+        "of a scene and matter: gate later choices and endings on them, keep "
+        "initial_state complete for every declared variable, and make each "
+        "ending reachable by a distinct play style."
     )
 
 
@@ -162,11 +210,18 @@ def _stage_b_user(blueprint: dict, config: GenerationConfig) -> str:
         f"Difficulty: {config.difficulty}. "
         f"Aim for about {config.decision_count} decision points and "
         f"{config.interchangeable_count} interchangeable encounters within "
-        f"{config.max_scenes} scenes. Include the opening scene, the core "
-        "story path, decision scenes, interchangeable modules, optional "
-        "discoveries, connectors, consequences and state changes for every "
-        "choice, explicit ending conditions, reward definitions and "
-        "compatibility rules."
+        f"{config.max_scenes} scenes. Include the opening scene (slot core), "
+        "the core story path in slot core only, decision scenes with real "
+        "branches, interchangeable modules as side alternatives (one moment "
+        "per slot, never sequential beats sharing a slot), optional "
+        "discoveries, connectors, specific consequence_text and divergent "
+        "state changes for every choice, explicit achievable ending "
+        "conditions, reward definitions and compatibility rules. "
+        "Before returning, self-check: no two choices of one scene share a "
+        "next_scene_id; no good-vs-bad polar pair leading to the same scene; "
+        "no repeated titles or narrative_text; initial_state sets every "
+        "declared variable (flags as string lists); flag values are strings; "
+        "each ending is reachable by a different play style."
     )
 
 
@@ -186,6 +241,7 @@ def _minimized_blueprint(blueprint: dict) -> dict:
                 "kind": var.get("kind"),
                 "min_value": var.get("min_value"),
                 "max_value": var.get("max_value"),
+                "initial": var.get("initial"),
             }
             for var in (blueprint.get("state_vars") or [])
         ],
@@ -206,10 +262,16 @@ def _batch_user(blueprint: dict, slot: str, existing_summary: str) -> str:
 
     return (
         f"Generate interchangeable scenes for slot {slot!r} of this approved "
-        "blueprint. Return a single JSON object with the slot name and its "
+        "blueprint. These are alternative versions of ONE side moment, not "
+        "sequential story beats: they must be mutually substitutable, with "
+        "unique titles and narrative_text that do not duplicate any existing "
+        "scene. Return a single JSON object with the slot name and its "
         "scenes, where every scene is a full scene object (id, type, title, "
         "narrative_text, actor, slot, tags, choices with valid "
-        "next_scene_id transitions) -- never a string or an id.\n\n"
+        "next_scene_id transitions and divergent targets) -- never a string "
+        "or an id. Each scene still branches (choices lead to different next "
+        "scenes) and still offers tradeoffs, never a polar good-vs-bad pair "
+        "converging on one scene.\n\n"
         f"BLUEPRINT (essentials):\n{_json.dumps(_minimized_blueprint(blueprint))}\n\n"
         f"EXISTING SCENES (summaries, do not duplicate):\n{existing_summary}"
     )
@@ -776,7 +838,11 @@ def simulate_path(package: dict, choice_ids: list[str]) -> dict:
     Used by the admin preview to inspect sample decision paths and their
     outcomes. Stops at the first invalid step with valid=False.
     """
-    from .plot_twist_gameplay import apply_state_changes, check_conditions
+    from .plot_twist_gameplay import (
+        _initial_state_with_defaults,
+        apply_state_changes,
+        check_conditions,
+    )
 
     scenes = {s.get("id"): s for s in (package.get("scenes") or [])}
     endings = {e.get("id"): e for e in (package.get("endings") or [])}
@@ -785,7 +851,7 @@ def simulate_path(package: dict, choice_ids: list[str]) -> dict:
         return {"steps": [], "ending_id": None, "ending_title": None,
                 "final_state": {}, "treasures": [], "valid": False,
                 "error": "Opening scene is missing."}
-    state = dict(package.get("initial_state") or {})
+    state = _initial_state_with_defaults(package)
     var_map = {v.get("name"): v for v in (package.get("state_vars") or [])}
     current_id = opening_id
     steps: list[dict] = []
