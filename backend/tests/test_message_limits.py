@@ -273,8 +273,8 @@ def test_a_participants_own_share_is_the_one_reported_when_both_are_spent(db):
 
 
 def test_a_removed_message_still_counts_towards_the_share(db):
-    # A message a moderator took down is still a message that was written: it is still in the
-    # archive, and the other party still sees the hole where it was. Refunding the allowance
+    # A message a moderator took down is still a message that was written: it stays in the
+    # database, and the other party still sees the hole where it was. Refunding the allowance
     # would let the ceiling depend on how many reports succeeded -- a user who could get a
     # message removed would have bought back the right to write another.
     make_user(db, "alice", "female")

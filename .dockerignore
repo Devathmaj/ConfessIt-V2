@@ -9,7 +9,6 @@ venv
 */.env
 **/.env
 my_app.log*
-archives/
 **/__pycache__/
 *.pyc
 .pytest_cache/

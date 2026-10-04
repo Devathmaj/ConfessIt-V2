@@ -11,8 +11,8 @@
 # * `read_only` filesystems with tmpfs where the runtime needs scratch space, resource
 #   ceilings, and `restart: unless-stopped` everywhere.
 # * Data persists in NAMED volumes (never bind mounts, never ephemeral overlay): the
-#   database, Redis snapshots and message archives must survive a container replace.
-#   Back these volumes up; losing them loses accounts, sessions and archives.
+#   database and Redis snapshots must survive a container replace.
+#   Back these volumes up; losing them loses accounts and sessions.
 #
 # Required environment (all fail closed with `:?`; keep them in a gitignored file --
 # never in this tracked one):
@@ -108,8 +108,6 @@ services:
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     # Read-only root means bytecode caches cannot be written back; disable them so
     # imports never try (the image ships compiled-clean and runs identically).
-    volumes:
-      - archives_prod_data:/app/archives
     depends_on:
       - postgres
       - redis
@@ -189,4 +187,3 @@ services:
 volumes:
   postgres_prod_data:
   redis_prod_data:
-  archives_prod_data:

@@ -3,8 +3,7 @@
 The rule under test replaced a ``role`` column with the table a row lives in: there are
 exactly three account tables (``users``, ``admin``, ``moderator``), the table name is matched
 exactly, and any value that is not one of them is resolved to the least-privileged kind rather
-than trusted. Moderators get the moderation tools, but never user management, session reads,
-or the message archive.
+than trusted. Moderators get the moderation tools, but never user management or session reads.
 
 Where the old suite asserted on a column, this one asserts on the schema and on the model
 shape: a staff account cannot hold participant fields, and there is no field anywhere for a

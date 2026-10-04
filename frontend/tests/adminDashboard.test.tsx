@@ -17,8 +17,8 @@ import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
  *   card is a plain number. A tile that looks clickable and opens nothing is worse than one
  *   that never looked clickable, and the test asserts it is not a button at all.
  *
- * * **The backlog is a count of outstanding work.** "Love Notes" counted every note ever sent,
- *   which is a total of the archive rather than of anybody's queue. It reads "Pending Reports"
+  * * **The backlog is a count of outstanding work.** "Love Notes" counted every note ever sent,
+  *   which is a lifetime total rather than of anybody's queue. It reads "Pending Reports"
  *   now, and the number behind it is the three report queues' pending totals.
  *
  * * **The breakdown card is real data.** It was a hardcoded list of five sentences that said
@@ -142,7 +142,7 @@ describe('AdminDashboard: the figures it reports', () => {
     await waitFor(() => {
       expect(screen.getByText('Pending Reports')).toBeInTheDocument();
     });
-    // The archive total is not on the page at all: nothing acts on 240, and every one of those
+    // The lifetime total is not on the page at all: nothing acts on 240, and every one of those
     // notes is either approved, rejected or waiting, which the two tiles below already say.
     expect(screen.queryByText('240')).not.toBeInTheDocument();
     expect(screen.getByText('6')).toBeInTheDocument();

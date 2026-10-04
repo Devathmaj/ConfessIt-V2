@@ -12,7 +12,6 @@ whether a nearby naive value is meant as UTC or as local time.
 """
 
 import ast
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +21,6 @@ import pytest
 
 from app.config import settings
 from app.services.auth_service import create_access_token
-from app.services.message_archival_service import MessageArchivalService
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 
@@ -179,29 +177,3 @@ def test_exp_is_unambiguous_across_source_zones():
     # 12:00 naive in Kathmandu is a *different* instant that a naive value cannot express.
     naive_local = datetime(2026, 1, 1, 17, 45, 0)
     assert timegm(naive_local.utctimetuple()) != timegm(same_instant.utctimetuple())
-
-
-def test_archive_listing_reports_mtime_in_utc(tmp_path, monkeypatch):
-    """``modified_at`` must be aware UTC even though the file's mtime is an epoch float.
-
-    The archive ``date`` is parsed out of a UTC-based filename, so a local-time
-    ``modified_at`` on a non-UTC server would contradict the date shown beside it.
-    """
-    service = MessageArchivalService()
-    service.archive_dir = str(tmp_path)
-
-    target = tmp_path / "messages_20260101_120000.json.gz"
-    target.write_bytes(b"{}")
-    # Pin mtime to a known instant so the assertion is exact.
-    os.utime(target, (1767268800, 1767268800))
-
-    entries = service.list_archives()
-    assert len(entries) == 1
-
-    modified_at = entries[0]["modified_at"]
-    assert modified_at == "2026-01-01T12:00:00+00:00"
-
-    # And it must parse back to the exact instant we set.
-    parsed = datetime.fromisoformat(modified_at)
-    assert parsed.tzinfo is not None
-    assert parsed.astimezone(timezone.utc).timestamp() == 1767268800

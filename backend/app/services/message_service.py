@@ -136,14 +136,11 @@ class MessageService:
         """How much of a conversation's message allowance is spent, read on an open session.
 
         Counts every row in the conversation, removed ones included. A message a moderator
-        took down is still a message that was written: it is still in the archive, still in
+        took down is still a message that was written: it is still in
         the transcript the other party sees a hole where it was, and letting its removal hand
         the allowance back would mean the ceiling depended on how many reports succeeded.
 
-        One note on what can still move the number: ``message_archival_service`` deletes rows
-        wholesale, and a conversation whose messages were archived reads as emptier than it
-        was. That is deliberate on its own terms -- the messages are gone -- and it is an
-        admin-only, manual action rather than something a participant can lean on.
+        Messages remain in the database permanently; old rows are never deleted.
         """
         total = session.scalar(
             select(func.count())

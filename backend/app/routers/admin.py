@@ -20,7 +20,6 @@ from ..utils import ilike_contains
 from .. import limits as app_limits
 from ..logger import get_logger
 from ..services.love_note_service import rotate_sender_love_note_images
-from ..services.message_archival_service import ARCHIVED_MESSAGES_MAX_LIMIT
 from ..services.storage_service import storage_service
 from ..services.admin_service import (
     ADMIN_USERS_MAX_LIMIT,
@@ -771,83 +770,6 @@ def delete_matchmaking_slot(
 # ----------------------
 # Message Management
 # ----------------------
-
-@router.post("/messages/archive")
-def archive_old_messages(
-    hours_old: int = Query(4, ge=1, le=168, description="Archive messages older than this many hours"),
-    db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
-) -> Dict[str, Any]:
-    """
-    Archive old messages to compressed JSON files and remove from PostgreSQL
-    
-    Default: Archives messages older than 4 hours
-    """
-    from ..services.message_archival_service import message_archival_service
-    
-    result = message_archival_service.archive_old_messages(db, hours_old=hours_old)
-    return result
-
-
-@router.get("/messages/archives")
-def list_message_archives(
-    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
-) -> Dict[str, Any]:
-    """List all archived message files"""
-    from ..services.message_archival_service import message_archival_service
-    
-    archives = message_archival_service.list_archives()
-    
-    total_size_kb = sum(archive["size_kb"] for archive in archives)
-    
-    return {
-        "archives": archives,
-        "count": len(archives),
-        "total_size_kb": round(total_size_kb, 2),
-        "total_size_mb": round(total_size_kb / 1024, 2)
-    }
-
-
-@router.get("/messages/archives/{date}")
-def get_archived_messages(
-    date: str,
-    user_regno: Optional[str] = Query(None, description="Filter by user regno"),
-    conversation_id: Optional[str] = Query(None, description="Filter by conversation ID"),
-    skip: int = Query(0, ge=0, description="How many matching messages to skip."),
-    limit: int = Query(50, ge=1, le=ARCHIVED_MESSAGES_MAX_LIMIT, description="How many matching messages to return. Clamped so one request can never materialise a whole day at once."),
-    _: AccountDetails = Depends(require_capability(Capability.MESSAGES_ARCHIVE))
-) -> Dict[str, Any]:
-    """
-    Get one page of archived messages for a specific date, with the total beside it.
-
-    Date format: YYYY-MM-DD. Anything else answers 400 before any file is touched --
-    the date is interpolated into a filename, so it is validated as a calendar date
-    and resolved strictly inside the archive directory rather than joined blindly.
-    A missing day answers an empty page, not an error; an archive larger than the
-    read ceiling answers 413 instead of costing the process its memory.
-
-    `total` counts every message the filters matched, so the caller pages the
-    question it asked; `count` is the size of this page.
-    """
-    from ..services.message_archival_service import message_archival_service
-
-    messages, total = message_archival_service.get_archived_messages(
-        date=date,
-        user_regno=user_regno,
-        conversation_id=conversation_id,
-        skip=skip,
-        limit=limit,
-    )
-
-    return {
-        "date": date,
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "count": len(messages),
-        "messages": messages
-    }
-
 
 @router.get("/messages/reports")
 def get_message_reports(

@@ -31,7 +31,6 @@ export const CAPABILITIES = {
   USERS_CREATE: 'users:create',
   USERS_UPDATE: 'users:update',
   USERS_BLOCK: 'users:block',
-  MESSAGES_ARCHIVE: 'messages:archive',
   APP_CONFIG_READ: 'app_config:read',
   GAMES_MANAGE: 'games:manage',
 } as const;
