@@ -809,6 +809,30 @@ def test_validation_refuses_inescapable_cycles():
     assert any(e.code == "inescapable_cycle" for e in report.errors)
 
 
+def test_start_enters_a_pair_formed_before_the_event(http, db, players):
+    # Pair first while no Plot Twist event exists, then open the event: the
+    # couple reaches the story through /start instead of re-picking.
+    seed_questionnaire(db)
+    client_a = client_for(http, players["a"])
+    client_b = client_for(http, players["b"])
+    client_a.post("/games/plot-twist/selection", json={"selected_user_id": B_ID})
+    client_b.post("/games/plot-twist/selection", json={"selected_user_id": A_ID})
+    # The event opens after the pair formed (its own global, created after).
+    seed_published(db)
+
+    first = client_a.post("/games/plot-twist/start")
+    assert first.status_code == 200, first.text
+    assert first.json()["stage"] == "awaiting_you"
+    assert first.json()["scene"]["scene_id"] == "s_open"
+    # Idempotent: entering again fetches the same session.
+    second = client_a.post("/games/plot-twist/start")
+    assert second.status_code == 200, second.text
+    assert second.json()["session_id"] == first.json()["session_id"]
+    # Without a mutual pair there is nothing to start.
+    lonely = client_for(http, players["c"]).post("/games/plot-twist/start")
+    assert lonely.status_code == 400, lonely.text
+
+
 def test_wrong_participant_cannot_submit(http, db, players):
     seed_published(db)
     client_a, client_b = pair(db, http, players)
@@ -1047,6 +1071,61 @@ def test_featured_game_earns_double(db, http, players):
 
 
 # --- admin API ------------------------------------------------------------------
+
+
+def _stage_ready_version(db, seed, version):
+    """One more validated package version waiting for review."""
+    import copy
+    from app.db_models import PlotTwistPackageRecord
+
+    with db.sessions.begin() as session:
+        row = session.get(PlotTwistPackageRecord, seed["package_id"])
+        package = copy.deepcopy(dict(row.package))
+        package["version"] = version
+        nxt = PlotTwistPackageRecord(
+            blueprint_id=str(row.blueprint_id), version=version,
+            title=row.title, package=package, status="ready_for_review",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(nxt)
+        session.flush()
+        return str(nxt.id)
+
+
+def test_publish_opens_the_event_immediately(db):
+    from app.db_models import PlotTwistGameRecord
+
+    seed = seed_published(db)
+    v2_id = _stage_ready_version(db, seed, 2)
+    # End the live event: publishing then opens a fresh period on v2.
+    with db.sessions.begin() as session:
+        game = session.scalar(
+            select(PlotTwistGameRecord).where(
+                PlotTwistGameRecord.status.in_(("active", "pending"))
+            )
+        )
+        game.status = "ended"
+    published = plot_twist_generation.publish_package(db, v2_id)
+    assert published["status"] == "published"
+    with db.sessions() as session:
+        live = session.scalars(
+            select(PlotTwistGameRecord).where(
+                PlotTwistGameRecord.status.in_(("active", "pending"))
+            )
+        ).all()
+        assert len(live) == 1
+        assert str(live[0].story_package_id) == v2_id
+    # Publishing v3 while the period is live keeps v2 playing undisturbed.
+    v3_id = _stage_ready_version(db, seed, 3)
+    plot_twist_generation.publish_package(db, v3_id)
+    with db.sessions() as session:
+        live = session.scalars(
+            select(PlotTwistGameRecord).where(
+                PlotTwistGameRecord.status.in_(("active", "pending"))
+            )
+        ).all()
+        assert len(live) == 1
+        assert str(live[0].story_package_id) == v2_id
 
 
 def test_admin_blueprint_requires_approval_before_package(http, db, players):

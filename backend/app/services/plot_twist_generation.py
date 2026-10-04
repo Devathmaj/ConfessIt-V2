@@ -19,6 +19,10 @@ from typing import Any, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 
+from ..logger import get_logger
+
+logger = get_logger(__name__)
+
 from ..db_models import PlotTwistBlueprintRecord, PlotTwistPackageRecord
 from ..limits import (
     PLOT_TWIST_ENDING_TYPES,
@@ -698,7 +702,22 @@ def publish_package(db: Database, package_id: str) -> dict:
         row.status = "published"
         row.validation_errors = []
         row.published_at = _now()
-    return get_package(db, package_id)
+    published = get_package(db, package_id)
+    # Publishing opens the event: the scheduler pins the newest published
+    # version into a live period (or leaves the current one playing its own
+    # pinned version). Best-effort -- the reset loop and the manual trigger
+    # are the backstops -- so a scheduler fault never fails a good publish.
+    try:
+        from . import game_scheduler
+
+        summary = game_scheduler.ensure_single_game(db, "plot-twist")
+        logger.info(
+            "Plot Twist publish opened the event",
+            extra={"package_id": package_id, "scheduler": summary.get("action")},
+        )
+    except Exception as exc:
+        logger.warning("Plot Twist publish could not open the event: %s", exc)
+    return published
 
 
 def update_package_content(

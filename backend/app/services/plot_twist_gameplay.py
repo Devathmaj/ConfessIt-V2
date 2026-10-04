@@ -573,6 +573,40 @@ def choose_partner(db: Database, user: UserDetails, selected_user_id: str) -> Pl
 # --- sessions ------------------------------------------------------------------
 
 
+def enter_event(db: Database, user: UserDetails) -> PlotTwistCurrentState:
+    """Enter the active event: create (or fetch) this couple's session.
+
+    Pairs formed while no event was live otherwise sit at the partner
+    picker with nothing to press: choosing again works (the selection is
+    an upsert), but an explicit start is what the screen offers. Creating
+    twice settles on the one row -- never two sessions for a pair.
+    """
+    with db.sessions.begin() as session:
+        _require_playable(session)
+    with db.sessions.begin() as session:
+        from .game_configs import lock_game_for_play
+
+        lock_game_for_play(session, GAME_ID)
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": PLOT_TWIST_SESSION_LOCK_KEY},
+        )
+        game = _latest_global_game(session)
+        if game is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="There is no active Plot Twist event right now. Check back soon.",
+            )
+        couple = _my_couple_session(session, user.id)
+        if couple is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Choose a partner first: Plot Twist is played as a mutual pair.",
+            )
+        _get_or_create_session(session, game, couple)
+    return current_state(db, user)
+
+
 def _get_my_session_for_update(session, game_id: str, user_a_id: str, user_b_id: str):
     return session.scalar(
         select(PlotTwistSessionRecord)

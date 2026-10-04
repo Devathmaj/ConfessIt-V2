@@ -13,6 +13,7 @@ import {
   getPlotTwistPartners,
   getPlotTwistState,
   selectPlotTwistPartner,
+  startPlotTwistEvent,
   submitPlotTwistChoice,
   type CouplePartnerCandidate,
   type PlotTwistState,
@@ -56,6 +57,7 @@ export const PlotTwistGamePage = () => {
   const [search, setSearch] = useState('');
   const [choosingId, setChoosingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -145,6 +147,19 @@ export const PlotTwistGamePage = () => {
     }
   };
 
+  const handleStart = async () => {
+    if (starting) return;
+    setStarting(true);
+    try {
+      setState(await startPlotTwistEvent());
+    } catch (error) {
+      toast.error(describeApiError(error, 'Could not start the story.'));
+      await refresh();
+    } finally {
+      setStarting(false);
+    }
+  };
+
   const handleChoice = async (choiceId: string) => {
     if (!state || submittingId !== null) return;
     setSubmittingId(choiceId);
@@ -218,6 +233,9 @@ export const PlotTwistGamePage = () => {
           choosingId={choosingId}
           onChoose={handleChoose}
           selectionName={state.my_selection?.selected_user_name ?? null}
+          partnerName={state.partner?.name ?? null}
+          starting={starting}
+          onBegin={handleStart}
         />
       )}
 
@@ -385,6 +403,9 @@ const PartnerPicker = ({
   choosingId,
   onChoose,
   selectionName,
+  partnerName,
+  starting,
+  onBegin,
 }: {
   stage: string;
   partners: CouplePartnerCandidate[];
@@ -396,6 +417,9 @@ const PartnerPicker = ({
   choosingId: string | null;
   onChoose: (candidateId: string) => void;
   selectionName: string | null;
+  partnerName: string | null;
+  starting: boolean;
+  onBegin: () => void;
 }) => (
   <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
     <CardHeader>
@@ -410,10 +434,26 @@ const PartnerPicker = ({
       </CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
-      {selectionName && (
+      {selectionName && !partnerName && (
         <p className="text-sm">
           You chose <span className="font-semibold">{selectionName}</span>. Waiting for them to choose you back.
         </p>
+      )}
+      {partnerName && (
+        <div className="rounded-xl border border-romantic/40 bg-romantic/5 p-4">
+          <p className="text-sm">
+            You and <span className="font-semibold">{partnerName}</span> chose each other.
+          </p>
+          <Button
+            type="button"
+            className="mt-3 rounded-full"
+            disabled={starting}
+            onClick={onBegin}
+          >
+            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <HeartHandshake className="h-4 w-4" />}
+            {starting ? 'Opening…' : 'Begin the story'}
+          </Button>
+        </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Input

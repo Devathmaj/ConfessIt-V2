@@ -68,6 +68,21 @@ def choose_partner(
     return plot_twist_gameplay.choose_partner(db, user, payload.selected_user_id)
 
 
+@router.post("/start", response_model=PlotTwistCurrentState)
+def start_event(
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> PlotTwistCurrentState:
+    """Enter the active Plot Twist event.
+
+    Creates this couple's story session (with its deterministic module
+    selection persisted up front) when the pair is mutual and an event is
+    live, or fetches it when it already exists. Pairs formed while no
+    event was live reach the story through here instead of re-picking.
+    """
+    return plot_twist_gameplay.enter_event(db, user)
+
+
 @router.post("/choices", response_model=PlotTwistCurrentState)
 def submit_choice(
     payload: PlotTwistChoiceSubmitRequest,

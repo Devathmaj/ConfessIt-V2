@@ -92,6 +92,15 @@ if ! command -v runuser >/dev/null 2>&1; then
   exit 1
 fi
 
+# Seconds between catch-up attempts. Digits only: it is interpolated into
+# sleep, where anything else would execute.
+case "${CATCHUP_RETRY_DELAY_SECONDS:-15}" in
+  ''|*[!0-9]*)
+    echo "[game-scheduler] refusing to start: CATCHUP_RETRY_DELAY_SECONDS must be digits" >&2
+    exit 1
+    ;;
+esac
+
 # The indirection exists because cron(8) does not expand the environment and
 # mis-handles quoted values in cron.d files; a shell wrapper quotes exactly once.
 # Every expansion below is wrapped in single quotes (via escape_single_quotes),
@@ -121,13 +130,25 @@ chmod 755 "$WRAPPER"
 chmod 644 "$CRON_FILE"
 
 echo "[game-scheduler] running catch-up reset pass at container start"
-if runuser -u "$CRON_USER" -- "$WRAPPER"; then
-  echo "[game-scheduler] catch-up pass complete"
-else
-  # A failed catch-up must not take the daemon down with it: the daily tick
-  # retries, and the exit reporting above is what pages the operator.
-  echo "[game-scheduler] catch-up pass reported failures; continuing to cron" >&2
-fi
+_attempt=1
+while [ "$_attempt" -le 5 ]; do
+  if runuser -u "$CRON_USER" -- "$WRAPPER"; then
+    echo "[game-scheduler] catch-up pass complete"
+    break
+  fi
+  # The usual cause is starting ahead of the database (empty tables on a
+  # fresh bring-up): back off and retry rather than waiting a whole day
+  # for the next tick. A failed catch-up still must not take the daemon
+  # down with it: the daily tick retries, and the exit reporting above is
+  # what pages the operator.
+  if [ "$_attempt" -eq 5 ]; then
+    echo "[game-scheduler] catch-up pass reported failures; continuing to cron" >&2
+    break
+  fi
+  echo "[game-scheduler] catch-up pass attempt $_attempt failed; retrying" >&2
+  sleep "${CATCHUP_RETRY_DELAY_SECONDS:-15}"
+  _attempt=$((_attempt + 1))
+done
 
 echo "[game-scheduler] starting cron (game resets daily at 00:01 UTC)"
 exec cron -f

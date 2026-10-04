@@ -1620,6 +1620,16 @@ export const selectPlotTwistPartner = async (
   return response.data;
 };
 
+/** Enter the active event: create (or fetch) this couple's story session. */
+export const startPlotTwistEvent = async (): Promise<PlotTwistState> => {
+  const response = await axios.post(
+    `${API_URL}/games/plot-twist/start`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
 /** Submit the assigned decision. Retries of a recorded turn answer the stored outcome. */
 export const submitPlotTwistChoice = async (
   choiceId: string,

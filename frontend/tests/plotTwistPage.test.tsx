@@ -23,6 +23,7 @@ vi.mock('@/services/api', () => ({
   getPlotTwistState: vi.fn(),
   getPlotTwistPartners: vi.fn(),
   selectPlotTwistPartner: vi.fn(),
+  startPlotTwistEvent: vi.fn(),
   submitPlotTwistChoice: vi.fn(),
 }));
 
@@ -40,6 +41,7 @@ const {
   getPlotTwistState,
   getPlotTwistPartners,
   selectPlotTwistPartner,
+  startPlotTwistEvent,
   submitPlotTwistChoice,
 } = await import('@/services/api');
 
@@ -140,6 +142,24 @@ describe('partner selection', () => {
 
     await waitFor(() => expect(selectPlotTwistPartner).toHaveBeenCalledWith('id-b'));
     expect(await screen.findByText(/waiting for them to choose you back/i)).toBeInTheDocument();
+  });
+});
+
+describe('entering the event', () => {
+  it('offers paired couples a way in without re-picking', async () => {
+    vi.mocked(getPlotTwistState).mockResolvedValue(
+      baseState({
+        my_selection: { selected_user_id: 'id-b', selected_user_name: 'Sam' },
+        partner: { id: 'id-b', name: 'Sam' },
+      }),
+    );
+    vi.mocked(startPlotTwistEvent).mockResolvedValue(sceneState());
+    renderGame();
+
+    fireEvent.click(await screen.findByRole('button', { name: /begin the story/i }));
+
+    await waitFor(() => expect(startPlotTwistEvent).toHaveBeenCalled());
+    expect(await screen.findByText('Locked In')).toBeInTheDocument();
   });
 });
 

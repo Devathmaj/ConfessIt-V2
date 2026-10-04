@@ -130,3 +130,40 @@ def test_hostile_values_are_refused_before_anything_is_written(tmp_path, field, 
     assert not paths["wrapper"].exists()
     assert not paths["cron_file"].exists()
     assert not (tmp_path / "pwned").exists()
+
+
+def test_catch_up_retries_a_failing_pass_then_continues(tmp_path):
+    # A bring-up race (database still empty) fails the first passes: the
+    # entrypoint retries instead of waiting a whole day for the next tick.
+    # The stub python fails twice, then succeeds; the delay is zero here.
+    flaky = tmp_path / "bin" / "flaky-python"
+    counter = tmp_path / "attempts"
+    flaky.write_text(
+        "#!/bin/sh\n"
+        f'n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
+        f'echo $((n + 1)) > "{counter}"\n'
+        '[ "$n" -ge 2 ] || exit 1\n'
+        "exit 0\n"
+    )
+    os.chmod(flaky, 0o755)
+    proc, _paths = _run(
+        tmp_path, PYTHON_BIN=str(flaky), CATCHUP_RETRY_DELAY_SECONDS="0"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert counter.read_text().strip() == "3"
+    assert "retrying" in proc.stderr
+
+
+def test_catch_up_gives_up_after_five_attempts_but_keeps_cron(tmp_path):
+    proc, paths = _run(
+        tmp_path, PYTHON_BIN="false", CATCHUP_RETRY_DELAY_SECONDS="0"
+    )
+    # The daemon still starts: a failed catch-up must not take cron down.
+    assert proc.returncode == 0, proc.stderr
+    assert paths["cron_file"].exists()
+
+
+def test_non_digit_retry_delay_is_refused(tmp_path):
+    proc, paths = _run(tmp_path, CATCHUP_RETRY_DELAY_SECONDS="15; evil")
+    assert proc.returncode != 0
+    assert "refusing to start" in proc.stderr
