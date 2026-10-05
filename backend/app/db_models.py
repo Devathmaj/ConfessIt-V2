@@ -3158,6 +3158,38 @@ class CaseClosedEvidenceRecord(Base):
     )
 
 
+class CaseClosedMessageRecord(Base):
+    """One chat turn in a couple's Case Closed detective thread.
+
+    Scoped to the couple's game session (one thread per session), not to a
+    matchmaking match: the thread is found via the caller's current Case
+    Closed session, so the game id and session id travel together. Quotas
+    (400 per thread, 200 per detective) are enforced in
+    ``case_closed_messaging``; the columns here only persist the transcript.
+    """
+
+    __tablename__ = "case_closed_messages"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_sessions.id", ondelete="CASCADE"), index=True
+    )
+    sender_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+    __table_args__ = (
+        Index("ix_case_closed_messages_session_created", "session_id", "created_at"),
+        CheckConstraint(
+            f"length(body) <= {MESSAGE_BODY_MAX}",
+            name=f"ck_case_closed_messages_body_length_{MESSAGE_BODY_MAX}",
+        ),
+    )
+
+
 def resolve_account_by_id(session, account_id: Optional[str]) -> Optional[tuple[str, Any]]:
     """Find the account with this primary key, as ``(account_type, row)`` or None."""
     if not _is_account_id(account_id):

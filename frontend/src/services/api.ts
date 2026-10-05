@@ -2033,6 +2033,69 @@ export const publishCaseClosedPackage = async (packageId: string): Promise<CaseC
   return response.data;
 };
 
+// --- Case Closed detective thread (per-couple chat inside the game) ---
+
+export interface CaseClosedThread {
+  game_id: string;
+  session_id: string;
+  partner: { id: string; name: string };
+  conversation_limit: number;
+  participant_limit: number;
+}
+
+export interface CaseClosedChatMessage {
+  id: string;
+  game_id: string | null;
+  session_id: string;
+  sender_user_id: string;
+  body: string;
+  created_at: string;
+  is_read: boolean;
+  is_sender?: boolean;
+}
+
+export interface CaseClosedMessageQuota {
+  conversation_limit: number;
+  participant_limit: number;
+  conversation_count: number;
+  participant_count: number;
+  conversation_remaining: number;
+  participant_remaining: number;
+  can_send: boolean;
+  limit_reached: 'participant' | 'conversation' | null;
+}
+
+export interface CaseClosedTranscript {
+  game_id: string;
+  session_id: string;
+  messages: CaseClosedChatMessage[];
+  count: number;
+  total: number;
+  quota: CaseClosedMessageQuota;
+}
+
+export interface CaseClosedSentMessage extends CaseClosedChatMessage {
+  quota: CaseClosedMessageQuota;
+}
+
+export const getCaseClosedThread = async (): Promise<CaseClosedThread> => {
+  const response = await axios.get(`${API_URL}/games/case-closed/messages/thread`, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const getCaseClosedMessages = async (limit?: number, before?: string): Promise<CaseClosedTranscript> => {
+  const response = await axios.get(`${API_URL}/games/case-closed/messages`, {
+    headers: getAuthHeaders(),
+    params: { ...(limit ? { limit } : {}), ...(before ? { before } : {}) },
+  });
+  return response.data;
+};
+
+export const sendCaseClosedMessage = async (body: string): Promise<CaseClosedSentMessage> => {
+  const response = await axios.post(`${API_URL}/games/case-closed/messages`, { body }, { headers: getAuthHeaders() });
+  return response.data;
+};
+
 // --- Game configuration, featured spotlight, scheduling and selection ---
 //
 // The separated model: per-game availability/cadence, the one-spotlight-per-day

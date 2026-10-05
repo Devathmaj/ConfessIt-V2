@@ -93,3 +93,13 @@ export const ADMIN_DEPARTMENT_MAX = 80;
  */
 export const CONVERSATION_MESSAGE_MAX = 200;
 export const CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100;
+
+/**
+ * The Case Closed detective thread: one thread per couple session, double
+ * the matchmaking allowance (400 per thread, 200 per detective) so a full
+ * five-actions-each investigation plus accusation debate fits. Mirrors
+ * `CASE_CLOSED_CONVERSATION_MESSAGE_MAX` /
+ * `CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX` in backend/app/limits.py.
+ */
+export const CASE_CLOSED_CONVERSATION_MESSAGE_MAX = 400;
+export const CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX = 200;

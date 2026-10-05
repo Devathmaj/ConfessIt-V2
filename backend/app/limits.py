@@ -85,6 +85,12 @@ CONVERSATION_MESSAGE_MAX = 200
 # filled by a build that did not enforce it.
 CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100
 
+# Case Closed per-couple detective thread: double the matchmaking allowance
+# (400 per thread, 200 per detective) so a full five-actions-each investigation
+# plus accusation discussion fits without hitting the ceiling mid-case.
+CASE_CLOSED_CONVERSATION_MESSAGE_MAX = 400
+CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX = 200
+
 # Report reasons are reviewed by an admin, so they need to be readable but not a data dump.
 # Matches the existing reports.reason column.
 REPORT_REASON_MAX = 1000

@@ -16,7 +16,17 @@ vi.mock('@/services/api', () => ({
   proposeCaseClosedAccusation: vi.fn(),
   confirmCaseClosedAccusation: vi.fn(),
   getCaseClosedResult: vi.fn(),
+  getCaseClosedMessages: vi.fn(),
+  sendCaseClosedMessage: vi.fn(),
 }));
+
+vi.mock('@/lib/caseClosedMessaging', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/caseClosedMessaging')>();
+  return {
+    ...actual,
+    caseClosedMessagingClient: { connect: vi.fn(), onMessage: vi.fn(() => () => {}), onError: vi.fn(() => () => {}), disconnect: vi.fn() },
+  };
+});
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
@@ -29,6 +39,8 @@ const investigate = api.investigateCaseClosedLead as ReturnType<typeof vi.fn>;
 const propose = api.proposeCaseClosedAccusation as ReturnType<typeof vi.fn>;
 const confirmFn = api.confirmCaseClosedAccusation as ReturnType<typeof vi.fn>;
 const getResult = api.getCaseClosedResult as ReturnType<typeof vi.fn>;
+const getMessages = api.getCaseClosedMessages as ReturnType<typeof vi.fn>;
+const sendChat = api.sendCaseClosedMessage as ReturnType<typeof vi.fn>;
 
 type AuthValue = ContextType<typeof AuthContext>;
 const authValue = (): AuthValue =>
@@ -55,7 +67,13 @@ const renderPage = () =>
   render(<AuthContext.Provider value={authValue()}><MemoryRouter><CaseClosedGamePage /></MemoryRouter></AuthContext.Provider>);
 
 describe('CaseClosedGamePage', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getMessages.mockResolvedValue({
+      game_id: 'g1', session_id: 's1', messages: [], count: 0, total: 0,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 0, participant_count: 0, conversation_remaining: 400, participant_remaining: 200, can_send: true, limit_reached: null },
+    });
+  });
 
   it('shows leads, budgets, evidence board and timer placeholder', async () => {
     getState.mockResolvedValue(baseState());
@@ -105,5 +123,35 @@ describe('CaseClosedGamePage', () => {
     renderPage();
     await waitFor(() => expect(getResult).toHaveBeenCalled());
     expect(screen.queryByText(/Solution reveal/)).toBeNull();
+  });
+
+  it('embeds the detective thread with 400/200 quotas inside the game window', async () => {
+    getState.mockResolvedValue(baseState());
+    getMessages.mockResolvedValue({
+      game_id: 'g1', session_id: 's1',
+      messages: [{ id: 'm1', game_id: 'g1', session_id: 's1', sender_user_id: 'b', body: 'Check the key log', created_at: new Date().toISOString(), is_read: true }],
+      count: 1, total: 1,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 1, participant_count: 0, conversation_remaining: 399, participant_remaining: 200, can_send: true, limit_reached: null },
+    });
+    renderPage();
+    expect(await screen.findByText('Detective thread')).toBeTruthy();
+    expect(await screen.findByText('Check the key log')).toBeTruthy();
+    expect(screen.getByText('0/200 sent')).toBeTruthy();
+  });
+
+  it('sends a detective-thread message without touching the investigation budget', async () => {
+    getState.mockResolvedValue(baseState());
+    sendChat.mockResolvedValue({
+      id: 'm2', game_id: 'g1', session_id: 's1', sender_user_id: 'a', body: 'On it',
+      created_at: new Date().toISOString(), is_read: false,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 2, participant_count: 1, conversation_remaining: 398, participant_remaining: 199, can_send: true, limit_reached: null },
+    });
+    renderPage();
+    await screen.findByText('Detective thread');
+    fireEvent.change(await screen.findByPlaceholderText(/Discuss leads/), { target: { value: 'On it' } });
+    fireEvent.click(screen.getByText('Send'));
+    await waitFor(() => expect(sendChat).toHaveBeenCalledWith('On it'));
+    expect(await screen.findByText('On it')).toBeTruthy();
+    expect(investigate).not.toHaveBeenCalled();
   });
 });

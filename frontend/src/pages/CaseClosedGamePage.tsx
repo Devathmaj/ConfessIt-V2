@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
+import { CaseClosedChatDialog } from '@/components/CaseClosedChatDialog';
 import {
   confirmCaseClosedAccusation,
   getCaseClosedPartners,
@@ -229,6 +230,8 @@ export const CaseClosedGamePage = () => {
           ))}
         </CardContent>
       </Card>
+
+      <CaseClosedChatDialog sessionId={state.session_id} />
 
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Scale className="h-4 w-4" /> Final accusation</CardTitle>

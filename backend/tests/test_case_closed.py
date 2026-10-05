@@ -655,3 +655,92 @@ def test_isolation_and_package_immutability(db, http, players):
     with db.sessions() as session:
         game = session.get(CaseClosedGameRecord, gid)
         assert game is not None and str(game.case_package_id) == old_pkg
+
+
+# --- detective thread --------------------------------------------------------
+
+
+def test_detective_thread_send_read_quotas(db, http, players):
+    from app.services import case_closed_messaging
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca, cb = client_for(http, players["a"]), client_for(http, players["b"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    assert cb.post("/games/case-closed/start").status_code == 200
+
+    thread = ca.get("/games/case-closed/messages/thread").json()
+    assert thread["game_id"] == gid and thread["session_id"]
+    assert thread["conversation_limit"] == 400 and thread["participant_limit"] == 200
+
+    r = ca.post("/games/case-closed/messages", json={"body": "Check the footage at 6:18"})
+    assert r.status_code == 201, r.text
+    sent = r.json()
+    assert sent["body"] == "Check the footage at 6:18"
+    assert sent["quota"]["conversation_limit"] == 400
+    assert sent["quota"]["participant_limit"] == 200
+    assert sent["quota"]["conversation_count"] == 1
+
+    # Partner reads the same thread; messaging costs no investigation action.
+    before_a = ca.get("/games/case-closed").json()
+    got = cb.get("/games/case-closed/messages").json()
+    assert got["total"] == 1 and got["messages"][0]["body"] == "Check the footage at 6:18"
+    after_a = ca.get("/games/case-closed").json()
+    assert after_a["my_remaining"] == before_a["my_remaining"]
+
+    # Quota endpoint mirrors the thread allowance.
+    quota = cb.get("/games/case-closed/messages").json()["quota"]
+    assert quota["conversation_limit"] == 400 and quota["participant_limit"] == 200
+
+    # Paging anchor works.
+    r2 = cb.post("/games/case-closed/messages", json={"body": "On it, checking the key log"})
+    assert r2.status_code == 201
+    page = ca.get("/games/case-closed/messages").json()
+    assert page["total"] == 2
+    first_id = page["messages"][0]["id"]
+    assert first_id == sent["id"]
+
+    # Timer still starts only on investigation, not on chat.
+    assert ca.get("/games/case-closed").json()["timer"]["started"] is False
+    assert case_closed_messaging.channel_for_session(thread["session_id"]) == f"case-closed:{thread['session_id']}"
+
+
+def test_detective_thread_isolation_and_quotas(db, http, players):
+    from unittest.mock import patch
+
+    from app.services import case_closed_messaging
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    cc = client_for(http, players["c"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    # Outsider with no mutual pair cannot reach the thread.
+    assert cc.get("/games/case-closed/messages/thread").status_code in (400, 403, 410)
+
+    # Per-detective quota: fake usage at the ceiling, next send refused.
+    thread = ca.get("/games/case-closed/messages/thread").json()
+    with patch.object(
+        case_closed_messaging, "_usage",
+        return_value={"conversation_count": 10, "participant_count": 200},
+    ):
+        r = ca.post("/games/case-closed/messages", json={"body": "one too many"})
+        assert r.status_code == 403
+    # Thread quota: conversation full refused even when the sender has room.
+    with patch.object(
+        case_closed_messaging, "_usage",
+        return_value={"conversation_count": 400, "participant_count": 5},
+    ):
+        r = ca.post("/games/case-closed/messages", json={"body": "thread is full"})
+        assert r.status_code == 403
+
+    # Stored rows scope to the session (game + couple travel together).
+    from app.db_models import CaseClosedMessageRecord
+
+    with db.sessions() as session:
+        rows = session.scalars(
+            select(CaseClosedMessageRecord).where(
+                CaseClosedMessageRecord.session_id == thread["session_id"]
+            )
+        ).all()
+        assert all(str(r.session_id) == thread["session_id"] for r in rows)
