@@ -1820,6 +1820,219 @@ export const getCurrentAdminPlotTwistSession = async (): Promise<{
   return response.data;
 };
 
+// --- Case Closed (cooperative mystery): player + admin ---
+
+export type CaseClosedStage =
+  | 'no_game'
+  | 'selecting_partner'
+  | 'investigating'
+  | 'accusation_locked'
+  | 'completed';
+
+export interface CaseClosedLead {
+  id: string;
+  title: string;
+  description: string;
+  investigated: boolean;
+  available: boolean;
+  depth: number;
+}
+
+export interface CaseClosedEvidence {
+  id: string;
+  title: string;
+  description: string;
+  discovered_at: string | null;
+  discovered_by: string | null;
+  source_lead_id: string | null;
+  suspect_ids: string[];
+  kind: string;
+}
+
+export interface CaseClosedSuspect {
+  id: string;
+  name: string;
+  background: string;
+  relationship: string;
+}
+
+export interface CaseClosedState {
+  stage: CaseClosedStage;
+  game_id: string | null;
+  session_id: string | null;
+  case_title: string | null;
+  opening_narrative: string | null;
+  suspects: CaseClosedSuspect[];
+  available_leads: CaseClosedLead[];
+  my_path: string[];
+  investigated_lead_ids: string[];
+  evidence_board: CaseClosedEvidence[];
+  my_remaining: number;
+  partner_remaining: number;
+  accusation: {
+    my_proposal: string | null;
+    partner_proposal: string | null;
+    my_confirmed: string | null;
+    partner_confirmed: string | null;
+    locked_suspect_id: string | null;
+    locked_at: string | null;
+  };
+  timer: {
+    started: boolean;
+    first_investigation_at: string | null;
+    locked_at: string | null;
+    elapsed_seconds: number | null;
+  };
+  session_status: string | null;
+  event_deadline: string | null;
+  state_version: number;
+  finalized: boolean;
+}
+
+export interface CaseClosedInvestigateResult {
+  state: CaseClosedState;
+  lead_id: string;
+  discovery_text: string;
+  already_known: boolean;
+  replay: boolean;
+}
+
+export interface CaseClosedResult {
+  locked_suspect_id: string | null;
+  correct: boolean | null;
+  score: number | null;
+  elapsed_seconds: number | null;
+  finalized: boolean;
+  culprit_id: string | null;
+  solution_title: string | null;
+  solution_narrative: string | null;
+  why_others_ruled_out: string | null;
+}
+
+export const getCaseClosedState = async (): Promise<CaseClosedState> => {
+  const response = await axios.get(`${API_URL}/games/case-closed`, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const getCaseClosedPartners = async (): Promise<CouplePartnerCandidate[]> => {
+  const response = await axios.get(`${API_URL}/games/case-closed/partners`, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const selectCaseClosedPartner = async (selectedUserId: string): Promise<CaseClosedState> => {
+  const response = await axios.post(
+    `${API_URL}/games/case-closed/selection`,
+    { selected_user_id: selectedUserId },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const startCaseClosedEvent = async (): Promise<CaseClosedState> => {
+  const response = await axios.post(`${API_URL}/games/case-closed/start`, {}, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const investigateCaseClosedLead = async (
+  leadId: string,
+  stateVersion: number
+): Promise<CaseClosedInvestigateResult> => {
+  const response = await axios.post(
+    `${API_URL}/games/case-closed/investigate`,
+    { lead_id: leadId, state_version: stateVersion },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const proposeCaseClosedAccusation = async (suspectId: string): Promise<CaseClosedState> => {
+  const response = await axios.post(
+    `${API_URL}/games/case-closed/accusation/propose`,
+    { suspect_id: suspectId },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const confirmCaseClosedAccusation = async (suspectId: string): Promise<CaseClosedState> => {
+  const response = await axios.post(
+    `${API_URL}/games/case-closed/accusation/confirm`,
+    { suspect_id: suspectId },
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
+export const getCaseClosedResult = async (): Promise<CaseClosedResult> => {
+  const response = await axios.get(`${API_URL}/games/case-closed/result`, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export interface CaseClosedBlueprint {
+  id: string;
+  title: string;
+  difficulty: string;
+  config: Record<string, unknown>;
+  blueprint: Record<string, unknown>;
+  status: string;
+  validation_errors: Array<{ lead_id?: string | null; code: string; message: string }>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseClosedPackage {
+  id: string;
+  blueprint_id: string;
+  version: number;
+  title: string;
+  package: Record<string, unknown>;
+  status: string;
+  validation_errors: Array<{ lead_id?: string | null; code: string; message: string }>;
+  published_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const createCaseClosedBlueprint = async (payload: Record<string, unknown>): Promise<CaseClosedBlueprint> => {
+  const response = await axios.post(`${API_URL}/admin/case-closed/blueprints`, payload, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const getCaseClosedBlueprints = async (): Promise<CaseClosedBlueprint[]> => {
+  const response = await axios.get(`${API_URL}/admin/case-closed/blueprints`, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const generateCaseClosedBlueprint = async (blueprintId: string): Promise<CaseClosedBlueprint> => {
+  const response = await axios.post(`${API_URL}/admin/case-closed/blueprints/${blueprintId}/generate`, {}, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const approveCaseClosedBlueprint = async (blueprintId: string): Promise<CaseClosedBlueprint> => {
+  const response = await axios.post(`${API_URL}/admin/case-closed/blueprints/${blueprintId}/approve`, {}, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const generateCaseClosedPackage = async (blueprintId: string): Promise<CaseClosedPackage> => {
+  const response = await axios.post(`${API_URL}/admin/case-closed/blueprints/${blueprintId}/packages`, {}, { headers: getAuthHeaders() });
+  return response.data;
+};
+
+export const getCaseClosedPackages = async (blueprintId?: string): Promise<CaseClosedPackage[]> => {
+  const response = await axios.get(`${API_URL}/admin/case-closed/packages`, {
+    headers: getAuthHeaders(),
+    params: blueprintId ? { blueprint_id: blueprintId } : {},
+  });
+  return response.data;
+};
+
+export const publishCaseClosedPackage = async (packageId: string): Promise<CaseClosedPackage> => {
+  const response = await axios.post(`${API_URL}/admin/case-closed/packages/${packageId}/publish`, {}, { headers: getAuthHeaders() });
+  return response.data;
+};
+
 // --- Game configuration, featured spotlight, scheduling and selection ---
 //
 // The separated model: per-game availability/cadence, the one-spotlight-per-day

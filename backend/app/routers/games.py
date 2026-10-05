@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from ..db_models import (
     AnagramGameRecord,
+    CaseClosedGameRecord,
     ConnectionsGameRecord,
     CoupleGameRecord,
     PlotTwistGameRecord,
@@ -42,10 +43,8 @@ _GAME_NAMES = {
     "case-closed": "Case Closed",
 }
 
-# Barebones couple titles with no session lifecycle yet: they are
-# discoverable through the same hidden/disabled switches, but they never
-# hold a session row, so they are never playable until the gameplay lands.
-_BAREBONES_GAMES = ("case-closed",)
+# Former barebones titles now live: kept empty so _entry uses sessions.
+_BAREBONES_GAMES: tuple[str, ...] = ()
 
 _SESSION_MODELS = {
     "wordle": WordleGameRecord,
@@ -55,6 +54,7 @@ _SESSION_MODELS = {
     "connections": ConnectionsGameRecord,
     "two-key-escape": TwoKeyEscapeGameRecord,
     "plot-twist": PlotTwistGameRecord,
+    "case-closed": CaseClosedGameRecord,
 }
 
 

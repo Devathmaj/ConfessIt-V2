@@ -22,7 +22,7 @@ from .config import (
     validate_public_base_url,
     validate_transport_security,
 )
-from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, staff_notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_plot_twist, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, plot_twist, reaction_time, games, two_key_escape, leaderboards
+from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, staff_notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_plot_twist, admin_case_closed, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, plot_twist, case_closed, reaction_time, games, two_key_escape, leaderboards
 from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
@@ -785,6 +785,7 @@ app.include_router(admin_connections.router)
 app.include_router(admin_trivia_drop.router)
 app.include_router(admin_reaction_time.router)
 app.include_router(admin_plot_twist.router)
+app.include_router(admin_case_closed.router)
 app.include_router(admin_games.router)
 app.include_router(wordle.router)
 app.include_router(anagram.router)
@@ -792,6 +793,7 @@ app.include_router(connections.router)
 app.include_router(trivia_drop.router)
 app.include_router(couple_questionnaire.router)
 app.include_router(plot_twist.router)
+app.include_router(case_closed.router)
 app.include_router(reaction_time.router)
 app.include_router(two_key_escape.router)
 app.include_router(games.router)

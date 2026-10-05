@@ -25,6 +25,9 @@ from sqlalchemy import func, select
 from ..db_models import (
     AnagramGameRecord,
     AnagramUserGameRecord,
+    CaseClosedGameRecord,
+    CaseClosedInvestigationRecord,
+    CaseClosedSessionRecord,
     ConnectionsGameRecord,
     ConnectionsSubmissionRecord,
     CoupleGameRecord,
@@ -144,6 +147,8 @@ def pending_opportunities(session, game_id: str, known: set[str]) -> list[str]:
         return _ended_session_ids(session, TwoKeyEscapeGameRecord, game_id, known)
     if game_id == "plot-twist":
         return _ended_session_ids(session, PlotTwistGameRecord, game_id, known)
+    if game_id == "case-closed":
+        return _ended_session_ids(session, CaseClosedGameRecord, game_id, known)
     if game_id == "trivia-drop":
         rows = session.scalars(
             select(TriviaDropQuestionRecord.id).where(
@@ -178,6 +183,9 @@ def opportunity_info(session, game_id: str, opportunity_id: str) -> Optional[Opp
         start = _period_start(row) if row is not None else None
     elif game_id == "plot-twist":
         row = session.get(PlotTwistGameRecord, opportunity_id)
+        start = _period_start(row) if row is not None else None
+    elif game_id == "case-closed":
+        row = session.get(CaseClosedGameRecord, opportunity_id)
         start = _period_start(row) if row is not None else None
     elif game_id == "trivia-drop":
         row = session.get(TriviaDropQuestionRecord, opportunity_id)
@@ -222,6 +230,7 @@ def is_event_closed(session, game_id: str, opportunity_id: str) -> bool:
         "couple-questionnaire": CoupleGameRecord,
         "two-key-escape": TwoKeyEscapeGameRecord,
         "plot-twist": PlotTwistGameRecord,
+        "case-closed": CaseClosedGameRecord,
     }[game_id]
     row = session.get(model, opportunity_id)
     return row is not None and row.status == "ended"
@@ -603,6 +612,60 @@ def plot_twist_results(session, opportunity_id: str) -> list[RankedSubject]:
     return subjects
 
 
+def case_closed_results(session, opportunity_id: str) -> list[RankedSubject]:
+    """Correct accusations rank ahead of wrong/incomplete; faster wins ties.
+
+    Only finalized sessions qualify. Correct -> time-decay positive score
+    (same rule as gameplay/finalization); wrong/incomplete -> zero.
+    Deterministic order: score desc, elapsed asc, locked_at, couple ids.
+    """
+    from .case_closed_gameplay import score_for_result
+
+    rows = session.scalars(
+        select(CaseClosedSessionRecord).where(
+            CaseClosedSessionRecord.case_closed_game_id == opportunity_id,
+            CaseClosedSessionRecord.finalized.is_(True),
+        )
+    ).all()
+    if not rows:
+        return []
+    game = session.get(CaseClosedGameRecord, opportunity_id)
+    subjects = []
+    for row in rows:
+        member_a, member_b = canonical_couple(str(row.user_a_id), str(row.user_b_id))
+        correct = bool(row.is_correct) if row.is_correct is not None else False
+        elapsed = row.elapsed_seconds if row.elapsed_seconds is not None else 10**9
+        base = score_for_result(correct, row.elapsed_seconds, game) if game is not None else (0 if not correct else 1)
+        leads = int(
+            session.scalar(
+                select(func.count())
+                .select_from(CaseClosedInvestigationRecord)
+                .where(CaseClosedInvestigationRecord.session_id == row.id)
+            )
+            or 0
+        )
+        subjects.append(
+            RankedSubject(
+                subject=(member_a, member_b),
+                tie_key=(int(base), -int(elapsed if correct else 10**9)),
+                order_key=(int(base), -int(elapsed if correct else 10**9),
+                           _completed_at_iso(row.accusation_locked_at), member_a, member_b),
+                raw_metrics={
+                    "base_points": int(base),
+                    "correct": bool(correct),
+                    "elapsed_seconds": int(row.elapsed_seconds) if row.elapsed_seconds is not None else None,
+                    "locked_suspect_id": str(row.locked_culprit_id) if row.locked_culprit_id else None,
+                    "leads_investigated": int(leads),
+                    "actions_used_a": int(row.actions_used_a or 0),
+                    "actions_used_b": int(row.actions_used_b or 0),
+                    "expired": row.status == "expired",
+                    "finalized": bool(row.finalized),
+                },
+            )
+        )
+    return subjects
+
+
 RESULT_FETCHERS: dict[str, Callable] = {
     "wordle": wordle_results,
     "anagram": anagram_results,
@@ -612,6 +675,7 @@ RESULT_FETCHERS: dict[str, Callable] = {
     "couple-questionnaire": couple_results,
     "two-key-escape": two_key_escape_results,
     "plot-twist": plot_twist_results,
+    "case-closed": case_closed_results,
 }
 
 

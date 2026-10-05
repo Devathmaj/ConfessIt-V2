@@ -1821,6 +1821,68 @@ class PlotTwistSimulateResponse(BaseModel):
     error: Optional[str] = None
 
 
+# --- Case Closed ---------------------------------------------------------------
+#
+# Admin-side generation views mirror Plot Twist; player views live in
+# services.case_closed_schemas and are re-exported here for router typing.
+
+class CaseClosedGenerationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    theme: Optional[str] = None
+    premise: Optional[str] = None
+    tone: Optional[str] = None
+    suspect_count: Optional[int] = None
+    target_lead_count: Optional[int] = None
+
+
+class CaseClosedBlueprintView(BaseModel):
+    id: str
+    title: str
+    difficulty: str
+    config: dict = {}
+    blueprint: dict = {}
+    status: str
+    validation_errors: list = []
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseClosedPackageView(BaseModel):
+    id: str
+    blueprint_id: str
+    version: int
+    title: str
+    package: dict = {}
+    status: str
+    validation_errors: list = []
+    published_at: Optional[datetime] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseClosedInvestigationSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lead_id: str
+    state_version: int
+
+
+class CaseClosedProposeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suspect_id: str
+
+
+class CaseClosedConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suspect_id: str
+
+
 # --- Connections configuration --------------------------------------------------
 #
 # Admin-side only, and the same boundary the Wordle models hold: these describe a

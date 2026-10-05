@@ -39,11 +39,11 @@ from sqlalchemy.exc import IntegrityError
 
 from ..db_models import (
     AnagramGameRecord,
+    CaseClosedGameRecord,
     ConnectionsGameRecord,
     ConnectionsScheduledPuzzleRecord,
     ConnectionsWordRecord,
     CoupleGameQuestionRecord,
-    CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
     PlotTwistGameRecord,
@@ -70,6 +70,7 @@ _GAME_MODELS: dict[str, Any] = {
     "connections": ConnectionsGameRecord,
     "two-key-escape": TwoKeyEscapeGameRecord,
     "plot-twist": PlotTwistGameRecord,
+    "case-closed": CaseClosedGameRecord,
 }
 
 
@@ -412,19 +413,85 @@ def ensure_single_game(
 
         return trivia_service.release_due_questions(db, _now_utc(now))
     if game_id == "case-closed":
-        # Barebones couple title: no session table and no period yet. It
-        # rides the same pass so hidden keeps skipping and the summary
-        # stays complete, but it never opens sessions until gameplay lands.
+        # Case Closed now plays: pin the newest published package like
+        # Plot Twist. With no published package there is nothing to open.
+        # Per-couple sessions are created lazily on entering.
         moment = _now_utc(now)
-        with db.sessions.begin() as session:
-            session.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": game_lock_key(game_id)},
-            )
-            config = get_config(session, game_id)
-            if config.is_hidden:
-                return {"game_id": game_id, "action": "skipped_hidden"}
-        return {"game_id": game_id, "action": "coming_soon"}
+        today = moment.date()
+        try:
+            with db.sessions.begin() as session:
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": game_lock_key(game_id)},
+                )
+                config = get_config(session, game_id)
+                if config.is_hidden:
+                    return {"game_id": game_id, "action": "skipped_hidden"}
+                cadence = config.reset_cadence
+                current = _current_row(session, CaseClosedGameRecord)
+                if current is not None and not game_periods.is_reset_due(
+                    current.period_end_date, today
+                ):
+                    return {
+                        "game_id": game_id,
+                        "action": "current",
+                        "session_id": str(current.id),
+                    }
+                if current is not None:
+                    _end_row(current, moment)
+                start, end = game_periods.period_for_start(today, cadence)
+                from ..db_models import CaseClosedPackageRecord
+
+                published = session.scalar(
+                    select(CaseClosedPackageRecord)
+                    .where(CaseClosedPackageRecord.status == "published")
+                    .order_by(CaseClosedPackageRecord.published_at.desc())
+                    .limit(1)
+                )
+                if published is None:
+                    # Keep the ended row ended; no playable event to open.
+                    return {"game_id": game_id, "action": "coming_soon"}
+                import uuid as _uuid_mod
+
+                pkg = dict(published.package or {})
+                scoring = pkg.get("time_scoring_config") or {}
+                opened = CaseClosedGameRecord(
+                    game_date=start,
+                    status="active",
+                    period_start_date=start,
+                    period_end_date=end,
+                    case_package_id=str(published.id),
+                    seed=_uuid_mod.uuid4().hex,
+                    scoring_half_life_seconds=int(scoring.get("half_life_seconds") or 43200),
+                    scoring_max_points=int(scoring.get("max_points") or 100),
+                    started_at=moment,
+                    created_by="scheduler",
+                )
+                session.add(opened)
+                session.flush()
+                outcome = {
+                    "game_id": game_id,
+                    "action": "created",
+                    "session_id": str(opened.id),
+                    "status": opened.status,
+                    "case_package_id": str(published.id),
+                    "period_start": start.isoformat(),
+                    "period_end": end.isoformat(),
+                }
+                _snapshot_league_opportunity(session, game_id, outcome)
+                return outcome
+        except IntegrityError as exc:
+            from psycopg.errors import UniqueViolation
+
+            if not isinstance(exc.orig, UniqueViolation):
+                raise
+            with db.sessions() as session:
+                winner = _current_row(session, CaseClosedGameRecord)
+                return {
+                    "game_id": game_id,
+                    "action": "current",
+                    "session_id": str(winner.id) if winner is not None else None,
+                }
     moment = _now_utc(now)
     today = moment.date()
     model = _GAME_MODELS[game_id]
@@ -909,7 +976,4 @@ def active_session_counts(db: Database) -> dict[str, int]:
             )
             or 0
         )
-        # Barebones titles hold no sessions yet; report zero like a game
-        # with no live rows so the counts stay complete per GAME_IDS.
-        out["case-closed"] = 0
         return out

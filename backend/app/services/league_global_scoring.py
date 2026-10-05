@@ -327,6 +327,17 @@ def plot_twist_global_base(raw: dict[str, Any]) -> Decimal:
     return quantize_points(Decimal(str(max(0, min(100, base)))))
 
 
+def case_closed_global_base(raw: dict[str, Any]) -> Decimal:
+    """Time-decay base for correct accusations, zero otherwise (clamped)."""
+    try:
+        base = int(raw.get("base_points") if raw.get("base_points") is not None else 0)
+    except (TypeError, ValueError):
+        base = 0
+    if not raw.get("correct"):
+        base = 0
+    return quantize_points(Decimal(str(max(0, min(1000, base)))))
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -340,6 +351,7 @@ _GLOBAL_BASE_FUNCTIONS = {
     "couple-questionnaire": couple_global_base,
     "two-key-escape": two_key_escape_global_base,
     "plot-twist": plot_twist_global_base,
+    "case-closed": case_closed_global_base,
 }
 
 

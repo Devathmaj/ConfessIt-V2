@@ -3155,7 +3155,6 @@ class CaseClosedEvidenceRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("session_id", "evidence_id"),
-        UniqueConstraint("session_id", "lead_id"),
     )
 
 

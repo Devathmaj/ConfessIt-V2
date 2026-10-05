@@ -1,0 +1,109 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import type { ContextType } from 'react';
+
+import { CaseClosedGamePage } from '@/pages/CaseClosedGamePage';
+import { AuthContext } from '@/contexts/AuthContext';
+import type { CaseClosedState } from '@/services/api';
+
+vi.mock('@/services/api', () => ({
+  getCaseClosedState: vi.fn(),
+  getCaseClosedPartners: vi.fn(),
+  selectCaseClosedPartner: vi.fn(),
+  startCaseClosedEvent: vi.fn(),
+  investigateCaseClosedLead: vi.fn(),
+  proposeCaseClosedAccusation: vi.fn(),
+  confirmCaseClosedAccusation: vi.fn(),
+  getCaseClosedResult: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+  Toaster: () => null,
+}));
+
+const api = await import('@/services/api');
+const getState = api.getCaseClosedState as ReturnType<typeof vi.fn>;
+const investigate = api.investigateCaseClosedLead as ReturnType<typeof vi.fn>;
+const propose = api.proposeCaseClosedAccusation as ReturnType<typeof vi.fn>;
+const confirmFn = api.confirmCaseClosedAccusation as ReturnType<typeof vi.fn>;
+const getResult = api.getCaseClosedResult as ReturnType<typeof vi.fn>;
+
+type AuthValue = ContextType<typeof AuthContext>;
+const authValue = (): AuthValue =>
+  ({ user: { id: 'a', name: 'Alice', regno: 'T1', email: 'a@x.com', gender: 'female' }, isAuthenticated: true, isLoading: false }) as unknown as AuthValue;
+
+const baseState = (over: Partial<CaseClosedState> = {}): CaseClosedState => ({
+  stage: 'investigating',
+  game_id: 'g1', session_id: 's1',
+  case_title: 'The Missing Mascot', opening_narrative: 'A costume vanished.',
+  suspects: [
+    { id: 's1', name: 'Alex', background: 'Stagehand', relationship: 'Crew' },
+    { id: 's2', name: 'Blake', background: 'Actor', relationship: 'Cast' },
+  ],
+  available_leads: [{ id: 'lead-a', title: 'Footage', description: 'Cameras', investigated: false, available: true, depth: 0 }],
+  my_path: [], investigated_lead_ids: [], evidence_board: [],
+  my_remaining: 5, partner_remaining: 5,
+  accusation: { my_proposal: null, partner_proposal: null, my_confirmed: null, partner_confirmed: null, locked_suspect_id: null, locked_at: null },
+  timer: { started: false, first_investigation_at: null, locked_at: null, elapsed_seconds: null },
+  session_status: 'investigating', event_deadline: null, state_version: 0, finalized: false,
+  ...over,
+});
+
+const renderPage = () =>
+  render(<AuthContext.Provider value={authValue()}><MemoryRouter><CaseClosedGamePage /></MemoryRouter></AuthContext.Provider>);
+
+describe('CaseClosedGamePage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows leads, budgets, evidence board and timer placeholder', async () => {
+    getState.mockResolvedValue(baseState());
+    renderPage();
+    expect(await screen.findByText('The Missing Mascot')).toBeTruthy();
+    expect(screen.getByText(/You: 5 left/)).toBeTruthy();
+    expect(screen.getByText('Footage')).toBeTruthy();
+    expect(screen.getByText(/Timer starts on first investigation/)).toBeTruthy();
+  });
+
+  it('investigates a lead and shows the discovery + evidence', async () => {
+    const after = baseState({
+      my_path: ['lead-a'], investigated_lead_ids: ['lead-a'],
+      evidence_board: [{ id: 'e1', title: 'Entry', description: 'At 6:18', discovered_at: new Date().toISOString(), discovered_by: 'a', source_lead_id: 'lead-a', suspect_ids: [], kind: 'establishes_fact' }],
+      my_remaining: 4, state_version: 1,
+      timer: { started: true, first_investigation_at: new Date().toISOString(), locked_at: null, elapsed_seconds: 12 },
+    });
+    getState.mockResolvedValue(baseState());
+    investigate.mockResolvedValue({ state: after, lead_id: 'lead-a', discovery_text: 'Entry at 6:18', already_known: false, replay: false });
+    renderPage();
+    fireEvent.click(await screen.findByText('Investigate'));
+    await waitFor(() => expect(investigate).toHaveBeenCalledWith('lead-a', 0));
+    expect(await screen.findByText('Entry')).toBeTruthy();
+  });
+
+  it('proposes then confirms with an irreversible warning', async () => {
+    getState.mockResolvedValue(baseState());
+    propose.mockResolvedValue(baseState({ accusation: { my_proposal: 's1', partner_proposal: null, my_confirmed: null, partner_confirmed: null, locked_suspect_id: null, locked_at: null } }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    confirmFn.mockResolvedValue(baseState({ stage: 'accusation_locked', accusation: { my_proposal: 's1', partner_proposal: 's1', my_confirmed: 's1', partner_confirmed: 's1', locked_suspect_id: 's1', locked_at: new Date().toISOString() }, timer: { started: true, first_investigation_at: new Date().toISOString(), locked_at: new Date().toISOString(), elapsed_seconds: 60 } }));
+    getResult.mockResolvedValue({ locked_suspect_id: 's1', correct: null, score: null, elapsed_seconds: 60, finalized: false, culprit_id: null, solution_title: null, solution_narrative: null, why_others_ruled_out: null });
+    renderPage();
+    const alexButtons = await screen.findAllByText('Alex');
+    const alexBtn = alexButtons.find((el) => el.tagName === 'BUTTON') ?? alexButtons[0];
+    fireEvent.click(alexBtn);
+    fireEvent.click(screen.getByText('Propose'));
+    await waitFor(() => expect(propose).toHaveBeenCalledWith('s1'));
+    fireEvent.click(screen.getByText(/Confirm \(irreversible\)/));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    await waitFor(() => expect(confirmFn).toHaveBeenCalledWith('s1'));
+    confirmSpy.mockRestore();
+  });
+
+  it('hides correctness until finalization and reveals after', async () => {
+    getState.mockResolvedValue(baseState({ stage: 'accusation_locked', accusation: { my_proposal: 's1', partner_proposal: 's1', my_confirmed: 's1', partner_confirmed: 's1', locked_suspect_id: 's1', locked_at: new Date().toISOString() }, timer: { started: true, first_investigation_at: new Date().toISOString(), locked_at: new Date().toISOString(), elapsed_seconds: 60 } }));
+    getResult.mockResolvedValue({ locked_suspect_id: 's1', correct: null, score: null, elapsed_seconds: 60, finalized: false, culprit_id: null, solution_title: null, solution_narrative: null, why_others_ruled_out: null });
+    renderPage();
+    await waitFor(() => expect(getResult).toHaveBeenCalled());
+    expect(screen.queryByText(/Solution reveal/)).toBeNull();
+  });
+});
