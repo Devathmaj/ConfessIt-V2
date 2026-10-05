@@ -42,13 +42,22 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _sanitized_detail(exc: Exception) -> str:
+    raw = str(getattr(exc, "detail", exc) or "Case generation failed.")
+    lowered = raw.lower()
+    for marker in ("bearer ", "api-key", "apikey", "secret"):
+        if marker in lowered:
+            return "Case generation failed. Check provider configuration and retry."
+    return raw[:500]
+
+
 def _as_http(exc: Exception) -> HTTPException:
     from .llm_client import LLMError
 
     if isinstance(exc, HTTPException):
         return exc
     if isinstance(exc, LLMError):
-        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.detail)
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_sanitized_detail(exc))
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY, detail="Case generation failed."
     )
@@ -397,7 +406,7 @@ def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
             if row is not None:
                 row.status = "generation_failed"
                 row.validation_errors = [
-                    {"code": getattr(exc, "code", "model_error"), "message": getattr(exc, "detail", str(exc))[:500]}
+                    {"code": getattr(exc, "code", "model_error"), "message": _sanitized_detail(exc)}
                 ]
         raise _as_http(exc)
 

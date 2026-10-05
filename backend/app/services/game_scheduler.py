@@ -44,6 +44,7 @@ from ..db_models import (
     ConnectionsScheduledPuzzleRecord,
     ConnectionsWordRecord,
     CoupleGameQuestionRecord,
+    CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
     PlotTwistGameRecord,
