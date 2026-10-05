@@ -518,6 +518,51 @@ PLOT_TWIST_TREASURE_BONUS_MAX = 15
 PLOT_TWIST_LLM_TIMEOUT_SECONDS = 120
 PLOT_TWIST_SESSION_LOCK_KEY = 7_250_003
 
+# Case Closed. Cooperative mystery game: one immutable published case per
+# event, five investigation actions per partner, three initial leads,
+# ~15-20 DAG lead nodes, joint accusation with hidden correctness until
+# event finalization. Deterministic gameplay; LLM only pre-publication.
+CASE_CLOSED_DIFFICULTIES: tuple[str, ...] = ("easy", "medium", "hard")
+CASE_CLOSED_EVIDENCE_KINDS: tuple[str, ...] = (
+    "establishes_fact",
+    "contradicts_statement",
+    "supports_theory",
+    "misleading",
+)
+CASE_CLOSED_PACKAGE_STATUSES: tuple[str, ...] = (
+    "draft",
+    "generating",
+    "validation_failed",
+    "ready_for_review",
+    "published",
+    "generation_failed",
+)
+CASE_CLOSED_BLUEPRINT_STATUSES: tuple[str, ...] = (
+    "draft",
+    "generating",
+    "ready_for_review",
+    "approved",
+    "generation_failed",
+)
+CASE_CLOSED_SESSION_STATUSES: tuple[str, ...] = (
+    "investigating",
+    "accusation_locked",
+    "completed",
+    "expired",
+)
+CASE_CLOSED_SCHEMA_VERSION = 1
+CASE_CLOSED_BUDGET_PER_PARTNER = 5
+CASE_CLOSED_INITIAL_LEADS_COUNT = 3
+CASE_CLOSED_MIN_LEADS = 15
+CASE_CLOSED_MAX_LEADS = 24
+CASE_CLOSED_MAX_FOLLOW_UPS = 3
+CASE_CLOSED_MIN_DEPTH = 4
+CASE_CLOSED_MAX_REPAIR_ATTEMPTS = 3
+CASE_CLOSED_LLM_TIMEOUT_SECONDS = 120
+CASE_CLOSED_DEFAULT_HALF_LIFE_SECONDS = 43200
+CASE_CLOSED_DEFAULT_MAX_POINTS = 100
+CASE_CLOSED_SESSION_LOCK_KEY = 7_250_004
+
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #
