@@ -2939,6 +2939,226 @@ class PlotTwistDecisionRecord(Base):
     )
 
 
+class CaseClosedBlueprintRecord(Base):
+    """One AI-generated mystery blueprint awaiting approval.
+
+    Hidden authoritative truth (Stage A). ``blueprint`` holds the validated
+    CaseClosedBlueprint; ``status`` moves draft -> generating ->
+    ready_for_review -> approved (or generation_failed). Publishing never
+    mutates this row; packages snapshot new versions.
+    """
+
+    __tablename__ = "case_closed_blueprints"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String(200), default="", server_default=text("''"))
+    difficulty: Mapped[str] = mapped_column(String(16), default="medium", server_default=text("'medium'"))
+    config: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    blueprint: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default=text("'draft'"), index=True)
+    validation_errors: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'generating', 'ready_for_review', 'approved', 'generation_failed')",
+            name="ck_case_closed_blueprints_status_known",
+        ),
+    )
+
+
+class CaseClosedPackageRecord(Base):
+    """One versioned, validated investigation package from a blueprint.
+
+    ``package`` holds the validated CaseClosedPackage (DAG + evidence +
+    hidden solution). Immutable once published and referenced by an event.
+    """
+
+    __tablename__ = "case_closed_packages"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    blueprint_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_blueprints.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    title: Mapped[str] = mapped_column(String(200), default="", server_default=text("''"))
+    package: Mapped[dict] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(20), default="draft", server_default=text("'draft'"), index=True)
+    validation_errors: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("blueprint_id", "version"),
+        CheckConstraint(
+            "status IN ('draft', 'generating', 'validation_failed', 'ready_for_review', 'published', 'generation_failed')",
+            name="ck_case_closed_packages_status_known",
+        ),
+    )
+
+
+class CaseClosedGameRecord(Base):
+    """One Case Closed global event: pins one published package version.
+
+    Every couple in the event plays the same case, scoring rules, and
+    deadline. Publishing a new package does not mutate this row; the
+    scheduler opens a fresh event pinned to the new package.
+    """
+
+    __tablename__ = "case_closed_games"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_date: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default=text("'ended'"), index=True
+    )
+    period_start_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    period_end_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
+    case_package_id: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_packages.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    seed: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
+    scoring_half_life_seconds: Mapped[int] = mapped_column(Integer, default=43200, server_default=text("43200"))
+    scoring_max_points: Mapped[int] = mapped_column(Integer, default=100, server_default=text("100"))
+    finalized: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    finalized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending', 'ended')",
+            name="ck_case_closed_games_status_known",
+        ),
+    )
+
+
+class CaseClosedSessionRecord(Base):
+    """One couple's session for a pinned case event.
+
+    ``case_package_id`` is denormalized from the game at creation so the
+    session stays bound to the version it started even if a newer package
+    is published. Budgets/paths/proposals live here; append-only history
+    lives in investigations + evidence tables. ``state_version`` is
+    optimistic concurrency for investigations and accusation locks.
+    """
+
+    __tablename__ = "case_closed_sessions"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    case_closed_game_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_games.id", ondelete="CASCADE"), index=True
+    )
+    case_package_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_packages.id", ondelete="CASCADE"), index=True
+    )
+    user_a_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    user_b_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="investigating", server_default=text("'investigating'"), index=True)
+    actions_used_a: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    actions_used_b: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    path_a: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    path_b: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    proposal_a: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    proposal_b: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    confirmed_a: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    confirmed_b: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    locked_culprit_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    first_investigation_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    accusation_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    elapsed_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    finalized: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    finalized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    state_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("case_closed_game_id", "user_a_id", "user_b_id"),
+        CheckConstraint("user_a_id != user_b_id", name="ck_case_closed_sessions_distinct_users"),
+        CheckConstraint(
+            "status IN ('investigating', 'accusation_locked', 'completed', 'expired')",
+            name="ck_case_closed_sessions_status_known",
+        ),
+    )
+
+
+class CaseClosedInvestigationRecord(Base):
+    """Append-only per-actor investigation history (audit + idempotency).
+
+    One row per (session, actor, lead) first touch; retries resolve to the
+    stored row instead of charging twice. ``already_known`` marks a visit
+    to a lead the couple already discovered via the partner (no budget
+    charge, navigation only).
+    """
+
+    __tablename__ = "case_closed_investigations"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_sessions.id", ondelete="CASCADE"), index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer)
+    lead_id: Mapped[str] = mapped_column(String(64), index=True)
+    actor_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    already_known: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq"),
+        UniqueConstraint("session_id", "actor_user_id", "lead_id"),
+    )
+
+
+class CaseClosedEvidenceRecord(Base):
+    """Shared evidence board: one row per first discovery per session.
+
+    Records who discovered what and when; the partner's later visit to the
+    same lead replays this row instead of creating a duplicate.
+    """
+
+    __tablename__ = "case_closed_evidence"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("case_closed_sessions.id", ondelete="CASCADE"), index=True
+    )
+    evidence_id: Mapped[str] = mapped_column(String(64), index=True)
+    lead_id: Mapped[str] = mapped_column(String(64), index=True)
+    discoverer_user_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "evidence_id"),
+        UniqueConstraint("session_id", "lead_id"),
+    )
+
+
 def resolve_account_by_id(session, account_id: Optional[str]) -> Optional[tuple[str, Any]]:
     """Find the account with this primary key, as ``(account_type, row)`` or None."""
     if not _is_account_id(account_id):
