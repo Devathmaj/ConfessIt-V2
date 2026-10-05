@@ -48,3 +48,9 @@ opentelemetry-exporter-otlp-proto-grpc==1.45.1
 # `setuptools<81` install step, which the image build immediately overrode.
 setuptools==84.0.0
 SQLAlchemy==2.1.4
+# pgvector Python bindings for the vector(1536) confession-embedding column.
+# The package alone does not install the server extension; PostgreSQL still needs
+# CREATE EXTENSION vector (see app.postgres.apply_vector_extension and
+# docker-compose.yml pgvector/pgvector:pg16 image).
+pgvector==0.4.2
+numpy==2.2.6

@@ -218,6 +218,39 @@ class ReportCreate(BaseModel):
     """
     reason: str = Field(max_length=REPORT_REASON_MAX)
 
+
+class SemanticSearchRequest(BaseModel):
+    """Natural-language semantic search over confessions.
+
+    ``query`` is embedded with text-embedding-3-small and ranked by pgvector
+    cosine distance. ``limit`` is bounded so one request can never materialize
+    the whole corpus. Only legitimate public dimensions are supported: ranking
+    is always semantic relevance (no sort picker), and visibility/moderation
+    filters are enforced in SQL, not by the caller.
+    """
+
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=10, ge=1, le=50)
+
+    @field_validator("query", mode="after")
+    @classmethod
+    def _validate_query(cls, value: str) -> str:
+        normalized = " ".join((value or "").split())
+        if not normalized:
+            raise ValueError("Search query must not be blank.")
+        return normalized
+
+
+class SemanticSearchResponse(BaseModel):
+    """Ranked confessions for a semantic query, in existing public shape."""
+
+    confessions: List["Confession"] = Field(default_factory=list)
+    total: int = 0
+    query: str = ""
+    limit: int = 10
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
 class UserInfo(BaseModel):
     """
     Represents denormalized user information to be embedded in comments.

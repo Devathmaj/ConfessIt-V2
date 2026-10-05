@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -399,6 +400,99 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str | None = None
     LLM_MODEL: str | None = None
+
+    # --- Semantic search embeddings (Azure) ---
+    #
+    # Confession semantic search uses a single Azure-hosted embedding model.
+    # The model and dimensions are fixed invariants, not tunable knobs:
+    #   * EMBEDDING_MODEL must be "text-embedding-3-small".
+    #   * EMBEDDING_DIMENSIONS must be 1536, stored as PostgreSQL vector(1536).
+    # Query and confession embeddings always use the same model/dimensions.
+    # Credentials stay in the runtime environment and are never committed.
+    EMBEDDING_ENDPOINT: str = "https://confessit-model.services.ai.azure.com"
+    EMBEDDING_API_KEY: str | None = None
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_SEARCH_ENABLED: bool = True
+    # Kept for backward compatibility; Foundry v1 embeddings
+    # ({endpoint}/openai/v1/embeddings) takes no api-version query param.
+    EMBEDDING_API_VERSION: str = "2024-02-01"
+    # Optional deployment name when the Azure resource distinguishes a
+    # deployment name from the underlying model id. When unset, the model
+    # name is used as the deployment name. Never invent a value silently:
+    # this is explicit configuration, defaulting to the model id.
+    EMBEDDING_DEPLOYMENT: str | None = None
+    # Bounded HTTP behavior for the provider client (seconds / attempts).
+    EMBEDDING_TIMEOUT_SECONDS: float = 10.0
+    EMBEDDING_MAX_RETRIES: int = 2
+
+    @field_validator("EMBEDDING_ENDPOINT", mode="before")
+    @classmethod
+    def _coerce_empty_embedding_endpoint(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "https://confessit-model.services.ai.azure.com"
+        return value
+
+    @field_validator("EMBEDDING_MODEL", mode="before")
+    @classmethod
+    def _coerce_empty_embedding_model(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "text-embedding-3-small"
+        return value
+
+    @field_validator("EMBEDDING_DIMENSIONS", mode="before")
+    @classmethod
+    def _coerce_empty_embedding_dims(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 1536
+        return value
+
+    @field_validator("EMBEDDING_API_KEY", "EMBEDDING_DEPLOYMENT", mode="before")
+    @classmethod
+    def _coerce_empty_embedding_optional(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("EMBEDDING_MODEL")
+    @classmethod
+    def _validate_embedding_model(cls, value: str | None) -> str:
+        """Only text-embedding-3-small: query and index vectors must match."""
+        text_value = (value or "").strip() or "text-embedding-3-small"
+        if text_value != "text-embedding-3-small":
+            raise ValueError(
+                "EMBEDDING_MODEL must be 'text-embedding-3-small' "
+                f"(got {value!r}): query and confession embeddings must use "
+                "the same compatible model."
+            )
+        return text_value
+
+    @field_validator("EMBEDDING_DIMENSIONS")
+    @classmethod
+    def _validate_embedding_dimensions(cls, value: int | None) -> int:
+        """Only 1536: the database column is vector(1536)."""
+        resolved = 1536 if value is None else value
+        if resolved != 1536:
+            raise ValueError(
+                f"EMBEDDING_DIMENSIONS must be 1536 (got {value}): "
+                "the PostgreSQL column is vector(1536) and vectors must "
+                "never be truncated, padded, or reshaped."
+            )
+        return resolved
+
+    @field_validator("EMBEDDING_ENDPOINT")
+    @classmethod
+    def _validate_embedding_endpoint(cls, value: str | None) -> str:
+        """Non-blank https endpoint; the request path is built from it."""
+        text_value = (value or "").strip().rstrip("/") or "https://confessit-model.services.ai.azure.com"
+        if not text_value:
+            raise ValueError("EMBEDDING_ENDPOINT must not be blank.")
+        lowered = text_value.lower()
+        if not (lowered.startswith("https://") or lowered.startswith("http://")):
+            raise ValueError(
+                f"EMBEDDING_ENDPOINT must be an http(s) URL (got {value!r})."
+            )
+        return text_value
 
     # --- Host allowlist ---
     #

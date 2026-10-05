@@ -156,7 +156,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector image (PostgreSQL 16 + pgvector extension) so CREATE EXTENSION
+    # vector and the confession_embeddings vector(1536) column work. The stock
+    # postgres:16-alpine image has no vector extension available.
+    image: pgvector/pgvector:pg16
     # Published to the host on loopback only, so a host-side psql/DBeaver can attach
     # while nothing on the network can reach the database or the application data in
     # it. This is the same posture as the observability UIs below, which bind

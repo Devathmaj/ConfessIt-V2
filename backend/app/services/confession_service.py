@@ -6,7 +6,7 @@ from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord,
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
 import datetime
 from datetime import timezone
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 from .report_counters import CONFESSION, record_report_filed
 from .storage_service import storage_service
@@ -202,8 +202,88 @@ class ConfessionService:
             session.add(row)
             session.flush()
             confession_id = str(row.id)
+            confession_body = row.body
+            confession_recipient = row.recipient_name
         logger.info(f"Created confession {confession_id} for user {user_id}")
+        # Exactly one embedding for this eligible confession, generated
+        # synchronously so no worker infrastructure is needed. A provider failure
+        # never fails the confession itself: the post stays and is simply not
+        # searchable until... (no backfill by design) -- it stays unsearchable.
+        # Comments, likes, and reports never generate embeddings (only this path).
+        self._generate_embedding_for_confession(
+            confession_id, confession_body, confession_recipient
+        )
         return self.get_confession(confession_id, user_id)
+
+    def _generate_embedding_for_confession(
+        self, confession_id: str, body: Any, recipient_name: Any = None
+    ) -> bool:
+        """Generate and store the single embedding for a new confession.
+
+        Returns True when a valid embedding was stored. False when search is
+        disabled or generation failed: the confession remains created but is
+        excluded from semantic search (no valid embedding row). Never raises
+        for provider failures so creation is not permanently dependent on Azure.
+        """
+        from ..config import settings as _settings
+        from .embedding_service import (
+            EmbeddingError,
+            build_confession_document,
+            config_from_settings,
+            embed_confession,
+        )
+        from ..db_models import ConfessionEmbeddingRecord
+
+        try:
+            config = config_from_settings(_settings)
+        except Exception as exc:
+            logger.warning("Skipping confession embedding: bad config: %s", exc)
+            return False
+        if not config.enabled:
+            return False
+        try:
+            document = build_confession_document(body, recipient_name)
+            if not document:
+                return False
+            vector = embed_confession(body, recipient_name, config=config)
+        except EmbeddingError as exc:
+            # Searchability state is explicit: no row means not searchable.
+            # Never log confession text; only the id and the safe code.
+            logger.warning(
+                "Confession %s not searchable: embedding failed (%s)",
+                confession_id, exc.code,
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "Confession %s not searchable: unexpected embedding failure: %s",
+                confession_id, type(exc).__name__,
+            )
+            return False
+        try:
+            with self.sessions.begin() as session:
+                existing = session.scalar(
+                    select(ConfessionEmbeddingRecord).where(
+                        ConfessionEmbeddingRecord.confession_id == str(confession_id)
+                    )
+                )
+                if existing is not None:
+                    return True
+                session.add(
+                    ConfessionEmbeddingRecord(
+                        confession_id=str(confession_id),
+                        embedding=vector,
+                        model=config.model,
+                    )
+                )
+            logger.info("Stored embedding for confession %s", confession_id)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Confession %s not searchable: embedding store failed: %s",
+                confession_id, type(exc).__name__,
+            )
+            return False
 
     def get_confession_cooldown(self, user_id: str) -> dict:
         """Advisory: may this participant confess right now, and if not, when can they?
@@ -852,3 +932,178 @@ class ConfessionService:
         except Exception:
             logger.warning("Failed to queue staff notification for confession report %s", confession_id)
         return self.get_confession(confession_id, user_id)
+
+    def search_confessions_semantic(
+        self, query: str, user_id: Optional[str] = None, limit: int = 10
+   ) -> Dict[str, Any]:
+        """Semantic search over eligible confessions ranked by cosine distance.
+
+        Ranking uses pgvector cosine distance (``<=>``) ascending: the smallest
+        distance is the most semantically similar. Cosine distance for
+        length-normalized embeddings equals ``1 - cosine_similarity``; no
+        calibrated probability or confidence percentage is implied. Results
+        exclude confessions without a valid current embedding and any row that
+        is hidden, deleted (hard-deleted rows vanish via CASCADE), or otherwise
+        ineligible (``removed_at IS NULL`` is enforced in the database search
+        itself). Ties break by newest first, then id, so pages are stable.
+        """
+        from ..config import settings as _settings
+        from .embedding_service import (
+            EmbeddingError,
+            SEARCH_QUERY_MAX_LENGTH,
+            config_from_settings,
+            embed_query,
+            normalize_text,
+        )
+        from ..db_models import ConfessionEmbeddingRecord
+
+        normalized = normalize_text(query or "")
+        if not normalized:
+            raise EmbeddingError(
+                "Search query must not be blank.", code="invalid_input"
+            )
+        if len(normalized) > SEARCH_QUERY_MAX_LENGTH:
+            raise EmbeddingError(
+                f"Search query is too long (max {SEARCH_QUERY_MAX_LENGTH} characters).",
+                code="invalid_input",
+            )
+        limit = max(1, min(int(limit or 10), FEED_MAX_LIMIT))
+        config = config_from_settings(_settings)
+        if not config.enabled:
+            raise EmbeddingError(
+                "Semantic search is disabled (EMBEDDING_SEARCH_ENABLED is not true).",
+                code="disabled",
+            )
+        # Generates the query embedding with the same model; validates 1536 dims.
+        # No provider call happens when disabled (checked above).
+        query_vector = embed_query(normalized, config=config)
+
+        # Vector ranking in the database: inner join excludes confessions without
+        # a valid embedding; removed_at IS NULL enforces moderation/visibility in
+        # SQL, not in frontend code. Safe ORM expression, never string SQL.
+        try:
+            with self.sessions() as session:
+                distance = ConfessionEmbeddingRecord.embedding.cosine_distance(query_vector)
+                rows = session.execute(
+                    select(
+                        ConfessionRecord,
+                        distance.label("distance"),
+                    )
+                    .join(
+                        ConfessionEmbeddingRecord,
+                        ConfessionEmbeddingRecord.confession_id == ConfessionRecord.id,
+                    )
+                    .where(ConfessionRecord.removed_at.is_(None))
+                    .order_by(
+                        distance.asc(),
+                        ConfessionRecord.created_at.desc(),
+                        ConfessionRecord.id.asc(),
+                    )
+                    .limit(limit)
+                ).all()
+                ordered_models = [row[0] for row in rows]
+                ordered_ids = [str(row.id) for row in ordered_models]
+        except Exception as exc:
+            message = str(exc).lower()
+            if "vector" in message or "embedding" in message or "cosine" in message:
+                raise EmbeddingError(
+                    "Semantic search is unavailable: the pgvector extension or "
+                    "confession_embeddings schema is missing. See README for "
+                    "the pgvector/pgvector:pg16 requirement.",
+                    code="unavailable",
+                ) from exc
+            raise
+        if not ordered_models:
+            return {"confessions": [], "total": 0, "query": normalized, "limit": limit}
+        # Hydrate the ranked page with the same bulk reads as the feed: newest N
+        # comments per confession, authors, and reporter ids -- one bulk read per
+        # relation, never per row. Order is semantic relevance, not time.
+        with self.sessions() as session:
+            confession_ids = ordered_ids
+            ranked = (
+                select(
+                    ConfessionCommentRecord.id,
+                    func.row_number().over(
+                        partition_by=ConfessionCommentRecord.confession_id,
+                        order_by=ConfessionCommentRecord.created_at.desc(),
+                    ).label("thread_rank"),
+                )
+                .where(
+                    ConfessionCommentRecord.removed_at.is_(None),
+                    ConfessionCommentRecord.confession_id.in_(confession_ids),
+                )
+                .subquery()
+            )
+            kept_ids = session.scalars(
+                select(ranked.c.id).where(ranked.c.thread_rank <= FEED_COMMENTS_INITIAL)
+            ).all()
+            comment_models = session.scalars(
+                select(ConfessionCommentRecord)
+                .where(ConfessionCommentRecord.id.in_(kept_ids))
+                .order_by(ConfessionCommentRecord.created_at.desc())
+            ).all() if kept_ids else []
+            wanted_user_ids = {str(row.author_id) for row in ordered_models}
+            wanted_user_ids |= {str(row.user_id) for row in comment_models}
+            user_map = {
+                user.id: user for user in session.scalars(
+                    select(UserRecord).where(UserRecord.id.in_(wanted_user_ids))
+                ).all()
+            } if wanted_user_ids else {}
+            confession_reporters: dict = {}
+            for target_id, reporter_id in session.execute(
+                select(ReportRecord.confession_id, ReportRecord.reported_by_id).where(
+                    ReportRecord.confession_id.in_(confession_ids)
+                )
+            ).all():
+                confession_reporters.setdefault(str(target_id), []).append(str(reporter_id))
+            comments_by_confession: dict = {}
+            for comment in self._hydrate_comments(session, comment_models, user_id, user_map):
+                comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
+            # Re-fetch confession rows in this session so payloads read live attrs.
+            fresh = {
+                str(row.id): row for row in session.scalars(
+                    select(ConfessionRecord).where(ConfessionRecord.id.in_(confession_ids))
+                ).all()
+            }
+        confession_rows = []
+        for confession_id in ordered_ids:
+            row = fresh.get(confession_id)
+            if row is None or row.removed_at is not None:
+                continue
+            payload = self._confession_payload(row)
+            reporter_ids = confession_reporters.get(str(payload["id"]), [])
+            payload["has_reported"] = bool(user_id and user_id in reporter_ids)
+            payload["reported_by"] = []
+            payload["report_count"] = len(reporter_ids)
+            payload["comments"] = sorted(
+                comments_by_confession.get(confession_id, []),
+                key=lambda c: c.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            author = user_map.get(str(payload.get("author_id")))
+            payload["user_info"] = {
+                "id": str(payload.get("author_id")),
+                "name": author.name if author else "Anonymous User",
+                "profile_picture_url": _profile_picture_url(author) if not payload.get("anonymous") else None,
+            }
+            user_reaction = None
+            if user_id and "reactions" in payload:
+                for reaction_type, reactor_ids in payload["reactions"].items():
+                    if user_id in reactor_ids:
+                        user_reaction = reaction_type
+                        break
+            payload["user_reaction"] = user_reaction
+            payload["reactions"] = {}
+            # Reuse the feed's comment hydration for user_reaction preservation.
+            comments_list = []
+            for comment_doc in sorted(payload.get("comments", []), key=lambda c: c["created_at"], reverse=True):
+                comments_list.append(ConfessionComment(**comment_doc))
+            payload["comments"] = comments_list
+            confession_rows.append(Confession(**payload))
+        logger.info("Semantic search returned %s confession(s)", len(confession_rows))
+        return {
+            "confessions": confession_rows,
+            "total": len(confession_rows),
+            "query": normalized,
+            "limit": limit,
+        }

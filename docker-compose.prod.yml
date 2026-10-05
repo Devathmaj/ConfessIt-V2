@@ -145,7 +145,9 @@ services:
           memory: 512M
 
   postgres:
-    image: postgres:16-alpine
+    # Same pgvector requirement as dev (see docker-compose.yml): the
+    # confession_embeddings vector(1536) column needs the vector extension.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: confessit
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}

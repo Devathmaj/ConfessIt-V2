@@ -212,6 +212,11 @@ class PostgresClient:
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
     def initialize(self) -> None:
+        # pgvector must exist before any table using vector(1536) is created.
+        # Without this, create_all fails on a fresh database with "type vector
+        # does not exist". Requires the pgvector extension package on the
+        # server (pgvector/pgvector:pg16 image); see docker-compose.yml.
+        self.apply_vector_extension()
         Base.metadata.create_all(self.engine)
         # Columns before constraints: a CHECK added to an already-created table can name a
         # column that only exists in the models, and PostgreSQL refuses the constraint if the
@@ -224,6 +229,9 @@ class PostgresClient:
         # Needs the extension installed first, and nothing else depends on it, so it
         # runs with the other additive DDL rather than in table-creation order.
         self.apply_trgm_indexes()
+        # HNSW cosine index for confession embeddings where the server supports
+        # it; exact search remains correct without it on a small corpus.
+        self.apply_embedding_vector_index()
         # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
         # unlike the others it may have to *rewrite rows* before it can be applied.
         self.apply_not_null_constraints()
@@ -428,6 +436,69 @@ class PostgresClient:
                     )
         except Exception as e:
             logger.warning("Skipping trigram indexes: %s", e)
+
+    def apply_vector_extension(self) -> bool:
+        """Install the pgvector extension so vector(1536) columns can exist.
+
+        Installing the extension needs superuser (or rds_superuser); the bundled
+        pgvector image grants it to the app role, but a managed database may not.
+        Returns True when the extension is installed. A missing extension is a
+        warning here rather than a boot refusal so the failure surfaces where it
+        belongs (table creation / embedding writes); the README and compose files
+        document the pgvector/pgvector:pg16 image requirement.
+        """
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                installed = connection.scalar(
+                    text("SELECT count(*) FROM pg_extension WHERE extname = 'vector'")
+                )
+                if not installed:
+                    logger.warning(
+                        "pgvector extension unavailable; confession embeddings "
+                        "require the pgvector extension (see docker-compose.yml)"
+                    )
+                    return False
+                return True
+        except Exception as e:
+            logger.warning("Skipping pgvector extension: %s", e)
+            return False
+
+    def apply_embedding_vector_index(self) -> None:
+        """Best-effort HNSW cosine index on confession_embeddings.embedding.
+
+        Exact nearest-neighbor search is correct without it on a small corpus;
+        the index only speeds retrieval as the corpus grows. Visibility filters
+        (removed_at IS NULL) still apply in the query itself, so approximate
+        recall is filtered after ranking rather than assumed. Unsupported
+        servers (old pgvector, missing extension) degrade to exact search with
+        a warning instead of refusing to boot.
+        """
+        try:
+            with self.engine.begin() as connection:
+                installed = connection.scalar(
+                    text("SELECT count(*) FROM pg_extension WHERE extname = 'vector'")
+                )
+                if not installed:
+                    return
+                # Table may not exist yet on a database where create_all could not
+                # create it (extension installed late); skip quietly in that case.
+                exists = connection.scalar(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = 'confession_embeddings'"
+                    )
+                )
+                if not exists:
+                    return
+                connection.execute(
+                    text(
+                        'CREATE INDEX IF NOT EXISTS "ix_confession_embeddings_embedding_hnsw" '
+                        'ON "confession_embeddings" USING hnsw ("embedding" vector_cosine_ops)'
+                    )
+                )
+        except Exception as e:
+            logger.warning("Skipping embedding HNSW index (exact search remains): %s", e)
 
     def apply_check_constraints(self) -> None:
         """Bring the database's CHECK constraints in line with the models.

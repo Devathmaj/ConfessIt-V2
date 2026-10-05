@@ -160,6 +160,34 @@ export const createConfession = async (confession: any) => {
   return response.data;
 };
 
+/**
+ * Semantic search over confessions by meaning (POST /confessions/search).
+ *
+ * The query is embedded server-side with text-embedding-3-small and ranked by
+ * pgvector cosine distance. Returns {confessions, total, query, limit} in the
+ * existing public confession shape (anonymous presentation preserved). A 503
+ * means search is disabled or the provider is unavailable; callers should
+ * surface the server's detail rather than invent one.
+ */
+export interface SemanticSearchResult {
+  confessions: any[];
+  total: number;
+  query: string;
+  limit: number;
+}
+
+export const searchConfessions = async (
+  query: string,
+  limit = 10,
+): Promise<SemanticSearchResult> => {
+  const response = await axios.post(
+    `${API_URL}/confessions/search`,
+    { query, limit },
+    { headers: getAuthHeaders() },
+  );
+  return response.data as SemanticSearchResult;
+};
+
 export const updateConfession = async (confessionId: string, updateData: { anonymous?: boolean; comments_enabled?: boolean }) => {
     const response = await axios.put(
       `${API_URL}/confessions/${confessionId}`,

@@ -15,6 +15,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+try:
+    from pgvector.sqlalchemy import Vector as _PgVector
+except ImportError:  # pragma: no cover - pgvector is a required dependency
+    _PgVector = None  # type: ignore[assignment]
+
 from .limits import (
     ANAGRAM_ANSWER_MAX,
     ANAGRAM_MAX_ATTEMPTS,
@@ -541,6 +546,58 @@ class ConfessionCommentRecord(RemovedContentColumns, Base):
         ),
     )
     report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+
+# Fixed embedding contract for confession semantic search. The model and
+# dimensions are invariants enforced in app.config and app.services.embedding_service:
+# text-embedding-3-small with exactly 1536 dimensions, stored as vector(1536).
+EMBEDDING_MODEL_ID = "text-embedding-3-small"
+EMBEDDING_DIMENSIONS = 1536
+
+
+class ConfessionEmbeddingRecord(Base):
+    """Exactly one current embedding per eligible confession.
+
+    Confessions are immutable: the searchable content never changes after creation,
+    so there is exactly one embedding row per confession, written once when an
+    eligible confession is created through the normal creation workflow. No
+    edit-triggered regeneration, no historical versions, no content hashes, no
+    backfill, and never an embedding for comments, replies, likes, or reports.
+
+    The embedding input is the confession's own public text only (body plus the
+    optional public recipient name). Comments, usernames, emails, author ids,
+    reports, moderation notes, and engagement counts are never embedded.
+
+    Deletion follows the confession: the foreign key cascades, so a hard delete
+    (DELETE /admin/confessions/{id}) removes the embedding with the row. A soft
+    removal (removed_at, via moderation) keeps the row but search filters it out
+    with the confession itself (removed_at IS NULL).
+
+    A failed generation is never a searchable row: no row is written until a
+    validated 1536-dimensional finite vector is available.
+    """
+
+    __tablename__ = "confession_embeddings"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    confession_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False),
+        ForeignKey("confessions.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    # vector(1536) when pgvector is installed; falls back to JSONB only if the
+    # optional import is unavailable (tests without the package). Production and
+    # the pgvector-enabled test database always use the vector type.
+    embedding: Mapped[Any] = mapped_column(
+        _PgVector(EMBEDDING_DIMENSIONS) if _PgVector is not None else JSONB
+    )
+    model: Mapped[str] = mapped_column(
+        String(64), default=EMBEDDING_MODEL_ID, server_default=text(f"'{EMBEDDING_MODEL_ID}'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now(), index=True
+    )
 
 
 class ReportRecord(Base):

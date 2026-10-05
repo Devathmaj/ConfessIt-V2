@@ -26,7 +26,7 @@ import {
   Edit,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getConfessions, getConfessionComments, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession } from '../services/api';
+import { getConfessions, getConfessionComments, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession, searchConfessions } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
@@ -176,6 +176,11 @@ export const ConfessionsPage = () => {
    */
   const [commentSort, setCommentSort] = useState<'latest' | 'relevant'>('latest');
   const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('time');
+  /** Semantic search state: natural-language query over confession meaning. */
+  const [searchInput, setSearchInput] = useState('');
+  const [activeSearch, setActiveSearch] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [newConfession, setNewConfession] = useState('');
   const [confessingTo, setConfessingTo] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(true);
@@ -278,6 +283,9 @@ export const ConfessionsPage = () => {
   };
 
   useEffect(() => {
+    // While a semantic search is active the feed is replaced by ranked results;
+    // sort changes and reloads apply to the feed only after Clear.
+    if (activeSearch !== null) return;
     let cancelled = false;
     const fetchConfessions = async () => {
       try {
@@ -297,7 +305,68 @@ export const ConfessionsPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [sortBy, isAuthenticated]);
+  }, [sortBy, isAuthenticated, activeSearch]);
+
+  const readSearchError = (error: any): string => {
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail;
+    const text = typeof detail === 'string' && detail.trim() ? detail : '';
+    if (status === 503 && /disabled/i.test(text)) {
+      return 'Semantic search is currently disabled. Showing the latest feed instead.';
+    }
+    if (status === 503 || status === 502) {
+      return text || 'Semantic search is temporarily unavailable. Please try again later.';
+    }
+    if (status === 429) {
+      return text || 'Too many search requests. Please wait a moment and try again.';
+    }
+    if (status === 422) {
+      return text || 'Please enter a search phrase up to 1000 characters.';
+    }
+    return text || 'Semantic search failed. Please try again.';
+  };
+
+  const handleSemanticSearch = async () => {
+    const query = searchInput.trim();
+    if (!query) {
+      toast.info('Type a few words to search by meaning.');
+      return;
+    }
+    setIsSearching(true);
+    setSearchError(null);
+    try {
+      const result = await searchConfessions(query, FEED_PAGE_SIZE);
+      setConfessions(result.confessions ?? []);
+      setTotal(result.total ?? 0);
+      setPagedFeed(false);
+      setActiveSearch(result.query || query);
+      if ((result.total ?? 0) === 0) {
+        setSearchError(null);
+      }
+    } catch (error: any) {
+      const message = readSearchError(error);
+      setSearchError(message);
+      toast.error(message);
+      console.error(error);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleClearSearch = async () => {
+    setSearchInput('');
+    setActiveSearch(null);
+    setSearchError(null);
+    try {
+      const page = splitPage(await getConfessions(sortBy, { skip: 0, limit: FEED_PAGE_SIZE }));
+      setConfessions(page.rows);
+      setTotal(page.total);
+      setPagedFeed(page.enveloped);
+    } catch (error) {
+      toast.error('Failed to load confessions. Please try again.');
+      console.error(error);
+    }
+  };
 
   /**
    * Grow the feed downwards: the next page appends beneath the posts already on screen,
@@ -636,6 +705,10 @@ export const ConfessionsPage = () => {
         comments_enabled: allowComments,
       };
       await createConfession(confessionData);
+      // A new post clears an active semantic search: the ranked list no longer
+      // describes the corpus, and the new post belongs in the feed order.
+      setActiveSearch(null);
+      setSearchError(null);
       // The new post belongs at the head of a time-ordered feed but anywhere in the
       // others, so the first page is re-read instead of prepending: prepending would put
       // it first under every sort and grow the window past its page.
@@ -847,6 +920,46 @@ export const ConfessionsPage = () => {
           <p className="page-subtitle text-sm sm:text-base md:text-xl px-2 break-words">
             Share your heart safely and anonymously
           </p>
+        </div>
+        <div className="relative z-10 mb-4 sm:mb-6">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              aria-label="Search confessions by meaning"
+              placeholder="Search by meaning — e.g. homesick late-night thoughts…"
+              value={searchInput}
+              maxLength={1000}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleSemanticSearch();
+              }}
+              className="bg-background/80 border-romantic/30 focus:border-romantic"
+            />
+            <div className="flex gap-2">
+              <Button onClick={() => void handleSemanticSearch()} disabled={isSearching} className="btn-romantic">
+                {isSearching ? 'Searching…' : 'Search'}
+              </Button>
+              {activeSearch !== null && (
+                <Button variant="outline" onClick={() => void handleClearSearch()} aria-label="Clear search">
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+          {activeSearch !== null && (
+            <p role="status" className="mt-2 text-xs sm:text-sm text-muted-foreground">
+              Semantic results for “{activeSearch}” ({total} found) — ranked by meaning.
+            </p>
+          )}
+          {searchError && (
+            <p role="alert" className="mt-2 text-xs sm:text-sm text-destructive">
+              {searchError}
+            </p>
+          )}
+          {activeSearch !== null && total === 0 && !searchError && !isSearching && (
+            <p role="status" className="mt-2 text-xs sm:text-sm text-muted-foreground">
+              No confessions match that meaning yet. Try different words, or clear to see the latest feed.
+            </p>
+          )}
         </div>
         <div className="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
           <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-center w-full md:w-auto">
@@ -1060,8 +1173,9 @@ export const ConfessionsPage = () => {
         })}
         {/* The feed only grows downwards: the next page appends beneath the posts already
             on screen, so the reader's place never moves. Shown only while the server holds
-            more visible posts than the feed is showing; legacy answers never page. */}
-        {pagedFeed && confessions.length < total && (
+            more visible posts than the feed is showing; legacy answers never page.
+            Hidden while a semantic search is active: search returns one ranked page. */}
+        {activeSearch === null && pagedFeed && confessions.length < total && (
           <div className="flex justify-center pt-2">
             <Button
               variant="outline"
