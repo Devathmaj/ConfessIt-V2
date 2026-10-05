@@ -494,6 +494,67 @@ class Settings(BaseSettings):
             )
         return text_value
 
+    # --- Hybrid search (keyword + semantic) tuning ---
+    #
+    # All three are operator knobs, not invariants: the model/dimensions above must
+    # never change, but these trade recall against noise and cost.
+    #
+    # EMBEDDING_MIN_SIMILARITY is a cosine-similarity floor (similarity is
+    # ``1 - cosine_distance`` for length-normalized embeddings). Nearest neighbors
+    # below it are withheld rather than returned to fill the requested limit, so
+    # semantic never invents relevance. There is no universal threshold; 0.30 is a
+    # permissive default that drops only clearly unrelated rows.
+    EMBEDDING_MIN_SIMILARITY: float = Field(default=0.30, ge=-1.0, le=1.0)
+    # Hard cap on semantic items per hybrid response, before dedupe against the
+    # keyword page. Keeps one expensive vector query from materialising the corpus.
+    EMBEDDING_SEMANTIC_TOP_K: int = Field(default=10, ge=1, le=50)
+    # Queries shorter than this skip the embedding call entirely (keyword only).
+    # A 1-2 character substring is a legitimate keyword prefix but carries almost
+    # no semantic signal, so embedding it only burns budget and returns noise.
+    EMBEDDING_MIN_QUERY_CHARS: int = Field(default=3, ge=1, le=10)
+    # Per-minute embedding budgets, enforced in-process per bucket. Staff and
+    # public traffic get separate buckets so one cannot starve the other. Zero
+    # disables the limiter (fail-open, e.g. for tests). Same fixed-window shape
+    # as the global flood brake, but local rather than Redis-shared so search
+    # stays fast and dependency-free.
+    EMBEDDING_SEARCH_RATE_LIMIT_PER_MINUTE: int = Field(default=30, ge=0)
+    EMBEDDING_ADMIN_SEARCH_RATE_LIMIT_PER_MINUTE: int = Field(default=60, ge=0)
+
+    @field_validator("EMBEDDING_MIN_SIMILARITY", mode="before")
+    @classmethod
+    def _coerce_empty_min_similarity(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 0.30
+        return value
+
+    @field_validator("EMBEDDING_SEMANTIC_TOP_K", mode="before")
+    @classmethod
+    def _coerce_empty_semantic_top_k(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 10
+        return value
+
+    @field_validator("EMBEDDING_MIN_QUERY_CHARS", mode="before")
+    @classmethod
+    def _coerce_empty_min_query_chars(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 3
+        return value
+
+    @field_validator("EMBEDDING_SEARCH_RATE_LIMIT_PER_MINUTE", mode="before")
+    @classmethod
+    def _coerce_empty_search_rate_limit(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 30
+        return value
+
+    @field_validator("EMBEDDING_ADMIN_SEARCH_RATE_LIMIT_PER_MINUTE", mode="before")
+    @classmethod
+    def _coerce_empty_admin_search_rate_limit(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 60
+        return value
+
     # --- Host allowlist ---
     #
     # Comma-separated hostnames the app answers for, checked per request before routing.

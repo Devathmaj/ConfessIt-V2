@@ -161,31 +161,76 @@ export const createConfession = async (confession: any) => {
 };
 
 /**
- * Semantic search over confessions by meaning (POST /confessions/search).
+ * Hybrid search over confessions (POST /confessions/search): keyword matches
+ * first, similar-in-meaning below, in the existing public confession shape
+ * (anonymous presentation preserved).
  *
- * The query is embedded server-side with text-embedding-3-small and ranked by
- * pgvector cosine distance. Returns {confessions, total, query, limit} in the
- * existing public confession shape (anonymous presentation preserved). A 503
- * means search is disabled or the provider is unavailable; callers should
- * surface the server's detail rather than invent one.
+ * `semantic.status` is `ok` when the embedding pipeline ran, otherwise the
+ * reason the semantic half is empty: `disabled` | `unavailable` |
+ * `rate_limited` | `skipped_short`. A non-`ok` status is a notice, not an
+ * error: the keyword half still answers.
  */
-export interface SemanticSearchResult {
-  confessions: any[];
-  total: number;
+export type HybridSemanticStatus =
+  | 'ok'
+  | 'disabled'
+  | 'unavailable'
+  | 'rate_limited'
+  | 'skipped_short';
+
+export interface HybridSearchResult {
   query: string;
   limit: number;
+  keyword: { items: any[]; total: number };
+  semantic: { items: any[]; status: HybridSemanticStatus };
 }
+
+/** Legacy alias for the semantic-only response era. */
+export type SemanticSearchResult = HybridSearchResult;
 
 export const searchConfessions = async (
   query: string,
   limit = 10,
-): Promise<SemanticSearchResult> => {
+  opts?: { signal?: AbortSignal },
+): Promise<HybridSearchResult> => {
   const response = await axios.post(
     `${API_URL}/confessions/search`,
     { query, limit },
-    { headers: getAuthHeaders() },
+    { headers: getAuthHeaders(), ...(opts?.signal ? { signal: opts.signal } : {}) },
   );
-  return response.data as SemanticSearchResult;
+  return response.data as HybridSearchResult;
+};
+
+/**
+ * Staff hybrid search (GET /admin/confessions/search): the existing lexical
+ * page as `keyword` plus a top-K semantic section with removed rows included
+ * and flagged. Same `semantic.status` vocabulary as the public path.
+ */
+export interface AdminHybridSearchResult {
+  query: string;
+  filter: string;
+  sort: string;
+  skip: number;
+  limit: number;
+  keyword: { items: any[]; total: number; skip: number; limit: number };
+  semantic: { items: any[]; status: HybridSemanticStatus };
+}
+
+export const searchAdminConfessions = async (
+  params: { q: string; filter?: string; sort?: string; skip?: number; limit?: number },
+  opts?: { signal?: AbortSignal },
+): Promise<AdminHybridSearchResult> => {
+  const response = await axios.get(`${API_URL}/admin/confessions/search`, {
+    headers: getAuthHeaders(),
+    params: {
+      q: params.q,
+      ...(params.filter && params.filter !== 'all' ? { filter: params.filter } : {}),
+      ...(params.sort ? { sort: params.sort } : {}),
+      ...(params.skip !== undefined ? { skip: params.skip } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    },
+    ...(opts?.signal ? { signal: opts.signal } : {}),
+  });
+  return response.data as AdminHybridSearchResult;
 };
 
 export const updateConfession = async (confessionId: string, updateData: { anonymous?: boolean; comments_enabled?: boolean }) => {

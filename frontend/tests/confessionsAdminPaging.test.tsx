@@ -25,6 +25,7 @@ import { ConfessionsAdmin } from '@/pages/ConfessionsAdmin';
 
 const api = vi.hoisted(() => ({
   getAdminConfessions: vi.fn(),
+  searchAdminConfessions: vi.fn(),
   hideAdminConfession: vi.fn(),
   hideAdminComment: vi.fn(),
 }));
@@ -144,11 +145,44 @@ async function choose(label: string, option: string) {
 const callsWith = () =>
   api.getAdminConfessions.mock.calls.map((call) => call[0] as Record<string, unknown>);
 
+const hybridCallsWith = () =>
+  api.searchAdminConfessions.mock.calls.map((call) => call[0] as Record<string, unknown>);
+
+/** Semantic status the hybrid mock answers with; tests set it before submitting. */
+let hybridStatus = 'ok';
+
+/** Hybrid stand-in: the keyword page plus meaning rows mentioning a marker token.
+ * A degraded status carries no meaning rows, exactly like the server, which
+ * makes no provider call when it degrades. */
+const serveHybrid = async (params: Record<string, unknown> = {}) => {
+  const skip = (params.skip as number | undefined) ?? 0;
+  const limit = (params.limit as number | undefined) ?? 10;
+  const page = await serveConfessions(params);
+  const keywordIds = new Set(page.confessions.map((row) => row.id));
+  const semantic =
+    hybridStatus === 'ok'
+      ? db
+          .filter((row) => !keywordIds.has(row.id) && row.body.includes('semantic-echo'))
+          .slice(0, 10)
+      : [];
+  return {
+    query: params.q ?? '',
+    filter: params.filter ?? 'all',
+    sort: params.sort ?? 'recent',
+    skip,
+    limit,
+    keyword: { items: page.confessions, total: page.total, skip, limit },
+    semantic: { items: semantic, status: hybridStatus },
+  };
+};
+
 describe('ConfessionsAdmin: server-driven search, filters and paging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     db = [];
+    hybridStatus = 'ok';
     api.getAdminConfessions.mockImplementation(serveConfessions);
+    api.searchAdminConfessions.mockImplementation(serveHybrid);
     api.hideAdminConfession.mockImplementation(async (confessionId: string) => {
       // The endpoint stamps the row: the refetch below must find it hidden.
       const row = db.find((candidate) => candidate.id === confessionId);
@@ -177,9 +211,52 @@ describe('ConfessionsAdmin: server-driven search, filters and paging', () => {
       expect(screen.queryByText('an unrelated post')).not.toBeInTheDocument();
     });
 
-    expect(callsWith().some((params) => params.q === 'lighthouse')).toBe(true);
+    // A submitted query takes the hybrid endpoint: keyword page plus meaning.
+    expect(hybridCallsWith().some((params) => params.q === 'lighthouse')).toBe(true);
     expect(screen.getByText('the lighthouse keeper')).toBeInTheDocument();
     expect(screen.getByText(/Showing 1 of 1/)).toBeInTheDocument();
+  });
+
+  it('shows keyword matches first and similar-in-meaning below, deduped', async () => {
+    db = [
+      confession('c1', 'the lighthouse keeper semantic-echo tale'),
+      confession('c2', 'semantic-echo midnight thoughts'),
+      confession('c3', 'an unrelated post'),
+    ];
+    await renderPage();
+    await screen.findByText('the lighthouse keeper semantic-echo tale');
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by confession text/), {
+      target: { value: 'lighthouse' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search confessions' }));
+
+    await screen.findByText('Keyword matches');
+    await screen.findByText('Similar in meaning');
+    // c1 matched the keyword, so it renders once overall, not once per section.
+    // (Each review row shows its body once: the collapsed trigger line.)
+    expect(screen.getAllByText('the lighthouse keeper semantic-echo tale')).toHaveLength(1);
+    expect(screen.getByText('semantic-echo midnight thoughts')).toBeInTheDocument();
+    expect(screen.queryByText('an unrelated post')).not.toBeInTheDocument();
+  });
+
+  it('shows a non-blocking notice when meaning search degrades, keeping keyword results', async () => {
+    hybridStatus = 'rate_limited';
+    db = [
+      confession('c1', 'the lighthouse keeper'),
+      confession('c2', 'semantic-echo midnight thoughts'),
+    ];
+    await renderPage();
+    await screen.findByText('the lighthouse keeper');
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by confession text/), {
+      target: { value: 'lighthouse' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search confessions' }));
+
+    await screen.findByText(/Meaning search is rate-limited/);
+    expect(screen.getByText('the lighthouse keeper')).toBeInTheDocument();
+    expect(screen.queryByText('Similar in meaning')).not.toBeInTheDocument();
   });
 
   it('sends the filter and sort pickers to the database and pages the filtered question', async () => {

@@ -629,6 +629,103 @@ def get_admin_confessions_data(
     return {"confessions": items, "total": total, "skip": skip, "limit": limit}
 
 
+def get_admin_confessions_hybrid_data(
+    db: Database,
+    *,
+    query: str,
+    filter_option: str = "all",
+    sort: str = "recent",
+    skip: int = 0,
+    limit: int = 10,
+    rate_key: str = "admin",
+) -> Dict[str, Any]:
+    """Hybrid keyword + semantic search for staff review, keyword first.
+
+    Keyword is the existing lexical page unchanged (same search across body,
+    recipient, and non-anonymous sender; same filter/sort/paging/total). The
+    semantic half runs the shared embed + vector-query + threshold + dedupe
+    pipeline capped at ``EMBEDDING_SEMANTIC_TOP_K`` (not paged), with staff
+    visibility: removed rows are included and flagged, anonymous senders stay
+    withheld, and the active status ``filter`` applies to both halves. Uses the
+    admin rate-limit bucket. Degrades like the public path: semantic failures
+    return keyword results with ``semantic.status`` naming the reason.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ..config import settings as _settings
+    from ..logger import get_logger as _get_logger
+    from .semantic_candidates import get_semantic_candidates
+    from .semantic_rate_limit import ADMIN_BUCKET
+
+    _hybrid_logger = _get_logger(__name__)
+    cleaned = (query or "").strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Search query must not be blank.",
+        )
+    if len(cleaned) > 1000:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Search query is too long (max 1000 characters).",
+        )
+    top_k = int(_settings.EMBEDDING_SEMANTIC_TOP_K)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        keyword_future = pool.submit(
+            get_admin_confessions_data,
+            db, skip=skip, limit=limit, query=cleaned,
+            filter_option=filter_option, sort=sort,
+        )
+        semantic_future = pool.submit(
+            get_semantic_candidates,
+            sessions=db.sessions,
+            query=cleaned,
+            cap=top_k,
+            include_removed=True,
+            extra_filters=_admin_confession_status_filters(filter_option),
+            fetch_extra=max(0, int(limit or 0)),
+            bucket=ADMIN_BUCKET,
+            rate_key=rate_key or "admin",
+        )
+        keyword_page = keyword_future.result()
+        try:
+            candidates, semantic_status = semantic_future.result()
+        except Exception as exc:
+            _hybrid_logger.warning("Admin hybrid semantic half failed: %s", type(exc).__name__)
+            candidates, semantic_status = [], "unavailable"
+    keyword_ids = {str(item["id"]) for item in keyword_page.get("confessions", [])}
+    # Dedupe against the keyword page (same rule as the public path). The shared
+    # pipeline over-fetched by the keyword page size so the top-K still fills.
+    candidates = [cand for cand in candidates if cand[0] not in keyword_ids][:top_k]
+    semantic_items: list = []
+    if candidates:
+        sem_ids = [cid for cid, _, _ in candidates]
+        with db.sessions() as session:
+            rows = session.scalars(
+                select(ConfessionRecord).where(ConfessionRecord.id.in_(sem_ids))
+            ).all()
+        by_id = {str(row.id): row for row in rows}
+        ordered = [by_id[cid] for cid in sem_ids if cid in by_id]
+        if ordered:
+            with db.sessions() as session:
+                comments, reports, users = _load_admin_confession_relations(session, ordered)
+            semantic_items = _build_admin_confession_items(ordered, comments, reports, users)
+    return {
+        "query": cleaned,
+        "filter": filter_option,
+        "sort": sort,
+        "skip": keyword_page.get("skip", skip),
+        "limit": keyword_page.get("limit", limit),
+        "keyword": {
+            "items": keyword_page.get("confessions", []),
+            "total": keyword_page.get("total", 0),
+            "skip": keyword_page.get("skip", skip),
+            "limit": keyword_page.get("limit", limit),
+        },
+        "semantic": {"items": semantic_items, "status": semantic_status},
+    }
+
+
 def _confession_report_search_filters(query: Optional[str]) -> list:
     """A case-insensitive substring match on a report and the content it points at.
 

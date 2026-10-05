@@ -242,12 +242,57 @@ class SemanticSearchRequest(BaseModel):
 
 
 class SemanticSearchResponse(BaseModel):
-    """Ranked confessions for a semantic query, in existing public shape."""
+    """Ranked confessions for a semantic query, in existing public shape.
+
+    Legacy shape for the semantic-only endpoint era; the live endpoint now
+    answers :class:`HybridSearchResponse`. Kept so older clients and tests
+    importing this name do not break.
+    """
 
     confessions: List["Confession"] = Field(default_factory=list)
     total: int = 0
     query: str = ""
     limit: int = 10
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+
+class KeywordSearchSection(BaseModel):
+    """Keyword half of a hybrid answer: trigram matches with their total."""
+
+    items: List["Confession"] = Field(default_factory=list)
+    total: int = 0
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+
+class SemanticSearchSection(BaseModel):
+    """Semantic half of a hybrid answer: vector matches with a status.
+
+    ``status`` is ``ok`` when the embedding pipeline ran, otherwise the reason
+    the semantic half is empty: ``disabled`` (flag off), ``unavailable``
+    (misconfigured / blocked / provider error), ``rate_limited`` (budget spent),
+    or ``skipped_short`` (query too short to embed meaningfully).
+    """
+
+    items: List["Confession"] = Field(default_factory=list)
+    status: str = "ok"
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+
+class HybridSearchResponse(BaseModel):
+    """One search box, both signals: keyword first, semantic underneath.
+
+    Keyword items never reappear in semantic (deduped). Both lists carry the
+    existing public confession shape; semantic degradation never fails the
+    keyword half.
+    """
+
+    query: str = ""
+    limit: int = 10
+    keyword: KeywordSearchSection = Field(default_factory=KeywordSearchSection)
+    semantic: SemanticSearchSection = Field(default_factory=SemanticSearchSection)
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
@@ -763,6 +808,10 @@ class Notification(BaseModel):
 
 # Update forward references to allow nested Pydantic models
 Confession.model_rebuild()
+SemanticSearchResponse.model_rebuild()
+KeywordSearchSection.model_rebuild()
+SemanticSearchSection.model_rebuild()
+HybridSearchResponse.model_rebuild()
 
 
 # --- Wordle configuration ------------------------------------------------------

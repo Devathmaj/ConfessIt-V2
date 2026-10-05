@@ -30,11 +30,19 @@ def _vec(first: float, second: float = 0.0) -> list[float]:
 
 
 def _enable_search(monkeypatch, api_key: str = "test-key"):
+    from app.services import semantic_rate_limit
+
     monkeypatch.setattr(settings, "EMBEDDING_SEARCH_ENABLED", True)
     monkeypatch.setattr(settings, "EMBEDDING_API_KEY", api_key)
     monkeypatch.setattr(settings, "EMBEDDING_ENDPOINT", "https://confessit-model.services.ai.azure.com")
     monkeypatch.setattr(settings, "EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSIONS", 1536)
+    # Unlimited local budgets unless a test says otherwise: the in-memory
+    # buckets are process-wide, so a shared default would let one test spend
+    # another's allowance within the same minute window.
+    monkeypatch.setattr(settings, "EMBEDDING_SEARCH_RATE_LIMIT_PER_MINUTE", 0)
+    monkeypatch.setattr(settings, "EMBEDDING_ADMIN_SEARCH_RATE_LIMIT_PER_MINUTE", 0)
+    semantic_rate_limit.reset_buckets()
 
 
 def make_user(db, regno):
@@ -341,15 +349,17 @@ def test_search_rejects_blank_and_long_queries(db, monkeypatch, client):
     assert client.post("/confessions/search", json={"query": "", "limit": 5}).status_code == 422
 
 
-# 11. Limits and empty results.
+# 11. Limits and empty results (hybrid shape).
 def test_search_limits_and_empty_results(db, monkeypatch, client):
     _enable_search(monkeypatch)
     monkeypatch.setattr(
         embedding_service, "_call_azure_embedding_api", lambda doc, cfg: _vec(1.0)
     )
-    # No confessions yet: empty, not an error.
+    # No confessions yet: both halves empty, not an error.
     body = client.post("/confessions/search", json={"query": "anything", "limit": 5}).json()
-    assert body["confessions"] == [] and body["total"] == 0
+    assert body["keyword"] == {"items": [], "total": 0}
+    assert body["semantic"]["items"] == [] and body["semantic"]["status"] == "ok"
+    assert body["query"] == "anything"
     # Limit bounds enforced by validation.
     assert client.post("/confessions/search", json={"query": "hi", "limit": 0}).status_code == 422
     assert client.post("/confessions/search", json={"query": "hi", "limit": 51}).status_code == 422
@@ -479,7 +489,7 @@ def test_update_does_not_regenerate_embedding(db, monkeypatch):
         assert after is not None
 
 
-# 15. Disabled search makes no provider calls and answers 503.
+# 15. Disabled search makes no provider calls and degrades gracefully.
 def test_disabled_search_makes_no_provider_calls(db, monkeypatch, client):
     monkeypatch.setattr(settings, "EMBEDDING_SEARCH_ENABLED", False)
     called = {"n": 0}
@@ -489,9 +499,11 @@ def test_disabled_search_makes_no_provider_calls(db, monkeypatch, client):
         return _vec(1.0)
 
     monkeypatch.setattr(embedding_service, "_call_azure_embedding_api", fail)
-    response = client.post("/confessions/search", json={"query": "hello", "limit": 5})
-    assert response.status_code == 503
-    assert "disabled" in response.json()["detail"].lower()
+    # Hybrid degradation: 200 with keyword results and semantic.status set,
+    # instead of failing the whole request.
+    body = client.post("/confessions/search", json={"query": "hello", "limit": 5}).json()
+    assert body["semantic"]["status"] == "disabled"
+    assert body["semantic"]["items"] == []
     assert called["n"] == 0
 
 

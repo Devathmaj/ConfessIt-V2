@@ -163,6 +163,36 @@ def get_all_confessions(
     return get_admin_confessions_data(db, skip=skip, limit=limit, query=q, filter_option=filter, sort=sort)
 
 
+# Declared before ``/confessions/{confession_id}`` siblings so the literal
+# ``search`` segment can never be read as a confession id on a future GET route.
+@router.get("/confessions/search", response_model=Dict[str, Any])
+def search_confessions_hybrid(
+    q: str = Query(..., min_length=1, max_length=1000, description="Keyword + meaning query: lexical matches first, similar-in-meaning below."),
+    skip: int = Query(0, ge=0, description="Keyword page offset; the semantic section is top-K only and ignores it."),
+    limit: int = Query(10, ge=1, le=CONFESSIONS_MAX_LIMIT, description="Keyword page size; semantic is capped at the configured top-K."),
+    filter: str = Query("all", description="Narrow to a subset: all, reported, anonymous or with-comments. Applies to both sections."),
+    sort: str = Query("recent", description="Order the keyword page: recent, reports, comments or reactions. Semantic stays relevance-ordered."),
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_REVIEW))
+) -> Dict[str, Any]:
+    """Hybrid keyword + semantic search for staff review.
+
+    Keyword is the existing lexical page unchanged (same sender-aware search,
+    same filter/sort/paging/total). Semantic runs the shared embed +
+    vector-query pipeline with staff visibility -- removed rows included and
+    flagged, anonymous senders withheld, active filter applied -- deduped
+    against the keyword page and capped at the configured top-K. Degrades like
+    the public path: semantic failures return keyword results with
+    ``semantic.status`` naming the reason. Uses the admin rate-limit bucket.
+    """
+    from ..services.admin_service import get_admin_confessions_hybrid_data
+
+    return get_admin_confessions_hybrid_data(
+        db, query=q, filter_option=filter, sort=sort,
+        skip=skip, limit=limit, rate_key=reviewer.regno,
+    )
+
+
 @router.delete("/confessions/{confession_id}")
 def delete_confession(
     confession_id: str,

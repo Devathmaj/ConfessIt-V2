@@ -15,7 +15,7 @@ import {
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
-import { getAdminConfessions, hideAdminComment, hideAdminConfession } from '@/services/api';
+import { getAdminConfessions, hideAdminComment, hideAdminConfession, searchAdminConfessions, type HybridSemanticStatus } from '@/services/api';
 import { toast } from 'sonner';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
@@ -138,6 +138,12 @@ const totalOf = (answer: unknown, fallback: number): number => {
   if (Array.isArray(answer)) return answer.length;
   const total = (answer as { total?: unknown } | null | undefined)?.total;
   return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+};
+
+/** The rows inside one hybrid section (`keyword`/`semantic`), keyed by `items`. */
+const itemsOf = (section: unknown): AdminConfession[] => {
+  const items = (section as { items?: AdminConfession[] } | null | undefined)?.items;
+  return Array.isArray(items) ? items : [];
 };
 
 /**
@@ -298,6 +304,26 @@ export const ConfessionsAdmin = () => {
    * out is the question the operator meant.
    */
   const [appliedSearch, setAppliedSearch] = useState('');
+  /** Semantic half of a hybrid search: top-K similar-in-meaning with its status. */
+  const [semanticItems, setSemanticItems] = useState<AdminConfession[]>([]);
+  const [semanticStatus, setSemanticStatus] = useState<HybridSemanticStatus>('ok');
+  /** True while the review list is answering a hybrid question (submitted text). */
+  const hybridActive = legacyRows === null && appliedSearch.trim() !== '';
+
+  const semanticNotice = (status: HybridSemanticStatus): string | null => {
+    switch (status) {
+      case 'ok':
+        return null;
+      case 'skipped_short':
+        return 'Too short for meaning search — showing keyword matches.';
+      case 'disabled':
+        return 'Meaning search is disabled — showing keyword matches.';
+      case 'rate_limited':
+        return 'Meaning search is rate-limited — showing keyword matches. Try again shortly.';
+      default:
+        return 'Meaning search is temporarily unavailable — showing keyword matches.';
+    }
+  };
 
   /**
    * Submit the draft search box as the query the read is issued with, back on the first
@@ -323,6 +349,8 @@ export const ConfessionsAdmin = () => {
     setSearchTerm('');
     setAppliedSearch('');
     setFilterOption('all');
+    setSemanticItems([]);
+    setSemanticStatus('ok');
   };
 
   /**
@@ -350,9 +378,46 @@ export const ConfessionsAdmin = () => {
   };
 
   /**
+   * One hybrid read: the keyword page plus the top-K semantic section. Falls
+   * back to the keyword-only page when the hybrid endpoint is unreachable
+   * (older servers), so review never goes blank for lack of meaning search.
+   */
+  const readHybrid = async (
+    skip: number,
+    limit: number,
+    question: { q: string; filter: ConfessionFilterOption; sort: ConfessionSortOption },
+  ): Promise<{ rows: AdminConfession[]; total: number }> => {
+    try {
+      const answer = await searchAdminConfessions({
+        q: question.q,
+        filter: question.filter,
+        sort: question.sort,
+        skip,
+        limit,
+      });
+      if (Array.isArray(answer)) throw new Error('legacy hybrid answer');
+      const rows = itemsOf(answer.keyword).map((item, index) =>
+        normalizeConfession(item, skip + index),
+      );
+      setSemanticItems(
+        itemsOf(answer.semantic).map((item, index) => normalizeConfession(item, index)),
+      );
+      setSemanticStatus((answer.semantic as { status?: HybridSemanticStatus })?.status ?? 'unavailable');
+      return { rows, total: totalOf(answer.keyword, 0) };
+    } catch (error) {
+      console.error('Hybrid search unavailable, falling back to keyword-only', error);
+      const page = await readPage(skip, limit, question);
+      setSemanticItems([]);
+      setSemanticStatus('unavailable');
+      return page;
+    }
+  };
+
+  /**
    * First page, freshly: what a search submit, a filter change, an order flip and the
    * first load all do. A bare-array answer means the params went nowhere, so the one
    * list they all are becomes the legacy rows the screen filters itself below.
+   * A submitted search term takes the hybrid endpoint (keyword + meaning).
    */
   useEffect(() => {
     let cancelled = false;
@@ -365,24 +430,37 @@ export const ConfessionsAdmin = () => {
           filter: filterOption,
           sort: sortOption,
         };
-        const answer = await getAdminConfessions({
-          skip: 0,
-          limit: CONFESSIONS_PAGE_SIZE,
-          ...(question.q ? { q: question.q } : {}),
-          ...(question.filter !== 'all' ? { filter: question.filter } : {}),
-          sort: question.sort,
-        });
-        if (cancelled) return;
-        if (Array.isArray(answer)) {
-          setLegacyRows(
-            confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
-          );
-        } else {
+        if (question.q) {
+          const hybrid = await readHybrid(0, CONFESSIONS_PAGE_SIZE, {
+            q: question.q,
+            filter: question.filter,
+            sort: question.sort,
+          });
+          if (cancelled) return;
           setLegacyRows(null);
-          setItems(
-            confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
-          );
-          setTotal(totalOf(answer, 0));
+          setItems(hybrid.rows);
+          setTotal(hybrid.total);
+        } else {
+          const answer = await getAdminConfessions({
+            skip: 0,
+            limit: CONFESSIONS_PAGE_SIZE,
+            ...(question.filter !== 'all' ? { filter: question.filter } : {}),
+            sort: question.sort,
+          });
+          if (cancelled) return;
+          if (Array.isArray(answer)) {
+            setLegacyRows(
+              confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
+            );
+          } else {
+            setLegacyRows(null);
+            setItems(
+              confessionsOf(answer).map((item, index) => normalizeConfession(item, index)),
+            );
+            setTotal(totalOf(answer, 0));
+          }
+          setSemanticItems([]);
+          setSemanticStatus('ok');
         }
       } catch (error) {
         if (!cancelled) {
@@ -480,14 +558,25 @@ export const ConfessionsAdmin = () => {
   const refreshWindow = async () => {
     setRefreshing(true);
     try {
-      const question = {
-        q: appliedSearch.trim() || undefined,
-        filter: filterOption,
-        sort: sortOption,
-      };
-      const page = await readPage(0, Math.max(items.length, CONFESSIONS_PAGE_SIZE), question);
-      setItems(page.rows);
-      setTotal(page.total);
+      const draft = appliedSearch.trim();
+      if (draft) {
+        const page = await readHybrid(0, Math.max(items.length, CONFESSIONS_PAGE_SIZE), {
+          q: draft,
+          filter: filterOption,
+          sort: sortOption,
+        });
+        setItems(page.rows);
+        setTotal(page.total);
+      } else {
+        const question = {
+          q: undefined,
+          filter: filterOption,
+          sort: sortOption,
+        };
+        const page = await readPage(0, Math.max(items.length, CONFESSIONS_PAGE_SIZE), question);
+        setItems(page.rows);
+        setTotal(page.total);
+      }
     } catch (error) {
       console.error('Failed to refresh confessions', error);
       toast.error('Unable to refresh the confessions.');
@@ -511,7 +600,10 @@ export const ConfessionsAdmin = () => {
         sort: sortOption,
       };
       const page = await readPage(items.length, CONFESSIONS_PAGE_SIZE, question);
-      setItems((prev) => [...prev, ...page.rows]);
+      // The semantic section was computed against the first keyword page: drop
+      // appended rows it already shows so the two sections never overlap.
+      const seen = new Set(semanticItems.map((item) => item.id));
+      setItems((prev) => [...prev, ...page.rows.filter((row) => !seen.has(row.id))]);
       setTotal(page.total);
     } catch (error) {
       console.error('Failed to load more confessions', error);
@@ -524,6 +616,33 @@ export const ConfessionsAdmin = () => {
   /** Whether the search box, the filter, or both are narrowing the list right now. */
   const activeSearch = serverDriven ? appliedSearch : searchTerm;
   const filtersNarrowed = activeSearch.trim() !== '' || filterOption !== 'all';
+
+  /** Rows while a hybrid search is active: keyword first, notice, meaning below. */
+  type ReviewRow =
+    | { kind: 'header'; key: string; title: string }
+    | { kind: 'notice'; key: string; text: string }
+    | { kind: 'review'; key: string; confession: AdminConfession };
+
+  const hybridRows = (): ReviewRow[] => {
+    const rows: ReviewRow[] = [];
+    if (processedConfessions.length > 0) {
+      rows.push({ kind: 'header', key: 'hybrid-keyword', title: 'Keyword matches' });
+      for (const confession of processedConfessions) {
+        rows.push({ kind: 'review', key: confession.id, confession });
+      }
+    }
+    const notice = semanticNotice(semanticStatus);
+    if (notice) {
+      rows.push({ kind: 'notice', key: 'hybrid-notice', text: notice });
+    }
+    if (semanticItems.length > 0) {
+      rows.push({ kind: 'header', key: 'hybrid-semantic', title: 'Similar in meaning' });
+      for (const confession of semanticItems) {
+        rows.push({ kind: 'review', key: confession.id, confession });
+      }
+    }
+    return rows;
+  };
 
   const handleHide = (confessionId: string) => {
     setSelectedConfessionId(confessionId);
@@ -742,7 +861,7 @@ export const ConfessionsAdmin = () => {
                 Loading confessions for review...
               </CardContent>
             </Card>
-          ) : processedConfessions.length === 0 ? (
+          ) : processedConfessions.length === 0 && (!hybridActive || semanticItems.length === 0) ? (
             <Card>
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
                 No confessions match the current filters.
@@ -751,7 +870,29 @@ export const ConfessionsAdmin = () => {
           ) : (
             <>
             <Accordion type="single" collapsible className="space-y-3">
-              {processedConfessions.map((confession) => {
+              {(hybridActive
+                ? hybridRows()
+                : processedConfessions.map((confession) => ({
+                    kind: 'review' as const,
+                    key: confession.id,
+                    confession,
+                  }))
+              ).map((row) => {
+                if (row.kind === 'header') {
+                  return (
+                    <h3 key={row.key} aria-label={row.title} className="pt-2 text-sm font-semibold text-muted-foreground">
+                      {row.title}
+                    </h3>
+                  );
+                }
+                if (row.kind === 'notice') {
+                  return (
+                    <p key={row.key} role="status" className="text-xs text-muted-foreground">
+                      {row.text}
+                    </p>
+                  );
+                }
+                const confession = row.confession;
                 const senderVisible = visibleSenders[confession.id];
                 const senderHidden = confession.sender_hidden ?? confession.anonymous;
                 const anonymityVariant: 'default' | 'secondary' = confession.anonymous ? 'secondary' : 'default';

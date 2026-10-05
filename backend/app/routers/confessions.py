@@ -1,10 +1,10 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import Dict, List, Optional, Any
 from ..dependencies import get_db
 from ..postgres import Database
 from ..services.confession_service import ConfessionService, FEED_MAX_LIMIT
-from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ConfessionCooldown, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate, SemanticSearchRequest, SemanticSearchResponse
+from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ConfessionCooldown, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate, SemanticSearchRequest, HybridSearchResponse
 from ..services.authorization import (
     get_current_participant_optional,
     require_participant,
@@ -44,47 +44,35 @@ def get_confessions(
     user_id = str(current_user.id) if current_user else None
     return service.get_confessions(sort_by, user_id, skip=skip, limit=limit)
 
-@router.post("/confessions/search", response_model=SemanticSearchResponse)
+@router.post("/confessions/search", response_model=HybridSearchResponse)
 def semantic_search_confessions(
     payload: SemanticSearchRequest,
+    request: Request,
     service: ConfessionService = Depends(get_confession_service),
     current_user: Optional[UserDetails] = Depends(get_current_participant_optional),
 ):
-    """Semantic search over confessions by meaning, not keywords.
+    """Hybrid search: keyword matches first, similar-in-meaning underneath.
 
-    The query is embedded with text-embedding-3-small (1536 dims) and ranked
-    by pgvector cosine distance ascending in PostgreSQL. Only confessions with
-    a valid current embedding are eligible; hidden/removed posts are excluded
-    in SQL. Returns the existing public confession shape (no raw embeddings,
-    no author ids, no reports); anonymous presentation is preserved.
+    Keyword runs over body/recipient only (never identity) with trigram
+    relevance ordering; semantic runs the shared embed + pgvector pipeline with
+    a similarity floor and top-K cap, deduped against the keyword page. Both
+    lists carry the existing public confession shape; anonymity is preserved.
 
-    When EMBEDDING_SEARCH_ENABLED is not true, no provider call is made and
-    this answers 503. Missing credentials or bad provider state also answer
-    503/429/502 with an actionable message and no secrets.
+    Semantic degradation never fails the keyword half: a disabled, blocked, or
+    rate-limited embedding pipeline returns keyword results with
+    ``semantic.status`` naming the reason. Blank or over-long queries still
+    answer 422.
     """
     from ..services.embedding_service import EmbeddingError
 
     user_id = str(current_user.id) if current_user else None
+    client_ip = request.client.host if request.client else "anon"
     try:
-        return service.search_confessions_semantic(
-            payload.query, user_id, limit=payload.limit
+        return service.search_confessions(
+            payload.query, user_id, limit=payload.limit, rate_key=client_ip,
         )
     except EmbeddingError as exc:
-        if exc.code == "invalid_input":
-            raise HTTPException(status_code=422, detail=exc.detail)
-        if exc.code == "rate_limited":
-            raise HTTPException(
-                status_code=429,
-                detail=exc.detail,
-                headers={"Retry-After": "60"},
-            )
-        if exc.code == "disabled":
-            raise HTTPException(status_code=503, detail=exc.detail)
-        if exc.code in ("missing_config", "invalid_config"):
-            raise HTTPException(status_code=503, detail=exc.detail)
-        if exc.code in ("timeout", "network", "unavailable", "network_blocked"):
-            raise HTTPException(status_code=503, detail=exc.detail)
-        raise HTTPException(status_code=502, detail=exc.detail)
+        raise HTTPException(status_code=422, detail=exc.detail)
 
 
 @router.get("/confessions/cooldown", response_model=ConfessionCooldown)

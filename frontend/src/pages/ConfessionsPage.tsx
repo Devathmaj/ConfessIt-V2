@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -176,11 +176,20 @@ export const ConfessionsPage = () => {
    */
   const [commentSort, setCommentSort] = useState<'latest' | 'relevant'>('latest');
   const [sortBy, setSortBy] = useState<'popularity' | 'time' | 'comments'>('time');
-  /** Semantic search state: natural-language query over confession meaning. */
+  /** Hybrid search state: one box, keyword matches first, meaning below. */
   const [searchInput, setSearchInput] = useState('');
   const [activeSearch, setActiveSearch] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [keywordResults, setKeywordResults] = useState<Confession[]>([]);
+  const [keywordTotal, setKeywordTotal] = useState(0);
+  const [semanticResults, setSemanticResults] = useState<Confession[]>([]);
+  const [semanticStatus, setSemanticStatus] = useState<string>('ok');
+  /** Debounce timer, in-flight request id and aborter: typing never fires a
+   * request per keystroke, and a slow answer can never overwrite a newer one. */
+  const searchDebounce = useRef<number | null>(null);
+  const searchRequestId = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
   const [newConfession, setNewConfession] = useState('');
   const [confessingTo, setConfessingTo] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(true);
@@ -311,52 +320,112 @@ export const ConfessionsPage = () => {
     const status = error?.response?.status;
     const detail = error?.response?.data?.detail;
     const text = typeof detail === 'string' && detail.trim() ? detail : '';
-    if (status === 503 && /disabled/i.test(text)) {
-      return 'Semantic search is currently disabled. Showing the latest feed instead.';
-    }
-    if (status === 503 || status === 502) {
-      return text || 'Semantic search is temporarily unavailable. Please try again later.';
+    if (status === 422) {
+      return text || 'Please enter a search phrase up to 1000 characters.';
     }
     if (status === 429) {
       return text || 'Too many search requests. Please wait a moment and try again.';
     }
-    if (status === 422) {
-      return text || 'Please enter a search phrase up to 1000 characters.';
-    }
-    return text || 'Semantic search failed. Please try again.';
+    return text || 'Search failed. Please try again.';
   };
 
-  const handleSemanticSearch = async () => {
-    const query = searchInput.trim();
-    if (!query) {
-      toast.info('Type a few words to search by meaning.');
-      return;
+  /** The non-blocking note under keyword results when the meaning half degrades. */
+  const semanticNotice = (status: string): string | null => {
+    switch (status) {
+      case 'ok':
+        return null;
+      case 'skipped_short':
+        return 'Too short for meaning search — showing keyword matches.';
+      case 'disabled':
+        return 'Meaning search is disabled — showing keyword matches.';
+      case 'rate_limited':
+        return 'Meaning search is rate-limited — showing keyword matches. Try again shortly.';
+      default:
+        return 'Meaning search is temporarily unavailable — showing keyword matches.';
     }
+  };
+
+  const runHybridSearch = async (query: string) => {
+    const id = ++searchRequestId.current;
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
     setIsSearching(true);
     setSearchError(null);
     try {
-      const result = await searchConfessions(query, FEED_PAGE_SIZE);
-      setConfessions(result.confessions ?? []);
-      setTotal(result.total ?? 0);
-      setPagedFeed(false);
+      const result = await searchConfessions(query, FEED_PAGE_SIZE, { signal: controller.signal });
+      // A slow answer must never overwrite a newer one.
+      if (searchRequestId.current !== id) return;
+      setKeywordResults(result.keyword?.items ?? []);
+      setKeywordTotal(result.keyword?.total ?? 0);
+      setSemanticResults(result.semantic?.items ?? []);
+      setSemanticStatus(result.semantic?.status ?? 'unavailable');
       setActiveSearch(result.query || query);
-      if ((result.total ?? 0) === 0) {
-        setSearchError(null);
-      }
     } catch (error: any) {
+      if (controller.signal.aborted || searchRequestId.current !== id) return;
       const message = readSearchError(error);
       setSearchError(message);
       toast.error(message);
       console.error(error);
     } finally {
-      setIsSearching(false);
+      if (searchRequestId.current === id) setIsSearching(false);
     }
+  };
+
+  const handleSemanticSearch = () => {
+    if (searchDebounce.current) {
+      window.clearTimeout(searchDebounce.current);
+      searchDebounce.current = null;
+    }
+    const query = searchInput.trim();
+    if (!query) {
+      toast.info('Type a few words to search confessions.');
+      return;
+    }
+    void runHybridSearch(query);
+  };
+
+  /** Type-ahead: debounced so each keystroke does not fire a heavy read. */
+  const queueDebouncedSearch = (value: string) => {
+    setSearchInput(value);
+    if (searchDebounce.current) {
+      window.clearTimeout(searchDebounce.current);
+      searchDebounce.current = null;
+    }
+    const query = value.trim();
+    if (!query) return;
+    searchDebounce.current = window.setTimeout(() => {
+      searchDebounce.current = null;
+      void runHybridSearch(query);
+    }, 350);
+  };
+
+  // Drop timers and in-flight searches on unmount so no late answer touches state.
+  useEffect(() => {
+    return () => {
+      if (searchDebounce.current) window.clearTimeout(searchDebounce.current);
+      searchAbort.current?.abort();
+    };
+  }, []);
+
+  const clearHybridState = () => {
+    searchRequestId.current += 1;
+    searchAbort.current?.abort();
+    if (searchDebounce.current) {
+      window.clearTimeout(searchDebounce.current);
+      searchDebounce.current = null;
+    }
+    setKeywordResults([]);
+    setKeywordTotal(0);
+    setSemanticResults([]);
+    setSemanticStatus('ok');
   };
 
   const handleClearSearch = async () => {
     setSearchInput('');
     setActiveSearch(null);
     setSearchError(null);
+    clearHybridState();
     try {
       const page = splitPage(await getConfessions(sortBy, { skip: 0, limit: FEED_PAGE_SIZE }));
       setConfessions(page.rows);
@@ -366,6 +435,26 @@ export const ConfessionsPage = () => {
       toast.error('Failed to load confessions. Please try again.');
       console.error(error);
     }
+  };
+
+  /** Patch one confession everywhere it is rendered: feed and both search lists. */
+  const patchConfessionEverywhere = (id: string, patch: (conf: Confession) => Confession) => {
+    setConfessions((prev) => prev.map((conf) => (conf.id === id ? patch(conf) : conf)));
+    setKeywordResults((prev) => prev.map((conf) => (conf.id === id ? patch(conf) : conf)));
+    setSemanticResults((prev) => prev.map((conf) => (conf.id === id ? patch(conf) : conf)));
+  };
+
+  /** Snapshot all three lists so an optimistic update can roll back. */
+  const snapshotEverywhere = () => ({
+    feed: [...confessions],
+    keyword: [...keywordResults],
+    semantic: [...semanticResults],
+  });
+
+  const restoreEverywhere = (snap: { feed: Confession[]; keyword: Confession[]; semantic: Confession[] }) => {
+    setConfessions(snap.feed);
+    setKeywordResults(snap.keyword);
+    setSemanticResults(snap.semantic);
   };
 
   /**
@@ -508,27 +597,23 @@ export const ConfessionsPage = () => {
             ? { ...prev, comments: rows, comment_count: applyCount(prev.comment_count) }
             : prev,
         );
-        setConfessions((prev) =>
-          prev.map((conf) =>
-            conf.id === confessionId
-              ? { ...conf, comments: rows, comment_count: applyCount(conf.comment_count) }
-              : conf,
-          ),
+        patchConfessionEverywhere(
+          confessionId,
+          (conf) => ({ ...conf, comments: rows, comment_count: applyCount(conf.comment_count) }),
         );
       } else {
-        let updatedConfessionsList: Confession[] = [];
-        setConfessions(prev => {
-          updatedConfessionsList = prev.map(conf =>
-            conf.id === confessionId
-              ? { ...conf, comments: [newCommentData, ...conf.comments], comment_count: conf.comment_count + 1 }
-              : conf
-          );
-          return updatedConfessionsList;
-        });
+        const appendComment = (conf: Confession) =>
+          conf.id === confessionId
+            ? { ...conf, comments: [newCommentData, ...conf.comments], comment_count: conf.comment_count + 1 }
+            : conf;
+        patchConfessionEverywhere(confessionId, appendComment);
 
-        const updatedSelectedConfession = updatedConfessionsList.find(c => c.id === confessionId);
+        const updatedSelectedConfession =
+          keywordResults.find((c) => c.id === confessionId) ??
+          semanticResults.find((c) => c.id === confessionId) ??
+          confessions.find((c) => c.id === confessionId);
         if (updatedSelectedConfession) {
-          setSelectedConfession(updatedSelectedConfession);
+          setSelectedConfession(appendComment(updatedSelectedConfession));
         }
       }
 
@@ -551,39 +636,32 @@ export const ConfessionsPage = () => {
       return;
     }
     
-    const originalConfessions = [...confessions];
+    const snapshot = snapshotEverywhere();
 
-    setConfessions(prevConfessions => 
-      prevConfessions.map(conf => {
-        if (conf.id === confessionId) {
-          const newConf = { ...conf };
-          const isTogglingOff = newConf.user_reaction === reactionType;
-          
-          if (newConf.user_reaction) {
-            const oldCountKey = `${newConf.user_reaction}_count` as keyof Confession;
-            (newConf[oldCountKey] as number)--;
-          }
+    patchConfessionEverywhere(confessionId, (conf) => {
+      const newConf = { ...conf };
+      const isTogglingOff = newConf.user_reaction === reactionType;
 
-          if (!isTogglingOff) {
-            const newCountKey = `${reactionType}_count` as keyof Confession;
-            (newConf[newCountKey] as number)++;
-          }
+      if (newConf.user_reaction) {
+        const oldCountKey = `${newConf.user_reaction}_count` as keyof Confession;
+        (newConf[oldCountKey] as number)--;
+      }
 
-          newConf.user_reaction = isTogglingOff ? null : reactionType;
-          return newConf;
-        }
-        return conf;
-      })
-    );
+      if (!isTogglingOff) {
+        const newCountKey = `${reactionType}_count` as keyof Confession;
+        (newConf[newCountKey] as number)++;
+      }
+
+      newConf.user_reaction = isTogglingOff ? null : reactionType;
+      return newConf;
+    });
 
     try {
       const updatedConfession = await reactToConfession(confessionId, reactionType);
-      setConfessions(prevConfessions => 
-        prevConfessions.map(c => c.id === confessionId ? { ...c, ...updatedConfession } : c)
-      );
+      patchConfessionEverywhere(confessionId, (c) => ({ ...c, ...updatedConfession }));
     } catch (error) {
       toast.error("Failed to save reaction.");
-      setConfessions(originalConfessions);
+      restoreEverywhere(snapshot);
     }
   };
 
@@ -593,7 +671,7 @@ export const ConfessionsPage = () => {
       return;
     }
 
-    const originalConfessions = JSON.parse(JSON.stringify(confessions));
+    const snapshot = snapshotEverywhere();
 
     const updateReactionState = (conf: Confession) => {
       if (conf.id !== confessionId) return conf;
@@ -605,7 +683,7 @@ export const ConfessionsPage = () => {
 
           const currentReaction = c.user_reaction;
           const isTogglingOff = currentReaction === reaction;
-          
+
           let newLikeCount = c.like_count;
           let newDislikeCount = c.dislike_count;
 
@@ -616,7 +694,7 @@ export const ConfessionsPage = () => {
             if (reaction === 'like') newLikeCount++;
             if (reaction === 'dislike') newDislikeCount++;
           }
-          
+
           return {
             ...c,
             like_count: newLikeCount,
@@ -626,47 +704,45 @@ export const ConfessionsPage = () => {
         }),
       };
     };
-    
-    let optimisticallyUpdatedConfessions: Confession[] = [];
-    setConfessions(prev => {
-        optimisticallyUpdatedConfessions = prev.map(updateReactionState);
-        return optimisticallyUpdatedConfessions;
-    });
-    const optimisticConfession = optimisticallyUpdatedConfessions.find(c => c.id === confessionId);
+
+    patchConfessionEverywhere(confessionId, updateReactionState);
+    const optimisticConfession =
+      keywordResults.find((c) => c.id === confessionId) ??
+      semanticResults.find((c) => c.id === confessionId) ??
+      confessions.find((c) => c.id === confessionId);
     if (optimisticConfession) {
-        setSelectedConfession(optimisticConfession);
+        setSelectedConfession(updateReactionState(optimisticConfession));
     }
 
 
     try {
       const apiCall = reaction === 'like' ? likeComment : dislikeComment;
       const updatedCommentFromServer = await apiCall(commentId);
-      
+
       const syncWithServer = (conf: Confession) => {
         if (conf.id !== confessionId) return conf;
-        
+
         return {
           ...conf,
-          comments: conf.comments.map(c => 
+          comments: conf.comments.map(c =>
             c.id === commentId ? { ...c, ...updatedCommentFromServer } : c
           ),
         };
       };
 
-      let serverSyncedConfessions: Confession[] = [];
-      setConfessions(prev => {
-          serverSyncedConfessions = prev.map(syncWithServer);
-          return serverSyncedConfessions;
-      });
-      const serverSyncedConfession = serverSyncedConfessions.find(c => c.id === confessionId);
+      patchConfessionEverywhere(confessionId, syncWithServer);
+      const serverSyncedConfession =
+        keywordResults.find((c) => c.id === confessionId) ??
+        semanticResults.find((c) => c.id === confessionId) ??
+        confessions.find((c) => c.id === confessionId);
       if (serverSyncedConfession) {
-          setSelectedConfession(serverSyncedConfession);
+          setSelectedConfession(syncWithServer(serverSyncedConfession));
       }
 
     } catch (error) {
       toast.error(`Failed to ${reaction} comment.`);
-      setConfessions(originalConfessions); 
-      const originalSelected = originalConfessions.find((c: Confession) => c.id === confessionId);
+      restoreEverywhere(snapshot);
+      const originalSelected = snapshot.feed.find((c: Confession) => c.id === confessionId);
       setSelectedConfession(originalSelected || null);
     }
   };
@@ -705,10 +781,11 @@ export const ConfessionsPage = () => {
         comments_enabled: allowComments,
       };
       await createConfession(confessionData);
-      // A new post clears an active semantic search: the ranked list no longer
-      // describes the corpus, and the new post belongs in the feed order.
+      // A new post clears an active search: the ranked lists no longer
+      // describe the corpus, and the new post belongs in the feed order.
       setActiveSearch(null);
       setSearchError(null);
+      clearHybridState();
       // The new post belongs at the head of a time-ordered feed but anywhere in the
       // others, so the first page is re-read instead of prepending: prepending would put
       // it first under every sort and grow the window past its page.
@@ -763,7 +840,7 @@ export const ConfessionsPage = () => {
     try {
       const updatedComment = await reportComment(commentToReport.id, reportReason);
       
-      const updateCommentInState = (prev: Confession[]) => prev.map(conf => {
+      const updateCommentInState = (conf: Confession) => {
         if (conf.id === selectedConfession?.id) {
           return {
             ...conf,
@@ -771,9 +848,9 @@ export const ConfessionsPage = () => {
           };
         }
         return conf;
-      });
+      };
 
-      setConfessions(updateCommentInState);
+      patchConfessionEverywhere(selectedConfession?.id ?? '', updateCommentInState);
       if (selectedConfession) {
         setSelectedConfession(prev => prev ? {
             ...prev,
@@ -814,10 +891,8 @@ export const ConfessionsPage = () => {
 
       try {
           const updatedConfession = await reportConfession(confessionToReport.id, reportReason);
-          
-          setConfessions(prev => prev.map(conf => 
-              conf.id === confessionToReport.id ? updatedConfession : conf
-          ));
+
+          patchConfessionEverywhere(confessionToReport.id, () => updatedConfession);
 
           toast.success("Confession reported successfully.");
       } catch (error) {
@@ -855,10 +930,8 @@ export const ConfessionsPage = () => {
 
     try {
       const updatedConfession = await updateConfession(confessionToEdit.id, payload);
-      
-      setConfessions(prev => 
-        prev.map(conf => conf.id === confessionToEdit.id ? updatedConfession : conf)
-      );
+
+      patchConfessionEverywhere(confessionToEdit.id, () => updatedConfession);
 
       if (selectedConfession?.id === confessionToEdit.id) {
         setSelectedConfession(updatedConfession);
@@ -878,6 +951,38 @@ export const ConfessionsPage = () => {
     { type: 'whoa', icon: Eye, countKey: 'whoa_count' },
     { type: 'heartbreak', icon: HeartCrack, countKey: 'heartbreak_count' },
   ] as const;
+
+  /**
+   * Rows on screen while a search is active: keyword matches first, then the
+   * meaning notice (when degraded), then similar-in-meaning. Headers render
+   * only for non-empty sections; the caller shows the overall empty state when
+   * both lists are empty.
+   */
+  type SearchRow =
+    | { kind: 'header'; key: string; title: string; label: string }
+    | { kind: 'notice'; key: string; text: string }
+    | { kind: 'confession'; key: string; confession: Confession };
+
+  const searchRows = (): SearchRow[] => {
+    const rows: SearchRow[] = [];
+    if (keywordResults.length > 0) {
+      rows.push({ kind: 'header', key: 'header-keyword', title: 'Keyword matches', label: 'Keyword matches' });
+      for (const confession of keywordResults) {
+        rows.push({ kind: 'confession', key: confession.id, confession });
+      }
+    }
+    const notice = semanticNotice(semanticStatus);
+    if (notice) {
+      rows.push({ kind: 'notice', key: 'semantic-notice', text: notice });
+    }
+    if (semanticResults.length > 0) {
+      rows.push({ kind: 'header', key: 'header-semantic', title: 'Similar in meaning', label: 'Similar in meaning' });
+      for (const confession of semanticResults) {
+        rows.push({ kind: 'confession', key: confession.id, confession });
+      }
+    }
+    return rows;
+  };
 
   return (
     <div className="min-h-screen p-2 sm:p-4 pt-20 sm:pt-24 relative overflow-hidden">
@@ -924,18 +1029,18 @@ export const ConfessionsPage = () => {
         <div className="relative z-10 mb-4 sm:mb-6">
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
-              aria-label="Search confessions by meaning"
-              placeholder="Search by meaning — e.g. homesick late-night thoughts…"
+              aria-label="Search confessions"
+              placeholder="Search confessions — keywords or meaning…"
               value={searchInput}
               maxLength={1000}
-              onChange={(e) => setSearchInput(e.target.value)}
+              onChange={(e) => queueDebouncedSearch(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleSemanticSearch();
+                if (e.key === 'Enter') handleSemanticSearch();
               }}
               className="bg-background/80 border-romantic/30 focus:border-romantic"
             />
             <div className="flex gap-2">
-              <Button onClick={() => void handleSemanticSearch()} disabled={isSearching} className="btn-romantic">
+              <Button onClick={handleSemanticSearch} disabled={isSearching} className="btn-romantic">
                 {isSearching ? 'Searching…' : 'Search'}
               </Button>
               {activeSearch !== null && (
@@ -947,7 +1052,7 @@ export const ConfessionsPage = () => {
           </div>
           {activeSearch !== null && (
             <p role="status" className="mt-2 text-xs sm:text-sm text-muted-foreground">
-              Semantic results for “{activeSearch}” ({total} found) — ranked by meaning.
+              Results for “{activeSearch}” — {keywordTotal} keyword{keywordTotal === 1 ? '' : 's'} + {semanticResults.length} similar in meaning.
             </p>
           )}
           {searchError && (
@@ -955,9 +1060,9 @@ export const ConfessionsPage = () => {
               {searchError}
             </p>
           )}
-          {activeSearch !== null && total === 0 && !searchError && !isSearching && (
+          {activeSearch !== null && keywordResults.length === 0 && semanticResults.length === 0 && !searchError && !isSearching && (
             <p role="status" className="mt-2 text-xs sm:text-sm text-muted-foreground">
-              No confessions match that meaning yet. Try different words, or clear to see the latest feed.
+              No confessions match that yet. Try different words, or clear to see the latest feed.
             </p>
           )}
         </div>
@@ -1067,7 +1172,22 @@ export const ConfessionsPage = () => {
       </div>
 
       <div className="max-w-4xl mx-auto space-y-6 min-w-0">
-        {confessions.map((confession, index) => {
+        {(activeSearch !== null ? searchRows() : confessions.map((confession) => ({ kind: 'confession' as const, key: confession.id, confession }))).map((row, index) => {
+          if (row.kind === 'header') {
+            return (
+              <h2 key={row.key} aria-label={row.label} className="font-dancing text-xl text-romantic pt-2">
+                {row.title}
+              </h2>
+            );
+          }
+          if (row.kind === 'notice') {
+            return (
+              <p key={row.key} role="status" className="text-xs sm:text-sm text-muted-foreground">
+                {row.text}
+              </p>
+            );
+          }
+          const confession = row.confession;
           const hasReportedConfession = user && hasReportedByMe(confession, user.id);
           return (
             <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300 min-w-0 overflow-hidden" style={{ animationDelay: `${index * 0.1}s` }}>
@@ -1174,7 +1294,7 @@ export const ConfessionsPage = () => {
         {/* The feed only grows downwards: the next page appends beneath the posts already
             on screen, so the reader's place never moves. Shown only while the server holds
             more visible posts than the feed is showing; legacy answers never page.
-            Hidden while a semantic search is active: search returns one ranked page. */}
+            Hidden while a search is active: hybrid answers are single pages. */}
         {activeSearch === null && pagedFeed && confessions.length < total && (
           <div className="flex justify-center pt-2">
             <Button

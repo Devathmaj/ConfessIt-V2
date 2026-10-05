@@ -1107,3 +1107,231 @@ class ConfessionService:
             "query": normalized,
             "limit": limit,
         }
+
+    def _user_keyword_id_page(self, cleaned: str, limit: int) -> tuple[list, int]:
+        """Keyword ids over body/recipient only, trigram-relevance ordered.
+
+        Participant-safe by construction: author identity columns are never
+        referenced, so a confession cannot be found by who wrote it. Uses the
+        same ILIKE + pg_trgm approach as the rest of the app, with
+        ``removed_at IS NULL`` enforced in SQL. Relevance is trigram similarity
+        (best of body/recipient) with recency as the tiebreak.
+        """
+        from ..utils import ilike_contains
+
+        match = or_(
+            ilike_contains(ConfessionRecord.body, cleaned),
+            ilike_contains(ConfessionRecord.recipient_name, cleaned),
+        )
+        relevance = func.greatest(
+            func.similarity(ConfessionRecord.body, cleaned),
+            func.similarity(func.coalesce(ConfessionRecord.recipient_name, ""), cleaned),
+        )
+        ordering = [
+            relevance.desc(),
+            ConfessionRecord.created_at.desc(),
+            ConfessionRecord.id.asc(),
+        ]
+        with self.sessions() as session:
+            total = session.scalar(
+                select(func.count())
+                .select_from(ConfessionRecord)
+                .where(ConfessionRecord.removed_at.is_(None), match)
+            ) or 0
+            ids = [
+                str(row_id)
+                for row_id in session.scalars(
+                    select(ConfessionRecord.id)
+                    .where(ConfessionRecord.removed_at.is_(None), match)
+                    .order_by(*ordering)
+                    .limit(limit)
+                ).all()
+            ]
+        return ids, total
+
+    def _hydrate_public_page(
+        self, ordered_ids: list, user_id: Optional[str] = None
+    ) -> list:
+        """Bulk-hydrate confession ids into public ``Confession`` models, in order.
+
+        Same participant-scoped shape as the feed (comments window, authors,
+        reporter counts, caller's own reaction/report state; no identities, no
+        vectors). Removed rows encountered here are skipped, so the page never
+        names content its reader cannot open.
+        """
+        if not ordered_ids:
+            return []
+        with self.sessions() as session:
+            ranked = (
+                select(
+                    ConfessionCommentRecord.id,
+                    func.row_number().over(
+                        partition_by=ConfessionCommentRecord.confession_id,
+                        order_by=ConfessionCommentRecord.created_at.desc(),
+                    ).label("thread_rank"),
+                )
+                .where(
+                    ConfessionCommentRecord.removed_at.is_(None),
+                    ConfessionCommentRecord.confession_id.in_(ordered_ids),
+                )
+                .subquery()
+            )
+            kept_ids = session.scalars(
+                select(ranked.c.id).where(ranked.c.thread_rank <= FEED_COMMENTS_INITIAL)
+            ).all()
+            comment_models = session.scalars(
+                select(ConfessionCommentRecord)
+                .where(ConfessionCommentRecord.id.in_(kept_ids))
+                .order_by(ConfessionCommentRecord.created_at.desc())
+            ).all() if kept_ids else []
+            fresh = {
+                str(row.id): row for row in session.scalars(
+                    select(ConfessionRecord).where(ConfessionRecord.id.in_(ordered_ids))
+                ).all()
+            }
+            wanted_user_ids = {
+                str(row.author_id) for row in fresh.values()
+            } | {str(row.user_id) for row in comment_models}
+            user_map = {
+                user.id: user for user in session.scalars(
+                    select(UserRecord).where(UserRecord.id.in_(wanted_user_ids))
+                ).all()
+            } if wanted_user_ids else {}
+            confession_reporters: dict = {}
+            for target_id, reporter_id in session.execute(
+                select(ReportRecord.confession_id, ReportRecord.reported_by_id).where(
+                    ReportRecord.confession_id.in_(ordered_ids)
+                )
+            ).all():
+                confession_reporters.setdefault(str(target_id), []).append(str(reporter_id))
+            comments_by_confession: dict = {}
+            for comment in self._hydrate_comments(session, comment_models, user_id, user_map):
+                comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
+        rows = []
+        for confession_id in ordered_ids:
+            row = fresh.get(str(confession_id))
+            if row is None or row.removed_at is not None:
+                continue
+            payload = self._confession_payload(row)
+            reporter_ids = confession_reporters.get(str(payload["id"]), [])
+            payload["has_reported"] = bool(user_id and user_id in reporter_ids)
+            payload["reported_by"] = []
+            payload["report_count"] = len(reporter_ids)
+            payload["comments"] = sorted(
+                comments_by_confession.get(str(confession_id), []),
+                key=lambda c: c.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            author = user_map.get(str(payload.get("author_id")))
+            payload["user_info"] = {
+                "id": str(payload.get("author_id")),
+                "name": author.name if author else "Anonymous User",
+                "profile_picture_url": _profile_picture_url(author) if not payload.get("anonymous") else None,
+            }
+            user_reaction = None
+            if user_id and "reactions" in payload:
+                for reaction_type, reactor_ids in payload["reactions"].items():
+                    if user_id in reactor_ids:
+                        user_reaction = reaction_type
+                        break
+            payload["user_reaction"] = user_reaction
+            payload["reactions"] = {}
+            payload["comments"] = [
+                ConfessionComment(**comment_doc)
+                for comment_doc in sorted(
+                    payload.get("comments", []), key=lambda c: c["created_at"], reverse=True
+                )
+            ]
+            rows.append(Confession(**payload))
+        return rows
+
+    def _user_semantic_section(
+        self,
+        normalized: str,
+        exclude_ids: list,
+        cap: int,
+        user_id: Optional[str],
+        rate_key: str,
+    ) -> tuple[list, str]:
+        """Semantic half of hybrid search via the shared candidate pipeline."""
+        from .semantic_candidates import get_semantic_candidates
+        from .semantic_rate_limit import USER_BUCKET
+
+        candidates, status = get_semantic_candidates(
+            sessions=self.sessions,
+            query=normalized,
+            cap=cap,
+            include_removed=False,
+            extra_filters=None,
+            exclude_ids=exclude_ids,
+            bucket=USER_BUCKET,
+            rate_key=rate_key or user_id or "anon",
+        )
+        if not candidates:
+            return [], status
+        return (
+            self._hydrate_public_page([cid for cid, _, _ in candidates], user_id),
+            status,
+        )
+
+    def search_confessions(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        limit: int = 10,
+        rate_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Hybrid keyword + semantic search, keyword first and deduped.
+
+        Keyword runs over body/recipient only (never identity) with trigram
+        relevance ordering; semantic runs through the shared
+        embed + vector-query + threshold + dedupe pipeline capped at
+        ``min(limit, EMBEDDING_SEMANTIC_TOP_K)``. The two halves run
+        concurrently (keyword hydration overlaps the embedding provider call).
+        Semantic degradation (disabled / unavailable / rate-limited / too-short)
+        still returns keyword results with ``semantic.status`` naming the reason
+        instead of failing the request. Blank or over-long queries raise
+        ``invalid_input`` (422).
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        from ..config import settings as _settings
+        from .embedding_service import (
+            EmbeddingError,
+            SEARCH_QUERY_MAX_LENGTH,
+            normalize_text,
+        )
+
+        normalized = normalize_text(query or "")
+        if not normalized:
+            raise EmbeddingError("Search query must not be blank.", code="invalid_input")
+        if len(normalized) > SEARCH_QUERY_MAX_LENGTH:
+            raise EmbeddingError(
+                f"Search query is too long (max {SEARCH_QUERY_MAX_LENGTH} characters).",
+                code="invalid_input",
+            )
+        limit = max(1, min(int(limit or 10), FEED_MAX_LIMIT))
+        keyword_ids, keyword_total = self._user_keyword_id_page(normalized, limit)
+        cap = max(1, min(int(limit), int(_settings.EMBEDDING_SEMANTIC_TOP_K)))
+        key = rate_key or user_id or "anon"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            keyword_future = pool.submit(self._hydrate_public_page, keyword_ids, user_id)
+            semantic_future = pool.submit(
+                self._user_semantic_section, normalized, keyword_ids, cap, user_id, key
+            )
+            keyword_items = keyword_future.result()
+            try:
+                semantic_items, semantic_status = semantic_future.result()
+            except Exception as exc:
+                logger.warning("Hybrid semantic half failed: %s", type(exc).__name__)
+                semantic_items, semantic_status = [], "unavailable"
+        logger.info(
+            "Hybrid search returned %s keyword + %s semantic confession(s)",
+            len(keyword_items), len(semantic_items),
+        )
+        return {
+            "query": normalized,
+            "limit": limit,
+            "keyword": {"items": keyword_items, "total": keyword_total},
+            "semantic": {"items": semantic_items, "status": semantic_status},
+        }
