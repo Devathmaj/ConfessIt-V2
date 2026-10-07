@@ -165,36 +165,50 @@ def test_severity_0_no_report_no_hide_embedding_occurs(db, monkeypatch):
     assert any(str(c.id) == str(created.id) for c in feed["confessions"])
 
 
-# 2. Severity 2: flagged + hidden (>1), embedding still occurs.
+def _sole_confession_id(db):
+    with db.sessions() as session:
+        row = session.scalar(select(ConfessionRecord))
+        assert row is not None
+        return str(row.id)
+
+
+# 2. Severity 2: flagged + hidden (>1), 422 violation, embedding still occurs.
 def test_severity_2_no_report_no_hide_embedding_occurs(db, monkeypatch):
     _enable_content_safety(monkeypatch)
     _mock_moderation(monkeypatch, {"Hate": 2, "SelfHarm": 0, "Sexual": 2, "Violence": 0})
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "s2author")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="mildly edgy", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
-    assert len(_reports_for(db, created.id)) == 1
-    assert _confession_row(db, created.id).removed_at is not None
-    assert _embedding_row(db, created.id) is not None
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="mildly edgy", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
+    assert "violated our content policies" in str(exc.value.detail).lower()
+    cid = _sole_confession_id(db)
+    assert len(_reports_for(db, cid)) == 1
+    assert _confession_row(db, cid).removed_at is not None
+    assert _embedding_row(db, cid) is not None
     feed = svc.get_confessions(user_id=author["id"])
-    assert all(str(c.id) != str(created.id) for c in feed["confessions"])
+    assert all(str(c.id) != cid for c in feed["confessions"])
 
 
-# 3. Severity 4: one report + hidden, actor Azure Content Safety, embedding occurs.
+# 3. Severity 4: one report + hidden, 422 violation, embedding occurs.
 def test_severity_4_reports_without_hiding(db, monkeypatch):
     _enable_content_safety(monkeypatch)
     _mock_moderation(monkeypatch, {"Hate": 4, "SelfHarm": 0, "Sexual": 2, "Violence": 0})
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "s4author")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="moderate content", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
-    reports = _reports_for(db, created.id)
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="moderate content", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
+    cid = _sole_confession_id(db)
+    reports = _reports_for(db, cid)
     assert len(reports) == 1
     assert reports[0].reported_by_name == "Azure Content Safety"
     assert reports[0].reported_by_id is None
@@ -204,39 +218,42 @@ def test_severity_4_reports_without_hiding(db, monkeypatch):
     assert "Azure AI Content Safety" in reports[0].reason
     assert "Hate=4" in reports[0].reason
     # Hidden (>1 flagged+hidden).
-    assert _confession_row(db, created.id).removed_at is not None
+    assert _confession_row(db, cid).removed_at is not None
     feed = svc.get_confessions(user_id=author["id"])
-    assert all(str(c.id) != str(created.id) for c in feed["confessions"])
-    assert _embedding_row(db, created.id) is not None
-    assert svc.get_confession(str(created.id), author["id"]) is None
+    assert all(str(c.id) != cid for c in feed["confessions"])
+    assert _embedding_row(db, cid) is not None
+    assert svc.get_confession(cid, author["id"]) is None
 
 
-# 4. Severity 6: report + hide via existing mechanism, feed excludes, embedding still occurs.
+# 4. Severity 6: report + hide, 422 violation, feed excludes, embedding still occurs.
 def test_severity_6_reports_and_hides_but_still_embeds(db, monkeypatch):
     _enable_content_safety(monkeypatch)
     _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 6, "Violence": 0})
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "s6author")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="high severity", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
-    assert created is not None
-    reports = _reports_for(db, created.id)
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="high severity", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
+    assert "violated our content policies" in str(exc.value.detail).lower()
+    cid = _sole_confession_id(db)
+    reports = _reports_for(db, cid)
     assert len(reports) == 1
     assert reports[0].reported_by_name == "Azure Content Safety"
-    row = _confession_row(db, created.id)
+    row = _confession_row(db, cid)
     assert row.removed_at is not None
     # Existing hide mechanism: removed_at set (soft removal, row kept).
     assert row.body == "high severity"
     # Excluded from ordinary feeds/lists/counts.
     feed = svc.get_confessions(user_id=author["id"])
-    assert all(str(c.id) != str(created.id) for c in feed["confessions"])
-    assert svc.get_confession(str(created.id), author["id"]) is None
+    assert all(str(c.id) != cid for c in feed["confessions"])
+    assert svc.get_confession(cid, author["id"]) is None
     assert svc.get_total_confessions_count() == 0
     # Embedding still occurs despite high severity.
-    assert _embedding_row(db, created.id) is not None
+    assert _embedding_row(db, cid) is not None
 
 
 # 5. Mixed categories: 6 in any single category triggers high policy.
@@ -246,13 +263,15 @@ def test_mixed_categories_single_6_triggers_high(db, monkeypatch):
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "mixauthor")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="mixed scores", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
-    assert len(_reports_for(db, created.id)) == 1
-    assert _confession_row(db, created.id).removed_at is not None
-    assert _embedding_row(db, created.id) is not None
+    with pytest.raises(HTTPException):
+        svc.create_confession(
+            ConfessionCreate(body="mixed scores", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    cid = _sole_confession_id(db)
+    assert len(_reports_for(db, cid)) == 1
+    assert _confession_row(db, cid).removed_at is not None
+    assert _embedding_row(db, cid) is not None
 
 
 def test_policy_central_max_and_thresholds():
@@ -274,21 +293,24 @@ def test_no_duplicate_automated_reports_on_retry(db, monkeypatch):
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "dupauthor")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="needs report", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
-    first = _reports_for(db, created.id)
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="needs report", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
+    cid = _sole_confession_id(db)
+    first = _reports_for(db, cid)
     assert len(first) == 1
     # Retrying the same reporting operation does not duplicate.
     rid1 = svc.create_automated_content_safety_report(
-        str(created.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+        cid, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
     )
     rid2 = svc.create_automated_content_safety_report(
-        str(created.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+        cid, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
     )
     assert rid1 == rid2 == str(first[0].id)
-    assert len(_reports_for(db, created.id)) == 1
+    assert len(_reports_for(db, cid)) == 1
 
 
 # 7. Content Safety API failure: not treated as safe, embedding/publishing does not continue.
@@ -335,22 +357,25 @@ def test_embedding_failure_preserves_moderation_and_retry_creates_no_report(db, 
     _mock_embedding_failure(monkeypatch)
     author = make_user(db, "embfailauthor")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="embed fails but moderated", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="embed fails but moderated", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
+    cid = _sole_confession_id(db)
     # Moderation outcome durable despite embedding failure.
-    assert len(_reports_for(db, created.id)) == 1
-    assert _confession_row(db, created.id).removed_at is not None
-    assert _embedding_row(db, created.id) is None
+    assert len(_reports_for(db, cid)) == 1
+    assert _confession_row(db, cid).removed_at is not None
+    assert _embedding_row(db, cid) is None
     # Embedding retry does not create another report.
-    assert svc._generate_embedding_for_confession(str(created.id), "embed fails but moderated", None) is False
-    assert len(_reports_for(db, created.id)) == 1
+    assert svc._generate_embedding_for_confession(cid, "embed fails but moderated", None) is False
+    assert len(_reports_for(db, cid)) == 1
     # Now succeed the embedding retry: still exactly one report.
     _mock_embedding_success(monkeypatch)
-    assert svc._generate_embedding_for_confession(str(created.id), "embed fails but moderated", None) is True
-    assert len(_reports_for(db, created.id)) == 1
-    assert _embedding_row(db, created.id) is not None
+    assert svc._generate_embedding_for_confession(cid, "embed fails but moderated", None) is True
+    assert len(_reports_for(db, cid)) == 1
+    assert _embedding_row(db, cid) is not None
 
 
 # 9. Actor rendering in admin/report interfaces.
@@ -360,19 +385,21 @@ def test_actor_rendering_in_admin_queue(db, monkeypatch, admin_client):
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "actor author", name="Actor Author")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="actor rendering", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
+    with pytest.raises(HTTPException):
+        svc.create_confession(
+            ConfessionCreate(body="actor rendering", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    cid = _sole_confession_id(db)
     resp = admin_client.get("/admin/confessions/reports")
     assert resp.status_code == 200
-    items = [r for r in resp.json()["reports"] if r["confession_id"] == str(created.id)]
+    items = [r for r in resp.json()["reports"] if r["confession_id"] == cid]
     assert len(items) == 1
     assert items[0]["reporter"]["name"] == "Azure Content Safety"
     # Confession review surface also shows the automated reporter.
     conf_resp = admin_client.get("/admin/confessions")
     assert conf_resp.status_code == 200
-    found = [c for c in conf_resp.json()["confessions"] if c["id"] == str(created.id)]
+    found = [c for c in conf_resp.json()["confessions"] if c["id"] == cid]
     assert len(found) == 1
     assert found[0]["content_removed"] is True
     reporter_names = [r["reporter"]["name"] for r in found[0]["reports"]]
@@ -491,12 +518,14 @@ def test_order_content_safety_before_embedding(db, monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSIONS", 1536)
     author = make_user(db, "orderauthor")
     svc = ConfessionService(db)
-    created = svc.create_confession(
-        ConfessionCreate(body="order check", anonymous=False, comments_enabled=True),
-        author["id"],
-    )
+    with pytest.raises(HTTPException) as exc:
+        svc.create_confession(
+            ConfessionCreate(body="order check", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    assert exc.value.status_code == 422
     assert order == ["moderate", "embed"]
-    assert len(_reports_for(db, created.id)) == 1
+    assert len(_reports_for(db, _sole_confession_id(db))) == 1
 
 
 # 12. Configuration: missing config errors clearly; credentials never hardcoded/logged.
@@ -738,6 +767,15 @@ def test_comment_severity_0_visible_no_report(db, monkeypatch):
     assert any(c.id == comment.id for c in page["comments"])
 
 
+def _sole_comment_id(db):
+    from app.db_models import ConfessionCommentRecord as _CCR
+
+    with db.sessions() as session:
+        row = session.scalar(select(_CCR))
+        assert row is not None
+        return str(row.id)
+
+
 def test_comment_severity_2_flagged_hidden_with_report(db, monkeypatch, admin_client):
     from app.db_models import ConfessionCommentRecord as _CCR
 
@@ -748,19 +786,23 @@ def test_comment_severity_2_flagged_hidden_with_report(db, monkeypatch, admin_cl
     svc = ConfessionService(db)
     parent = _make_visible_confession(db, monkeypatch, author["id"])
     _mock_moderation(monkeypatch, {"Hate": 2, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
-    comment = svc.add_comment_to_confession(
-        str(parent.id), CommentCreate(body="edgy comment"), as_participant(commenter)
-    )
-    reports = _comment_reports_for(db, comment.id)
+    with pytest.raises(HTTPException) as exc:
+        svc.add_comment_to_confession(
+            str(parent.id), CommentCreate(body="edgy comment"), as_participant(commenter)
+        )
+    assert exc.value.status_code == 422
+    assert "violated our content policies" in str(exc.value.detail).lower()
+    cid = _sole_comment_id(db)
+    reports = _comment_reports_for(db, cid)
     assert len(reports) == 1
     assert reports[0].reported_by_name == "Azure Content Safety"
     assert reports[0].reported_by_id is None
     with db.sessions() as session:
-        assert session.get(_CCR, str(comment.id)).removed_at is not None
+        assert session.get(_CCR, cid).removed_at is not None
     # Hidden from participant thread, still visible to staff.
     page = svc.get_confession_comments(str(parent.id), commenter["id"])
-    assert all(c.id != comment.id for c in page["comments"])
-    queued = [r for r in admin_client.get("/admin/confessions/reports").json()["reports"] if r["target_id"] == str(comment.id)]
+    assert all(c.id != cid for c in page["comments"])
+    queued = [r for r in admin_client.get("/admin/confessions/reports").json()["reports"] if r["target_id"] == cid]
     assert len(queued) == 1
     assert queued[0]["reporter"]["name"] == "Azure Content Safety"
 
@@ -775,14 +817,16 @@ def test_comment_severity_6_flagged_hidden(db, monkeypatch):
     svc = ConfessionService(db)
     parent = _make_visible_confession(db, monkeypatch, author["id"])
     _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 6})
-    comment = svc.add_comment_to_confession(
-        str(parent.id), CommentCreate(body="bad comment"), as_participant(commenter)
-    )
-    assert len(_comment_reports_for(db, comment.id)) == 1
+    with pytest.raises(HTTPException):
+        svc.add_comment_to_confession(
+            str(parent.id), CommentCreate(body="bad comment"), as_participant(commenter)
+        )
+    cid = _sole_comment_id(db)
+    assert len(_comment_reports_for(db, cid)) == 1
     with db.sessions() as session:
-        assert session.get(_CCR, str(comment.id)).removed_at is not None
-    assert svc.get_confession_comments(str(parent.id), commenter["id"])["comments"] == [] or all(
-        c.id != comment.id for c in svc.get_confession_comments(str(parent.id), commenter["id"])["comments"]
+        assert session.get(_CCR, cid).removed_at is not None
+    assert all(
+        c.id != cid for c in svc.get_confession_comments(str(parent.id), commenter["id"])["comments"]
     )
 
 
@@ -794,19 +838,21 @@ def test_comment_no_duplicate_reports_on_retry(db, monkeypatch):
     svc = ConfessionService(db)
     parent = _make_visible_confession(db, monkeypatch, author["id"])
     _mock_moderation(monkeypatch, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
-    comment = svc.add_comment_to_confession(
-        str(parent.id), CommentCreate(body="needs report"), as_participant(commenter)
-    )
-    first = _comment_reports_for(db, comment.id)
+    with pytest.raises(HTTPException):
+        svc.add_comment_to_confession(
+            str(parent.id), CommentCreate(body="needs report"), as_participant(commenter)
+        )
+    cid = _sole_comment_id(db)
+    first = _comment_reports_for(db, cid)
     assert len(first) == 1
     rid1 = svc.create_automated_comment_safety_report(
-        str(comment.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+        cid, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
     )
     rid2 = svc.create_automated_comment_safety_report(
-        str(comment.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+        cid, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
     )
     assert rid1 == rid2 == str(first[0].id)
-    assert len(_comment_reports_for(db, comment.id)) == 1
+    assert len(_comment_reports_for(db, cid)) == 1
 
 
 def test_comment_moderation_failure_aborts(db, monkeypatch):

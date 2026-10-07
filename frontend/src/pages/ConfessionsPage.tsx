@@ -9,6 +9,7 @@ import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { 
   Heart, 
   Laugh, 
@@ -195,7 +196,15 @@ export const ConfessionsPage = () => {
   const [isAnonymous, setIsAnonymous] = useState(true);
   const [allowComments, setAllowComments] = useState(true);
   const [isPostDialogOpen, setIsPostDialogOpen] = useState(false);
+  const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const { user, isAuthenticated } = useAuth();
+
+  const readViolationMessage = (error: any): string | null => {
+    const detail = error?.response?.data?.detail;
+    const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join(' ') : '';
+    if (error?.response?.status === 422 && /violat.*polic/i.test(text)) return text;
+    return null;
+  };
 
   /**
    * The wait on posting, as the server described it, plus when that wait is over.
@@ -620,6 +629,15 @@ export const ConfessionsPage = () => {
       setNewComment('');
       toast.success("Your comment has been posted!");
     } catch (error: any) {
+      const violation = readViolationMessage(error);
+      if (violation) {
+        // Flagged+hidden: never render the returned row (there is none on
+        // error) and never prepend. Clear the box since the attempt consumed
+        // one of the 3 comment slots server-side.
+        setNewComment('');
+        setViolationDialog({ open: true, message: violation });
+        return;
+      }
       if (error.response && error.response.status === 403) {
         toast.error("Comments are disabled for this confession.");
       } else if (error.response && error.response.status === 400) {
@@ -803,6 +821,26 @@ export const ConfessionsPage = () => {
       });
       toast.success('Your confession has been shared! 💖');
     } catch (error) {
+      // Flagged+hidden: the server kept the row hidden for audit but answers
+      // 422 so we show a violation popup and never render it (no refresh with
+      // the hidden row, no success toast). The 2h window was still consumed.
+      const violation = readViolationMessage(error);
+      if (violation) {
+        setActiveSearch(null);
+        setSearchError(null);
+        clearHybridState();
+        setNewConfession('');
+        setConfessingTo('');
+        setIsPostDialogOpen(false);
+        startCooldown({
+          message: 'You can post one confession every 2 hours.',
+          hours: 2,
+          minutes: 0,
+          seconds: 2 * 60 * 60,
+        });
+        setViolationDialog({ open: true, message: violation });
+        return;
+      }
       // The server is the authority: this dialog can have been open for an hour, and the
       // write is what refuses. A 429 therefore starts the countdown from the server's own
       // Retry-After rather than from the stale advisory answer this page loaded with.
@@ -1577,6 +1615,20 @@ export const ConfessionsPage = () => {
             </DialogFooter>
         </DialogContent>
         </Dialog>
+
+      <AlertDialog open={violationDialog.open} onOpenChange={(open) => setViolationDialog((prev) => ({ ...prev, open }))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Content removed</AlertDialogTitle>
+            <AlertDialogDescription>
+              {violationDialog.message || 'Your content was removed because it violated our content policies.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setViolationDialog({ open: false, message: '' })}>Understood</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

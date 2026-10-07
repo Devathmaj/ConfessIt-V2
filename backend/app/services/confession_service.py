@@ -376,7 +376,7 @@ class ConfessionService:
                     )
         # Exactly one embedding for this eligible confession, generated
         # synchronously so no worker infrastructure is needed. Runs for every
-        # successfully moderated confession, including severity 4 and 6:
+        # successfully moderated confession, including flagged ones:
         # moderation determines reporting/visibility, never whether the
         # embedding is generated. A provider failure never fails the confession
         # itself: the post stays and is simply not searchable (no backfill).
@@ -385,15 +385,26 @@ class ConfessionService:
         self._generate_embedding_for_confession(
             confession_id, confession_body, confession_recipient
         )
+        if decision.should_hide:
+            # Flagged+hidden: the row stays hidden for audit (report + removed_at
+            # already committed, embedding already attempted), but the caller
+            # is told plainly it was removed for violating policies so the
+            # frontend shows a violation popup and never renders it. Feeds,
+            # searches and later reads keep excluding it.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Your confession was removed because it violated our content policies.",
+            )
         visible = self.get_confession(confession_id, user_id)
         if visible is not None:
             return visible
         if decision.should_hide:
-            # The confession is hidden from participant reads by design
-            # (get_confession returns None for removed rows). The creation
-            # response still answers with the created post so the call does not
-            # become a 500; feeds, searches and later reads keep excluding it.
-            return self._get_created_hidden_confession(confession_id, user_id)
+            # Defensive: should have raised above; kept so a hidden row can
+            # never leak as a 200 success.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Your confession was removed because it violated our content policies.",
+            )
         return visible
 
     def _get_created_hidden_confession(self, confession_id: str, user_id: Optional[str]):
@@ -1237,6 +1248,14 @@ class ConfessionService:
                         "Failed to queue removal notice for comment %s",
                         new_comment.get("id"),
                     )
+        if decision.should_hide:
+            # Flagged+hidden: row stays hidden for audit, but the caller is
+            # told plainly so the frontend shows a violation popup and never
+            # renders it.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Your comment was removed because it violated our content policies.",
+            )
         return ConfessionComment(**new_comment)
 
     def _react_to_comment(self, comment_id: str, user_id: str, reaction_type: str) -> Optional[ConfessionComment]:
