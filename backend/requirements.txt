@@ -13,6 +13,15 @@ httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
 redis==8.1.0
+# Azure AI Content Safety (Batch 1: confessions; central dispatcher in
+# app/services/content_safety_service.py). Official SDK per
+# https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/contentsafety/azure-ai-contentsafety
+# (ContentSafetyClient + AnalyzeTextOptions, api-version 2024-09-01).
+# Sync client runs in the existing sync service path (threadpool), so no
+# event-loop blocking beyond the current httpx usage.
+azure-ai-contentsafety==1.0.0
+azure-core==1.41.0
+isodate==0.7.2
 # Plot Twist story generation talks to the configured provider through one of
 # these SDKs: Groq's own SDK when LLM_PROVIDER is groq (Strict Structured
 # Outputs), the OpenAI SDK for OpenAI-compatible surfaces such as Microsoft

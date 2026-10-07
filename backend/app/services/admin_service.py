@@ -383,7 +383,10 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                 "reason": report.reason,
                 "created_at": serialize_datetime(report.created_at),
                 "reporter": {
-                    "id": str(report.reported_by_id),
+                    # Automated reports carry reported_by_id IS NULL and the
+                    # exact display name "Azure Content Safety"; the snapshot
+                    # is the display contract, not the live users row.
+                    "id": str(report.reported_by_id) if report.reported_by_id is not None else None,
                     "name": report.reported_by_name,
                 },
             }
@@ -410,7 +413,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                     "reason": report.reason,
                     "created_at": serialize_datetime(report.created_at),
                     "reporter": {
-                        "id": str(report.reported_by_id),
+                        "id": str(report.reported_by_id) if report.reported_by_id is not None else None,
                         "name": report.reported_by_name,
                     },
                 }
@@ -424,7 +427,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                     "created_at": serialize_datetime(comment_doc.created_at),
                     "user": {"id": str(comment_doc.user_id), "name": (users_by_id.get(comment_doc.user_id).name if users_by_id.get(comment_doc.user_id) else "User")},
                     "report_count": comment_doc.report_count,
-                    "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(comment_id, [])],
+                    "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(comment_id, []) if report.reported_by_id is not None],
                     "like_count": comment_doc.like_count,
                     "dislike_count": comment_doc.dislike_count,
                     "reports": comment_reports,
@@ -446,7 +449,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                 "created_at": serialize_datetime(doc.created_at),
                 "sender": sender_info,
                 "report_count": doc.report_count,
-                "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(confession_id, [])],
+                "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(confession_id, []) if report.reported_by_id is not None],
                 "reports": confession_reports,
                 # The raw id list is kept: `heart_count` and friends are denormalised counters
                 # and can disagree with the array, so anything auditing engagement needs both.
@@ -859,8 +862,9 @@ def get_confession_reports_data(
         # The reporter's name is snapshotted on the report row, but the live row wins: a
         # participant who has since changed their name should appear under the name they have
         # now, not the one they filed under. The snapshot is the fallback for a reporter whose
-        # row cannot be read at all.
-        reporter_ids = {report.reported_by_id for report in reports}
+        # row cannot be read at all -- including automated reports, which carry
+        # reported_by_id IS NULL and display exactly "Azure Content Safety".
+        reporter_ids = {report.reported_by_id for report in reports if report.reported_by_id is not None}
         reporters = {
             user.id: user for user in session.scalars(
                 select(UserRecord).where(UserRecord.id.in_(reporter_ids))
@@ -942,9 +946,11 @@ def get_confession_reports_data(
             },
             "author_hidden": author_hidden,
             "reporter": {
-                "id": str(report.reported_by_id),
+                "id": str(report.reported_by_id) if report.reported_by_id is not None else None,
                 # Prefer the live row: a participant who has since changed their name should
                 # appear under the name they have now, not the one they filed under.
+                # Automated reports have no live row; the snapshot ("Azure Content
+                # Safety") is the display contract.
                 "name": reporter.name if reporter else report.reported_by_name,
                 "regno": reporter.regno if reporter else None,
             },

@@ -426,6 +426,47 @@ class Settings(BaseSettings):
     EMBEDDING_TIMEOUT_SECONDS: float = 10.0
     EMBEDDING_MAX_RETRIES: int = 2
 
+    # --- Azure AI Content Safety (confession moderation, Batch 1) ---
+    #
+    # Newly submitted confessions are analyzed with the Analyze Text API
+    # (2024-09-01) before their embedding call. Only confession content is
+    # in scope; comments and all other entities are untouched.
+    # Credentials stay in the runtime environment and are never committed
+    # or logged.
+    CONTENT_SAFETY_ENDPOINT: str | None = None
+    CONTENT_SAFETY_API_KEY: str | None = None
+    CONTENT_SAFETY_REGION: str | None = None
+    # Bounded HTTP behavior for the Content Safety client (seconds).
+    CONTENT_SAFETY_TIMEOUT_SECONDS: float = 10.0
+
+    @field_validator(
+        "CONTENT_SAFETY_ENDPOINT",
+        "CONTENT_SAFETY_API_KEY",
+        "CONTENT_SAFETY_REGION",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_empty_content_safety_optional(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("CONTENT_SAFETY_ENDPOINT")
+    @classmethod
+    def _validate_content_safety_endpoint(cls, value: str | None) -> str | None:
+        """Non-blank https endpoint when set; None means unconfigured."""
+        if value is None:
+            return None
+        text_value = value.strip().rstrip("/")
+        if not text_value:
+            return None
+        lowered = text_value.lower()
+        if not (lowered.startswith("https://") or lowered.startswith("http://")):
+            raise ValueError(
+                f"CONTENT_SAFETY_ENDPOINT must be an http(s) URL (got {value!r})."
+            )
+        return text_value
+
     @field_validator("EMBEDDING_ENDPOINT", mode="before")
     @classmethod
     def _coerce_empty_embedding_endpoint(cls, value: Any) -> Any:

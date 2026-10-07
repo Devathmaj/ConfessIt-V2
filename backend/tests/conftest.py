@@ -309,4 +309,81 @@ def clear_db():
     with test_db.engine.begin() as connection:
         tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
         connection.exec_driver_sql(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
+    # Admin list totals are cached briefly (30s) beside each page. Truncating
+    # every table without clearing that cache leaves the next test reading the
+    # previous test's total, so the cache is part of the state that must not
+    # leak either.
+    try:
+        from app.services.admin_service import _count_cache as _admin_count_cache
+
+        _admin_count_cache.clear()
+    except Exception:
+        pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_content_safety_safe(monkeypatch):
+    """Safe Content Safety default so existing creation paths keep working.
+
+    Batch 1 moderation runs before persistence and fails closed on missing
+    config or provider errors. Without this, every pre-existing test that
+    posts via ``ConfessionService.create_confession`` would try the real
+    Azure endpoint. This provides dummy config + a safe (all-zero) analysis
+    so those paths behave as low-severity by default without real credentials.
+
+    Validation is preserved: the mock still refuses missing endpoint/key, so
+    the missing-configuration operational error remains testable by clearing
+    the settings. Tests needing other severities or failures override this
+    mock explicitly with their own ``monkeypatch.setattr``.
+    """
+    monkeypatch.setattr(settings, "CONTENT_SAFETY_ENDPOINT", "https://test-content-safety.example.com")
+    monkeypatch.setattr(settings, "CONTENT_SAFETY_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "CONTENT_SAFETY_REGION", "test-region")
+    monkeypatch.setattr(settings, "CONTENT_SAFETY_TIMEOUT_SECONDS", 5.0)
+    from app.services import content_safety_service as _css
+
+    def _safe(text, *, config=None):
+        cfg = config if config is not None else _css.config_from_settings(settings)
+        if not cfg.endpoint or not str(cfg.endpoint).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_ENDPOINT is missing.",
+                code="missing_config",
+            )
+        if not cfg.api_key or not str(cfg.api_key).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_API_KEY is missing.",
+                code="missing_config",
+            )
+        if len(text or "") > _css.TEXT_MAX_LENGTH:
+            raise _css.ContentSafetyError(
+                "Confession text exceeds the moderation limit.",
+                code="invalid_input",
+            )
+        return {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0}
+
+    monkeypatch.setattr(_css, "analyze_confession_text", _safe)
+    monkeypatch.setattr(_css, "analyze_text", _safe)
+    # Central dispatcher also mocked safe so features calling moderate_content
+    # / moderate_confession_text (no local config) stay offline in tests.
+    # Validation preserved: missing endpoint/key still raises missing_config.
+    def _safe_decision(content_type, text, *, config=None):
+        cfg = config if config is not None else _css.config_from_settings(settings)
+        if not cfg.endpoint or not str(cfg.endpoint).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_ENDPOINT is missing.",
+                code="missing_config",
+            )
+        if not cfg.api_key or not str(cfg.api_key).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_API_KEY is missing.",
+                code="missing_config",
+            )
+        scores = _safe(text, config=cfg)
+        return _css._decision_for(content_type, scores)
+
+    def _safe_confession(text, *, config=None):
+        return _safe_decision(_css.CONTENT_CONFESSION, text, config=config)
+
+    monkeypatch.setattr(_css, "moderate_content", _safe_decision)
+    monkeypatch.setattr(_css, "moderate_confession_text", _safe_confession)

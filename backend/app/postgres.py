@@ -245,6 +245,9 @@ class PostgresClient:
         # Trivia Drop's single-active-question rule, for the same reason: the
         # table is new, but the index is the backstop behind the advisory lock.
         self.apply_trivia_drop_convergence()
+        # Automated confession moderation (Batch 1): system-actor reports reuse
+        # the reports table with a nullable reporter and a source column.
+        self.apply_report_source_convergence()
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.
@@ -918,6 +921,79 @@ class PostgresClient:
                 )
             )
             logger.info("Trivia Drop session lifecycle converged")
+
+    def apply_report_source_convergence(self) -> None:
+        """Converge the reports table for automated moderation (Batch 1).
+
+        Automated confession reports reuse the same table as manual ones with
+        a system actor: ``reported_by_id`` becomes nullable (NULL means no
+        users row behind the report) and ``source`` discriminates
+        ``"user"`` from ``"azure_content_safety"``. History backfills to
+        ``"user"`` via the column default; ``apply_missing_columns`` adds the
+        column itself, this step relaxes nullability and installs the
+        idempotency backstop.
+
+        The partial unique index allows at most one automated report per
+        confession while leaving manual reports untouched: multiple users may
+        still report the same confession, each under their own reporter id.
+        Idempotent and safe to re-run on every boot.
+        """
+        try:
+            with self.engine.begin() as connection:
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": "reports"},
+                    )
+                }
+                if not present:
+                    return
+                # Backfill + relax: existing manual rows always carry a reporter,
+                # new automated rows carry NULL. Fresh tables created from the
+                # models are already nullable; this only affects databases that
+                # predate the change.
+                if "source" in present:
+                    connection.execute(
+                        text(
+                            "UPDATE \"reports\" SET \"source\" = 'user' "
+                            "WHERE \"source\" IS NULL"
+                        )
+                    )
+                if "reported_by_id" in present:
+                    is_nullable = connection.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = 'reports' "
+                            "AND column_name = 'reported_by_id'"
+                        )
+                    ).scalar()
+                    if is_nullable == "NO":
+                        connection.execute(
+                            text(
+                                "ALTER TABLE \"reports\" "
+                                "ALTER COLUMN \"reported_by_id\" DROP NOT NULL"
+                            )
+                        )
+                        logger.info(
+                            "Relaxed reports.reported_by_id to NULL for system-actor reports"
+                        )
+                # One automated report per confession. Manual reports keep their
+                # own (confession_id, reported_by_id) uniqueness.
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        '"uq_reports_confession_automated" '
+                        'ON "reports" ("confession_id") '
+                        "WHERE source = 'azure_content_safety'"
+                    )
+                )
+                logger.info("Report source lifecycle converged")
+        except Exception as e:
+            logger.warning("Skipping report source convergence: %s", e)
 
     def close(self) -> None:
         self.engine.dispose()

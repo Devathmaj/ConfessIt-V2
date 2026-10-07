@@ -144,9 +144,13 @@ class ConfessionService:
         self.sessions = self.client.sessions
         self.REACTION_TYPES = ["heart", "haha", "whoa", "heartbreak"]
 
-    def _reporter_ids(self, target_id: str) -> List[str]:
+    def _reporter_ids(self, target_id: str) -> List[Any]:
+        # Includes automated system reports (reported_by_id IS NULL) in the
+        # count: they are real report rows. ``None`` never matches a caller id,
+        # so ``has_reported`` stays False for every participant while
+        # ``report_count`` (len of this list) still counts the automated row.
         with self.sessions() as session:
-            return [str(report.reported_by_id) for report in session.scalars(select(ReportRecord).where(or_(
+            return [report.reported_by_id for report in session.scalars(select(ReportRecord).where(or_(
                 ReportRecord.confession_id == str(target_id), ReportRecord.comment_id == str(target_id)
             ))).all()]
 
@@ -183,37 +187,308 @@ class ConfessionService:
         # is not addressed to anyone. Both spellings mean the same thing, so both are NULL.
         confession_dict = confession_data.model_dump()
         now = datetime.datetime.now(datetime.timezone.utc)
+        confession_body_raw = confession_dict["body"]
+
+        # Central moderation: one call handles config + analyze + per-item
+        # policy. This path carries no local endpoint/key/timeout handling and
+        # never branches on raw severities -- only on the decision flags.
+        # Runs BEFORE persistence and BEFORE embedding; failures are unknown,
+        # never safe, so abort before any row exists. Never log body/secrets.
+        from .content_safety_service import (
+            AUTOMATED_REMOVED_BY,
+            AUTOMATED_REPORTER_DISPLAY_NAME,
+            AUTOMATED_SOURCE,
+            CONTENT_CONFESSION,
+            ContentSafetyError,
+            moderate_content,
+            moderation_error_to_http,
+        )
+
+        try:
+            decision = moderate_content(CONTENT_CONFESSION, confession_body_raw)
+        except ContentSafetyError as exc:
+            logger.error(
+                "Content Safety moderation failed (%s); aborting confession creation",
+                exc.code,
+            )
+            raise moderation_error_to_http(exc, content_type=CONTENT_CONFESSION) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Content Safety moderation failed unexpectedly: %s",
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Content moderation is temporarily unavailable. Please retry shortly.",
+            ) from exc
+
+        cs_scores = decision.scores
+        cs_max = decision.max_severity
+        cs_action = decision.action
 
         # One confession per participant every CONFESSION_COOLDOWN_HOURS. Read-then-write
         # would leave a window in which two simultaneous posts both see "eligible" and both
         # land, so the cooldown is claimed by the same conditional UPDATE that
         # _consume_matchmaking_attempt uses: PostgreSQL re-evaluates the predicate against
         # the committed row under the lock, so only one caller sees a row to update.
-        with self.sessions.begin() as session:
-            if not _consume_confession_attempt(session, user_id, now):
-                raise _cooldown_rejection(
-                    _seconds_until_confession_eligible(session, user_id, now)
+        #
+        # Creation, automated reporting and hiding commit atomically: the
+        # high-severity row is born hidden (removed_at set in the same INSERT),
+        # so it is never observable in a feed between a visible insert and a
+        # later hide. Report/hide failures roll back the whole confession rather
+        # than leaving a visible confession that should have been hidden or a
+        # hidden confession with no audit trail.
+        automated_report_id: Optional[str] = None
+        try:
+            with self.sessions.begin() as session:
+                if not _consume_confession_attempt(session, user_id, now):
+                    raise _cooldown_rejection(
+                        _seconds_until_confession_eligible(session, user_id, now)
+                    )
+                row = ConfessionRecord(
+                    body=confession_dict["body"], recipient_name=confession_dict.get("recipient_name"),
+                    anonymous=confession_dict["anonymous"], comments_enabled=confession_dict["comments_enabled"],
+                    created_at=now, author_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
                 )
-            row = ConfessionRecord(
-                body=confession_dict["body"], recipient_name=confession_dict.get("recipient_name"),
-                anonymous=confession_dict["anonymous"], comments_enabled=confession_dict["comments_enabled"],
-                created_at=now, author_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
+                if decision.should_hide:
+                    # Born hidden: the same removed_at write the review-screen
+                    # hide performs, so every participant read (removed_at IS NULL)
+                    # excludes it from the first commit. No second flag.
+                    row.removed_at = now
+                    row.removed_by_regno = AUTOMATED_REMOVED_BY
+                session.add(row)
+                session.flush()
+                confession_id = str(row.id)
+                confession_body = row.body
+                confession_recipient = row.recipient_name
+                if decision.should_report:
+                    # Idempotent: exactly one automated report per confession.
+                    # A new confession cannot already have one, but the check
+                    # makes retries safe and the partial unique index backstops
+                    # races. Manual reports (source="user") are untouched.
+                    existing = session.scalar(
+                        select(ReportRecord.id).where(
+                            ReportRecord.confession_id == str(confession_id),
+                            ReportRecord.source == AUTOMATED_SOURCE,
+                        ).limit(1)
+                    )
+                    if existing is None:
+                        reason = decision.report_reason
+                        report_row = ReportRecord(
+                            confession_id=str(confession_id),
+                            reported_by_id=None,
+                            reported_by_name=AUTOMATED_REPORTER_DISPLAY_NAME,
+                            reason=reason,
+                            created_at=now,
+                            source=AUTOMATED_SOURCE,
+                        )
+                        session.add(report_row)
+                        session.flush()
+                        automated_report_id = str(report_row.id)
+                        target = session.get(ConfessionRecord, str(confession_id))
+                        if target is not None:
+                            target.report_count = int(target.report_count or 0) + 1
+                        record_report_filed(
+                            session, kind=CONFESSION, author_user_id=user_id,
+                        )
+                        if decision.should_hide:
+                            # Same authoritative counter the manual hide writes.
+                            # Only on this transition; re-runs find existing and
+                            # increment nothing.
+                            from .report_counters import record_removal as _record_removal
+
+                            _record_removal(
+                                session, kind=CONFESSION, author_user_id=user_id
+                            )
+                    else:
+                        automated_report_id = str(existing)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Report/hide bookkeeping failed after a successful moderation
+            # result: never silently treat as successful. The transaction above
+            # rolled back, so no partial visible confession survives; surface a
+            # retryable error with the failure in the logs (no body/secrets).
+            logger.error(
+                "Automated moderation bookkeeping failed for new confession: %s",
+                type(exc).__name__,
             )
-            session.add(row)
-            session.flush()
-            confession_id = str(row.id)
-            confession_body = row.body
-            confession_recipient = row.recipient_name
-        logger.info(f"Created confession {confession_id} for user {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not complete moderation for this confession.",
+            ) from exc
+
+        logger.info(
+            f"Created confession {confession_id} for user {user_id} "
+            f"(content-safety max={cs_max} action={cs_action} "
+            f"scores Hate={int(cs_scores.get('Hate', 0) or 0)} "
+            f"SelfHarm={int(cs_scores.get('SelfHarm', 0) or 0)} "
+            f"Sexual={int(cs_scores.get('Sexual', 0) or 0)} "
+            f"Violence={int(cs_scores.get('Violence', 0) or 0)})"
+        )
+        # Best-effort staff/author notices: failures never unwind the committed
+        # moderation outcome (report + hidden state are already durable).
+        if automated_report_id is not None:
+            try:
+                from .staff_notification_service import notify_report_filed
+
+                notify_report_filed(
+                    self.client, kind="confession", report_id=automated_report_id,
+                    summary=(
+                        "A confession was automatically reported by "
+                        "Azure Content Safety. Open Reports review to rule on it."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to queue staff notification for automated report %s",
+                    automated_report_id,
+                )
+            if decision.should_hide:
+                try:
+                    # Same neutral copy the direct-hide path sends: no policy
+                    # is cited because no human ruled on a report.
+                    from ..db_models import UserRecord as _UserRecord
+
+                    with self.sessions() as _s:
+                        _regno = _s.scalar(
+                            select(_UserRecord.regno).where(
+                                _UserRecord.id == str(user_id)
+                            )
+                        )
+                    if _regno:
+                        from .notification_service import (
+                            create_notification_service as _notify,
+                        )
+
+                        _notify(
+                            recipient_regno=str(_regno),
+                            heading="Confession removed",
+                            body="We removed your confession from ConfessIt.",
+                            db=self.client,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to queue removal notice for confession %s",
+                        confession_id,
+                    )
         # Exactly one embedding for this eligible confession, generated
-        # synchronously so no worker infrastructure is needed. A provider failure
-        # never fails the confession itself: the post stays and is simply not
-        # searchable until... (no backfill by design) -- it stays unsearchable.
+        # synchronously so no worker infrastructure is needed. Runs for every
+        # successfully moderated confession, including severity 4 and 6:
+        # moderation determines reporting/visibility, never whether the
+        # embedding is generated. A provider failure never fails the confession
+        # itself: the post stays and is simply not searchable (no backfill).
         # Comments, likes, and reports never generate embeddings (only this path).
+        # An embedding retry never creates another report (reports live above).
         self._generate_embedding_for_confession(
             confession_id, confession_body, confession_recipient
         )
-        return self.get_confession(confession_id, user_id)
+        visible = self.get_confession(confession_id, user_id)
+        if visible is not None:
+            return visible
+        if decision.should_hide:
+            # The confession is hidden from participant reads by design
+            # (get_confession returns None for removed rows). The creation
+            # response still answers with the created post so the call does not
+            # become a 500; feeds, searches and later reads keep excluding it.
+            return self._get_created_hidden_confession(confession_id, user_id)
+        return visible
+
+    def _get_created_hidden_confession(self, confession_id: str, user_id: Optional[str]):
+        """Build the creation response for a just-hidden confession.
+
+        Participant reads exclude removed rows, so ``get_confession`` answers
+        None here. Returning None would turn creation into a response-validation
+        500. This builds the same participant-scoped shape from the stored row
+        without the removed filter, used only for the creation response;
+        subsequent feeds, searches and single reads keep excluding it.
+        """
+        with self.sessions() as session:
+            row = session.get(ConfessionRecord, str(confession_id))
+            if row is None:
+                return None
+            payload = self._confession_payload(row)
+            # Participant-scoped: hide other reporters, keep the count (which
+            # includes the automated report). The caller did not file it, so
+            # has_reported is always False here.
+            with self.sessions() as inner:
+                reporter_ids = [
+                    r.reported_by_id
+                    for r in inner.scalars(
+                        select(ReportRecord).where(
+                            ReportRecord.confession_id == str(confession_id)
+                        )
+                    ).all()
+                ]
+            payload["has_reported"] = False
+            payload["reported_by"] = []
+            payload["report_count"] = len(reporter_ids)
+            payload["user_reaction"] = None
+            payload["reactions"] = {}
+            payload["comments"] = []
+            try:
+                author = session.get(UserRecord, str(payload.get("author_id")))
+                if author is not None:
+                    info = UserInfo(
+                        id=str(author.id), name=author.name or "Anonymous User",
+                        profile_picture_url=_profile_picture_url(author),
+                    )
+                    if payload.get("anonymous"):
+                        info.profile_picture_url = None
+                    payload["user_info"] = info.model_dump()
+            except Exception:
+                pass
+            return Confession(**payload)
+
+    def create_automated_content_safety_report(
+        self, confession_id: str, scores: Dict[str, int], maximum: int
+    ) -> Optional[str]:
+        """Idempotent helper for tests/retries: one automated report per confession.
+
+        Returns the report id, existing or newly created. Never creates a
+        duplicate automated report for the same confession. Manual reports are
+        untouched. Used by create_confession; exposed so retry semantics are
+        directly testable without re-posting a confession.
+        """
+        from .content_safety_service import (
+            AUTOMATED_REPORTER_DISPLAY_NAME,
+            AUTOMATED_SOURCE,
+            build_report_reason,
+        )
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+        with self.sessions.begin() as session:
+            target = session.get(ConfessionRecord, str(confession_id))
+            if target is None:
+                return None
+            existing = session.scalar(
+                select(ReportRecord.id).where(
+                    ReportRecord.confession_id == str(confession_id),
+                    ReportRecord.source == AUTOMATED_SOURCE,
+                ).limit(1)
+            )
+            if existing is not None:
+                return str(existing)
+            reason = build_report_reason(scores, maximum)
+            row = ReportRecord(
+                confession_id=str(confession_id),
+                reported_by_id=None,
+                reported_by_name=AUTOMATED_REPORTER_DISPLAY_NAME,
+                reason=reason,
+                created_at=now,
+                source=AUTOMATED_SOURCE,
+            )
+            session.add(row)
+            session.flush()
+            report_id = str(row.id)
+            target.report_count = int(target.report_count or 0) + 1
+            record_report_filed(
+                session, kind=CONFESSION, author_user_id=str(target.author_id),
+            )
+        return report_id
 
     def _generate_embedding_for_confession(
         self, confession_id: str, body: Any, recipient_name: Any = None

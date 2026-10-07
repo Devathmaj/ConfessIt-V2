@@ -632,6 +632,16 @@ class ReportRecord(Base):
     for a comment it is ``confession_comments.user_id`` -- both foreign keys that cascade, and
     both one join away in a table the queue already reads to show the content. A denormalised
     column could only ever disagree with its source.
+
+    Automated moderation (Batch 1: Azure AI Content Safety for confessions) reuses this
+    same table rather than a parallel system. ``source`` discriminates the actor:
+    ``"user"`` for manual participant reports, ``"azure_content_safety"`` for automated
+    confession reports. Automated rows carry ``reported_by_id IS NULL`` and
+    ``reported_by_name`` of exactly ``"Azure Content Safety"`` -- there is no users row
+    behind them, so they are never attributed to the author, the recipient or staff.
+    ``reported_by_id`` is therefore nullable; pre-existing manual rows always carry a
+    value. At most one automated report exists per confession, enforced by the partial
+    unique index ``uq_reports_confession_automated`` (see PostgresClient).
     """
 
     __tablename__ = "reports"
@@ -644,7 +654,7 @@ class ReportRecord(Base):
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     confession_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), ForeignKey("confessions.id", ondelete="CASCADE"), index=True)
     comment_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), ForeignKey("confession_comments.id", ondelete="CASCADE"), index=True)
-    reported_by_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    reported_by_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
     reported_by_name: Mapped[str] = mapped_column(String(160))
     reason: Mapped[str] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -653,6 +663,9 @@ class ReportRecord(Base):
     # No foreign key: the value names an account in ``moderator`` or ``admin``, which a
     # foreign key to ``users`` could never point at.
     reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # Discriminates manual ("user") from automated ("azure_content_safety") reports.
+    # Added for Batch 1 confession moderation; backfills to "user" for history.
+    source: Mapped[str] = mapped_column(String(32), default="user", server_default=text("'user'"), index=True)
 
 
 class LoginTokenRecord(Base):
