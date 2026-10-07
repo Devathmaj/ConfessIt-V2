@@ -15,7 +15,7 @@ import {
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
-import { getAdminConfessions, hideAdminComment, hideAdminConfession, searchAdminConfessions, type HybridSemanticStatus } from '@/services/api';
+import { getAdminConfessions, hideAdminComment, hideAdminConfession, searchAdminConfessions, unhideAdminComment, unhideAdminConfession, type HybridSemanticStatus } from '@/services/api';
 import { toast } from 'sonner';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
@@ -118,6 +118,12 @@ interface AdminConfession {
 
 type ConfessionSortOption = 'recent' | 'reports' | 'comments' | 'reactions';
 type ConfessionFilterOption = 'all' | 'reported' | 'anonymous' | 'with-comments';
+
+/** System-hidden marker (removed_by_regno) vs human moderator hides. */
+const AZURE_REMOVED_BY = 'azure-content-safety';
+const isAzureRemoved = (removedBy: string | null | undefined) => removedBy === AZURE_REMOVED_BY;
+const removedByLabel = (removedBy: string | null | undefined) =>
+  isAzureRemoved(removedBy) ? 'Azure Content Safety' : removedBy;
 
 /**
  * How many confessions one read returns. Rows here are heavy -- every confession carries
@@ -281,6 +287,10 @@ export const ConfessionsAdmin = () => {
   // loaded. One slot rather than a per-comment `useState`, because the dialog has to name the
   // comment actually being hidden and there is exactly one dialog.
   const [pendingCommentId, setPendingCommentId] = useState<string | null>(null);
+  // Restore targets for Azure-hidden rows only; manual hides never offer restore.
+  const [pendingRestoreConfessionId, setPendingRestoreConfessionId] = useState<string | null>(null);
+  const [pendingRestoreCommentId, setPendingRestoreCommentId] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   // Set while the comment request is in flight, so a second confirm cannot fire for the same
   // comment before the first has answered. A failed request clears it in `finally`; otherwise
   // one failure would leave the dialog permanently disabled.
@@ -743,6 +753,77 @@ export const ConfessionsAdmin = () => {
     }
   };
 
+  const confirmRestoreConfession = async () => {
+    if (!pendingRestoreConfessionId) return;
+    const confessionId = pendingRestoreConfessionId;
+    setRestoring(true);
+    try {
+      await unhideAdminConfession(confessionId);
+      if (!serverDriven) {
+        setLegacyRows((prev) =>
+          prev
+            ? prev.map((item) =>
+                item.id === confessionId
+                  ? { ...item, content_removed: false, removed_at: null, removed_by_regno: null }
+                  : item
+              )
+            : prev
+        );
+      } else {
+        await refreshWindow();
+      }
+      toast.success('Confession restored to public view.');
+    } catch (error: any) {
+      if (error?.response?.status === 409) {
+        toast.error('This confession was hidden by a moderator and cannot be restored here.');
+      } else {
+        toast.error('Could not restore the confession.');
+      }
+    } finally {
+      setPendingRestoreConfessionId(null);
+      setRestoring(false);
+    }
+  };
+
+  const confirmRestoreComment = async () => {
+    if (!pendingRestoreCommentId) return;
+    const commentId = pendingRestoreCommentId;
+    setRestoring(true);
+    try {
+      await unhideAdminComment(commentId);
+      if (!serverDriven) {
+        setLegacyRows((prev) =>
+          prev
+            ? prev.map((item) => {
+                if (!item.comments.some((comment) => comment.id === commentId)) return item;
+                return {
+                  ...item,
+                  comment_count: (item.comment_count ?? 0) + 1,
+                  comments: item.comments.map((comment) =>
+                    comment.id === commentId
+                      ? { ...comment, content_removed: false, removed_at: null, removed_by_regno: null }
+                      : comment
+                  ),
+                };
+              })
+            : prev
+        );
+      } else {
+        await refreshWindow();
+      }
+      toast.success('Comment restored to public view.');
+    } catch (error: any) {
+      if (error?.response?.status === 409) {
+        toast.error('This comment was hidden by a moderator and cannot be restored here.');
+      } else {
+        toast.error('Could not restore the comment.');
+      }
+    } finally {
+      setPendingRestoreCommentId(null);
+      setRestoring(false);
+    }
+  };
+
   const toggleSenderVisibility = (confessionId: string) => {
     setVisibleSenders((prev) => ({
       ...prev,
@@ -1180,9 +1261,13 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                   {comment.content_removed ? (
                                     <p className="flex items-center gap-2 text-xs text-muted-foreground">
                                       <EyeOff className="h-3.5 w-3.5" />
-                                      Already hidden
+                                      {isAzureRemoved(comment.removed_by_regno)
+                                        ? 'Content Removed by Azure Content Safety'
+                                        : 'Already hidden'}
                                       {comment.removed_at ? ` on ${formatTimestamp(comment.removed_at)}` : ''}
-                                      {comment.removed_by_regno ? ` by ${comment.removed_by_regno}` : ''}.
+                                      {comment.removed_by_regno && !isAzureRemoved(comment.removed_by_regno)
+                                        ? ` by ${comment.removed_by_regno}`
+                                        : ''}.
                                     </p>
                                   ) : (
                                     <span />
@@ -1197,6 +1282,15 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
                                       <EyeOff className="mr-2 h-3.5 w-3.5" /> Hide comment
                                     </Button>
                                   )}
+                                  {comment.content_removed && isAzureRemoved(comment.removed_by_regno) && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setPendingRestoreCommentId(comment.id)}
+                                    >
+                                      <Eye className="mr-2 h-3.5 w-3.5" /> Restore comment
+                                    </Button>
+                                  )}
                                 </div>
                               </AccordionContent>
                             </AccordionItem>
@@ -1207,15 +1301,31 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                       {confession.content_removed ? (
-                        // Not a disabled button. A control the reviewer can see but cannot use
-                        // invites a second click that does nothing, and a screen full of greyed-out
-                        // controls is harder to scan than one that simply says what happened.
-                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <EyeOff className="h-4 w-4" />
-                          Already hidden from public view
-                          {confession.removed_at ? ` on ${formatTimestamp(confession.removed_at)}` : ''}
-                          {confession.removed_by_regno ? ` by ${confession.removed_by_regno}` : ''}.
-                        </p>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <EyeOff className="h-4 w-4" />
+                            {isAzureRemoved(confession.removed_by_regno)
+                              ? 'Content Removed by Azure Content Safety'
+                              : 'Already hidden from public view'}
+                            {confession.removed_at ? ` on ${formatTimestamp(confession.removed_at)}` : ''}
+                            {confession.removed_by_regno && !isAzureRemoved(confession.removed_by_regno)
+                              ? ` by ${removedByLabel(confession.removed_by_regno)}`
+                              : ''}.
+                          </p>
+                          {isAzureRemoved(confession.removed_by_regno) ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setPendingRestoreConfessionId(confession.id)}
+                            >
+                              <Eye className="mr-2 h-4 w-4" /> Restore confession
+                            </Button>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              Hidden by a moderator and cannot be restored here.
+                            </p>
+                          )}
+                        </div>
                       ) : (
                         <Button
                           variant="outline"
@@ -1260,9 +1370,9 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
           <AlertDialogHeader>
             <AlertDialogTitle>Hide this confession?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will hide the confession from public view and notify its author. It cannot be
-              unhidden -- there is no way to bring a hidden confession back. The confession stays on
-              this screen as a record of the decision.
+              This will hide the confession from public view and notify its author. A confession
+              hidden here cannot be unhidden. Only content hidden by Azure Content Safety can be
+              restored. The confession stays on this screen as a record of the decision.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1289,9 +1399,9 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
             <AlertDialogTitle>Hide this comment?</AlertDialogTitle>
             <AlertDialogDescription>
               This will hide the comment from its confession and notify the person who wrote it.
-              The confession itself stays up. It cannot be unhidden -- there is no way to bring a
-              hidden comment back. The comment stays on this screen as a record of the decision,
-              and any reports filed against it survive with it.
+              The confession itself stays up. A comment hidden here cannot be unhidden. Only
+              content hidden by Azure Content Safety can be restored. The comment stays on this
+              screen as a record of the decision, and any reports filed against it survive with it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1309,6 +1419,62 @@ Submitted {formatTimestamp(confession.created_at)} &middot; Comments {commentTot
               className="bg-destructive hover:bg-destructive/90"
             >
               {hidingComment ? 'Working...' : 'Hide comment'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={pendingRestoreConfessionId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRestoreConfessionId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore this confession?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Users will now be able to see this confession.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={restoring}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={restoring}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmRestoreConfession();
+              }}
+            >
+              {restoring ? 'Working...' : 'Restore confession'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={pendingRestoreCommentId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRestoreCommentId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore this comment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Users will now be able to see this comment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={restoring}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={restoring}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmRestoreComment();
+              }}
+            >
+              {restoring ? 'Working...' : 'Restore comment'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

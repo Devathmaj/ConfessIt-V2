@@ -702,6 +702,114 @@ def hide_comment(
     }
 
 
+def _is_automated_removal(removed_by_regno: Optional[str]) -> bool:
+    """Whether this hidden row was taken down by Azure Content Safety."""
+    try:
+        from .content_safety_service import AUTOMATED_REMOVED_BY
+    except Exception:
+        AUTOMATED_REMOVED_BY = "azure-content-safety"
+    return str(removed_by_regno or "") == str(AUTOMATED_REMOVED_BY)
+
+
+def unhide_confession(
+    db: Database,
+    confession_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden confession to public view.
+
+    Only rows with ``removed_by_regno`` marking the automated system may be
+    restored. Anything hidden by an admin/moderator (human regno) is refused
+    with 409 so a second human cannot undo a colleague's decision here, and
+    visible rows answer ``already_visible`` instead of erroring on a double
+    click. Counters are left intact (the removal happened); reports stay for
+    audit. No author notice: restoration is a reviewer override, not a ruling.
+    """
+    if not is_valid_id(confession_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
+
+    with db.sessions.begin() as session:
+        confession = session.get(ConfessionRecord, str(confession_id))
+        if confession is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Confession not found")
+        if confession.removed_at is None:
+            return {
+                "id": str(confession_id),
+                "content_removed": False,
+                "already_visible": True,
+                "removed_at": None,
+                "removed_by_regno": None,
+            }
+        if not _is_automated_removal(confession.removed_by_regno):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This confession was hidden by a moderator and cannot be restored here.",
+            )
+        confession.removed_at = None
+        confession.removed_by_regno = None
+
+    logger.info(f"Confession {confession_id} restored by {reviewer_regno}")
+    return {
+        "id": str(confession_id),
+        "content_removed": False,
+        "already_visible": False,
+        "removed_at": None,
+        "removed_by_regno": None,
+    }
+
+
+def unhide_comment(
+    db: Database,
+    comment_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden comment to public view.
+
+    Same gate as :func:`unhide_confession`: only system-hidden rows restore.
+    The parent ``comment_count`` is incremented back (guarded, like the hide
+    decrement) so the feed stops hiding a comment it can now open. Counters
+    and reports stay for audit.
+    """
+    if not is_valid_id(comment_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid comment id")
+
+    confession_id: Optional[str] = None
+    with db.sessions.begin() as session:
+        comment = session.get(ConfessionCommentRecord, str(comment_id))
+        if comment is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+        if comment.removed_at is None:
+            return {
+                "id": str(comment_id),
+                "confession_id": str(comment.confession_id),
+                "content_removed": False,
+                "already_visible": True,
+                "removed_at": None,
+                "removed_by_regno": None,
+            }
+        if not _is_automated_removal(comment.removed_by_regno):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This comment was hidden by a moderator and cannot be restored here.",
+            )
+        confession_id = str(comment.confession_id)
+        comment.removed_at = None
+        comment.removed_by_regno = None
+        parent = session.get(ConfessionRecord, confession_id)
+        if parent is not None:
+            parent.comment_count = int(parent.comment_count or 0) + 1
+
+    logger.info(f"Comment {comment_id} restored by {reviewer_regno}")
+    return {
+        "id": str(comment_id),
+        "confession_id": confession_id,
+        "content_removed": False,
+        "already_visible": False,
+        "removed_at": None,
+        "removed_by_regno": None,
+    }
+
+
 def pending_report_totals(db: Database) -> Dict[str, int]:
     """How many reports are still awaiting a decision, per queue.
 

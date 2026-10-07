@@ -6,6 +6,8 @@ import {
   updateAdminConfessionReportStatus,
   updateAdminLoveNoteReportStatus,
   updateAdminMessageReportStatus,
+  unhideAdminComment,
+  unhideAdminConfession,
 } from '@/services/api';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Badge } from '@/components/ui/badge';
@@ -36,7 +38,7 @@ import { CAPABILITIES } from '@/lib/capabilities';
 import { authorLabel, partyName, partyRef, type Person } from '@/lib/reportAuthors';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import { toast } from 'sonner';
-import { ChevronDown, Flag, MessageSquare, MessageCircleHeart, Search, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react';
+import { ChevronDown, Eye, Flag, MessageSquare, MessageCircleHeart, Search, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react';
 
 /** Every state a report row can be in, including the one only history produces.
  *
@@ -207,12 +209,20 @@ const RESOLUTION_COPY: Record<Resolution, { title: string }> = {
   removed: { title: 'This will remove the reported content for good.' },
 };
 
-function statusBadge(status: ReportStatus) {
+function statusBadge(status: ReportStatus, reporterName?: string | null) {
   if (status === 'pending') return <Badge variant="secondary">Awaiting review</Badge>;
   if (status === 'reviewed') return <Badge variant="outline">Dismissed</Badge>;
-  if (status === 'removed') return <Badge variant="destructive">Content removed</Badge>;
+  if (status === 'removed') {
+    if (reporterName === 'Azure Content Safety') {
+      return <Badge variant="destructive">Content removed by Azure Content Safety</Badge>;
+    }
+    return <Badge variant="destructive">Content removed</Badge>;
+  }
   return <Badge variant="outline">Dismissed</Badge>;
 }
+
+const displayReviewer = (regno: string | null | undefined) =>
+  regno === 'azure-content-safety' ? 'Azure Content Safety' : regno;
 
 /** A one-line excerpt of a field, for the collapsed row.
  *
@@ -374,6 +384,17 @@ export const ReportsReview = () => {
   // Whether the confirmed request is in flight. Without it the confirm button stays live for
   // the whole round trip and a second click sends a second request for the same report.
   const [submitting, setSubmitting] = useState(false);
+
+  // Restore target for Azure-hidden rows only; manual hides never offer restore.
+  const [pendingRestore, setPendingRestore] = useState<{
+    reportId: string;
+    targetType: 'confession' | 'comment';
+    targetId: string;
+  } | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  const AZURE_REMOVED_BY = 'azure-content-safety';
+  const isAzureRemoved = (removedBy: string | null | undefined) => removedBy === AZURE_REMOVED_BY;
 
   // Which report card is open, as `queue:reportId`, or null when all are collapsed. Cards are
   // collapsed by default: the queue is read as a list first and opened one report at a time.
@@ -758,6 +779,30 @@ export const ReportsReview = () => {
       </div>
     ) : null;
 
+  const handleRestore = async () => {
+    if (!pendingRestore) return;
+    const { targetType, targetId } = pendingRestore;
+    setRestoring(true);
+    try {
+      if (targetType === 'comment') {
+        await unhideAdminComment(targetId);
+      } else {
+        await unhideAdminConfession(targetId);
+      }
+      await refreshQueue('confessions');
+      toast.success('Content restored to public view.');
+    } catch (error: any) {
+      if (error?.response?.status === 409) {
+        toast.error('This content was hidden by a moderator and cannot be restored here.');
+      } else {
+        toast.error('Could not restore the content.');
+      }
+    } finally {
+      setPendingRestore(null);
+      setRestoring(false);
+    }
+  };
+
   const renderFooter = (
     reportId: string,
     queue: Queue['key'],
@@ -767,6 +812,7 @@ export const ReportsReview = () => {
     reporterRef: string,
     targetRef: string,
     contentRemoved: boolean,
+    restore?: { targetType: 'confession' | 'comment'; targetId: string; removedBy: string | null | undefined } | null,
     children?: React.ReactNode
   ) => (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -781,12 +827,24 @@ export const ReportsReview = () => {
             longer exists, and a moderator looking at it now needs to know that. */}
         {contentRemoved ? (
           <p className="text-xs font-medium text-destructive">
-            This content has been removed from every participant-facing view. The record of it
-            is kept for auditing.
+            {restore && isAzureRemoved(restore.removedBy)
+              ? 'Content Removed by Azure Content Safety. The record of it is kept for auditing.'
+              : 'This content has been removed from every participant-facing view. The record of it is kept for auditing.'}
           </p>
         ) : null}
       </div>
-      {status === 'pending' ? renderCloseButtons(reportId, queue) : null}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {status === 'pending' ? renderCloseButtons(reportId, queue) : null}
+        {restore && contentRemoved && isAzureRemoved(restore.removedBy) ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPendingRestore({ reportId, targetType: restore.targetType, targetId: restore.targetId })}
+          >
+            <Eye className="mr-2 h-4 w-4" /> Restore content
+          </Button>
+        ) : null}
+      </div>
       {children}
     </div>
   );
@@ -922,7 +980,7 @@ export const ReportsReview = () => {
                     open={isExpanded('confessions', report.id)}
                     onToggle={() => toggleExpanded('confessions', report.id)}
                     title={`${isComment ? 'Comment' : 'Confession'} reported by ${partyName(report.reporter)}`}
-                    status={statusBadge(report.status)}
+                    status={statusBadge(report.status, report.reporter?.name)}
                     reason={report.reason}
                     content={report.content}
                     meta={
@@ -945,10 +1003,15 @@ export const ReportsReview = () => {
                       'confessions',
                       report.status,
                       report.reviewed_at,
-                      report.reviewed_by_regno,
+                      displayReviewer(report.reviewed_by_regno),
                       partyRef(report.reporter),
                       report.target_id,
-                      report.content_removed
+                      report.content_removed,
+                      {
+                        targetType: isComment ? 'comment' : 'confession',
+                        targetId: report.target_id,
+                        removedBy: report.removed_by_regno,
+                      }
                     )}
                   >
                     <div className="rounded-2xl border border-border bg-background/60 p-4">
@@ -1113,7 +1176,7 @@ export const ReportsReview = () => {
                     open={isExpanded('messages', report.id)}
                     onToggle={() => toggleExpanded('messages', report.id)}
                     title={`Message reported by ${partyName(report.reporter)}`}
-                    status={statusBadge(report.status)}
+                    status={statusBadge(report.status, report.reporter?.name)}
                     reason={report.reason}
                     content={report.body}
                     meta={
@@ -1132,7 +1195,7 @@ export const ReportsReview = () => {
                       'messages',
                       report.status,
                       report.reviewed_at,
-                      report.reviewed_by_regno,
+                      displayReviewer(report.reviewed_by_regno),
                       partyRef(report.reporter),
                       report.message_id,
                       report.content_removed
@@ -1251,6 +1314,34 @@ export const ReportsReview = () => {
                 : pendingDecision
                   ? RESOLUTION_LABELS[pendingDecision.status].verb
                   : ''}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={pendingRestore !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRestore(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore this content?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Users will now be able to see this {pendingRestore?.targetType ?? 'content'}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={restoring}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={restoring}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleRestore();
+              }}
+            >
+              {restoring ? 'Working...' : 'Restore content'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

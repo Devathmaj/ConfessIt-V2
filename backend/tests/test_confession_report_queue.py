@@ -896,24 +896,25 @@ def test_a_confession_hidden_by_a_report_then_hidden_again_keeps_the_reports_dec
 
 
 def test_there_is_no_way_to_unhide_a_hidden_confession(moderator_client, db):
-    """Hiding is one-way, and that is a property of the API rather than of the UI.
+    """A moderator hide is one-way; only Azure-hidden rows restore.
 
-    The confirmation dialog promises there is no bringing a post back, so the claim has to hold
-    for any caller. Every write verb is tried here on purpose: a future ``unhide`` endpoint, or
-    a DELETE that quietly restores visibility, would make the warning a lie.
+    ``PATCH .../unhide`` exists but refuses human hides with 409 so a reviewer
+    cannot undo a colleague's decision. Other verbs/paths still do not exist.
     """
     confession_id = make_confession(db, make_user(db, "author"))
     moderator_client.patch(f"/admin/confessions/{confession_id}/hide")
 
+    refused = moderator_client.patch(f"/admin/confessions/{confession_id}/unhide")
+    assert refused.status_code == 409
+
     for method, path, kwargs in (
         ("post", f"/admin/confessions/{confession_id}/unhide", {}),
-        ("patch", f"/admin/confessions/{confession_id}/unhide", {}),
         ("put", f"/admin/confessions/{confession_id}/unhide", {}),
         ("patch", f"/admin/confessions/{confession_id}/show", {}),
         ("patch", f"/admin/confessions/{confession_id}/restore", {}),
     ):
         response = moderator_client.request(method, path, **kwargs)
-        assert response.status_code == 404, f"{method.upper()} {path} unexpectedly exists"
+        assert response.status_code in (404, 405), f"{method.upper()} {path} unexpectedly exists"
 
     with db.sessions() as session:
         assert session.get(ConfessionRecord, confession_id).removed_at is not None
@@ -1162,23 +1163,21 @@ def test_hiding_a_comment_tells_its_author_it_was_removed(moderator_client, db):
 
 
 def test_there_is_no_way_to_unhide_a_hidden_comment(moderator_client, db):
-    """The confirmation dialog promises there is no bringing a comment back, so it must hold.
-
-    Same property as the confession equivalent, asserted on the other content type: a future
-    ``unhide`` endpoint would make the warning a lie on this route.
-    """
+    """A moderator comment hide is one-way; only Azure-hidden rows restore."""
     confession_id = make_confession(db, make_user(db, "author"))
     comment_id = make_comment(db, confession_id, make_user(db, "commenter"))
     moderator_client.patch(f"/admin/comments/{comment_id}/hide")
 
+    refused = moderator_client.patch(f"/admin/comments/{comment_id}/unhide")
+    assert refused.status_code == 409
+
     for method, path in (
         ("post", f"/admin/comments/{comment_id}/unhide"),
-        ("patch", f"/admin/comments/{comment_id}/unhide"),
         ("put", f"/admin/comments/{comment_id}/unhide"),
         ("patch", f"/admin/comments/{comment_id}/show"),
     ):
         response = moderator_client.request(method, path)
-        assert response.status_code == 404, f"{method.upper()} {path} unexpectedly exists"
+        assert response.status_code in (404, 405), f"{method.upper()} {path} unexpectedly exists"
 
     with db.sessions() as session:
         assert session.get(ConfessionCommentRecord, comment_id).removed_at is not None

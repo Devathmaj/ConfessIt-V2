@@ -276,6 +276,10 @@ class ConfessionService:
                     )
                     if existing is None:
                         reason = decision.report_reason
+                        # Automated action already taken (hidden): the report
+                        # is born closed as removed by Azure, not pending.
+                        # Admin queue shows "Content removed" with the system
+                        # attribution instead of "Awaiting review".
                         report_row = ReportRecord(
                             confession_id=str(confession_id),
                             reported_by_id=None,
@@ -283,6 +287,9 @@ class ConfessionService:
                             reason=reason,
                             created_at=now,
                             source=AUTOMATED_SOURCE,
+                            status="removed",
+                            reviewed_at=now,
+                            reviewed_by_regno=AUTOMATED_REMOVED_BY,
                         )
                         session.add(report_row)
                         session.flush()
@@ -478,6 +485,8 @@ class ConfessionService:
             )
             if existing is not None:
                 return str(existing)
+            from .content_safety_service import AUTOMATED_REMOVED_BY as _ARB
+
             row = ReportRecord(
                 comment_id=str(comment_id),
                 reported_by_id=None,
@@ -485,6 +494,9 @@ class ConfessionService:
                 reason=_reason_for(_CC, scores, maximum),
                 created_at=now,
                 source=_AS,
+                status="removed",
+                reviewed_at=now,
+                reviewed_by_regno=_ARB,
             )
             session.add(row)
             session.flush()
@@ -506,6 +518,7 @@ class ConfessionService:
         directly testable without re-posting a confession.
         """
         from .content_safety_service import (
+            AUTOMATED_REMOVED_BY,
             AUTOMATED_REPORTER_DISPLAY_NAME,
             AUTOMATED_SOURCE,
             build_report_reason,
@@ -533,6 +546,9 @@ class ConfessionService:
                 reason=reason,
                 created_at=now,
                 source=AUTOMATED_SOURCE,
+                status="removed",
+                reviewed_at=now,
+                reviewed_by_regno=AUTOMATED_REMOVED_BY,
             )
             session.add(row)
             session.flush()
@@ -1160,6 +1176,9 @@ class ConfessionService:
                             reason=decision.report_reason,
                             created_at=now,
                             source=_AUTO_SOURCE,
+                            status="removed",
+                            reviewed_at=now,
+                            reviewed_by_regno=_AUTO_REMOVED_BY,
                         )
                         session.add(report_row)
                         session.flush()

@@ -884,3 +884,111 @@ def test_comment_path_uses_no_local_configuration():
     assert "CONTENT_SAFETY_ENDPOINT" not in src
     assert "CONTENT_SAFETY_API_KEY" not in src
     assert "config_from_settings" not in src
+
+
+def test_automated_reports_say_content_removed_by_azure(db, monkeypatch):
+    _enable_content_safety(monkeypatch)
+    _mock_moderation(monkeypatch, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "statusauthor")
+    svc = ConfessionService(db)
+    with pytest.raises(HTTPException):
+        svc.create_confession(
+            ConfessionCreate(body="status check", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    cid = _sole_confession_id(db)
+    reports = _reports_for(db, cid)
+    assert len(reports) == 1
+    assert reports[0].status == "removed"
+    assert reports[0].reported_by_name == "Azure Content Safety"
+    assert reports[0].reviewed_by_regno == "azure-content-safety"
+    assert reports[0].reviewed_at is not None
+    row = _confession_row(db, cid)
+    assert row.removed_by_regno == "azure-content-safety"
+
+
+def test_restore_azure_hidden_confession(db, monkeypatch, moderator_client):
+    _enable_content_safety(monkeypatch)
+    _mock_moderation(monkeypatch, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "restoreauthor")
+    svc = ConfessionService(db)
+    with pytest.raises(HTTPException):
+        svc.create_confession(
+            ConfessionCreate(body="restore me", anonymous=False, comments_enabled=True),
+            author["id"],
+        )
+    cid = _sole_confession_id(db)
+    resp = moderator_client.patch(f"/admin/confessions/{cid}/unhide")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["content_removed"] is False
+    assert _confession_row(db, cid).removed_at is None
+    feed = svc.get_confessions(user_id=author["id"])
+    assert any(str(c.id) == cid for c in feed["confessions"])
+
+
+def test_cannot_restore_moderator_hidden_confession(db, moderator_client):
+    from app.db_models import ConfessionRecord as _CR
+
+    author = make_user(db, "manualrestoreauthor")
+    with db.sessions.begin() as session:
+        row = _CR(
+            body="manual hide", recipient_name=None, anonymous=False,
+            comments_enabled=True, created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            author_id=author["id"], reactions={},
+        )
+        session.add(row)
+        session.flush()
+        cid = str(row.id)
+    moderator_client.patch(f"/admin/confessions/{cid}/hide")
+    refused = moderator_client.patch(f"/admin/confessions/{cid}/unhide")
+    assert refused.status_code == 409
+    with db.sessions() as session:
+        assert session.get(_CR, cid).removed_at is not None
+
+
+def test_restore_azure_hidden_comment(db, monkeypatch, moderator_client):
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "rcauthor")
+    commenter = make_user(db, "rccommenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation(monkeypatch, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    with pytest.raises(HTTPException):
+        svc.add_comment_to_confession(
+            str(parent.id), CommentCreate(body="restore comment"), as_participant(commenter)
+        )
+    cid = _sole_comment_id(db)
+    resp = moderator_client.patch(f"/admin/comments/{cid}/unhide")
+    assert resp.status_code == 200, resp.text
+    page = svc.get_confession_comments(str(parent.id), commenter["id"])
+    assert any(c.id == cid for c in page["comments"])
+
+
+def test_cannot_restore_moderator_hidden_comment(db, moderator_client):
+    from app.db_models import ConfessionCommentRecord as _CCR
+    from app.db_models import ConfessionRecord as _CR
+
+    author = make_user(db, "mcauthor")
+    commenter = make_user(db, "mccommenter")
+    with db.sessions.begin() as session:
+        conf = _CR(
+            body="parent", recipient_name=None, anonymous=False, comments_enabled=True,
+            created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            author_id=author["id"], reactions={},
+        )
+        session.add(conf)
+        session.flush()
+        cid_conf = str(conf.id)
+        com = _CCR(
+            confession_id=cid_conf, user_id=commenter["id"], body="manual",
+            created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        )
+        session.add(com)
+        session.flush()
+        cid = str(com.id)
+    moderator_client.patch(f"/admin/comments/{cid}/hide")
+    refused = moderator_client.patch(f"/admin/comments/{cid}/unhide")
+    assert refused.status_code == 409

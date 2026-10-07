@@ -665,6 +665,29 @@ export const hideAdminComment = async (commentId: string) => {
     return response.data;
 };
 
+/**
+ * Restore Azure-hidden content to public view. Only rows the system hid
+ * (`removed_by_regno` marking Azure Content Safety) restore; manual hides
+ * answer 409. Already-visible rows answer `already_visible`.
+ */
+export const unhideAdminConfession = async (confessionId: string) => {
+    const response = await axios.patch(
+        `${API_URL}/admin/confessions/${confessionId}/unhide`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
+export const unhideAdminComment = async (commentId: string) => {
+    const response = await axios.patch(
+        `${API_URL}/admin/comments/${commentId}/unhide`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export interface AdminLoveNotesQuery {
     skip?: number;
     limit?: number;

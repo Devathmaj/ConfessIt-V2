@@ -969,6 +969,8 @@ def get_confession_reports_data(
             # practice the row is always there. It costs one attribute check and keeps a future
             # non-cascading delete from turning into a 500 on the moderation screen.
             "content_removed": bool(target.removed_at) if target is not None else False,
+            "removed_at": serialize_datetime(target.removed_at) if target is not None else None,
+            "removed_by_regno": target.removed_by_regno if target is not None else None,
         })
 
     return {"reports": items, "total": total, "skip": skip, "limit": limit}

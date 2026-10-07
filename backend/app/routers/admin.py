@@ -40,6 +40,8 @@ from ..services.report_resolution_service import (
 )
 from ..services.report_resolution_service import hide_confession as hide_confession_service
 from ..services.report_resolution_service import hide_comment as hide_comment_service
+from ..services.report_resolution_service import unhide_comment as unhide_comment_service
+from ..services.report_resolution_service import unhide_confession as unhide_confession_service
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -240,10 +242,27 @@ def hide_confession(
     that reads like a failure when the requested state is already in place, and pushes the
     screen to special-case a condition the user did nothing wrong about.
 
-    There is deliberately no matching unhide route. Hiding is one-way here, and the
-    confirmation dialog says so rather than offering a promise the API does not keep.
+    Manual hides are one-way; only Azure-hidden rows restore via
+    ``PATCH /confessions/{confession_id}/unhide``. The confirmation dialog
+    for manual hides still says so.
     """
     return hide_confession_service(db, confession_id, reviewer.regno)
+
+
+@router.patch("/confessions/{confession_id}/unhide")
+def unhide_confession(
+    confession_id: str,
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden confession to public view.
+
+    Only content with ``removed_by_regno`` marking Azure Content Safety
+    restores. Anything hidden by an admin/moderator answers 409 and stays
+    hidden, so a reviewer cannot undo a colleague's decision here. Already
+    visible rows answer ``already_visible`` instead of erroring.
+    """
+    return unhide_confession_service(db, confession_id, reviewer.regno)
 
 
 @router.patch("/comments/{comment_id}/hide")
@@ -271,8 +290,25 @@ def hide_comment(
 
     Unlike ``DELETE /confessions/{confession_id}``, this does not cascade the reports filed
     against the comment: hiding is a visibility change, so the record of it has to survive.
+
+    Manual hides are one-way; only Azure-hidden rows restore via
+    ``PATCH /comments/{comment_id}/unhide``.
     """
     return hide_comment_service(db, comment_id, reviewer.regno)
+
+
+@router.patch("/comments/{comment_id}/unhide")
+def unhide_comment(
+    comment_id: str,
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.CONFESSIONS_DELETE)),
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden comment to public view.
+
+    Same gate as confession unhide: only system-hidden rows restore, manual
+    hides answer 409. The parent ``comment_count`` is incremented back.
+    """
+    return unhide_comment_service(db, comment_id, reviewer.regno)
 
 
 # The report queue is declared after ``/confessions/{confession_id}`` on purpose. FastAPI
