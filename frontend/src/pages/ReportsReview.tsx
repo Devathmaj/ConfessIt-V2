@@ -8,6 +8,7 @@ import {
   updateAdminMessageReportStatus,
   unhideAdminComment,
   unhideAdminConfession,
+  unhideAdminMessage,
 } from '@/services/api';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Badge } from '@/components/ui/badge';
@@ -161,6 +162,8 @@ interface MessageReport {
   content_removed: boolean;
   removed_at?: string | null;
   removed_by_regno?: string | null;
+  /** "user" for a participant report, "azure_content_safety" for an automated one. */
+  source?: string;
 }
 
 /** The three id spaces the server owns, named once so the queue keys cannot drift apart. */
@@ -388,7 +391,7 @@ export const ReportsReview = () => {
   // Restore target for Azure-hidden rows only; manual hides never offer restore.
   const [pendingRestore, setPendingRestore] = useState<{
     reportId: string;
-    targetType: 'confession' | 'comment';
+    targetType: 'confession' | 'comment' | 'message';
     targetId: string;
   } | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -786,10 +789,12 @@ export const ReportsReview = () => {
     try {
       if (targetType === 'comment') {
         await unhideAdminComment(targetId);
+      } else if (targetType === 'message') {
+        await unhideAdminMessage(targetId);
       } else {
         await unhideAdminConfession(targetId);
       }
-      await refreshQueue('confessions');
+      await refreshQueue(targetType === 'message' ? 'messages' : 'confessions');
       toast.success('Content restored to public view.');
     } catch (error: any) {
       if (error?.response?.status === 409) {
@@ -812,7 +817,7 @@ export const ReportsReview = () => {
     reporterRef: string,
     targetRef: string,
     contentRemoved: boolean,
-    restore?: { targetType: 'confession' | 'comment'; targetId: string; removedBy: string | null | undefined } | null,
+    restore?: { targetType: 'confession' | 'comment' | 'message'; targetId: string; removedBy: string | null | undefined } | null,
     children?: React.ReactNode
   ) => (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1198,7 +1203,12 @@ export const ReportsReview = () => {
                       displayReviewer(report.reviewed_by_regno),
                       partyRef(report.reporter),
                       report.message_id,
-                      report.content_removed
+                      report.content_removed,
+                      {
+                        targetType: 'message',
+                        targetId: report.message_id,
+                        removedBy: report.removed_by_regno,
+                      }
                     )}
                   >
                     <div className="rounded-2xl border border-border bg-background/60 p-4">

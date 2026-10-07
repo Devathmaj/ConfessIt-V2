@@ -14,7 +14,7 @@ from fastapi import HTTPException, status
 from ..models import UserDetails
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
-from .report_counters import MESSAGE, record_report_filed
+from .report_counters import MESSAGE, record_report_filed, record_removal
 
 logger = get_logger(__name__)
 
@@ -290,6 +290,42 @@ class MessageService:
                 detail=ACCOUNT_UNAVAILABLE_DETAIL
             )
 
+        # Central moderation: one call handles config + analyze + per-item policy,
+        # exactly like confessions and their comments. Runs BEFORE persistence so a
+        # flagged message is born hidden (never observable in the transcript and
+        # never published to Redis) and a provider failure is unknown, never safe:
+        # abort before any row exists or anything is delivered. The chat path
+        # carries no local endpoint/key/timeout handling and never branches on raw
+        # severities -- only on the decision flags. Never log body/secrets.
+        from .content_safety_service import (
+            AUTOMATED_REMOVED_BY,
+            AUTOMATED_REPORTER_DISPLAY_NAME,
+            AUTOMATED_SOURCE,
+            CONTENT_CHAT_MESSAGE,
+            ContentSafetyError,
+            moderate_content,
+            moderation_error_to_http,
+        )
+
+        try:
+            decision = moderate_content(CONTENT_CHAT_MESSAGE, body or "")
+        except ContentSafetyError as exc:
+            logger.error(
+                "Content Safety moderation failed (%s); aborting chat send", exc.code
+            )
+            raise moderation_error_to_http(exc, content_type=CONTENT_CHAT_MESSAGE) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Content Safety moderation failed unexpectedly: %s",
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Content moderation is temporarily unavailable. Please retry shortly.",
+            ) from exc
+
         # Create message document
         message_doc = {
             "conversation_id": str(conversation_id),
@@ -308,38 +344,155 @@ class MessageService:
         # matchmaking claims its cooldown window with a conditional UPDATE rather than a read
         # followed by a write. The lock is on the conversation, so sends into *different*
         # conversations do not contend.
-        with db.sessions.begin() as session:
-            conversation_row = session.scalar(
-                select(ConversationRecord)
-                .where(ConversationRecord.id == str(conversation_id))
-                .with_for_update()
-            )
-            if conversation_row and conversation_row.blocked_by:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Cannot send messages: this conversation is blocked"
+        #
+        # A flagged message is stored born hidden (the same removed_at write a moderator's
+        # removal performs) together with its automated report, in this one transaction, so
+        # a report/hide bookkeeping failure rolls the whole send back rather than leaving a
+        # visible message that should have been hidden or a hidden one with no audit trail.
+        automated_report_id: Optional[str] = None
+        try:
+            with db.sessions.begin() as session:
+                conversation_row = session.scalar(
+                    select(ConversationRecord)
+                    .where(ConversationRecord.id == str(conversation_id))
+                    .with_for_update()
                 )
+                if conversation_row and conversation_row.blocked_by:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Cannot send messages: this conversation is blocked"
+                    )
 
-            quota = self._quota(self._message_usage(session, conversation_id, sender.regno))
-            refusal = self._quota_refusal(quota)
-            if refusal is not None:
-                raise refusal
+                quota = self._quota(self._message_usage(session, conversation_id, sender.regno))
+                refusal = self._quota_refusal(quota)
+                if refusal is not None:
+                    raise refusal
 
-            row = MessageRecord(
-                conversation_id=str(conversation_id), sender_regno=sender.regno,
-                receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
+                row = MessageRecord(
+                    conversation_id=str(conversation_id), sender_regno=sender.regno,
+                    receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
+                )
+                if decision.should_hide:
+                    # Born hidden: the same removed_at write a moderator's removal performs,
+                    # so every participant read (removed_at IS NULL) excludes it from the
+                    # first commit and it is never published.
+                    row.removed_at = message_doc["created_at"]
+                    row.removed_by_regno = AUTOMATED_REMOVED_BY
+                session.add(row)
+                if conversation_row and not decision.should_hide:
+                    # A hidden message must not become the conversation preview: that preview
+                    # is a denormalised copy of the newest *visible* message and is read by
+                    # both participants and staff.
+                    conversation_row.last_message_at = message_doc["created_at"]
+                    conversation_row.last_message_preview = body[:100]
+                session.flush()
+                message_doc["id"] = str(row.id)
+                if decision.should_report:
+                    # Idempotent: exactly one automated report per message. A new message
+                    # cannot already have one, but the check makes retries safe and the
+                    # partial unique index backstops races. Manual reports are untouched.
+                    existing = session.scalar(
+                        select(MessageReportRecord.id).where(
+                            MessageReportRecord.message_id == str(message_doc["id"]),
+                            MessageReportRecord.source == AUTOMATED_SOURCE,
+                        ).limit(1)
+                    )
+                    if existing is None:
+                        report_row = MessageReportRecord(
+                            message_id=str(message_doc["id"]),
+                            reporter_regno=None,
+                            reported_user_regno=sender.regno,
+                            reason=decision.report_reason,
+                            reported_at=message_doc["created_at"],
+                            source=AUTOMATED_SOURCE,
+                            status="removed",
+                            reviewed_at=message_doc["created_at"],
+                            reviewed_by_regno=AUTOMATED_REMOVED_BY,
+                        )
+                        session.add(report_row)
+                        session.flush()
+                        automated_report_id = str(report_row.id)
+                        record_report_filed(
+                            session, kind=MESSAGE, author_regno=sender.regno,
+                        )
+                        if decision.should_hide:
+                            record_removal(
+                                session, kind=MESSAGE, author_regno=sender.regno,
+                            )
+                    else:
+                        automated_report_id = str(existing)
+                # Reported after the insert rather than recounted, so the response describes the
+                # state this send actually left behind.
+                quota = self._quota(quota, messages_just_sent=1)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Report/hide bookkeeping failed after a successful moderation result: never
+            # silently treat as successful. The transaction above rolled back, so no partial
+            # visible message survives; surface a retryable error (no body/secrets logged).
+            logger.error(
+                "Automated moderation bookkeeping failed for new message: %s",
+                type(exc).__name__,
             )
-            session.add(row)
-            if conversation_row:
-                conversation_row.last_message_at = message_doc["created_at"]
-                conversation_row.last_message_preview = body[:100]
-            session.flush()
-            message_doc["id"] = str(row.id)
-            # Reported after the insert rather than recounted, so the response describes the
-            # state this send actually left behind.
-            quota = self._quota(quota, messages_just_sent=1)
-        
-        # Publish to Redis for real-time delivery
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not complete moderation for this message.",
+            ) from exc
+
+        # Best-effort staff/author notices: failures never unwind the committed moderation
+        # outcome (report + hidden state are already durable).
+        if automated_report_id is not None:
+            try:
+                from .staff_notification_service import notify_report_filed
+
+                notify_report_filed(
+                    db, kind="chat message", report_id=automated_report_id,
+                    summary=(
+                        "A chat message was automatically reported by "
+                        "Azure Content Safety. Open Reports review to rule on it."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to queue staff notification for automated message report %s",
+                    automated_report_id,
+                )
+            if decision.should_hide:
+                try:
+                    # Same neutral copy the direct-hide path sends: no policy is cited
+                    # because no human ruled on a report.
+                    from .notification_service import (
+                        create_notification_service as _notify,
+                    )
+
+                    _notify(
+                        recipient_regno=sender.regno,
+                        heading="Message removed",
+                        body="We removed your chat message from ConfessIt.",
+                        db=db,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to queue removal notice for message %s",
+                        message_doc.get("id"),
+                    )
+
+        if decision.should_hide:
+            # Flagged+hidden: the row stays hidden for audit (report + removed_at already
+            # committed), and it is never published to Redis, so the recipient never sees it.
+            # The caller is told plainly so the frontend shows a violation popup.
+            logger.info(
+                "Chat message %s withheld by content safety for %s -> %s "
+                "(conversation %s, max=%s action=%s)",
+                message_doc["id"], sender.regno, receiver_id, conversation_id,
+                decision.max_severity, decision.action,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Your chat message was removed because it violated our content policies.",
+            )
+
+        # Publish to Redis for real-time delivery (only reached for a visible message).
         redis_message = {
             "id": str(message_doc["id"]),
             "conversation_id": conversation_id,

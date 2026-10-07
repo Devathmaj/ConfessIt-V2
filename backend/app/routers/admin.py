@@ -42,6 +42,11 @@ from ..services.report_resolution_service import hide_confession as hide_confess
 from ..services.report_resolution_service import hide_comment as hide_comment_service
 from ..services.report_resolution_service import unhide_comment as unhide_comment_service
 from ..services.report_resolution_service import unhide_confession as unhide_confession_service
+from ..services.report_resolution_service import unhide_message as unhide_message_service
+from ..services.content_safety_service import (
+    AUTOMATED_REPORTER_DISPLAY_NAME,
+    AUTOMATED_SOURCE,
+)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -990,10 +995,17 @@ def get_message_reports(
             "message_created_at": serialize_datetime(message.created_at) if message else None,
             "conversation_id": str(message.conversation_id) if message else None,
             "conversation": conversation_context,
-            "reporter": {
-                "regno": report.reporter_regno,
-                "name": reporter.name if reporter else "Unknown"
-            },
+            # Automated reports carry no participant reporter; the system is the author. The
+            # live users row wins for a manual report, so a renamed participant appears under
+            # the name they have now rather than the one they filed under.
+            "reporter": (
+                {"regno": None, "name": AUTOMATED_REPORTER_DISPLAY_NAME}
+                if report.source == AUTOMATED_SOURCE
+                else {
+                    "regno": report.reporter_regno,
+                    "name": reporter.name if reporter else "Unknown"
+                }
+            ),
             "reported_user": {
                 "regno": report.reported_user_regno,
                 "name": reported_user.name if reported_user else "Unknown"
@@ -1001,6 +1013,9 @@ def get_message_reports(
             "reason": report.reason,
             "reported_at": serialize_datetime(report.reported_at),
             "status": report.status,
+            # Manual ("user") vs automated ("azure_content_safety"): the screen labels the
+            # latter and never attributes it to a participant.
+            "source": report.source,
             # Carried so the unified screen can show who closed a report and when without
             # a second request, matching the other two queues.
             "reviewed_at": serialize_datetime(report.reviewed_at),
@@ -1009,6 +1024,8 @@ def get_message_reports(
             # infer it from ``status``, because a content admin can remove a message without a
             # report ever existing, and a moderator needs to see that before deciding.
             "content_removed": bool(message.removed_at) if message else False,
+            # Who took it down: the restore button is offered only for rows the system hid.
+            "removed_by_regno": message.removed_by_regno if message else None,
         })
 
     return {
@@ -1041,3 +1058,26 @@ def update_message_report_status(
     the third field so the screen can say plainly whether anything came down.
     """
     return resolve_message_report(db, report_id, new_status, reviewer.regno)
+
+
+@router.patch("/messages/{message_id}/unhide")
+def unhide_message(
+    message_id: str,
+    db: Database = Depends(get_db),
+    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden chat message to both participants.
+
+    Only content with ``removed_by_regno`` marking Azure Content Safety restores;
+    anything hidden by an admin/moderator answers 409 and stays hidden, so a
+    reviewer cannot undo a colleague's decision here. Already-visible rows answer
+    ``already_visible`` instead of erroring.
+
+    Gated on ``reports:moderate`` rather than ``confessions:delete``: a message
+    has no hide route of its own, and the automated removal this restores is the
+    counterpart of the message-report ruling that same capability already governs.
+    The conversation preview is moved back onto the restored message when it is
+    the newest visible one; nothing is notified, because a restoration is a
+    reviewer override rather than a ruling.
+    """
+    return unhide_message_service(db, message_id, reviewer.regno)

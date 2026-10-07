@@ -1060,7 +1060,11 @@ class MessageReportRecord(Base):
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     message_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("messages.id", ondelete="CASCADE"), index=True)
-    reporter_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
+    # Nullable: an automated report (Azure AI Content Safety) has no participant
+    # behind it -- the receiver is the only person who can *manually* report a
+    # message, so a system report carries NULL here and names the sender in
+    # ``reported_user_regno``. Manual reports always carry a reporter.
+    reporter_regno: Mapped[Optional[str]] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True, nullable=True)
     reported_user_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     reason: Mapped[str] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
@@ -1071,6 +1075,9 @@ class MessageReportRecord(Base):
     # moderator's sign-off. Kept as plain text so the audit trail survives the reviewer's
     # account being deleted or renamed, which is what ``ON DELETE SET NULL`` was doing.
     reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # Discriminates manual ("user") from automated ("azure_content_safety") reports.
+    # Mirrors ``reports.source`` (see ReportRecord); backfills to "user" for history.
+    source: Mapped[str] = mapped_column(String(32), default="user", server_default=text("'user'"), index=True)
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
 
 

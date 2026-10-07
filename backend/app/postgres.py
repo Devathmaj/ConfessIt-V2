@@ -923,20 +923,21 @@ class PostgresClient:
             logger.info("Trivia Drop session lifecycle converged")
 
     def apply_report_source_convergence(self) -> None:
-        """Converge the reports table for automated moderation.
+        """Converge the reports tables for automated moderation.
 
-        Automated confession/comment reports reuse the same table as manual
-        ones with a system actor: ``reported_by_id`` becomes nullable (NULL
-        means no users row behind the report) and ``source`` discriminates
+        Automated confession/comment/message reports reuse the same table as
+        manual ones with a system actor: ``reported_by_id`` (``reports``) or
+        ``reporter_regno`` (``message_reports``) becomes nullable (NULL means
+        no users row behind the report) and ``source`` discriminates
         ``"user"`` from ``"azure_content_safety"``. History backfills to
         ``"user"`` via the column default; ``apply_missing_columns`` adds the
         column itself, this step relaxes nullability and installs the
         idempotency backstops.
 
         Partial unique indexes allow at most one automated report per
-        confession and per comment while leaving manual reports untouched:
-        multiple users may still report the same target, each under their own
-        reporter id. Idempotent and safe to re-run on every boot.
+        confession, per comment and per message while leaving manual reports
+        untouched: multiple users may still report the same target, each under
+        their own reporter id. Idempotent and safe to re-run on every boot.
         """
         try:
             with self.engine.begin() as connection:
@@ -999,6 +1000,53 @@ class PostgresClient:
                         "WHERE source = 'azure_content_safety'"
                     )
                 )
+                # Chat messages keep their own report table; the same system-actor
+                # shape is converged here so an automated message report needs no
+                # receiver. Manual message reports always carry a reporter.
+                message_columns = {
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :name"
+                        ),
+                        {"name": "message_reports"},
+                    )
+                }
+                if message_columns:
+                    if "source" in message_columns:
+                        connection.execute(
+                            text(
+                                "UPDATE \"message_reports\" SET \"source\" = 'user' "
+                                "WHERE \"source\" IS NULL"
+                            )
+                        )
+                    if "reporter_regno" in message_columns:
+                        is_nullable = connection.execute(
+                            text(
+                                "SELECT is_nullable FROM information_schema.columns "
+                                "WHERE table_schema = 'public' AND table_name = 'message_reports' "
+                                "AND column_name = 'reporter_regno'"
+                            )
+                        ).scalar()
+                        if is_nullable == "NO":
+                            connection.execute(
+                                text(
+                                    "ALTER TABLE \"message_reports\" "
+                                    "ALTER COLUMN \"reporter_regno\" DROP NOT NULL"
+                                )
+                            )
+                            logger.info(
+                                "Relaxed message_reports.reporter_regno to NULL for system-actor reports"
+                            )
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS "
+                            '"uq_message_reports_automated" '
+                            'ON "message_reports" ("message_id") '
+                            "WHERE source = 'azure_content_safety'"
+                        )
+                    )
                 logger.info("Report source lifecycle converged")
         except Exception as e:
             logger.warning("Skipping report source convergence: %s", e)

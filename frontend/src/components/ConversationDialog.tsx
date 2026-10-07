@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI, getConversationByMatch } from '@/services/api';
-import { messagingClient, sendMessage, fetchMessages, reportMessage } from '@/lib/messaging';
+import { messagingClient, sendMessage, fetchMessages, reportMessage, SendMessageError } from '@/lib/messaging';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
 import {
   canSendAnotherMessage,
@@ -30,6 +30,15 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface ConversationDialogProps {
   onClose: () => void;
@@ -153,6 +162,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const [showMobileProfile, setShowMobileProfile] = useState(false);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [selectedMessageForReport, setSelectedMessageForReport] = useState<Message | null>(null);
+  // A message taken down by content safety: the server refuses the send with a 422 and the
+  // text is never delivered, so the sender is told plainly rather than left thinking it sent.
+  const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [is_blocked, setIsBlocked] = useState(false);
   const [blocked_by, setBlockedBy] = useState<string | null>(null);
@@ -669,6 +681,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       scrollToBottom();
     } catch (error) {
       console.error('Error sending message:', error);
+      // Content safety refused it: the message was never delivered. Clear the composer (it
+      // cannot be sent as written) and say why, rather than restoring text that would only
+      // fail again.
+      if (error instanceof SendMessageError && error.status === 422) {
+        setViolationDialog({ open: true, message: error.message });
+        return;
+      }
       // The server's own refusal is the useful text: a run-out-of-room answer arrives as a
       // 403 whose detail says which allowance ran out, and a generic failure would throw it
       // away. Anything else still falls back to the generic sentence.
@@ -1358,6 +1377,28 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           onBlockSuccess={handleBlockSuccess}
         />
       )}
+
+      {/* A send content safety refused. Rendered from state rather than a toast so the reason
+          stays on screen until acknowledged. */}
+      <AlertDialog
+        open={violationDialog.open}
+        onOpenChange={(open) => setViolationDialog((prev) => ({ ...prev, open }))}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Message removed</AlertDialogTitle>
+            <AlertDialogDescription>
+              {violationDialog.message ||
+                'Your message was removed because it violated our content policies.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setViolationDialog({ open: false, message: '' })}>
+              Understood
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

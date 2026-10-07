@@ -688,6 +688,20 @@ export const unhideAdminComment = async (commentId: string) => {
     return response.data;
 };
 
+/**
+ * Restore an Azure-hidden chat message to both participants. Same gate as the
+ * confession/comment restores: only rows the system hid restore, manual hides
+ * answer 409, and already-visible rows answer `already_visible`.
+ */
+export const unhideAdminMessage = async (messageId: string) => {
+    const response = await axios.patch(
+        `${API_URL}/admin/messages/${messageId}/unhide`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export interface AdminLoveNotesQuery {
     skip?: number;
     limit?: number;

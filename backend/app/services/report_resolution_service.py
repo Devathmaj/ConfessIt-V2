@@ -810,6 +810,58 @@ def unhide_comment(
     }
 
 
+def unhide_message(
+    db: Database,
+    message_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden chat message to every participant read.
+
+    Same gate as :func:`unhide_confession` and :func:`unhide_comment`: only
+    system-hidden rows restore, manual hides answer 409 so a reviewer cannot
+    undo a colleague's decision here. Already-visible rows answer
+    ``already_visible`` instead of erroring on a double click.
+
+    The conversation preview is recomputed, because it is a denormalised copy of
+    the newest *visible* message and the restored message may now be that one.
+    Counters are left intact -- the removal happened -- and the automated report
+    stays for audit. No author notice: restoration is a reviewer override, not
+    a ruling.
+    """
+    if not is_valid_id(message_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message id")
+
+    with db.sessions.begin() as session:
+        message = session.get(MessageRecord, str(message_id))
+        if message is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        if message.removed_at is None:
+            return {
+                "id": str(message_id),
+                "content_removed": False,
+                "already_visible": True,
+                "removed_at": None,
+                "removed_by_regno": None,
+            }
+        if not _is_automated_removal(message.removed_by_regno):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This message was hidden by a moderator and cannot be restored here.",
+            )
+        message.removed_at = None
+        message.removed_by_regno = None
+        _recompute_conversation_preview(session, message.conversation_id)
+
+    logger.info(f"Message {message_id} restored by {reviewer_regno}")
+    return {
+        "id": str(message_id),
+        "content_removed": False,
+        "already_visible": False,
+        "removed_at": None,
+        "removed_by_regno": None,
+    }
+
+
 def pending_report_totals(db: Database) -> Dict[str, int]:
     """How many reports are still awaiting a decision, per queue.
 

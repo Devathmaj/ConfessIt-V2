@@ -264,6 +264,21 @@ export const messagingClient = new MessagingClient();
  */
 
 /**
+ * A failed send, carrying the HTTP status so a caller can tell a content-policy
+ * removal (422) from an ordinary refusal. The detail the server sent is kept as
+ * the message: it is the one sentence that tells the user what happened.
+ */
+export class SendMessageError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'SendMessageError';
+    this.status = status;
+  }
+}
+
+/**
  * Send a message via REST API
  */
 export async function sendMessage(
@@ -289,8 +304,9 @@ export async function sendMessage(
     const error = await response.json();
     // The refusal is the message: a conversation or a participant that has run out of room
     // answers with the reason, and replacing it with a generic failure would throw away the
-    // one sentence that tells the user what to do next.
-    throw new Error(error.detail || 'Failed to send message');
+    // one sentence that tells the user what to do next. The status rides along so a caller
+    // can single out a content-policy removal (422) for its own dialog.
+    throw new SendMessageError(error.detail || 'Failed to send message', response.status);
   }
 
   return response.json();
