@@ -923,20 +923,20 @@ class PostgresClient:
             logger.info("Trivia Drop session lifecycle converged")
 
     def apply_report_source_convergence(self) -> None:
-        """Converge the reports table for automated moderation (Batch 1).
+        """Converge the reports table for automated moderation.
 
-        Automated confession reports reuse the same table as manual ones with
-        a system actor: ``reported_by_id`` becomes nullable (NULL means no
-        users row behind the report) and ``source`` discriminates
+        Automated confession/comment reports reuse the same table as manual
+        ones with a system actor: ``reported_by_id`` becomes nullable (NULL
+        means no users row behind the report) and ``source`` discriminates
         ``"user"`` from ``"azure_content_safety"``. History backfills to
         ``"user"`` via the column default; ``apply_missing_columns`` adds the
         column itself, this step relaxes nullability and installs the
-        idempotency backstop.
+        idempotency backstops.
 
-        The partial unique index allows at most one automated report per
-        confession while leaving manual reports untouched: multiple users may
-        still report the same confession, each under their own reporter id.
-        Idempotent and safe to re-run on every boot.
+        Partial unique indexes allow at most one automated report per
+        confession and per comment while leaving manual reports untouched:
+        multiple users may still report the same target, each under their own
+        reporter id. Idempotent and safe to re-run on every boot.
         """
         try:
             with self.engine.begin() as connection:
@@ -981,13 +981,21 @@ class PostgresClient:
                         logger.info(
                             "Relaxed reports.reported_by_id to NULL for system-actor reports"
                         )
-                # One automated report per confession. Manual reports keep their
-                # own (confession_id, reported_by_id) uniqueness.
+                # One automated report per confession and per comment. Manual
+                # reports keep their own (target, reported_by_id) uniqueness.
                 connection.execute(
                     text(
                         "CREATE UNIQUE INDEX IF NOT EXISTS "
                         '"uq_reports_confession_automated" '
                         'ON "reports" ("confession_id") '
+                        "WHERE source = 'azure_content_safety'"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        '"uq_reports_comment_automated" '
+                        'ON "reports" ("comment_id") '
                         "WHERE source = 'azure_content_safety'"
                     )
                 )

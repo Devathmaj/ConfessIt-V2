@@ -1,18 +1,17 @@
-"""Central Azure AI Content Safety entry point (Batch 1: confessions only).
+"""Central Azure AI Content Safety entry point (confessions + comments).
 
 All moderation goes through this module so features never carry their own
 local configuration, HTTP client, or severity thresholds. Callers use the
 central dispatcher :func:`moderate_content` (or the thin
-:func:`moderate_confession_text` wrapper) and branch only on the returned
-decision -- never on raw numeric severities and never by reading
-``CONTENT_SAFETY_*`` settings directly.
+:func:`moderate_confession_text` / :func:`moderate_comment_text` wrappers)
+and branch only on the returned decision -- never on raw numeric severities
+and never by reading ``CONTENT_SAFETY_*`` settings directly.
 
-Currently only confessions are supported. Comments, chat messages, images
-(Cloudinary pre-upload), and AI-output validation are reserved item types:
-they share this module's configuration and HTTP client when they land, but
-each gets its own handling in ``_POLICIES``. Calling :func:`moderate_content`
-with any other item today raises ``ContentSafetyError(code="unsupported_item")``
-fail-closed instead of silently applying the confession policy elsewhere.
+Confessions and confession comments share the same principal/logic/report/
+hide mechanism (everything >1 flagged+hidden). Chat messages, images
+(Cloudinary pre-upload), and AI-output validation are reserved item types
+for later batches. Calling :func:`moderate_content` with any other item
+raises ``ContentSafetyError(code="unsupported_item")`` fail-closed.
 
 Batch 1 flow (see ConfessionService.create_confession):
   1. Analyze the confession body with Analyze Text (2024-09-01).
@@ -71,7 +70,7 @@ CONTENT_CHAT_MESSAGE = "chat_message"
 CONTENT_IMAGE = "image"
 CONTENT_AI_OUTPUT = "ai_output"
 
-SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (CONTENT_CONFESSION,)
+SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (CONTENT_CONFESSION, CONTENT_COMMENT)
 
 # The exact display name every automated report carries. Shown in the admin
 # report queue as the reporter name; never a real participant.
@@ -92,12 +91,17 @@ NO_ACTION = "none"
 REPORT_ONLY = "report"
 REPORT_AND_HIDE = "report_and_hide"
 
-# Per-item handling. Confession is the only entry today; future batches add
-# their own thresholds/handling here (e.g. comments may block instead of
-# report, images use the image operation, AI outputs use validation-only).
-# Central dispatcher reads this -- callers never hardcode thresholds.
+# Per-item handling. Confessions and confession comments share the same
+# principal/logic (everything >1 flagged+hidden); chat/images/AI outputs plug
+# in here in later batches. Central dispatcher reads this -- callers never
+# hardcode thresholds.
 _POLICIES: dict[str, dict] = {
     CONTENT_CONFESSION: {
+        "report_threshold": 2,
+        "hide_threshold": 2,
+        "block": False,
+    },
+    CONTENT_COMMENT: {
         "report_threshold": 2,
         "hide_threshold": 2,
         "block": False,
@@ -574,6 +578,15 @@ def moderate_confession_text(
 ) -> ModerationDecision:
     """Central confession moderation (thin wrapper over :func:`moderate_content`)."""
     return moderate_content(CONTENT_CONFESSION, text, config=config)
+
+
+def moderate_comment_text(
+    text: str,
+    *,
+    config: Optional[ContentSafetyConfig] = None,
+) -> ModerationDecision:
+    """Central comment moderation (same principal/logic as confessions)."""
+    return moderate_content(CONTENT_COMMENT, text, config=config)
 
 
 def moderation_error_to_http(

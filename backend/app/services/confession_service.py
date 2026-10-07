@@ -442,6 +442,48 @@ class ConfessionService:
                 pass
             return Confession(**payload)
 
+    def create_automated_comment_safety_report(
+        self, comment_id: str, scores: Dict[str, int], maximum: int
+    ) -> Optional[str]:
+        """Idempotent helper for tests/retries: one automated report per comment."""
+        from .content_safety_service import (
+            AUTOMATED_REPORTER_DISPLAY_NAME as _ADN,
+            AUTOMATED_SOURCE as _AS,
+            build_report_reason_for as _reason_for,
+            CONTENT_COMMENT as _CC,
+        )
+        import datetime as _dt
+
+        now = _dt.datetime.now(_dt.timezone.utc)
+        with self.sessions.begin() as session:
+            target = session.get(ConfessionCommentRecord, str(comment_id))
+            if target is None:
+                return None
+            existing = session.scalar(
+                select(ReportRecord.id).where(
+                    ReportRecord.comment_id == str(comment_id),
+                    ReportRecord.source == _AS,
+                ).limit(1)
+            )
+            if existing is not None:
+                return str(existing)
+            row = ReportRecord(
+                comment_id=str(comment_id),
+                reported_by_id=None,
+                reported_by_name=_ADN,
+                reason=_reason_for(_CC, scores, maximum),
+                created_at=now,
+                source=_AS,
+            )
+            session.add(row)
+            session.flush()
+            report_id = str(row.id)
+            target.report_count = int(target.report_count or 0) + 1
+            record_report_filed(
+                session, kind=CONFESSION, author_user_id=str(target.user_id),
+            )
+        return report_id
+
     def create_automated_content_safety_report(
         self, confession_id: str, scores: Dict[str, int], maximum: int
     ) -> Optional[str]:
@@ -1038,21 +1080,163 @@ class ConfessionService:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
             return "COMMENT_LIMIT_REACHED"
 
-        with self.sessions.begin() as session:
-            row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
-                body=comment_data.body, created_at=datetime.datetime.now(datetime.timezone.utc))
-            session.add(row)
-            confession_row = session.get(ConfessionRecord, str(confession_id))
-            if confession_row: confession_row.comment_count += 1
-            session.flush()
-            new_comment = self._comment_payload(row, user)
-            new_comment["user_info"].update({"name": user.name})
-            # Participant-scoped (SEC-002): a fresh comment has no reports/votes yet.
-            new_comment["has_reported"] = False
-            new_comment["reported_by"] = []
-            new_comment["likes"] = []
-            new_comment["dislikes"] = []
-        logger.info(f"Added comment {new_comment['id']} to confession {confession_id}")
+        # Central comment moderation: same principal/logic as confessions
+        # (everything >1 flagged+hidden). Runs BEFORE persistence; failures
+        # are unknown, never safe, so abort before any row exists.
+        from .content_safety_service import (
+            AUTOMATED_REMOVED_BY as _AUTO_REMOVED_BY,
+            AUTOMATED_REPORTER_DISPLAY_NAME as _AUTO_NAME,
+            AUTOMATED_SOURCE as _AUTO_SOURCE,
+            CONTENT_COMMENT as _CONTENT_COMMENT,
+            ContentSafetyError as _CSErr,
+            moderate_content as _moderate,
+            moderation_error_to_http as _to_http,
+        )
+
+        try:
+            decision = _moderate(_CONTENT_COMMENT, comment_data.body or "")
+        except _CSErr as exc:
+            logger.error(
+                "Content Safety comment moderation failed (%s); aborting comment creation",
+                exc.code,
+            )
+            raise _to_http(exc, content_type=_CONTENT_COMMENT) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Content Safety comment moderation failed unexpectedly: %s",
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Content moderation is temporarily unavailable. Please retry shortly.",
+            ) from exc
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        automated_report_id: Optional[str] = None
+        try:
+            with self.sessions.begin() as session:
+                row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
+                    body=comment_data.body, created_at=now)
+                if decision.should_hide:
+                    # Born hidden: same removed_at write hide_comment performs,
+                    # so participant reads (removed_at IS NULL) exclude it from
+                    # the first commit. No second flag.
+                    row.removed_at = now
+                    row.removed_by_regno = _AUTO_REMOVED_BY
+                session.add(row)
+                session.flush()
+                comment_id = str(row.id)
+                confession_row = session.get(ConfessionRecord, str(confession_id))
+                # Visible comments advertise in the parent count; born-hidden
+                # ones never do (hide_comment decrements on transition, so
+                # not incrementing here lands in the same state).
+                if confession_row and not decision.should_hide:
+                    confession_row.comment_count += 1
+                if decision.should_report:
+                    existing = session.scalar(
+                        select(ReportRecord.id).where(
+                            ReportRecord.comment_id == str(comment_id),
+                            ReportRecord.source == _AUTO_SOURCE,
+                        ).limit(1)
+                    )
+                    if existing is None:
+                        report_row = ReportRecord(
+                            comment_id=str(comment_id),
+                            reported_by_id=None,
+                            reported_by_name=_AUTO_NAME,
+                            reason=decision.report_reason,
+                            created_at=now,
+                            source=_AUTO_SOURCE,
+                        )
+                        session.add(report_row)
+                        session.flush()
+                        automated_report_id = str(report_row.id)
+                        target = session.get(ConfessionCommentRecord, str(comment_id))
+                        if target is not None:
+                            target.report_count = int(target.report_count or 0) + 1
+                        record_report_filed(
+                            session, kind=CONFESSION, author_user_id=user_id,
+                        )
+                        if decision.should_hide:
+                            from .report_counters import record_removal as _record_removal
+
+                            _record_removal(
+                                session, kind=CONFESSION, author_user_id=user_id
+                            )
+                    else:
+                        automated_report_id = str(existing)
+                session.flush()
+                new_comment = self._comment_payload(row, user)
+                new_comment["user_info"].update({"name": user.name})
+                # Participant-scoped (SEC-002).
+                new_comment["has_reported"] = False
+                new_comment["reported_by"] = []
+                new_comment["likes"] = []
+                new_comment["dislikes"] = []
+                # Freshly reported/hidden: surface the automated count.
+                if automated_report_id is not None:
+                    new_comment["report_count"] = 1
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Automated comment moderation bookkeeping failed: %s",
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not complete moderation for this comment.",
+            ) from exc
+        logger.info(
+            f"Added comment {new_comment['id']} to confession {confession_id} "
+            f"(content-safety max={decision.max_severity} action={decision.action} "
+            f"scores Hate={int(decision.scores.get('Hate', 0) or 0)} "
+            f"SelfHarm={int(decision.scores.get('SelfHarm', 0) or 0)} "
+            f"Sexual={int(decision.scores.get('Sexual', 0) or 0)} "
+            f"Violence={int(decision.scores.get('Violence', 0) or 0)})"
+        )
+        if automated_report_id is not None:
+            try:
+                from .staff_notification_service import notify_report_filed
+
+                notify_report_filed(
+                    self.client, kind="comment", report_id=automated_report_id,
+                    summary=(
+                        "A comment was automatically reported by "
+                        "Azure Content Safety. Open Reports review to rule on it."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to queue staff notification for automated comment report %s",
+                    automated_report_id,
+                )
+            if decision.should_hide:
+                try:
+                    with self.sessions() as _s:
+                        _regno = _s.scalar(
+                            select(UserRecord.regno).where(
+                                UserRecord.id == str(user_id)
+                            )
+                        )
+                    if _regno:
+                        from .notification_service import (
+                            create_notification_service as _notify,
+                        )
+
+                        _notify(
+                            recipient_regno=str(_regno),
+                            heading="Comment removed",
+                            body="We removed your comment from ConfessIt.",
+                            db=self.client,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to queue removal notice for comment %s",
+                        new_comment.get("id"),
+                    )
         return ConfessionComment(**new_comment)
 
     def _react_to_comment(self, comment_id: str, user_id: str, reaction_type: str) -> Optional[ConfessionComment]:

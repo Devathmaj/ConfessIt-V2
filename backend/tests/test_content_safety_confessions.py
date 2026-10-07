@@ -420,42 +420,26 @@ def test_existing_manual_workflows_intact(db, monkeypatch):
     assert svc.get_confession(str(created.id), author["id"]) is None
 
 
-# 11. Scope isolation: comment creation and comment embedding behavior unchanged.
+# 11. Comments share the same principal/logic (central call, report+hide).
 def test_scope_isolation_comments_unchanged(db, monkeypatch):
     _enable_content_safety(monkeypatch)
-    # Even a high-severity confession body must not cause comment moderation:
-    # comments use the pre-existing path with no Content Safety call.
-    _mock_moderation(monkeypatch, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
     _mock_embedding_success(monkeypatch)
     author = make_user(db, "scopeauthor")
     commenter = make_user(db, "scopecommenter")
     svc = ConfessionService(db)
-    # Create a visible confession for commenting: use low severity first.
-    _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
     created = svc.create_confession(
         ConfessionCreate(body="comment scope post", anonymous=False, comments_enabled=True),
         author["id"],
     )
-    # Now arm high severity and post a comment: comment path must not consult
-    # Content Safety at all (track central + low-level calls).
+    # Comment path must consult central moderation (track central calls).
     calls: list = []
-
-    def _tracking(text, *, config=None):
-        calls.append(("analyze", text))
-        return {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0}
 
     def _tracking_moderate(content_type, text, *, config=None):
         calls.append((content_type, text))
-        return css._decision_for(content_type, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+        return css._decision_for(content_type, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
 
-    def _tracking_confession(text, *, config=None):
-        calls.append(("confession", text))
-        return css._decision_for(css.CONTENT_CONFESSION, {"Hate": 6, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
-
-    monkeypatch.setattr(css, "analyze_confession_text", _tracking)
-    monkeypatch.setattr(css, "analyze_text", _tracking)
     monkeypatch.setattr(css, "moderate_content", _tracking_moderate)
-    monkeypatch.setattr(css, "moderate_confession_text", _tracking_confession)
     before = len(calls)
     comment = svc.add_comment_to_confession(
         str(created.id),
@@ -463,9 +447,9 @@ def test_scope_isolation_comments_unchanged(db, monkeypatch):
         as_participant(commenter),
     )
     assert comment.body == "a plain comment"
-    assert len(calls) == before  # no moderation call for comments
-    # No automated report for the comment's parent beyond the confession's own
-    # (which is zero here since the confession was low severity).
+    assert len(calls) == before + 1
+    assert calls[-1][0] == css.CONTENT_COMMENT
+    # No automated confession report (confession was low severity).
     assert _reports_for(db, created.id) == []
     # Comment has no embedding row mechanism (only confessions do).
     with db.sessions() as session:
@@ -677,7 +661,6 @@ def test_central_dispatcher_rejects_unimplemented_items(monkeypatch):
     _enable_content_safety(monkeypatch)
     monkeypatch.setattr(css, "moderate_content", _REAL_MODERATE)
     for item in (
-        css.CONTENT_COMMENT,
         css.CONTENT_CHAT_MESSAGE,
         css.CONTENT_IMAGE,
         css.CONTENT_AI_OUTPUT,
@@ -686,20 +669,19 @@ def test_central_dispatcher_rejects_unimplemented_items(monkeypatch):
         with pytest.raises(css.ContentSafetyError) as exc:
             css.moderate_content(item, "some text")
         assert exc.value.code == "unsupported_item"
-    # Confession stays supported.
-    assert css.CONTENT_CONFESSION in css.SUPPORTED_CONTENT_TYPES
-    assert set(css.SUPPORTED_CONTENT_TYPES) == {css.CONTENT_CONFESSION}
+    # Confessions + comments supported with the same principal.
+    assert set(css.SUPPORTED_CONTENT_TYPES) == {css.CONTENT_CONFESSION, css.CONTENT_COMMENT}
 
 
 def test_central_policy_registry_single_source_of_truth():
     # Thresholds live in _POLICIES, not scattered in callers.
-    # Everything >1 flagged+hidden.
-    assert css._POLICIES[css.CONTENT_CONFESSION]["report_threshold"] == 2
-    assert css._POLICIES[css.CONTENT_CONFESSION]["hide_threshold"] == 2
-    assert css.classify_for_content(css.CONTENT_CONFESSION, 0) == css.NO_ACTION
-    assert css.classify_for_content(css.CONTENT_CONFESSION, 2) == css.REPORT_AND_HIDE
-    assert css.classify_for_content(css.CONTENT_CONFESSION, 4) == css.REPORT_AND_HIDE
-    assert css.classify_for_content(css.CONTENT_CONFESSION, 6) == css.REPORT_AND_HIDE
+    # Everything >1 flagged+hidden, same for confessions + comments.
+    for item in (css.CONTENT_CONFESSION, css.CONTENT_COMMENT):
+        assert css._POLICIES[item]["report_threshold"] == 2
+        assert css._POLICIES[item]["hide_threshold"] == 2
+        assert css.classify_for_content(item, 0) == css.NO_ACTION
+        assert css.classify_for_content(item, 2) == css.REPORT_AND_HIDE
+        assert css.classify_for_content(item, 6) == css.REPORT_AND_HIDE
     # Legacy helpers still agree (backward compat).
     assert css.classify_action(2) == css.REPORT_AND_HIDE
     assert css.should_hide(2) is True
@@ -712,6 +694,146 @@ def test_confession_path_uses_no_local_configuration():
 
     src = inspect.getsource(ConfessionService.create_confession)
     # Central call only: no per-feature endpoint/key plumbing here.
+    assert "moderate_content" in src
+    assert "CONTENT_SAFETY_ENDPOINT" not in src
+    assert "CONTENT_SAFETY_API_KEY" not in src
+    assert "config_from_settings" not in src
+
+
+def _comment_reports_for(db, comment_id):
+    from app.db_models import ReportRecord as _RR
+
+    with db.sessions() as session:
+        return session.scalars(
+            select(_RR).where(_RR.comment_id == str(comment_id))
+        ).all()
+
+
+def _make_visible_confession(db, monkeypatch, author_id, body="parent post"):
+    _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    _mock_embedding_success(monkeypatch)
+    return ConfessionService(db).create_confession(
+        ConfessionCreate(body=body, anonymous=False, comments_enabled=True),
+        author_id,
+    )
+
+
+def test_comment_severity_0_visible_no_report(db, monkeypatch):
+    from app.db_models import ConfessionCommentRecord as _CCR
+
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "c0author")
+    commenter = make_user(db, "c0commenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    comment = svc.add_comment_to_confession(
+        str(parent.id), CommentCreate(body="kind comment"), as_participant(commenter)
+    )
+    assert _comment_reports_for(db, comment.id) == []
+    with db.sessions() as session:
+        assert session.get(_CCR, str(comment.id)).removed_at is None
+    page = svc.get_confession_comments(str(parent.id), commenter["id"])
+    assert any(c.id == comment.id for c in page["comments"])
+
+
+def test_comment_severity_2_flagged_hidden_with_report(db, monkeypatch, admin_client):
+    from app.db_models import ConfessionCommentRecord as _CCR
+
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "c2author")
+    commenter = make_user(db, "c2commenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation(monkeypatch, {"Hate": 2, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    comment = svc.add_comment_to_confession(
+        str(parent.id), CommentCreate(body="edgy comment"), as_participant(commenter)
+    )
+    reports = _comment_reports_for(db, comment.id)
+    assert len(reports) == 1
+    assert reports[0].reported_by_name == "Azure Content Safety"
+    assert reports[0].reported_by_id is None
+    with db.sessions() as session:
+        assert session.get(_CCR, str(comment.id)).removed_at is not None
+    # Hidden from participant thread, still visible to staff.
+    page = svc.get_confession_comments(str(parent.id), commenter["id"])
+    assert all(c.id != comment.id for c in page["comments"])
+    queued = [r for r in admin_client.get("/admin/confessions/reports").json()["reports"] if r["target_id"] == str(comment.id)]
+    assert len(queued) == 1
+    assert queued[0]["reporter"]["name"] == "Azure Content Safety"
+
+
+def test_comment_severity_6_flagged_hidden(db, monkeypatch):
+    from app.db_models import ConfessionCommentRecord as _CCR
+
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "c6author")
+    commenter = make_user(db, "c6commenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 6})
+    comment = svc.add_comment_to_confession(
+        str(parent.id), CommentCreate(body="bad comment"), as_participant(commenter)
+    )
+    assert len(_comment_reports_for(db, comment.id)) == 1
+    with db.sessions() as session:
+        assert session.get(_CCR, str(comment.id)).removed_at is not None
+    assert svc.get_confession_comments(str(parent.id), commenter["id"])["comments"] == [] or all(
+        c.id != comment.id for c in svc.get_confession_comments(str(parent.id), commenter["id"])["comments"]
+    )
+
+
+def test_comment_no_duplicate_reports_on_retry(db, monkeypatch):
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "cdupauthor")
+    commenter = make_user(db, "cdupcommenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation(monkeypatch, {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0})
+    comment = svc.add_comment_to_confession(
+        str(parent.id), CommentCreate(body="needs report"), as_participant(commenter)
+    )
+    first = _comment_reports_for(db, comment.id)
+    assert len(first) == 1
+    rid1 = svc.create_automated_comment_safety_report(
+        str(comment.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+    )
+    rid2 = svc.create_automated_comment_safety_report(
+        str(comment.id), {"Hate": 4, "SelfHarm": 0, "Sexual": 0, "Violence": 0}, 4
+    )
+    assert rid1 == rid2 == str(first[0].id)
+    assert len(_comment_reports_for(db, comment.id)) == 1
+
+
+def test_comment_moderation_failure_aborts(db, monkeypatch):
+    from app.db_models import ConfessionCommentRecord as _CCR
+
+    _enable_content_safety(monkeypatch)
+    _mock_embedding_success(monkeypatch)
+    author = make_user(db, "cfailauthor")
+    commenter = make_user(db, "cfailcommenter")
+    svc = ConfessionService(db)
+    parent = _make_visible_confession(db, monkeypatch, author["id"])
+    _mock_moderation_failure(monkeypatch, code="unavailable")
+    with pytest.raises(HTTPException) as exc:
+        svc.add_comment_to_confession(
+            str(parent.id), CommentCreate(body="unmoderated"), as_participant(commenter)
+        )
+    assert exc.value.status_code in (502, 503)
+    with db.sessions() as session:
+        assert session.scalar(select(_CCR)) is None
+
+
+def test_comment_path_uses_no_local_configuration():
+    import inspect
+
+    from app.services.confession_service import ConfessionService
+
+    src = inspect.getsource(ConfessionService.add_comment_to_confession)
     assert "moderate_content" in src
     assert "CONTENT_SAFETY_ENDPOINT" not in src
     assert "CONTENT_SAFETY_API_KEY" not in src
