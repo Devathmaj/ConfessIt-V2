@@ -253,14 +253,18 @@ async def upload_profile_picture_service(
     2. The window is read and, if it is still running, refused -- still before anything is
        stored, so a participant who is out of the window gets a 429 without an object ever
        coming into existence.
-    3. The upload to Cloudinary, which can only now be worth doing.
-    4. The claim itself, a conditional UPDATE, inside the same transaction that writes the
+    3. The prepared bytes are moderated centrally (Azure Content Safety, Analyze Image).
+       A violating verdict spends the window, tells the staff and refuses with a 422
+       before anything is stored; a provider failure refuses with a retryable 503 and
+       spends nothing.
+    4. The upload to Cloudinary, which can only now be worth doing.
+    5. The claim itself, a conditional UPDATE, inside the same transaction that writes the
        new identity -- to the row named by the caller's own regno, and only if there is one.
        If it loses -- the race step 2 cannot see -- the row is left as it was, the
-       transaction rolls back, and the object from step 3 is discarded because no row names
+       transaction rolls back, and the object from step 4 is discarded because no row names
        it.
 
-    Steps 2 and 4 are two checks rather than one because only step 4 is atomic, and step 2
+    Steps 2 and 5 are two checks rather than one because only step 5 is atomic, and step 2
     is not there for correctness: it is there so the ordinary case (a page left open, a
     second click a minute later) does not pay for an upload and a delete to be told no.
     """
@@ -280,6 +284,64 @@ async def upload_profile_picture_service(
     seconds_left = _seconds_left_before_change(db, current_user.regno, now)
     if seconds_left > 0:
         raise _picture_cooldown_rejection(seconds_left)
+
+    # Moderation runs on the prepared bytes, before anything is stored: a
+    # violating image must never reach Cloudinary, and a provider failure must
+    # abort before the one change is spent (retryable, nothing consumed).
+    # Imported inside the call so tests patching the central module's
+    # attributes keep intercepting, the same way confession_service does it.
+    from ..services.content_safety_service import (
+        CONTENT_PROFILE_PICTURE,
+        ContentSafetyError,
+        moderate_profile_picture,
+        moderation_error_to_http,
+    )
+
+    try:
+        decision = moderate_profile_picture(contents)
+    except ContentSafetyError as exc:
+        logger.error(
+            "Content Safety moderation failed (%s); aborting profile picture upload",
+            exc.code,
+        )
+        raise moderation_error_to_http(exc, content_type=CONTENT_PROFILE_PICTURE) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Content Safety moderation failed unexpectedly: %s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Content moderation is temporarily unavailable. Please retry shortly.",
+        ) from exc
+
+    if decision.should_block:
+        # A refused image still spends the participant's one change for the
+        # window: the rule limits how often the picture may change at all, and
+        # having the attempt land lets staff see the try. Claimed with the
+        # same conditional UPDATE as the accepted path, so racing uploads
+        # cannot both notify or both slip past the wait; the loser is out of
+        # the window and gets the ordinary 429. Nothing is stored and no
+        # report row is written -- the staff notification is the trace.
+        with db.sessions.begin() as session:
+            if not _consume_picture_attempt(session, current_user.regno, now):
+                raise _picture_cooldown_rejection(
+                    _seconds_until_picture_eligible(session, current_user.regno, now)
+                )
+        from ..services.staff_notification_service import (
+            notify_profile_picture_rejected,
+        )
+
+        notify_profile_picture_rejected(db, regno=current_user.regno, occurred_at=now)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Your profile picture was rejected because it violated our "
+                "content policies."
+            ),
+        )
 
     result = store_account_picture(
         content=contents,

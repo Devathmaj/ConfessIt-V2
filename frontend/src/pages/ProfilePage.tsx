@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { 
   User, 
   Save,
@@ -59,6 +60,19 @@ export const ProfilePage = () => {
   // State for UI elements
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // A 422 naming a content-policy violation is the server refusing the image
+  // itself, not the timing -- the same shape the confession composer shows a
+  // dialog for, so the picture path uses the same dialog rather than a toast
+  // that scrolls away.
+  const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
+
+  const readViolationMessage = (error: any): string | null => {
+    const detail = error?.response?.data?.detail;
+    const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join(' ') : '';
+    if (error?.response?.status === 422 && /violat.*polic/i.test(text)) return text;
+    return null;
+  };
 
   // The three-day wait, counted down from a clock that only runs while there is something
   // to count. Derived from the timestamp the server sends rather than from anything this
@@ -149,17 +163,29 @@ export const ProfilePage = () => {
         await fetchAndSetUser(token);
       }
     } catch (error) {
-      // The refusal is the server's to explain. A page can sit open past the moment it
-      // loaded, so a 429 -- not the timestamp this screen loaded with -- is what starts the
-      // wait the participant is actually under, and it comes with its own sentence.
-      const rejection = readPictureCooldownRejection(error);
-      if (rejection) {
-        toast.error(rejection.message);
+      // A rejected image (422) is the one refusal that is about the picture
+      // itself: it gets the dialog, and the refresh below starts the wait the
+      // server just began, because the refused attempt still spends the one
+      // change. Everything else keeps the existing toast treatment.
+      const violation = readViolationMessage(error);
+      if (violation) {
+        setViolationDialog({ open: true, message: violation });
         if (token) {
           await fetchAndSetUser(token);
         }
       } else {
-        toast.error(describeApiError(error, 'Failed to upload profile picture.'));
+        // The refusal is the server's to explain. A page can sit open past the moment it
+        // loaded, so a 429 -- not the timestamp this screen loaded with -- is what starts the
+        // wait the participant is actually under, and it comes with its own sentence.
+        const rejection = readPictureCooldownRejection(error);
+        if (rejection) {
+          toast.error(rejection.message);
+          if (token) {
+            await fetchAndSetUser(token);
+          }
+        } else {
+          toast.error(describeApiError(error, 'Failed to upload profile picture.'));
+        }
       }
       console.error(error);
     }
@@ -442,6 +468,20 @@ export const ProfilePage = () => {
           </div>
         </div>
       )}
+
+      <AlertDialog open={violationDialog.open} onOpenChange={(open) => setViolationDialog((prev) => ({ ...prev, open }))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Profile picture rejected</AlertDialogTitle>
+            <AlertDialogDescription>
+              {violationDialog.message || 'Your profile picture was rejected because it violated our content policies.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setViolationDialog({ open: false, message: '' })}>Understood</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

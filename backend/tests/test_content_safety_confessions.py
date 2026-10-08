@@ -698,12 +698,13 @@ def test_central_dispatcher_rejects_unimplemented_items(monkeypatch):
             css.moderate_content(item, "some text")
         assert exc.value.code == "unsupported_item"
     # Confessions + comments + chat messages + Case Closed turns supported with the same
-    # principal.
+    # principal; profile pictures are supported on the image policy.
     assert set(css.SUPPORTED_CONTENT_TYPES) == {
         css.CONTENT_CONFESSION,
         css.CONTENT_COMMENT,
         css.CONTENT_CHAT_MESSAGE,
         css.CONTENT_CASE_CLOSED_MESSAGE,
+        css.CONTENT_PROFILE_PICTURE,
     }
 
 

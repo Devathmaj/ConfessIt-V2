@@ -170,6 +170,30 @@ def notify_love_note_pending(db: Database, *, note_id: str) -> Optional[str]:
     )
 
 
+def notify_profile_picture_rejected(
+    db: Database, *, regno: str, occurred_at: datetime
+) -> Optional[str]:
+    """One ``report``-category notice to all staff that an image was rejected.
+
+    A rejected profile picture leaves no report row to open, so this notice is
+    the whole trace a moderator gets: which account tried, and that Azure
+    Content Safety refused the upload. ``occurred_at`` names the refused
+    attempt (the consumed cooldown window), so a replayed rejection cannot
+    notify the staff twice.
+    """
+    return create_staff_notification(
+        db,
+        audience="all",
+        category="report",
+        heading="Profile picture rejected by Azure Content Safety",
+        body=(
+            "Profile picture upload rejected by Azure Content Safety "
+            f"for user {regno}."
+        ),
+        dedup_key=f"profile-picture-rejected:{regno}:{isoformat_datetime(occurred_at)}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Live game alerts (computed, never stored)
 # ---------------------------------------------------------------------------

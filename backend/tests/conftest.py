@@ -364,10 +364,8 @@ def _mock_content_safety_safe(monkeypatch):
 
     monkeypatch.setattr(_css, "analyze_confession_text", _safe)
     monkeypatch.setattr(_css, "analyze_text", _safe)
-    # Central dispatcher also mocked safe so features calling moderate_content
-    # / moderate_confession_text (no local config) stay offline in tests.
-    # Validation preserved: missing endpoint/key still raises missing_config.
-    def _safe_decision(content_type, text, *, config=None):
+
+    def _safe_image(image, *, config=None):
         cfg = config if config is not None else _css.config_from_settings(settings)
         if not cfg.endpoint or not str(cfg.endpoint).strip():
             raise _css.ContentSafetyError(
@@ -379,11 +377,42 @@ def _mock_content_safety_safe(monkeypatch):
                 "Content moderation is not configured: CONTENT_SAFETY_API_KEY is missing.",
                 code="missing_config",
             )
-        scores = _safe(text, config=cfg)
+        if not (image or b""):
+            raise _css.ContentSafetyError(
+                "An empty image cannot be moderated.",
+                code="invalid_input",
+            )
+        return {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0}
+
+    monkeypatch.setattr(_css, "analyze_image", _safe_image)
+    # Central dispatcher also mocked safe so features calling moderate_content
+    # / moderate_confession_text (no local config) stay offline in tests.
+    # Validation preserved: missing endpoint/key still raises missing_config.
+    def _safe_decision(content_type, content, *, config=None):
+        cfg = config if config is not None else _css.config_from_settings(settings)
+        if not cfg.endpoint or not str(cfg.endpoint).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_ENDPOINT is missing.",
+                code="missing_config",
+            )
+        if not cfg.api_key or not str(cfg.api_key).strip():
+            raise _css.ContentSafetyError(
+                "Content moderation is not configured: CONTENT_SAFETY_API_KEY is missing.",
+                code="missing_config",
+            )
+        scores = (
+            _safe_image(content, config=cfg)
+            if content_type in _css._IMAGE_CONTENT_TYPES
+            else _safe(content, config=cfg)
+        )
         return _css._decision_for(content_type, scores)
 
     def _safe_confession(text, *, config=None):
         return _safe_decision(_css.CONTENT_CONFESSION, text, config=config)
 
+    def _safe_profile_picture(image, *, config=None):
+        return _safe_decision(_css.CONTENT_PROFILE_PICTURE, image, config=config)
+
     monkeypatch.setattr(_css, "moderate_content", _safe_decision)
     monkeypatch.setattr(_css, "moderate_confession_text", _safe_confession)
+    monkeypatch.setattr(_css, "moderate_profile_picture", _safe_profile_picture)

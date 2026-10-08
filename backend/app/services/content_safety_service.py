@@ -9,10 +9,12 @@ and never by reading ``CONTENT_SAFETY_*`` settings directly.
 
 Confessions, confession comments, matchmaking chat messages and Case Closed
 detective-thread turns share the same principal/logic/report/hide mechanism
-(everything >1 flagged+hidden). Images (Cloudinary pre-upload) and AI-output
-validation are reserved item types for later batches. Calling
-:func:`moderate_content` with any other item raises
-``ContentSafetyError(code="unsupported_item")`` fail-closed.
+(everything >1 flagged+hidden). Profile pictures are the first image item:
+their bytes are analyzed with Analyze Image *before* Cloudinary ever sees
+them, and anything >1 is rejected outright -- never stored, no report row --
+with a staff notification instead. AI-output validation remains a reserved
+item type for a later batch. Calling :func:`moderate_content` with any other
+item raises ``ContentSafetyError(code="unsupported_item")`` fail-closed.
 
 Batch 1 flow (see ConfessionService.create_confession):
   1. Analyze the confession body with Analyze Text (2024-09-01).
@@ -23,18 +25,34 @@ Batch 1 flow (see ConfessionService.create_confession):
   4. The existing Azure AI Foundry embedding workflow still runs for every
      successfully moderated confession, including flagged ones.
 
+Profile-picture flow (see ProfileService.upload_profile_picture_service):
+  1. The prepared upload bytes are analyzed with Analyze Image (2024-09-01);
+     nothing has been stored at this point, so a violating image never
+     reaches Cloudinary.
+  2. Severity 0: the upload proceeds to storage and the row.
+     Severity 2/4/6: the upload is rejected (422), the participant's one
+     change for the window is consumed, no picture is stored and no report
+     row is written; staff are notified so the try is visible.
+  3. Provider failures raise before persistence (retryable, nothing
+     consumed), so nothing unmoderated ever leaks.
+
 Only this module talks to the Content Safety endpoint, so credentials,
 timeouts and severity policy live in one place. Callers never scatter
 numeric severity checks.
 
 Transport uses the official SDK per
 https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/contentsafety/azure-ai-contentsafety
-(``ContentSafetyClient`` + ``AnalyzeTextOptions``, api-version 2024-09-01):
+(``ContentSafetyClient`` + ``AnalyzeTextOptions``/``AnalyzeImageOptions``,
+api-version 2024-09-01):
 
     client = ContentSafetyClient(endpoint, AzureKeyCredential(key),
                                  api_version="2024-09-01")
     client.analyze_text(AnalyzeTextOptions(
         text="<confession>",
+        categories=[HATE, SELF_HARM, SEXUAL, VIOLENCE],
+        output_type="FourSeverityLevels"))
+    client.analyze_image(AnalyzeImageOptions(
+        image=ImageData(content=<bytes>),
         categories=[HATE, SELF_HARM, SEXUAL, VIOLENCE],
         output_type="FourSeverityLevels"))
 
@@ -49,7 +67,7 @@ rather than silently truncated and treated as safe.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from ..logger import get_logger
 
@@ -63,13 +81,14 @@ OUTPUT_TYPE = "FourSeverityLevels"
 TEXT_MAX_LENGTH = 10000
 
 # Central item vocabulary. Confessions, their comments, matchmaking chat
-# messages and Case Closed detective-thread turns are moderated today;
-# images/AI outputs remain reserved so future batches plug handling into
-# _POLICIES instead of each feature wiring its own endpoint/key/timeout/policy.
+# messages, Case Closed detective-thread turns and profile pictures are
+# moderated today; AI outputs remain reserved so future batches plug handling
+# into _POLICIES instead of each feature wiring its own endpoint/key/timeout/policy.
 CONTENT_CONFESSION = "confession"
 CONTENT_COMMENT = "comment"
 CONTENT_CHAT_MESSAGE = "chat_message"
 CONTENT_CASE_CLOSED_MESSAGE = "case_closed_message"
+CONTENT_PROFILE_PICTURE = "profile_picture"
 CONTENT_IMAGE = "image"
 CONTENT_AI_OUTPUT = "ai_output"
 
@@ -78,7 +97,12 @@ SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
     CONTENT_COMMENT,
     CONTENT_CHAT_MESSAGE,
     CONTENT_CASE_CLOSED_MESSAGE,
+    CONTENT_PROFILE_PICTURE,
 )
+
+# Item types whose payload is image bytes and therefore go through Analyze
+# Image instead of Analyze Text. The dispatcher routes; callers never choose.
+_IMAGE_CONTENT_TYPES: frozenset[str] = frozenset({CONTENT_PROFILE_PICTURE})
 
 # The exact display name every automated report carries. Shown in the admin
 # report queue as the reporter name; never a real participant.
@@ -94,17 +118,22 @@ HUMAN_SOURCE = "user"
 AUTOMATED_REMOVED_BY = "azure-content-safety"
 
 # Central severity policy. The maximum per-category severity decides.
-# 0: no escalation. 2/4/6: report + hide (everything >1 flagged+hidden).
+# 0: no escalation. 2/4/6: report + hide (everything >1 flagged+hidden),
+# or -- for blocking items such as profile pictures -- reject outright.
 NO_ACTION = "none"
 REPORT_ONLY = "report"
 REPORT_AND_HIDE = "report_and_hide"
+REJECT = "reject"
 
 # Per-item handling. Confessions, their comments, matchmaking chat messages
 # and Case Closed detective-thread turns share the same principal/logic
-# (everything >1 flagged+hidden); images/AI outputs plug in here in later
-# batches. Central dispatcher reads this -- callers never hardcode thresholds.
-# None of these block: a flagged row is still stored (born hidden for chat, so
-# it never reaches the recipient) and carries an automated report for audit.
+# (everything >1 flagged+hidden); AI outputs plug in here in a later batch.
+# Central dispatcher reads this -- callers never hardcode thresholds.
+# None of the text items block: a flagged row is still stored (born hidden for
+# chat, so it never reaches the recipient) and carries an automated report for
+# audit. Profile pictures are the exception: a violating image has no row worth
+# keeping and no report queue to serve, so policy blocks it -- the caller
+# refuses the upload before storage and notifies staff instead.
 _POLICIES: dict[str, dict] = {
     CONTENT_CONFESSION: {
         "report_threshold": 2,
@@ -125,6 +154,10 @@ _POLICIES: dict[str, dict] = {
         "report_threshold": 2,
         "hide_threshold": 2,
         "block": False,
+    },
+    CONTENT_PROFILE_PICTURE: {
+        "block": True,
+        "block_threshold": 2,
     },
 }
 
@@ -184,6 +217,12 @@ def analyze_text_url_for(config: ContentSafetyConfig) -> str:
     return f"{base}/contentsafety/text:analyze?api-version={API_VERSION}"
 
 
+def analyze_image_url_for(config: ContentSafetyConfig) -> str:
+    """Full Analyze Image URL for this configuration."""
+    base = str(config.endpoint or "").strip().rstrip("/")
+    return f"{base}/contentsafety/image:analyze?api-version={API_VERSION}"
+
+
 def max_severity(scores: Dict[str, int]) -> int:
     """Maximum severity across the four categories (0, 2, 4 or 6).
 
@@ -205,13 +244,20 @@ def classify_action(maximum: int) -> str:
 
 
 def classify_for_content(content_type: str, maximum: int) -> str:
-    """Policy action for one item type and one maximum severity."""
+    """Policy action for one item type and one maximum severity.
+
+    Blocking items resolve first: a severe profile picture is a rejection,
+    not a report+hide, regardless of any report/hide thresholds. Everything
+    else keeps the canonical principal (2/4/6 report+hide).
+    """
     policy = _POLICIES.get(content_type)
     if policy is None:
         raise ContentSafetyError(
             f"Content moderation is not implemented for {content_type!r}.",
             code="unsupported_item",
         )
+    if policy.get("block") and maximum >= int(policy.get("block_threshold", 6)):
+        return REJECT
     if maximum >= int(policy.get("hide_threshold", 6)):
         return REPORT_AND_HIDE
     if maximum >= int(policy.get("report_threshold", 4)):
@@ -241,9 +287,10 @@ def should_hide_for(content_type: str, maximum: int) -> bool:
 def should_block_for(content_type: str, maximum: int) -> bool:
     """Whether this item must be rejected outright (not stored/published).
 
-    Confessions never block: even severity 6 is stored hidden with an
-    embedding. Future items (e.g. comments/chat) may block instead; their
-    policies declare ``"block": True`` with their own thresholds.
+    Text items never block: even severity 6 is stored hidden with an
+    embedding. Profile pictures block instead: their policy declares
+    ``"block": True`` with a ``block_threshold`` of >1, so a violating image
+    is refused before storage.
     """
     policy = _POLICIES.get(content_type)
     if policy is None:
@@ -377,6 +424,72 @@ def _map_sdk_error(exc: BaseException) -> ContentSafetyError:
     )
 
 
+def _call_sdk(
+    client: Any, operation: str, options: Any, config: ContentSafetyConfig
+) -> Any:
+    """Run one SDK analyze operation and classify any failure.
+
+    Shared by Analyze Text and Analyze Image so credentials, timeouts and
+    provider bodies are mapped in one place; the client is closed either way,
+    and neither the payload nor the key is ever logged.
+    """
+    try:
+        # Per-call client keeps credential/timeout rotation test-safe.
+        # azure-core honors timeout kwarg on the operation when supported.
+        if hasattr(client, "__enter__"):
+            with client as live:
+                return getattr(live, operation)(
+                    options, timeout=float(config.timeout_seconds)
+                )
+        return getattr(client, operation)(options, timeout=float(config.timeout_seconds))
+    except Exception as exc:
+        # HttpResponseError, ServiceRequestError, etc. Never include body/key.
+        if isinstance(exc, ContentSafetyError):
+            raise
+        logger.warning("Content Safety SDK call failed: %s", type(exc).__name__)
+        raise _map_sdk_error(exc) from exc
+    finally:
+        try:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            pass
+
+
+def _scores_from_response(response: Any) -> Dict[str, int]:
+    """Validate one analyze response into {category: severity}.
+
+    Both operations answer with the same ``categories_analysis`` shape and the
+    same four categories; both must fail closed on a malformed or incomplete
+    body rather than silently score a missing category as zero.
+    """
+    try:
+        items = getattr(response, "categories_analysis", None)
+        if not isinstance(items, list):
+            raise ValueError("missing categoriesAnalysis")
+        scores: Dict[str, int] = {}
+        for entry in items:
+            cat = getattr(entry, "category", None)
+            sev = getattr(entry, "severity", None)
+            canonical = _normalize_category(cat)
+            if canonical is not None:
+                scores[canonical] = int(sev)
+        for cat in CATEGORIES:
+            if cat not in scores:
+                raise ValueError(f"missing category {cat}")
+            if scores[cat] not in (0, 2, 4, 6):
+                raise ValueError(f"unexpected severity {scores[cat]!r} for {cat}")
+    except ContentSafetyError:
+        raise
+    except Exception as exc:
+        raise ContentSafetyError(
+            "The moderation provider returned a malformed analysis response.",
+            code="malformed",
+        ) from exc
+    return scores
+
+
 def analyze_text(
     text: str,
     *,
@@ -436,59 +549,83 @@ def analyze_text(
         categories=list(CATEGORIES),
         output_type=OUTPUT_TYPE,
     )
-    try:
-        # Per-call client keeps credential/timeout rotation test-safe.
-        # azure-core honors timeout kwarg on the operation when supported.
-        if hasattr(client, "__enter__"):
-            with client as live:
-                response = live.analyze_text(
-                    options, timeout=float(config.timeout_seconds)
-                )
-        else:
-            response = client.analyze_text(
-                options, timeout=float(config.timeout_seconds)
-            )
-    except Exception as exc:
-        # HttpResponseError, ServiceRequestError, etc. Never include body/key.
-        if isinstance(exc, ContentSafetyError):
-            raise
-        logger.warning("Content Safety SDK call failed: %s", type(exc).__name__)
-        raise _map_sdk_error(exc) from exc
-    finally:
-        try:
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
-        except Exception:
-            pass
-    try:
-        items = getattr(response, "categories_analysis", None)
-        if not isinstance(items, list):
-            raise ValueError("missing categoriesAnalysis")
-        scores: Dict[str, int] = {}
-        for entry in items:
-            cat = getattr(entry, "category", None)
-            sev = getattr(entry, "severity", None)
-            canonical = _normalize_category(cat)
-            if canonical is not None:
-                scores[canonical] = int(sev)
-        for cat in CATEGORIES:
-            if cat not in scores:
-                raise ValueError(f"missing category {cat}")
-            if scores[cat] not in (0, 2, 4, 6):
-                raise ValueError(f"unexpected severity {scores[cat]!r} for {cat}")
-    except ContentSafetyError:
-        raise
-    except Exception as exc:
-        raise ContentSafetyError(
-            "The moderation provider returned a malformed analysis response.",
-            code="malformed",
-        ) from exc
+    response = _call_sdk(client, "analyze_text", options, config)
+    scores = _scores_from_response(response)
     # Never log the text itself or secrets; lengths + per-category scores
     # + max are operational and safe.
     logger.info(
         "Content Safety analysis complete (%s chars, max=%s, scores Hate=%s SelfHarm=%s Sexual=%s Violence=%s)",
         len(body_text),
+        max_severity(scores),
+        int(scores.get("Hate", 0) or 0),
+        int(scores.get("SelfHarm", 0) or 0),
+        int(scores.get("Sexual", 0) or 0),
+        int(scores.get("Violence", 0) or 0),
+    )
+    return scores
+
+
+def analyze_image(
+    image: bytes,
+    *,
+    config: Optional[ContentSafetyConfig] = None,
+) -> Dict[str, int]:
+    """Analyze one image's bytes and return {category: severity}.
+
+    Used by profile pictures, whose bytes are in memory at this point and are
+    only stored after a safe verdict -- a violating image never reaches
+    Cloudinary. Raises ContentSafetyError on missing config, empty input,
+    timeouts, auth failures and provider errors. Never returns a default
+    score on failure: callers treat failure as unknown, never as safe.
+
+    The payload is the prepared upload bytes; the SDK base64-encodes
+    ``ImageData.content`` on the wire, matching the REST contract.
+    """
+    if config is None:
+        from ..config import settings as _settings
+
+        config = config_from_settings(_settings)
+    _require_config(config)
+    body = image or b""
+    if not body:
+        raise ContentSafetyError(
+            "An empty image cannot be moderated.",
+            code="invalid_input",
+        )
+    # Official SDK per
+    # https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/contentsafety/azure-ai-contentsafety
+    # (ContentSafetyClient + AnalyzeImageOptions/ImageData, api-version 2024-09-01).
+    try:
+        from azure.ai.contentsafety.models import AnalyzeImageOptions, ImageData
+    except ImportError as exc:
+        raise ContentSafetyError(
+            "Content moderation is unavailable: the azure-ai-contentsafety "
+            "package is not installed.",
+            code="unavailable",
+        ) from exc
+    try:
+        client = get_content_safety_client(config)
+    except ContentSafetyError:
+        raise
+    except Exception as exc:
+        raise ContentSafetyError(
+            "Content moderation is not configured.",
+            code="missing_config",
+        ) from exc
+    # Pass plain strings (not the ImageCategory enum) for the same reason as
+    # Analyze Text: strings serialize as the documented category names.
+    options = AnalyzeImageOptions(
+        image=ImageData(content=body),
+        categories=list(CATEGORIES),
+        output_type=OUTPUT_TYPE,
+    )
+    response = _call_sdk(client, "analyze_image", options, config)
+    scores = _scores_from_response(response)
+    # Never log the image bytes or secrets; size + per-category scores
+    # + max are operational and safe.
+    logger.info(
+        "Content Safety image analysis complete (%s bytes, max=%s, scores Hate=%s SelfHarm=%s Sexual=%s Violence=%s)",
+        len(body),
         max_severity(scores),
         int(scores.get("Hate", 0) or 0),
         int(scores.get("SelfHarm", 0) or 0),
@@ -558,18 +695,19 @@ def _decision_for(
 
 def moderate_content(
     content_type: str,
-    text: str,
+    content: Union[str, bytes],
     *,
     config: Optional[ContentSafetyConfig] = None,
 ) -> ModerationDecision:
     """Moderate one item centrally: analyze + per-item policy in one call.
 
     This is the only entry future features should use. Configuration is
-    loaded here, so comment/chat/image/AI-output paths never carry their own
-    local ``config_from_settings``/endpoint/key handling. Today only
-    ``"confession"`` is supported; any other ``content_type`` raises
-    ``ContentSafetyError(code="unsupported_item")`` fail-closed so the
-    confession policy can never silently apply elsewhere.
+    loaded here, so profile-picture/comment/chat/AI-output paths never carry
+    their own local ``config_from_settings``/endpoint/key handling. Text
+    items go through Analyze Text; image items (profile pictures) go through
+    Analyze Image. Any other ``content_type`` raises
+    ``ContentSafetyError(code="unsupported_item")`` fail-closed so one item's
+    policy can never silently apply to another.
 
     Failures are unknown, never safe: every ``ContentSafetyError`` from the
     analyzer propagates unchanged for the caller to turn into a retryable
@@ -586,8 +724,11 @@ def moderate_content(
         config = config_from_settings(_settings)
     # Route through the confession analyzer for text items so existing mocks
     # on that name keep intercepting; all text items share the same Analyze
-    # Text operation until image/AI-output analyzers land.
-    scores = analyze_confession_text(text, config=config)
+    # Text operation. Image items are the only ones on Analyze Image.
+    if content_type in _IMAGE_CONTENT_TYPES:
+        scores = analyze_image(content, config=config)
+    else:
+        scores = analyze_confession_text(content, config=config)
     return _decision_for(content_type, scores)
 
 
@@ -625,6 +766,21 @@ def moderate_case_closed_message_text(
 ) -> ModerationDecision:
     """Central Case Closed turn moderation (same principal/logic as confessions)."""
     return moderate_content(CONTENT_CASE_CLOSED_MESSAGE, text, config=config)
+
+
+def moderate_profile_picture(
+    image: bytes,
+    *,
+    config: Optional[ContentSafetyConfig] = None,
+) -> ModerationDecision:
+    """Central profile-picture moderation (prepared image bytes).
+
+    The bytes are in memory and nothing is stored yet, so a blocking verdict
+    (``should_block``) lets the caller refuse the upload before Cloudinary
+    ever sees it: the participant's attempt is consumed, staff are notified
+    and the response is a 422 -- no report row, no stored object.
+    """
+    return moderate_content(CONTENT_PROFILE_PICTURE, image, config=config)
 
 
 def moderation_error_to_http(
