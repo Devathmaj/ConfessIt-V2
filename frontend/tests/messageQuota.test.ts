@@ -9,6 +9,7 @@ import {
   messageLimitNotice,
   messageQuotaLabel,
   quotaAfterIncomingMessage,
+  quotaAfterRemovedMessage,
 } from '@/lib/messageQuota';
 import type { MessageQuota } from '@/lib/messageQuota';
 
@@ -176,5 +177,40 @@ describe('quotaAfterIncomingMessage', () => {
 
   it('stays unknown when the server has not reported an allowance', () => {
     expect(quotaAfterIncomingMessage(null, false)).toBeNull();
+  });
+});
+
+describe('quotaAfterRemovedMessage', () => {
+  it('still spends the caller own allowance when their message is removed', () => {
+    // The refused send carried no quota, but the server stored and counted the attempt, so the
+    // header has to move now: leaving it would keep showing "2/100 sent" after a third send.
+    const quota = quotaAfterRemovedMessage(quotaOf({ participant_count: 2 }))!;
+
+    expect(quota.participant_count).toBe(3);
+    expect(quota.conversation_count).toBe(1);
+    expect(messageQuotaLabel(quota)).toBe('3/100 sent');
+  });
+
+  it('moves both halves because the removed message was the caller own', () => {
+    const quota = quotaAfterRemovedMessage(
+      quotaOf({ conversation_count: 41, participant_count: 18 })
+    )!;
+
+    expect(quota.conversation_count).toBe(42);
+    expect(quota.participant_count).toBe(19);
+  });
+
+  it('closes the composer when the removed message was the last one allowed', () => {
+    const quota = quotaAfterRemovedMessage(
+      quotaOf({ participant_count: 99, conversation_count: 120 })
+    )!;
+
+    expect(quota.participant_remaining).toBe(0);
+    expect(quota.can_send).toBe(false);
+    expect(quota.limit_reached).toBe('participant');
+  });
+
+  it('stays unknown when the server has not reported an allowance', () => {
+    expect(quotaAfterRemovedMessage(null)).toBeNull();
   });
 });

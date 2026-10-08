@@ -23,11 +23,22 @@ import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   caseClosedLimitNotice,
   caseClosedMessagingClient,
+  caseClosedQuotaAfterRemovedMessage,
   caseClosedQuotaLabel,
   emptyCaseClosedQuota,
 } from '@/lib/caseClosedMessaging';
+import { quotaAfterIncomingMessage } from '@/lib/messageQuota';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
 import {
   getCaseClosedMessages,
@@ -47,6 +58,10 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [connected, setConnected] = useState(false);
+  const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({
+    open: false,
+    message: '',
+  });
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const subscribedRef = useRef(false);
 
@@ -95,21 +110,7 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
             return [...prev, { ...incoming, is_sender: incoming.sender_user_id === user?.id }];
           });
           setTotal((t) => t + 1);
-          setQuota((q) => {
-            if (!q) return q;
-            const fromCaller = incoming.sender_user_id === user?.id;
-            const conversationCount = q.conversation_count + 1;
-            const participantCount = q.participant_count + (fromCaller ? 1 : 0);
-            const conversationRemaining = Math.max(0, q.conversation_limit - conversationCount);
-            const participantRemaining = Math.max(0, q.participant_limit - participantCount);
-            const limitReached =
-              participantRemaining === 0 ? 'participant' : conversationRemaining === 0 ? 'conversation' : null;
-            return {
-              ...q, conversation_count: conversationCount, participant_count: participantCount,
-              conversation_remaining: conversationRemaining, participant_remaining: participantRemaining,
-              can_send: limitReached === null, limit_reached: limitReached,
-            };
-          });
+          setQuota((q) => quotaAfterIncomingMessage(q, incoming.sender_user_id === user?.id));
           scrollToBottom();
         });
         offError = caseClosedMessagingClient.onError(() => setConnected(false));
@@ -137,8 +138,9 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
   const remaining = total > messages.length ? total - messages.length : 0;
 
   return (
-    <Card>
-      <CardHeader>
+    <>
+      <Card>
+        <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <MessagesSquare className="h-4 w-4" /> Detective thread
           <Badge variant={connected ? 'default' : 'secondary'}>{connected ? 'live' : 'polling'}</Badge>
@@ -203,6 +205,20 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
                   setDraft('');
                   scrollToBottom();
                 } catch (error) {
+                  if ((error as { response?: { status?: number } }).response?.status === 422) {
+                    // The turn was removed, but the attempt was spent: the
+                    // server stored it and counted it, so move the counter now
+                    // rather than wait for the next read.
+                    setQuota((q) => caseClosedQuotaAfterRemovedMessage(q));
+                    setViolationDialog({
+                      open: true,
+                      message: describeApiError(
+                        error,
+                        'Your message was removed because it violated our content policies.'
+                      ),
+                    });
+                    return;
+                  }
                   toast.error(describeApiError(error, 'Could not send the message.'));
                 } finally {
                   setSending(false);
@@ -226,7 +242,30 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
           </>
         )}
       </CardContent>
-    </Card>
+      </Card>
+
+      {/* A send content safety refused. Rendered from state rather than a toast
+          so the reason stays on screen until acknowledged. */}
+      <AlertDialog
+        open={violationDialog.open}
+        onOpenChange={(open) => setViolationDialog((prev) => ({ ...prev, open }))}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Message removed</AlertDialogTitle>
+            <AlertDialogDescription>
+              {violationDialog.message ||
+                'Your message was removed because it violated our content policies.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setViolationDialog({ open: false, message: '' })}>
+              Understood
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };
 

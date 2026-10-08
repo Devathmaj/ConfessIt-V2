@@ -3235,7 +3235,7 @@ class CaseClosedEvidenceRecord(Base):
     )
 
 
-class CaseClosedMessageRecord(Base):
+class CaseClosedMessageRecord(RemovedContentColumns, Base):
     """One chat turn in a couple's Case Closed detective thread.
 
     Scoped to the couple's game session (one thread per session), not to a
@@ -3243,6 +3243,12 @@ class CaseClosedMessageRecord(Base):
     Closed session, so the game id and session id travel together. Quotas
     (400 per thread, 200 per detective) are enforced in
     ``case_closed_messaging``; the columns here only persist the transcript.
+
+    Carries ``removed_at``/``removed_by_regno`` like every other content table
+    so an Azure Content Safety removal can hide a turn without deleting it: the
+    flagged turn is stored born hidden (never delivered, never in the
+    transcript) but still counts against the sender's allowance, which is why
+    the quota reads count removed rows while the transcript reads filter them.
     """
 
     __tablename__ = "case_closed_messages"
@@ -3265,6 +3271,44 @@ class CaseClosedMessageRecord(Base):
             name=f"ck_case_closed_messages_body_length_{MESSAGE_BODY_MAX}",
         ),
     )
+
+
+class CaseClosedMessageReportRecord(Base):
+    """One report filed against a Case Closed detective-thread turn.
+
+    Mirrors ``MessageReportRecord``: there is no participant-facing report
+    route for the detective thread yet, so every row today is an automated
+    report written when Azure Content Safety removes a turn (``reporter_regno``
+    NULL, ``source`` = ``azure_content_safety``, sender named in
+    ``reported_user_regno``). Kept as its own table rather than reusing
+    ``message_reports`` because that table's FK points at matchmaking
+    ``messages``, not at ``case_closed_messages``. It exists for audit: the
+    removal is otherwise only visible as a ``removed_at`` stamp on the row.
+    """
+
+    __tablename__ = "case_closed_message_reports"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    message_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False),
+        ForeignKey("case_closed_messages.id", ondelete="CASCADE"),
+        index=True,
+    )
+    # Nullable for the same reason as ``message_reports.reporter_regno``: an
+    # automated report has no participant behind it.
+    reporter_regno: Mapped[Optional[str]] = mapped_column(
+        String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True, nullable=True
+    )
+    reported_user_regno: Mapped[str] = mapped_column(
+        String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True
+    )
+    reason: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default=text("'pending'"), index=True)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    reviewed_by_regno: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="user", server_default=text("'user'"), index=True)
+    __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
 
 
 def resolve_account_by_id(session, account_id: Optional[str]) -> Optional[tuple[str, Any]]:

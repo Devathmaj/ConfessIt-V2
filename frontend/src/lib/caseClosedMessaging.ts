@@ -16,6 +16,7 @@ import {
   CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
   CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX,
 } from './limits';
+import { quotaAfterIncomingMessage } from './messageQuota';
 import type { CaseClosedMessageQuota } from '@/services/api';
 
 export interface CaseClosedLiveMessage {
@@ -189,6 +190,20 @@ export const emptyCaseClosedQuota = (): CaseClosedMessageQuota => ({
 
 export const caseClosedQuotaLabel = (quota: CaseClosedMessageQuota | null): string | null =>
   quota === null ? null : `${quota.participant_count}/${quota.participant_limit} sent`;
+
+/**
+ * The allowance after the caller's own Case Closed turn was removed by content
+ * safety.
+ *
+ * Mirrors the matchmaking case: the refused send (HTTP 422) carries no `quota`
+ * but the attempt was still spent, so the counter has to move now rather than
+ * wait for the next transcript read, or the header keeps showing the
+ * pre-removal figure. Shares the arithmetic with `messageQuota` so the two
+ * chats can never drift apart.
+ */
+export const caseClosedQuotaAfterRemovedMessage = (
+  quota: CaseClosedMessageQuota | null
+): CaseClosedMessageQuota | null => quotaAfterIncomingMessage(quota, true);
 
 export const caseClosedLimitNotice = (quota: CaseClosedMessageQuota | null): string | null => {
   if (quota === null || quota.can_send) return null;

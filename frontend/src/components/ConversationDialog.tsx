@@ -13,6 +13,7 @@ import {
   messageLimitNotice,
   messageQuotaLabel,
   quotaAfterIncomingMessage,
+  quotaAfterRemovedMessage,
 } from '@/lib/messageQuota';
 import type { MessageQuota } from '@/lib/messageQuota';
 import { toast } from 'sonner';
@@ -685,6 +686,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // cannot be sent as written) and say why, rather than restoring text that would only
       // fail again.
       if (error instanceof SendMessageError && error.status === 422) {
+        // The message was removed, but the attempt was spent: the server stored
+        // it and counted it. Move the counter now, or the header keeps showing
+        // the pre-removal figure until the next read.
+        recordQuota(quotaAfterRemovedMessage(quota));
         setViolationDialog({ open: true, message: error.message });
         return;
       }

@@ -697,18 +697,25 @@ def test_central_dispatcher_rejects_unimplemented_items(monkeypatch):
         with pytest.raises(css.ContentSafetyError) as exc:
             css.moderate_content(item, "some text")
         assert exc.value.code == "unsupported_item"
-    # Confessions + comments + chat messages supported with the same principal.
+    # Confessions + comments + chat messages + Case Closed turns supported with the same
+    # principal.
     assert set(css.SUPPORTED_CONTENT_TYPES) == {
         css.CONTENT_CONFESSION,
         css.CONTENT_COMMENT,
         css.CONTENT_CHAT_MESSAGE,
+        css.CONTENT_CASE_CLOSED_MESSAGE,
     }
 
 
 def test_central_policy_registry_single_source_of_truth():
     # Thresholds live in _POLICIES, not scattered in callers.
-    # Everything >1 flagged+hidden, same for confessions + comments + chat.
-    for item in (css.CONTENT_CONFESSION, css.CONTENT_COMMENT, css.CONTENT_CHAT_MESSAGE):
+    # Everything >1 flagged+hidden, same for confessions + comments + chat + Case Closed.
+    for item in (
+        css.CONTENT_CONFESSION,
+        css.CONTENT_COMMENT,
+        css.CONTENT_CHAT_MESSAGE,
+        css.CONTENT_CASE_CLOSED_MESSAGE,
+    ):
         assert css._POLICIES[item]["report_threshold"] == 2
         assert css._POLICIES[item]["hide_threshold"] == 2
         assert css.classify_for_content(item, 0) == css.NO_ACTION

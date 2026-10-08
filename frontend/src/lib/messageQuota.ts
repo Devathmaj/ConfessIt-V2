@@ -110,6 +110,20 @@ export const quotaAfterIncomingMessage = (
 };
 
 /**
+ * The allowance after the caller's own message was removed by content safety.
+ *
+ * A refused send (HTTP 422) carries no `quota`, but the attempt was still spent:
+ * the server stores the flagged message and counts it, the same as any other
+ * message. So the counter has to move here rather than wait for the next read,
+ * or the header would keep showing "2/100 sent" after the third message went in
+ * -- the exact lie this corrects. Both halves move because the message was the
+ * caller's own. Derived from the server's last reading, clamped at zero.
+ */
+export const quotaAfterRemovedMessage = (
+  quota: MessageQuota | null
+): MessageQuota | null => quotaAfterIncomingMessage(quota, true);
+
+/**
  * A quota for a conversation the server has not reported one for.
  *
  * Only used when a read fails to carry the field -- an older backend, or a response shape
