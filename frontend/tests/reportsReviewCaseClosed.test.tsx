@@ -1,0 +1,180 @@
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AuthContext } from '@/contexts/AuthContext';
+import { ReportsReview } from '@/pages/ReportsReview';
+
+/**
+ * Case Closed detective-thread reports on the unified Reports Review screen.
+ *
+ * They share the "Chat messages" tab with matchmaking chat, discriminated by each row's
+ * `kind`. The property worth pinning is that a ruling is dispatched to the right table:
+ * a Case Closed report must close and restore through the case_closed endpoints, never the
+ * matchmaking ones -- the ids overlap between the two tables, so guessing would rule on the
+ * wrong row.
+ */
+
+const api = vi.hoisted(() => ({
+  getAdminConfessionReports: vi.fn(),
+  getAdminLoveNoteReports: vi.fn(),
+  getAdminMessageReports: vi.fn(),
+  updateAdminConfessionReportStatus: vi.fn(),
+  updateAdminLoveNoteReportStatus: vi.fn(),
+  updateAdminMessageReportStatus: vi.fn(),
+  unhideAdminConfession: vi.fn(),
+  unhideAdminComment: vi.fn(),
+  unhideAdminMessage: vi.fn(),
+}));
+
+vi.mock('@/services/api', () => api);
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
+  Toaster: () => null,
+}));
+
+const NOW = '2026-01-15T10:00:00Z';
+
+const conversation = {
+  id: 'session-1',
+  status: null,
+  participants: [
+    { regno: 'cc_player_a', name: 'Alice' },
+    { regno: 'cc_player_b', name: 'Bob' },
+  ],
+  message_count: 3,
+  removed_message_count: 0,
+};
+
+const caseClosedReport = {
+  id: '11111111-1111-1111-1111-111111111111',
+  kind: 'case_closed',
+  message_id: '22222222-2222-2222-2222-222222222222',
+  body: 'that alibi is a lie',
+  message_created_at: NOW,
+  conversation_id: 'session-1',
+  conversation,
+  reporter: { regno: 'cc_player_b', name: 'Bob' },
+  reported_user: { regno: 'cc_player_a', name: 'Alice' },
+  reason: 'out of line',
+  reported_at: NOW,
+  status: 'pending',
+  source: 'user',
+  reviewed_at: null,
+  reviewed_by_regno: null,
+  content_removed: false,
+  removed_by_regno: null,
+};
+
+const emptyQueue = { reports: [], total: 0, skip: 0, limit: 50 };
+const queue = (reports: unknown[]) => ({ reports, total: reports.length, skip: 0, limit: 50 });
+
+function renderPage() {
+  return render(
+    <AuthContext.Provider
+      value={
+        {
+          user: {
+            id: 'admin-1',
+            regno: 'ADMIN-1',
+            name: 'Admin',
+            account_type: 'admin',
+            capabilities: [],
+            is_blocked: false,
+          },
+          isAuthenticated: true,
+          loading: false,
+          can: () => true,
+        } as never
+      }
+    >
+      <MemoryRouter>
+        <ReportsReview />
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+/** Radix Tabs activate on mouse down, so a click alone would leave the tab where it was. */
+async function openMessagesTab() {
+  const trigger = await screen.findByRole('tab', { name: /chat messages/i });
+  fireEvent.mouseDown(trigger);
+}
+
+describe('ReportsReview: Case Closed detective-thread reports', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getAdminConfessionReports.mockResolvedValue(emptyQueue);
+    api.getAdminLoveNoteReports.mockResolvedValue(emptyQueue);
+    api.getAdminMessageReports.mockResolvedValue(queue([caseClosedReport]));
+  });
+
+  it('renders a Case Closed report as a detective-thread message in the chat messages tab', async () => {
+    renderPage();
+    await openMessagesTab();
+
+    expect(
+      await screen.findByRole('button', { name: /detective thread message reported by bob/i }),
+    ).toBeInTheDocument();
+    // The thread context names the other participant rather than a matchmaking conversation
+    // status (a detective thread has none).
+    expect(screen.getByText(/in a detective thread with bob/i)).toBeInTheDocument();
+  });
+
+  it('rules a Case Closed report through the case_closed kind', async () => {
+    renderPage();
+    await openMessagesTab();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /detective thread message reported by bob/i }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /remove content/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /remove content/i }));
+
+    await waitFor(() => {
+      expect(api.updateAdminMessageReportStatus).toHaveBeenCalledWith(
+        caseClosedReport.id,
+        'removed',
+        'case_closed',
+      );
+    });
+  });
+
+  it('restores an Azure-hidden Case Closed turn through the case_closed kind', async () => {
+    api.getAdminMessageReports.mockResolvedValue(
+      queue([
+        {
+          ...caseClosedReport,
+          reporter: { regno: null, name: 'Azure Content Safety' },
+          reason: 'Automatically generated by Azure AI Content Safety.',
+          status: 'removed',
+          source: 'azure_content_safety',
+          reviewed_at: NOW,
+          reviewed_by_regno: 'azure-content-safety',
+          content_removed: true,
+          removed_by_regno: 'azure-content-safety',
+        },
+      ]),
+    );
+    api.unhideAdminMessage.mockResolvedValue({ id: caseClosedReport.message_id });
+    renderPage();
+    await openMessagesTab();
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /detective thread message reported by azure content safety/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /restore content/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /restore content/i }));
+
+    await waitFor(() => {
+      expect(api.unhideAdminMessage).toHaveBeenCalledWith(
+        caseClosedReport.message_id,
+        'case_closed',
+      );
+    });
+  });
+});

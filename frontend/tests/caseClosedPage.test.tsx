@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { ContextType } from 'react';
 
@@ -18,6 +18,7 @@ vi.mock('@/services/api', () => ({
   getCaseClosedResult: vi.fn(),
   getCaseClosedMessages: vi.fn(),
   sendCaseClosedMessage: vi.fn(),
+  reportCaseClosedMessage: vi.fn(),
 }));
 
 vi.mock('@/lib/caseClosedMessaging', async (importOriginal) => {
@@ -41,6 +42,7 @@ const confirmFn = api.confirmCaseClosedAccusation as ReturnType<typeof vi.fn>;
 const getResult = api.getCaseClosedResult as ReturnType<typeof vi.fn>;
 const getMessages = api.getCaseClosedMessages as ReturnType<typeof vi.fn>;
 const sendChat = api.sendCaseClosedMessage as ReturnType<typeof vi.fn>;
+const reportCC = api.reportCaseClosedMessage as ReturnType<typeof vi.fn>;
 
 type AuthValue = ContextType<typeof AuthContext>;
 const authValue = (): AuthValue =>
@@ -153,5 +155,26 @@ describe('CaseClosedGamePage', () => {
     await waitFor(() => expect(sendChat).toHaveBeenCalledWith('On it'));
     expect(await screen.findByText('On it')).toBeTruthy();
     expect(investigate).not.toHaveBeenCalled();
+  });
+
+  it('offers a report action on a received turn and files it through the Case Closed endpoint', async () => {
+    getState.mockResolvedValue(baseState());
+    reportCC.mockResolvedValue({ id: 'r1' });
+    getMessages.mockResolvedValue({
+      game_id: 'g1', session_id: 's1',
+      messages: [{ id: 'm1', game_id: 'g1', session_id: 's1', sender_user_id: 'b', body: 'That alibi is a lie', created_at: new Date().toISOString(), is_read: true }],
+      count: 1, total: 1,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 1, participant_count: 0, conversation_remaining: 399, participant_remaining: 200, can_send: true, limit_reached: null },
+    });
+    renderPage();
+    await screen.findByText('That alibi is a lie');
+
+    // Only a turn the viewer received can be reported; their own turns carry no such action.
+    fireEvent.click(screen.getByRole('button', { name: /report this message/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getAllByRole('radio')[0]);
+    fireEvent.click(within(dialog).getByRole('button', { name: /report message/i }));
+
+    await waitFor(() => expect(reportCC).toHaveBeenCalledWith('m1', 'harassment'));
   });
 });

@@ -11,6 +11,7 @@ is refused everywhere.
 """
 
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,10 @@ from app.services.authorization import FORBIDDEN_DETAIL
 # The dependency is named after the capability by require_capability, which makes the name a
 # faithful reverse index from the route graph back to the enum.
 DEPENDENCY_NAMES = {f"require_{capability.value.replace(':', '_')}": capability for capability in Capability}
+
+# A syntactically valid but certainly absent UUID, used to fill path parameters
+# so a request reaches the authorisation layer without tripping a database cast.
+_SAMPLE_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def _declared_capability(route):
@@ -33,8 +38,37 @@ def _declared_capability(route):
     return found
 
 
+def _iter_routes(router, prefix=""):
+    """Yield ``(full_path, route)`` for every leaf route under ``router``.
+
+    ``include_router`` keeps each included router as a nested node on
+    ``app.routes`` instead of copying its routes onto the parent, so a single
+    pass over ``app.routes`` no longer reaches the leaves. Walk the tree and
+    fold each include prefix into the path so the leaves look exactly like the
+    flat list the assertions were written against.
+    """
+    for route in getattr(router, "routes", []):
+        if type(route).__name__ == "_IncludedRouter":
+            context = getattr(route, "include_context", None)
+            nested_prefix = prefix + (getattr(context, "prefix", "") or "")
+            yield from _iter_routes(route.original_router, nested_prefix)
+        else:
+            yield prefix, route
+
+
 def _admin_routes():
-    return [route for route in app.routes if getattr(route, "path", "").startswith("/admin")]
+    collected = []
+    for prefix, route in _iter_routes(app):
+        path = prefix + getattr(route, "path", "")
+        if path.startswith("/admin"):
+            collected.append(
+                SimpleNamespace(
+                    path=path,
+                    methods=getattr(route, "methods", None) or set(),
+                    dependant=route.dependant,
+                )
+            )
+    return collected
 
 
 ADMIN_ROUTES = _admin_routes()
@@ -166,16 +200,61 @@ SAMPLE_ROUTES = [
     ("PUT", "/admin/featured/range"),
     ("DELETE", "/admin/featured/{game_date}"),
     ("POST", "/admin/games/run-resets"),
+    # Confession search and the un-hide repair paths. Search is a confessions
+    # review read; restoring a hidden confession or comment is a delete-action
+    # reversal, and restoring an Azure-hidden chat message is a moderation act.
+    ("GET", "/admin/confessions/search"),
+    ("PATCH", "/admin/confessions/{confession_id}/unhide"),
+    ("PATCH", "/admin/comments/{comment_id}/unhide"),
+    ("PATCH", "/admin/messages/{message_id}/unhide"),
+    # Case Closed content studio. Blueprints and packages are authored material,
+    # so every read and write on the surface is gated on ``games:manage`` like
+    # the other game consoles.
+    ("GET", "/admin/case-closed/blueprints"),
+    ("POST", "/admin/case-closed/blueprints"),
+    ("GET", "/admin/case-closed/blueprints/{blueprint_id}"),
+    ("POST", "/admin/case-closed/blueprints/{blueprint_id}/generate"),
+    ("POST", "/admin/case-closed/blueprints/{blueprint_id}/approve"),
+    ("POST", "/admin/case-closed/blueprints/{blueprint_id}/packages"),
+    ("GET", "/admin/case-closed/packages"),
+    ("GET", "/admin/case-closed/packages/{package_id}"),
+    ("POST", "/admin/case-closed/packages/{package_id}/publish"),
+    ("GET", "/admin/case-closed/session"),
+    # Plot Twist content studio. Same shape as Case Closed's: blueprint and
+    # package authoring, generation, approval and publishing, all gated on
+    # ``games:manage``.
+    ("GET", "/admin/plot-twist/blueprints"),
+    ("POST", "/admin/plot-twist/blueprints"),
+    ("GET", "/admin/plot-twist/blueprints/{blueprint_id}"),
+    ("POST", "/admin/plot-twist/blueprints/{blueprint_id}/generate"),
+    ("POST", "/admin/plot-twist/blueprints/{blueprint_id}/approve"),
+    ("POST", "/admin/plot-twist/blueprints/{blueprint_id}/packages"),
+    ("GET", "/admin/plot-twist/packages"),
+    ("GET", "/admin/plot-twist/packages/{package_id}"),
+    ("PUT", "/admin/plot-twist/packages/{package_id}"),
+    ("POST", "/admin/plot-twist/packages/{package_id}/publish"),
+    ("POST", "/admin/plot-twist/packages/{package_id}/simulate"),
+    (
+        "POST",
+        "/admin/plot-twist/packages/{package_id}/scenes/{scene_id}/regenerate",
+    ),
+    ("GET", "/admin/plot-twist/session"),
 ]
 
 
 def _concrete(path_template):
     """Fill the path parameters in, so the request reaches the handler.
 
-    The value is deliberately nonsense: these tests are asserting on the authorisation
-    layer, and a handler that dislikes the id is allowed to complain about it afterwards.
+    The value is deliberately nonsense but must be well formed: ids in this
+    application are UUID columns, so a bare "1" would raise inside the query
+    and surface as a 500 instead of letting the request reach -- and be
+    refused by -- the authorisation layer. Dates keep the old "1" because the
+    validation layer rejects it before the handler is ever entered.
     """
-    return re.sub(r"\{[^}]+\}", "1", path_template)
+    def replacement(match):
+        return "1" if match.group(1).endswith("date") else _SAMPLE_UUID
+
+    return re.sub(r"\{([^}]+)\}", replacement, path_template)
 
 
 def _route_for(method, path_template):

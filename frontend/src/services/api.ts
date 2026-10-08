@@ -692,12 +692,18 @@ export const unhideAdminComment = async (commentId: string) => {
  * Restore an Azure-hidden chat message to both participants. Same gate as the
  * confession/comment restores: only rows the system hid restore, manual hides
  * answer 409, and already-visible rows answer `already_visible`.
+ *
+ * `kind` picks the table: `matchmaking` (the default, so every existing caller
+ * keeps working) or `case_closed` for a detective-thread turn.
  */
-export const unhideAdminMessage = async (messageId: string) => {
+export const unhideAdminMessage = async (
+    messageId: string,
+    kind: 'matchmaking' | 'case_closed' = 'matchmaking'
+) => {
     const response = await axios.patch(
         `${API_URL}/admin/messages/${messageId}/unhide`,
         {},
-        { headers: getAuthHeaders() }
+        { headers: getAuthHeaders(), params: { kind } }
     );
     return response.data;
 };
@@ -869,12 +875,13 @@ export const getAdminMessageReports = async (params?: AdminReportQueueQuery) => 
 
 export const updateAdminMessageReportStatus = async (
     reportId: string,
-    status: AdminReportResolution
+    status: AdminReportResolution,
+    kind: 'matchmaking' | 'case_closed' = 'matchmaking'
 ): Promise<AdminReportResolutionResult> => {
     const response = await axios.patch(
         `${API_URL}/admin/messages/reports/${reportId}`,
         {},
-        { headers: getAuthHeaders(), params: { status } }
+        { headers: getAuthHeaders(), params: { status, kind } }
     );
     return response.data;
 };
@@ -2204,6 +2211,31 @@ export const getCaseClosedMessages = async (limit?: number, before?: string): Pr
 export const sendCaseClosedMessage = async (body: string): Promise<CaseClosedSentMessage> => {
   const response = await axios.post(`${API_URL}/games/case-closed/messages`, { body }, { headers: getAuthHeaders() });
   return response.data;
+};
+
+/**
+ * Report a partner's detective-thread turn. Mirrors the matchmaking chat report:
+ * only the recipient may report a turn, one report per turn. The complaint lands
+ * in the admin "Chat messages" queue with `kind: "case_closed"`.
+ *
+ * The server's `detail` is re-thrown as the Error message so the dialog can tell
+ * a duplicate ("You have already reported this message") from any other failure.
+ */
+export const reportCaseClosedMessage = async (messageId: string, reason: string): Promise<{ id: string }> => {
+  try {
+    const response = await axios.post(
+      `${API_URL}/games/case-closed/messages/report`,
+      { message_id: messageId, reason },
+      { headers: getAuthHeaders() }
+    );
+    return response.data;
+  } catch (error: unknown) {
+    const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+    throw new Error(
+      typeof detail === 'string' && detail ? detail : 'Failed to report message',
+      { cause: error }
+    );
+  }
 };
 
 // --- Game configuration, featured spotlight, scheduling and selection ---

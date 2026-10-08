@@ -467,6 +467,43 @@ class Settings(BaseSettings):
             )
         return text_value
 
+    # --- Azure AI Language: PII detection ---
+    #
+    # Confession content is scanned for personally identifiable information
+    # before it is accepted. Credentials stay in the runtime environment and
+    # are never committed or logged.
+    PII_DETECTION_ENDPOINT: str | None = None
+    PII_DETECTION_API_KEY: str | None = None
+    PII_DETECTION_REGION: str | None = None
+
+    @field_validator(
+        "PII_DETECTION_ENDPOINT",
+        "PII_DETECTION_API_KEY",
+        "PII_DETECTION_REGION",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_empty_pii_detection_optional(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("PII_DETECTION_ENDPOINT")
+    @classmethod
+    def _validate_pii_detection_endpoint(cls, value: str | None) -> str | None:
+        """Non-blank http(s) endpoint when set; None means unconfigured."""
+        if value is None:
+            return None
+        text_value = value.strip().rstrip("/")
+        if not text_value:
+            return None
+        lowered = text_value.lower()
+        if not (lowered.startswith("https://") or lowered.startswith("http://")):
+            raise ValueError(
+                f"PII_DETECTION_ENDPOINT must be an http(s) URL (got {value!r})."
+            )
+        return text_value
+
     @field_validator("EMBEDDING_ENDPOINT", mode="before")
     @classmethod
     def _coerce_empty_embedding_endpoint(cls, value: Any) -> Any:

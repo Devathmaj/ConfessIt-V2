@@ -3276,14 +3276,14 @@ class CaseClosedMessageRecord(RemovedContentColumns, Base):
 class CaseClosedMessageReportRecord(Base):
     """One report filed against a Case Closed detective-thread turn.
 
-    Mirrors ``MessageReportRecord``: there is no participant-facing report
-    route for the detective thread yet, so every row today is an automated
-    report written when Azure Content Safety removes a turn (``reporter_regno``
-    NULL, ``source`` = ``azure_content_safety``, sender named in
-    ``reported_user_regno``). Kept as its own table rather than reusing
+    Mirrors ``MessageReportRecord``: the partner (the only one who may report a
+    turn, since a sender cannot report their own) files against a turn they
+    received, and Azure Content Safety rows are written when a turn is removed
+    (``reporter_regno`` NULL, ``source`` = ``azure_content_safety``, sender named
+    in ``reported_user_regno``). Kept as its own table rather than reusing
     ``message_reports`` because that table's FK points at matchmaking
-    ``messages``, not at ``case_closed_messages``. It exists for audit: the
-    removal is otherwise only visible as a ``removed_at`` stamp on the row.
+    ``messages``, not at ``case_closed_messages``. A manual report keeps the turn
+    visible until a moderator rules on it from the admin report queue.
     """
 
     __tablename__ = "case_closed_message_reports"

@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, MessagesSquare, RefreshCw, Send } from 'lucide-react';
+import { Flag, Loader2, MessagesSquare, RefreshCw, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
+import { ReportMessageDialog } from '@/components/ReportMessageDialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +43,7 @@ import { quotaAfterIncomingMessage } from '@/lib/messageQuota';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
 import {
   getCaseClosedMessages,
+  reportCaseClosedMessage,
   sendCaseClosedMessage,
   type CaseClosedChatMessage,
   type CaseClosedMessageQuota,
@@ -62,6 +64,7 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
     open: false,
     message: '',
   });
+  const [reportTarget, setReportTarget] = useState<CaseClosedChatMessage | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const subscribedRef = useRef(false);
 
@@ -178,8 +181,20 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
                 return (
                   <div key={m.id} className={cn('max-w-[85%] rounded-xl px-3 py-2 text-sm', mine ? 'self-end bg-primary text-primary-foreground' : 'self-start bg-muted')}>
                     <div className="whitespace-pre-wrap break-words">{m.body}</div>
-                    <div className={cn('mt-1 text-[11px]', mine ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
-                      {new Date(m.created_at).toLocaleTimeString()}
+                    <div className={cn('mt-1 flex items-center gap-2 text-[11px]', mine ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
+                      <span>{new Date(m.created_at).toLocaleTimeString()}</span>
+                      {/* Only a received turn can be reported: a sender does not report their
+                          own words, and the server refuses that too. */}
+                      {!mine && (
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 hover:text-destructive"
+                          onClick={() => setReportTarget(m)}
+                          aria-label="Report this message"
+                        >
+                          <Flag className="h-3 w-3" /> Report
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -265,6 +280,19 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* The same report dialog matchmaking chat uses; only the endpoint differs. A filed
+          report changes nothing here -- a moderator rules on it from the admin queue. */}
+      <ReportMessageDialog
+        isOpen={reportTarget !== null}
+        onClose={() => setReportTarget(null)}
+        messageId={reportTarget?.id ?? ''}
+        messageText={reportTarget?.body ?? ''}
+        reporterId={user?.id}
+        reportedUserId={reportTarget?.sender_user_id}
+        conversationId={sessionId ?? undefined}
+        onSubmit={(messageId, reason) => reportCaseClosedMessage(messageId, reason)}
+      />
     </>
   );
 };

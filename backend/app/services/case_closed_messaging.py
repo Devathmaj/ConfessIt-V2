@@ -39,9 +39,10 @@ from ..limits import (
     CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
     CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX,
     MESSAGE_BODY_MAX,
+    REPORT_REASON_MAX,
 )
 from ..logger import get_logger
-from ..postgres import Database
+from ..postgres import Database, is_valid_id
 from ..utils import isoformat_datetime
 from .redis_service import redis_service
 from .report_counters import MESSAGE, record_removal, record_report_filed
@@ -416,3 +417,87 @@ def get_messages(
             for r in unread:
                 r.is_read = True
     return {"messages": messages, "total": int(total)}
+
+
+def report_message(db: Database, user, message_id: str, reason: str) -> Dict[str, Any]:
+    """File a complaint against a partner's detective-thread turn.
+
+    Mirrors matchmaking chat: only the participant who *received* a turn may
+    report it, one report per participant per turn. A report records the
+    complaint and nothing else -- nothing is hidden here. A moderator rules on
+    it from the admin report queue, exactly as for a matchmaking chat message.
+
+    Authorisation reads the couple row directly rather than ``_resolve_thread``:
+    a report has to stay possible after the event closed, which is the same
+    window in which the transcript itself is still readable.
+    """
+    if not is_valid_id(message_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message ID")
+    text = (reason or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A reason is required.")
+    if len(text) > REPORT_REASON_MAX:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reason is too long.")
+
+    with db.sessions() as session:
+        message = session.get(CaseClosedMessageRecord, str(message_id))
+        if message is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        row = session.get(CaseClosedSessionRecord, str(message.session_id))
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        participants = {str(row.user_a_id), str(row.user_b_id)}
+        if str(user.id) not in participants:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not part of this detective thread",
+            )
+        if str(message.sender_user_id) == str(user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only report messages sent to you",
+            )
+        sender = session.get(UserRecord, str(message.sender_user_id))
+        sender_regno = sender.regno if sender is not None else None
+        duplicate = session.scalar(
+            select(CaseClosedMessageReportRecord.id).where(
+                CaseClosedMessageReportRecord.message_id == str(message_id),
+                CaseClosedMessageReportRecord.reporter_regno == user.regno,
+            ).limit(1)
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You have already reported this message",
+            )
+
+    now = datetime.now(timezone.utc)
+    with db.sessions.begin() as session:
+        report_row = CaseClosedMessageReportRecord(
+            message_id=str(message_id),
+            reporter_regno=user.regno,
+            reported_user_regno=sender_regno,
+            reason=text,
+            reported_at=now,
+            status="pending",
+        )
+        session.add(report_row)
+        session.flush()
+        report_id = str(report_row.id)
+        record_report_filed(session, kind=MESSAGE, author_regno=sender_regno)
+
+    try:
+        from .staff_notification_service import notify_report_filed
+
+        notify_report_filed(
+            db, kind="case closed message", report_id=report_id,
+            summary=(
+                f"A Case Closed detective-thread message was reported by {user.regno}. "
+                "Open Reports review to rule on it."
+            ),
+        )
+    except Exception:
+        logger.warning("Failed to queue staff notification for Case Closed report %s", message_id)
+
+    logger.info("Case Closed message %s reported by %s", message_id, user.regno)
+    return {"id": report_id, "message": "Message reported successfully"}

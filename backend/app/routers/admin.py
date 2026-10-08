@@ -7,9 +7,10 @@ from ..postgres import Database
 
 from ..dependencies import get_db
 from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate, Year
-from ..db_models import (ACCOUNT_MODELS, ConfessionRecord, ConversationRecord,
-    LoginTokenRecord, MessageRecord, MessageReportRecord, UserRecord, find_account_in_table,
-    resolve_account_by_id)
+from ..db_models import (ACCOUNT_MODELS, CaseClosedMessageRecord,
+    CaseClosedMessageReportRecord, CaseClosedSessionRecord, ConfessionRecord,
+    ConversationRecord, LoginTokenRecord, MessageRecord, MessageReportRecord,
+    UserRecord, find_account_in_table, resolve_account_by_id)
 from ..services.auth_service import SESSION_STATUS_ACTIVE, SESSION_STATUS_REVOKED
 from ..accounts import (
     AccountType, Capability, account_cap, account_cap_lock_key,
@@ -34,12 +35,14 @@ from ..services.admin_service import (
     get_admin_statistics_data,
 )
 from ..services.report_resolution_service import (
+    resolve_case_closed_message_report,
     resolve_confession_report,
     resolve_message_report,
     resolve_status_filter,
 )
 from ..services.report_resolution_service import hide_confession as hide_confession_service
 from ..services.report_resolution_service import hide_comment as hide_comment_service
+from ..services.report_resolution_service import unhide_case_closed_message as unhide_case_closed_message_service
 from ..services.report_resolution_service import unhide_comment as unhide_comment_service
 from ..services.report_resolution_service import unhide_confession as unhide_confession_service
 from ..services.report_resolution_service import unhide_message as unhide_message_service
@@ -875,18 +878,35 @@ def get_message_reports(
     matches, with the total counted under the same filter so the screen pages the question
     it asked. The message join is many-to-one on a unique key, so neither the page nor
     the COUNT can fan out; the names stay a display concern resolved in bulk below.
+
+    **Two message surfaces, one queue.** Matchmaking chat messages and Case Closed
+    detective-thread turns both report here, so the tab a moderator already watches covers
+    both. Each row carries a ``kind`` (``matchmaking`` or ``case_closed``) and the rest of
+    the payload is deliberately the same shape -- ``body``, ``conversation``, ``reporter``,
+    ``content_removed`` -- so the screen renders them identically and a ruling dispatches on
+    ``kind`` alone. The two tables are read ``skip + limit`` deep each and merged newest-first,
+    then sliced, which is the only way to keep a stable page across a union PostgreSQL cannot
+    order for us in one statement without a view.
     """
-    filters = []
     wanted = resolve_status_filter(status_filter)
-    if wanted:
-        filters.append(MessageReportRecord.status.in_(wanted))
     cleaned = (q or "").strip()
+    filters_mm = []
+    filters_cc = []
+    if wanted:
+        filters_mm.append(MessageReportRecord.status.in_(wanted))
+        filters_cc.append(CaseClosedMessageReportRecord.status.in_(wanted))
     if cleaned:
-        filters.append(or_(
+        filters_mm.append(or_(
             ilike_contains(MessageReportRecord.reason, cleaned),
             ilike_contains(MessageReportRecord.reporter_regno, cleaned),
             ilike_contains(MessageReportRecord.reported_user_regno, cleaned),
             ilike_contains(MessageRecord.body, cleaned),
+        ))
+        filters_cc.append(or_(
+            ilike_contains(CaseClosedMessageReportRecord.reason, cleaned),
+            ilike_contains(CaseClosedMessageReportRecord.reporter_regno, cleaned),
+            ilike_contains(CaseClosedMessageReportRecord.reported_user_regno, cleaned),
+            ilike_contains(CaseClosedMessageRecord.body, cleaned),
         ))
     from ..services.admin_service import ADMIN_MAX_SKIP as _ADMIN_MAX_SKIP
 
@@ -895,22 +915,54 @@ def get_message_reports(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"skip too deep (max {_ADMIN_MAX_SKIP}); use cursor pagination",
         )
+
+    fetch_depth = skip + limit
     with db.sessions() as session:
-        base = select(MessageReportRecord).outerjoin(
+        mm_base = select(MessageReportRecord).outerjoin(
             MessageRecord, MessageRecord.id == MessageReportRecord.message_id
-        ).where(*filters)
-        reports = session.scalars(base.order_by(
+        ).where(*filters_mm)
+        cc_base = select(CaseClosedMessageReportRecord).outerjoin(
+            CaseClosedMessageRecord, CaseClosedMessageRecord.id == CaseClosedMessageReportRecord.message_id
+        ).where(*filters_cc)
+
+        mm_rows = session.scalars(mm_base.order_by(
             MessageReportRecord.reported_at.desc(),
-            MessageReportRecord.id.asc()).offset(skip).limit(limit)).all()
-        total = session.scalar(select(func.count()).select_from(MessageReportRecord).outerjoin(
+            MessageReportRecord.id.asc()).limit(fetch_depth)).all()
+        cc_rows = session.scalars(cc_base.order_by(
+            CaseClosedMessageReportRecord.reported_at.desc(),
+            CaseClosedMessageReportRecord.id.asc()).limit(fetch_depth)).all()
+
+        total = (session.scalar(select(func.count()).select_from(MessageReportRecord).outerjoin(
             MessageRecord, MessageRecord.id == MessageReportRecord.message_id
-        ).where(*filters)) or 0
+        ).where(*filters_mm)) or 0) + (
+            session.scalar(select(func.count()).select_from(CaseClosedMessageReportRecord).outerjoin(
+                CaseClosedMessageRecord, CaseClosedMessageRecord.id == CaseClosedMessageReportRecord.message_id
+            ).where(*filters_cc)) or 0
+        )
+
+        # Merge newest-first. The two statements above each take the newest ``skip + limit`` of
+        # their own table; the union of those windows necessarily contains the global window, so
+        # slicing it here is exact. Sort by id first, then by ``reported_at`` with a *stable*
+        # sort, so the tie-break on equal timestamps is the ascending id each query ordered by.
+        merged = [("matchmaking", r) for r in mm_rows] + [("case_closed", r) for r in cc_rows]
+        merged.sort(key=lambda pair: str(pair[1].id))
+        merged.sort(key=lambda pair: pair[1].reported_at, reverse=True)
+        page = merged[skip:skip + limit]
+        mm_page = [r for kind, r in page if kind == "matchmaking"]
+        cc_page = [r for kind, r in page if kind == "case_closed"]
 
         # Two bulk reads rather than two per row: a queue grows with every report filed, so
         # the per-row lookup would be a cost paid on every page a moderator opens.
-        regnos = {report.reporter_regno for report in reports} | {report.reported_user_regno for report in reports}
+        regnos = {report.reporter_regno for report in mm_page} | {report.reported_user_regno for report in mm_page}
+        regnos |= {report.reporter_regno for report in cc_page} | {report.reported_user_regno for report in cc_page}
+        regnos.discard(None)
         users = {user.regno: user for user in session.scalars(select(UserRecord).where(UserRecord.regno.in_(regnos))).all()} if regnos else {}
-        message_ids = {report.message_id for report in reports}
+        def _party(regno: str) -> Dict[str, Any]:
+            person = users.get(regno) or parties.get(regno)
+            return {"regno": regno, "name": person.name if person else "Unknown"}
+
+        # --- Matchmaking chat: message + conversation context, in bulk. -------------------
+        message_ids = {report.message_id for report in mm_page}
         messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
 
         # Conversation context, in three bulk reads rather than three per row. A reported
@@ -954,12 +1006,44 @@ def get_message_reports(
             thread_totals = {str(row[0]): row[1] for row in counted}
             thread_removed = {str(row[0]): row[2] for row in counted}
 
-    def _party(regno: str) -> Dict[str, Any]:
-        person = users.get(regno) or parties.get(regno)
-        return {"regno": regno, "name": person.name if person else "Unknown"}
+        # --- Case Closed detective threads: turn + couple context, in bulk. ----------------
+        cc_message_ids = {report.message_id for report in cc_page}
+        cc_messages = {
+            str(message.id): message for message in session.scalars(
+                select(CaseClosedMessageRecord).where(CaseClosedMessageRecord.id.in_(cc_message_ids))
+            ).all()
+        } if cc_message_ids else {}
+        cc_session_ids = {str(message.session_id) for message in cc_messages.values()}
+        cc_sessions = {
+            str(row.id): row for row in session.scalars(
+                select(CaseClosedSessionRecord).where(CaseClosedSessionRecord.id.in_(cc_session_ids))
+            ).all()
+        } if cc_session_ids else {}
+        cc_user_ids: set = set()
+        for couple in cc_sessions.values():
+            cc_user_ids.add(str(couple.user_a_id))
+            cc_user_ids.add(str(couple.user_b_id))
+        cc_people = {
+            str(person.id): person for person in session.scalars(
+                select(UserRecord).where(UserRecord.id.in_(cc_user_ids))
+            ).all()
+        } if cc_user_ids else {}
+        cc_totals: Dict[str, int] = {}
+        cc_removed: Dict[str, int] = {}
+        if cc_session_ids:
+            counted = session.execute(
+                select(
+                    CaseClosedMessageRecord.session_id,
+                    func.count(CaseClosedMessageRecord.id),
+                    func.count(CaseClosedMessageRecord.id).filter(CaseClosedMessageRecord.removed_at.is_not(None)),
+                )
+                .where(CaseClosedMessageRecord.session_id.in_(cc_session_ids))
+                .group_by(CaseClosedMessageRecord.session_id)
+            ).all()
+            cc_totals = {str(row[0]): row[1] for row in counted}
+            cc_removed = {str(row[0]): row[2] for row in counted}
 
-    enriched_reports = []
-    for report in reports:
+    def _mm_row(report) -> Dict[str, Any]:
         reporter = users.get(report.reporter_regno)
         reported_user = users.get(report.reported_user_regno)
         message = messages.get(str(report.message_id))
@@ -985,8 +1069,9 @@ def get_message_reports(
                 "removed_message_count": thread_removed.get(str(conversation.id), 0),
             }
 
-        enriched_reports.append({
+        return {
             "id": str(report.id),
+            "kind": "matchmaking",
             "message_id": str(report.message_id),
             "body": message.body if message else "[Message not found]",
             # When the message was sent. The screen previously showed only when it was
@@ -1026,7 +1111,69 @@ def get_message_reports(
             "content_removed": bool(message.removed_at) if message else False,
             # Who took it down: the restore button is offered only for rows the system hid.
             "removed_by_regno": message.removed_by_regno if message else None,
-        })
+        }
+
+    def _cc_row(report) -> Dict[str, Any]:
+        reporter = users.get(report.reporter_regno)
+        reported_user = users.get(report.reported_user_regno)
+        message = cc_messages.get(str(report.message_id))
+        couple = cc_sessions.get(str(message.session_id)) if message else None
+
+        conversation_context = None
+        if couple is not None:
+            participants = []
+            for person_id in dict.fromkeys([str(couple.user_a_id), str(couple.user_b_id)]):
+                person = cc_people.get(person_id)
+                participants.append({
+                    "regno": person.regno if person else None,
+                    "name": person.name if person else "Unknown",
+                })
+            conversation_context = {
+                "id": str(couple.id),
+                # A detective thread has no open/blocked state the way a matchmaking
+                # conversation does; the screen shows this as a Case Closed thread.
+                "status": None,
+                "participants": participants,
+                "message_count": cc_totals.get(str(couple.id), 0),
+                "removed_message_count": cc_removed.get(str(couple.id), 0),
+            }
+
+        return {
+            "id": str(report.id),
+            "kind": "case_closed",
+            "message_id": str(report.message_id),
+            "body": message.body if message else "[Message not found]",
+            "message_created_at": serialize_datetime(message.created_at) if message else None,
+            "conversation_id": str(message.session_id) if message else None,
+            "conversation": conversation_context,
+            "reporter": (
+                {"regno": None, "name": AUTOMATED_REPORTER_DISPLAY_NAME}
+                if report.source == AUTOMATED_SOURCE
+                else {
+                    "regno": report.reporter_regno,
+                    "name": reporter.name if reporter else "Unknown"
+                }
+            ),
+            "reported_user": {
+                "regno": report.reported_user_regno,
+                "name": reported_user.name if reported_user else "Unknown"
+            },
+            "reason": report.reason,
+            "reported_at": serialize_datetime(report.reported_at),
+            "status": report.status,
+            "source": report.source,
+            "reviewed_at": serialize_datetime(report.reviewed_at),
+            "reviewed_by_regno": report.reviewed_by_regno,
+            "content_removed": bool(message.removed_at) if message else False,
+            "removed_by_regno": message.removed_by_regno if message else None,
+        }
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for report in mm_page:
+        by_id[str(report.id)] = _mm_row(report)
+    for report in cc_page:
+        by_id[str(report.id)] = _cc_row(report)
+    enriched_reports = [by_id[str(report.id)] for kind, report in page]
 
     return {
         "reports": enriched_reports,
@@ -1040,6 +1187,7 @@ def get_message_reports(
 def update_message_report_status(
     report_id: str,
     new_status: str = Query(..., alias="status", pattern="^(reviewed|dismissed|removed)$"),
+    kind: str = Query("matchmaking", pattern="^(matchmaking|case_closed)$"),
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
 ) -> Dict[str, Any]:
@@ -1054,15 +1202,22 @@ def update_message_report_status(
     message's text and would otherwise keep showing it -- and tells both the sender and the
     reporter.
 
+    ``kind`` selects the table the report lives in: the default ``matchmaking`` keeps every
+    existing caller working, while ``case_closed`` rules on a detective-thread turn (which
+    has no preview to move).
+
     Returns ``{id, status, content_removed}`` to match the other two close-out endpoints, with
     the third field so the screen can say plainly whether anything came down.
     """
+    if kind == "case_closed":
+        return resolve_case_closed_message_report(db, report_id, new_status, reviewer.regno)
     return resolve_message_report(db, report_id, new_status, reviewer.regno)
 
 
 @router.patch("/messages/{message_id}/unhide")
 def unhide_message(
     message_id: str,
+    kind: str = Query("matchmaking", pattern="^(matchmaking|case_closed)$"),
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
 ) -> Dict[str, Any]:
@@ -1073,6 +1228,9 @@ def unhide_message(
     reviewer cannot undo a colleague's decision here. Already-visible rows answer
     ``already_visible`` instead of erroring.
 
+    ``kind`` selects the table: ``matchmaking`` (the default) reads
+    ``messages``, ``case_closed`` reads the detective-thread ``case_closed_messages``.
+
     Gated on ``reports:moderate`` rather than ``confessions:delete``: a message
     has no hide route of its own, and the automated removal this restores is the
     counterpart of the message-report ruling that same capability already governs.
@@ -1080,4 +1238,6 @@ def unhide_message(
     the newest visible one; nothing is notified, because a restoration is a
     reviewer override rather than a ruling.
     """
+    if kind == "case_closed":
+        return unhide_case_closed_message_service(db, message_id, reviewer.regno)
     return unhide_message_service(db, message_id, reviewer.regno)

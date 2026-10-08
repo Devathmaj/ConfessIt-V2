@@ -22,9 +22,15 @@ interface ReportMessageDialogProps {
   onClose: () => void;
   messageId: string;
   messageText: string;
-  reporterId: string;
-  reportedUserId: string;
-  conversationId: string;
+  reporterId?: string;
+  reportedUserId?: string;
+  conversationId?: string;
+  /**
+   * How the complaint is filed. Defaults to the matchmaking chat report; the
+   * Case Closed detective thread passes its own endpoint so the same dialog
+   * serves both without a second near-identical component.
+   */
+  onSubmit?: (messageId: string, reason: string) => Promise<unknown>;
 }
 
 export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
@@ -35,6 +41,7 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
   reporterId,
   reportedUserId,
   conversationId,
+  onSubmit,
 }) => {
   const { token } = useAuth(); // Get token from AuthContext
   const [selectedReason, setSelectedReason] = useState<string>('');
@@ -46,14 +53,18 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
       return;
     }
 
-    if (!token) {
+    if (!onSubmit && !token) {
       toast.error('Authentication token missing');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await reportMessage(messageId, selectedReason, token);
+      if (onSubmit) {
+        await onSubmit(messageId, selectedReason);
+      } else {
+        await reportMessage(messageId, selectedReason, token as string);
+      }
 
       toast.success('Message reported successfully. Our team will review it.');
       onClose();
@@ -66,7 +77,7 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
           error?.message?.includes('already reported')) {
         toast.error('You have already reported this message.');
       } else {
-        toast.error('Failed to report message. Please try again.');
+        toast.error(error?.message || 'Failed to report message. Please try again.');
       }
     } finally {
       setIsSubmitting(false);

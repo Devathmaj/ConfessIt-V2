@@ -44,6 +44,8 @@ from sqlalchemy import func, select
 
 from ..accounts import AccountRef
 from ..db_models import (
+    CaseClosedMessageRecord,
+    CaseClosedMessageReportRecord,
     ConfessionCommentRecord,
     ConfessionRecord,
     ConversationRecord,
@@ -543,6 +545,70 @@ def resolve_message_report(
     return {"id": str(report_id), "status": status_value, "content_removed": removed_content}
 
 
+def resolve_case_closed_message_report(
+    db: Database,
+    report_id: str,
+    status_value: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Close out a Case Closed detective-thread message report.
+
+    The detective-thread counterpart to :func:`resolve_message_report`, and the
+    same ruling: a ``removed`` decision stamps ``removed_at`` on the turn so the
+    participant transcript (which filters on it) drops it, and a ``dismissed``
+    decision leaves the turn exactly as it was. Unlike matchmaking chat there is
+    no conversation-list preview to move forward -- the thread is only ever read
+    whole -- so removal is the single write.
+    """
+    _assert_resolution_status(status_value)
+    if not is_valid_id(report_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report id")
+
+    reporter_regno: Optional[str] = None
+    author_regno: Optional[str] = None
+    removed_content = False
+
+    with db.sessions.begin() as session:
+        report = session.get(CaseClosedMessageReportRecord, str(report_id))
+        if report is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+        reporter_regno = report.reporter_regno
+        message = session.get(CaseClosedMessageRecord, str(report.message_id))
+        if message is not None:
+            author_regno = _regno_for_user(session, message.sender_user_id)
+            if status_value == REMOVAL_STATUS and _stamp_removal(message, reviewer_regno):
+                removed_content = True
+                record_removal(session, kind=MESSAGE, author_regno=author_regno)
+        elif report.reported_user_regno is not None:
+            # The turn is gone from storage entirely; still charge the removal to
+            # whoever wrote it, using the regno the report recorded at filing time.
+            author_regno = report.reported_user_regno
+            if status_value == REMOVAL_STATUS:
+                removed_content = True
+                record_removal(session, kind=MESSAGE, author_regno=author_regno)
+
+        report.status = status_value
+        report.reviewed_at = datetime.now(timezone.utc)
+        report.reviewed_by_regno = reviewer_regno
+
+    if status_value == REMOVAL_STATUS:
+        _notify_removal(
+            db,
+            author_regno=author_regno,
+            reporter_regno=reporter_regno,
+            kind="message",
+            cites_policy=True,
+        )
+    else:
+        _notify_dismissal(db, reporter_regno)
+
+    logger.info(
+        f"Case Closed message report {report_id} closed as {status_value} by {reviewer_regno}"
+    )
+    return {"id": str(report_id), "status": status_value, "content_removed": removed_content}
+
+
 def hide_confession(
     db: Database,
     confession_id: str,
@@ -862,6 +928,54 @@ def unhide_message(
     }
 
 
+def unhide_case_closed_message(
+    db: Database,
+    message_id: str,
+    reviewer_regno: str,
+) -> Dict[str, Any]:
+    """Restore an Azure-hidden Case Closed detective-thread message.
+
+    Same gate as the other ``unhide_*`` functions: only system-hidden rows
+    restore, manual hides answer 409 so a reviewer cannot undo a colleague's
+    decision here, and already-visible rows answer ``already_visible``. There is
+    no conversation preview to recompute -- the thread is read whole -- so the
+    single write is clearing the removal stamp. Counters and the automated
+    report stay for audit, and no author is notified: this is a reviewer
+    override, not a ruling.
+    """
+    if not is_valid_id(message_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message id")
+
+    with db.sessions.begin() as session:
+        message = session.get(CaseClosedMessageRecord, str(message_id))
+        if message is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        if message.removed_at is None:
+            return {
+                "id": str(message_id),
+                "content_removed": False,
+                "already_visible": True,
+                "removed_at": None,
+                "removed_by_regno": None,
+            }
+        if not _is_automated_removal(message.removed_by_regno):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This message was hidden by a moderator and cannot be restored here.",
+            )
+        message.removed_at = None
+        message.removed_by_regno = None
+
+    logger.info(f"Case Closed message {message_id} restored by {reviewer_regno}")
+    return {
+        "id": str(message_id),
+        "content_removed": False,
+        "already_visible": False,
+        "removed_at": None,
+        "removed_by_regno": None,
+    }
+
+
 def pending_report_totals(db: Database) -> Dict[str, int]:
     """How many reports are still awaiting a decision, per queue.
 
@@ -880,9 +994,18 @@ def pending_report_totals(db: Database) -> Dict[str, int]:
                 .select_from(LoveNoteReportRecord)
                 .where(LoveNoteReportRecord.status == "pending")
             ) or 0,
-            "messages": session.scalar(
-                select(func.count())
-                .select_from(MessageReportRecord)
-                .where(MessageReportRecord.status == "pending")
-            ) or 0,
+            "messages": (
+                session.scalar(
+                    select(func.count())
+                    .select_from(MessageReportRecord)
+                    .where(MessageReportRecord.status == "pending")
+                ) or 0
+            )
+            + (
+                session.scalar(
+                    select(func.count())
+                    .select_from(CaseClosedMessageReportRecord)
+                    .where(CaseClosedMessageReportRecord.status == "pending")
+                ) or 0
+            ),
         }

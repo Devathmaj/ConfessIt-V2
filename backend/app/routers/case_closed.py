@@ -13,6 +13,8 @@ from ..dependencies import get_db
 from ..limits import (
     CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
     MESSAGE_BODY_MAX,
+    REPORT_REASON_MAX,
+    USER_REGNO_MAX,
 )
 from ..logger import get_logger
 from ..models import (
@@ -48,6 +50,20 @@ class CaseClosedMessageCreate(BaseModel):
         from ..models import _reject_unchangeable_characters
 
         return _reject_unchangeable_characters(value.strip(), "body")
+
+
+class CaseClosedMessageReportCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(min_length=1, max_length=USER_REGNO_MAX)
+    reason: str = Field(min_length=1, max_length=REPORT_REASON_MAX)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def _validate_reason_characters(cls, value: str) -> str:
+        from ..models import _reject_unchangeable_characters
+
+        return _reject_unchangeable_characters(value.strip(), "reason")
 
 
 @router.get("", response_model=CaseClosedCurrentState)
@@ -189,6 +205,16 @@ def send_thread_message(
 ) -> dict:
     """Send one detective-thread turn. Never charges an investigation action."""
     return case_closed_messaging.send_message(db, user, payload.body)
+
+
+@router.post("/messages/report", status_code=status.HTTP_201_CREATED)
+def report_thread_message(
+    payload: CaseClosedMessageReportCreate,
+    db: Database = Depends(get_db),
+    user=Depends(require_participant),
+) -> dict:
+    """Report a partner's detective-thread turn for moderation review."""
+    return case_closed_messaging.report_message(db, user, payload.message_id, payload.reason)
 
 
 WS_CLOSE_AUTH_REQUIRED = 4001

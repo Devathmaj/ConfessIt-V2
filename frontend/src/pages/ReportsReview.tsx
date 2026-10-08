@@ -164,6 +164,8 @@ interface MessageReport {
   removed_by_regno?: string | null;
   /** "user" for a participant report, "azure_content_safety" for an automated one. */
   source?: string;
+  /** Which message surface this came from. Older servers omit it; matchmaking is the default. */
+  kind?: 'matchmaking' | 'case_closed';
 }
 
 /** The three id spaces the server owns, named once so the queue keys cannot drift apart. */
@@ -382,6 +384,8 @@ export const ReportsReview = () => {
     reportId: string;
     queue: QueueKey;
     status: Resolution;
+    /** Which message table the report lives in; only message rows carry it. */
+    kind?: 'matchmaking' | 'case_closed';
   } | null>(null);
 
   // Whether the confirmed request is in flight. Without it the confirm button stays live for
@@ -393,6 +397,8 @@ export const ReportsReview = () => {
     reportId: string;
     targetType: 'confession' | 'comment' | 'message';
     targetId: string;
+    /** Which message table the restore targets; only message rows carry it. */
+    kind?: 'matchmaking' | 'case_closed';
   } | null>(null);
   const [restoring, setRestoring] = useState(false);
 
@@ -656,7 +662,8 @@ export const ReportsReview = () => {
   const handleClose = async (
     reportId: string,
     queue: QueueKey,
-    status: Resolution
+    status: Resolution,
+    kind?: 'matchmaking' | 'case_closed'
   ) => {
     const close = {
       confessions: updateAdminConfessionReportStatus,
@@ -665,7 +672,13 @@ export const ReportsReview = () => {
     }[queue];
 
     try {
-      await close(reportId, status);
+      // The message queue spans two tables; the report's own `kind` says which one to rule on,
+      // defaulting to matchmaking so a row from an older server still closes.
+      if (queue === 'messages') {
+        await updateAdminMessageReportStatus(reportId, status, kind ?? 'matchmaking');
+      } else {
+        await close(reportId, status);
+      }
       if (!serverDriven && legacyQueues) {
         // Legacy lists: the move is local, exactly as before pagination existed.
         setLegacyQueues((previous) => {
@@ -761,21 +774,21 @@ export const ReportsReview = () => {
 
   // A click opens the dialog and nothing else. The request is made from the dialog's confirm
   // button, so the network call is only ever reachable from a deliberate second action.
-  const renderCloseButtons = (reportId: string, queue: Queue['key']) =>
+  const renderCloseButtons = (reportId: string, queue: Queue['key'], kind?: 'matchmaking' | 'case_closed') =>
     canModerate ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
           className="border-muted-foreground text-muted-foreground hover:bg-muted"
-          onClick={() => setPendingDecision({ reportId, queue, status: 'dismissed' })}
+          onClick={() => setPendingDecision({ reportId, queue, status: 'dismissed', kind })}
         >
           <ShieldX className="mr-2 h-4 w-4" /> Dismiss
         </Button>
         <Button
           variant="destructive"
           size="sm"
-          onClick={() => setPendingDecision({ reportId, queue, status: 'removed' })}
+          onClick={() => setPendingDecision({ reportId, queue, status: 'removed', kind })}
         >
           <Trash2 className="mr-2 h-4 w-4" /> Remove content
         </Button>
@@ -784,13 +797,13 @@ export const ReportsReview = () => {
 
   const handleRestore = async () => {
     if (!pendingRestore) return;
-    const { targetType, targetId } = pendingRestore;
+    const { targetType, targetId, kind } = pendingRestore;
     setRestoring(true);
     try {
       if (targetType === 'comment') {
         await unhideAdminComment(targetId);
       } else if (targetType === 'message') {
-        await unhideAdminMessage(targetId);
+        await unhideAdminMessage(targetId, kind ?? 'matchmaking');
       } else {
         await unhideAdminConfession(targetId);
       }
@@ -817,7 +830,7 @@ export const ReportsReview = () => {
     reporterRef: string,
     targetRef: string,
     contentRemoved: boolean,
-    restore?: { targetType: 'confession' | 'comment' | 'message'; targetId: string; removedBy: string | null | undefined } | null,
+    restore?: { targetType: 'confession' | 'comment' | 'message'; targetId: string; removedBy: string | null | undefined; kind?: 'matchmaking' | 'case_closed' } | null,
     children?: React.ReactNode
   ) => (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -839,12 +852,12 @@ export const ReportsReview = () => {
         ) : null}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {status === 'pending' ? renderCloseButtons(reportId, queue) : null}
+        {status === 'pending' ? renderCloseButtons(reportId, queue, restore?.kind) : null}
         {restore && contentRemoved && isAzureRemoved(restore.removedBy) ? (
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setPendingRestore({ reportId, targetType: restore.targetType, targetId: restore.targetId })}
+            onClick={() => setPendingRestore({ reportId, targetType: restore.targetType, targetId: restore.targetId, kind: restore.kind })}
           >
             <Eye className="mr-2 h-4 w-4" /> Restore content
           </Button>
@@ -1166,6 +1179,9 @@ export const ReportsReview = () => {
             ) : (
               messageReports.map((report) => {
                 const conversation = report.conversation;
+                // Both message surfaces share this card; only the wording of the thread
+                // context differs (a detective thread has no open/blocked status).
+                const isCaseClosed = report.kind === 'case_closed';
                 // The person the message was sent *to*. Only a recipient can report a message,
                 // so this is the reporter in every real row -- which is exactly why the reporter
                 // is not filtered out here: filtering it would leave the counterpart undefined
@@ -1180,7 +1196,7 @@ export const ReportsReview = () => {
                     key={report.id}
                     open={isExpanded('messages', report.id)}
                     onToggle={() => toggleExpanded('messages', report.id)}
-                    title={`Message reported by ${partyName(report.reporter)}`}
+                    title={`${isCaseClosed ? 'Detective thread message' : 'Message'} reported by ${partyName(report.reporter)}`}
                     status={statusBadge(report.status, report.reporter?.name)}
                     reason={report.reason}
                     content={report.body}
@@ -1188,7 +1204,7 @@ export const ReportsReview = () => {
                       <>
                         Reported {formatTimestamp(report.reported_at)} · Sent{' '}
                         {formatTimestamp(report.message_created_at)}
-                        {counterpart ? ` · In a conversation with ${counterpart.name}` : ''}
+                        {counterpart ? ` · In a ${isCaseClosed ? 'detective thread' : 'conversation'} with ${counterpart.name}` : ''}
                         {conversation ? ` · ${conversation.message_count} message${conversation.message_count === 1 ? '' : 's'} in it` : ''}
                         {conversation && conversation.removed_message_count > 0
                           ? ` · ${conversation.removed_message_count} already removed`
@@ -1208,6 +1224,7 @@ export const ReportsReview = () => {
                         targetType: 'message',
                         targetId: report.message_id,
                         removedBy: report.removed_by_regno,
+                        kind: report.kind ?? 'matchmaking',
                       }
                     )}
                   >
@@ -1240,7 +1257,7 @@ export const ReportsReview = () => {
                     {conversation && (
                       <div className="rounded-2xl border border-border bg-background/60 p-4">
                         <p className="text-sm uppercase tracking-wide text-muted-foreground">
-                          The conversation it was sent in
+                          {isCaseClosed ? 'The Case Closed thread it was sent in' : 'The conversation it was sent in'}
                         </p>
                         <p className="mt-2 text-sm">
                           Between{' '}
@@ -1249,7 +1266,9 @@ export const ReportsReview = () => {
                             .join(' and ')}
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {`Conversation ${conversation.status ?? 'status unknown'}`}
+                          {isCaseClosed
+                            ? 'Case Closed detective thread'
+                            : `Conversation ${conversation.status ?? 'status unknown'}`}
                           {` · ${conversation.message_count} message${conversation.message_count === 1 ? '' : 's'} in total`}
                           {conversation.removed_message_count > 0
                             ? ` · ${conversation.removed_message_count} already removed`
@@ -1312,7 +1331,8 @@ export const ReportsReview = () => {
                 void handleClose(
                   pendingDecision.reportId,
                   pendingDecision.queue,
-                  pendingDecision.status
+                  pendingDecision.status,
+                  pendingDecision.kind
                 );
               }}
               className={

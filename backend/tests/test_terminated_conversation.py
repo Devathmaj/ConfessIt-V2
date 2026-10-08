@@ -179,7 +179,7 @@ def test_the_transcript_of_a_closed_thread_is_still_readable(db):
 
     mark_terminated(db, conversation_id)
 
-    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))
+    messages = message_service.get_messages(db, conversation_id, as_user(db, "alice"))["messages"]
     assert [m["body"] for m in messages] == ["before it was shut"]
 
 
@@ -195,7 +195,9 @@ def test_both_sides_keep_reading_a_closed_thread(db):
     for regno in ("alice", "bob"):
         bodies = [
             m["body"]
-            for m in message_service.get_messages(db, conversation_id, as_user(db, regno))
+            for m in message_service.get_messages(
+                db, conversation_id, as_user(db, regno)
+            )["messages"]
         ]
         assert bodies == ["one", "two"]
 
