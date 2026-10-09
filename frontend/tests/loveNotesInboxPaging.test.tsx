@@ -25,7 +25,7 @@ import { LoveNotesPage } from '@/pages/LoveNotesPage';
 vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => [] })));
 
 const api = vi.hoisted(() => ({
-  getAllUsers: vi.fn(),
+  getLoveNoteRecipients: vi.fn(),
   getCohorts: vi.fn(),
   getReceivedLoveNotes: vi.fn(),
   sendLoveNote: vi.fn(),
@@ -74,7 +74,7 @@ const authValue = {
 };
 
 async function renderAt(url: string) {
-  api.getAllUsers.mockResolvedValue([]);
+  api.getLoveNoteRecipients.mockResolvedValue({ users: [], total: 0, skip: 0, limit: 20 });
   api.getCohorts.mockResolvedValue([]);
   render(
     <AuthContext.Provider value={authValue as never}>

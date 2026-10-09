@@ -430,10 +430,52 @@ export const unblockConversation = async (match_id: string) => {
 
 // --- Love Notes Endpoints ---
 
-// Used to get all users for recipient selection
-export const getAllUsers = async () => {
-    const response = await axios.get(`${API_URL}/love-notes/users`, { headers: getAuthHeaders() });
-    return response.data;
+// One page of the love note recipient picker, with the total behind it.
+//
+// The page, the search and every filter are answered by the server -- SQL LIMIT/OFFSET plus
+// WHERE clauses -- so the picker never downloads the participant table to filter it in the
+// browser. Accepts both the `{users, total, skip, limit}` envelope and a legacy bare array
+// (older servers and unit-test mocks), normalising the latter to a single page whose total
+// is the array length.
+export interface LoveNoteRecipientsPage {
+    users: any[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+export const getLoveNoteRecipients = async (params?: {
+    skip?: number;
+    limit?: number;
+    q?: string;
+    includeSameGender?: boolean;
+    year?: number;
+    department?: string;
+}): Promise<LoveNoteRecipientsPage> => {
+    const response = await axios.get(`${API_URL}/love-notes/users`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.q ? { q: params.q } : {}),
+            ...(params?.includeSameGender !== undefined
+                ? { include_same_gender: params.includeSameGender }
+                : {}),
+            ...(params?.year !== undefined ? { year: params.year } : {}),
+            ...(params?.department ? { department: params.department } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { users: data, total: data.length, skip: 0, limit: data.length };
+    }
+    const rows = data?.users ?? [];
+    return {
+        users: Array.isArray(rows) ? rows : [],
+        total: data?.total ?? (Array.isArray(rows) ? rows.length : 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (Array.isArray(rows) ? rows.length : 0),
+    };
 };
 
 /**

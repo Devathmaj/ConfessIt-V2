@@ -52,26 +52,87 @@ class LoveNoteReportCreate(BaseModel):
     reason: str = Field(max_length=REPORT_REASON_MAX)
 
 
-def get_all_users_service(db: Database, viewer: AccountRef) -> List[dict]:
+# Hard ceiling for one page of the recipient list. The endpoint clamps anything larger,
+# so no client -- present or future, well-meaning or not -- can ask for every participant
+# at once and make the backend materialise them all.
+LOVE_NOTE_RECIPIENTS_MAX_LIMIT = 100
+
+
+def get_all_users_service(
+    db: Database,
+    viewer: UserDetails,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+    query: Optional[str] = None,
+    include_same_gender: bool = False,
+    year: Optional[int] = None,
+    department: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Service to fetch all users available as love note recipients, excluding the
-    active user, any administrator accounts, and users who opted out of
-    receiving love notes.
+    One page of users available as love note recipients, filtered and counted in SQL.
+
+    This used to answer every eligible participant in one response and left the picker to
+    search and filter them in the browser. Every filter here is now a WHERE, the page is a
+    LIMIT/OFFSET on the database itself and ``total`` is a COUNT under the same WHERE, so
+    the backend reads and serialises at most ``limit`` rows however big the participant
+    table gets.
+
+    What the page holds, and why:
+
+    * the viewer is excluded -- nobody sends themselves a note;
+    * accounts that opted out of receiving love notes are excluded;
+    * the viewer's own gender is excluded unless ``include_same_gender`` is on. The filter
+      is the literal one the switch names: exact equality on ``users.gender``, which for
+      an ``other`` viewer also means their own value is hidden until the switch is used;
+    * ``query`` is a case-insensitive substring match on the name, done in SQL;
+    * ``year``/``department`` are the cohort filter, exact (department case-insensitively).
 
     Accounts a staff member has blocked are deliberately still listed: love notes are
     moderated independently of matchmaking, so a note may still reach a blocked
     recipient. The ``is_blocked`` flag travels with each row so the sender is asked
     to confirm before the note is sent.
+
+    No staff exclusion filter is needed: staff have no row in ``users``, so they cannot
+    appear as candidates in the first place. The rule is a property of the schema rather
+    than a clause that has to be remembered here.
     """
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or 50), LOVE_NOTE_RECIPIENTS_MAX_LIMIT))
+
+    filters: list = [
+        UserRecord.regno != viewer.regno,
+        UserRecord.love_notes_receive_enabled.is_(True),
+    ]
+    cleaned_query = (query or "").strip()
+    if cleaned_query:
+        filters.append(ilike_contains(UserRecord.name, cleaned_query))
+    if not include_same_gender:
+        filters.append(UserRecord.gender != viewer.gender)
+    if year is not None:
+        filters.append(UserRecord.year == year)
+    cleaned_department = (department or "").strip()
+    if cleaned_department:
+        filters.append(func.lower(UserRecord.department) == cleaned_department.lower())
+
     with db.sessions() as session:
-        rows = session.scalars(select(UserRecord).where(
-            UserRecord.regno != viewer.regno,
-            # No staff exclusion filter is needed: staff have no row in ``users``, so they
-            # cannot appear as candidates in the first place. The rule is now a property of
-            # the schema rather than a clause that has to be remembered here.
-            UserRecord.love_notes_receive_enabled.is_(True),
-        )).all()
-        return [_user_payload(row, account=viewer) for row in rows]
+        total = session.scalar(select(func.count()).select_from(UserRecord).where(*filters)) or 0
+        rows = session.scalars(
+            select(UserRecord).where(*filters)
+            # ``id`` seconds the name so two participants who share one still come back in
+            # the same order on every page: an unordered tail reshuffles between the count
+            # and the read, and a load-more list that reorders under the reader shows some
+            # people twice and skips others.
+            .order_by(UserRecord.name.asc(), UserRecord.id.asc())
+            .offset(skip)
+            .limit(limit)
+        ).all()
+    return {
+        "users": [_user_payload(row) for row in rows],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
 
 def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
     """Every ``(year, department)`` pair a love note recipient can be filtered by.
@@ -84,7 +145,7 @@ def get_all_cohorts_service(db: Database) -> List[Dict[str, Any]]:
     return list_participant_cohorts(db)
 
 
-def _user_payload(user: UserRecord, *, account: AccountRef) -> dict:
+def _user_payload(user: UserRecord) -> dict:
     payload = {
         "id": str(user.id), "name": user.name,
         "year": user.year, "department": user.department, "gender": user.gender,

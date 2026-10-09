@@ -7,7 +7,7 @@ import {
     fontForPreset,
     fontString,
     maxFittingCharacters,
-    maxSizeForBox,
+    MAX_FONT_SIZE,
     wrapText,
     STYLE_PRESETS,
     MIN_FONT_SIZE,
@@ -19,13 +19,13 @@ import {
 // The page is stubbed at its API boundary rather than at the module boundary, because the
 // canvas it draws on is the thing under test and the assertions have to reach the real one.
 vi.mock('@/services/api', () => ({
-    getAllUsers: vi.fn().mockResolvedValue([]),
+    getLoveNoteRecipients: vi.fn().mockResolvedValue({ users: [], total: 0, skip: 0, limit: 20 }),
     getCohorts: vi.fn().mockResolvedValue([]),
     getReceivedLoveNotes: vi.fn().mockResolvedValue([]),
     sendLoveNote: vi.fn(),
 }));
 
-const { getAllUsers, getCohorts, getReceivedLoveNotes } =
+const { getLoveNoteRecipients, getCohorts, getReceivedLoveNotes } =
     await import('@/services/api');
 
 /**
@@ -331,7 +331,7 @@ describe('the renderer paints what the fit and the sender asked for', () => {
             const which = /template_(\d)\.json/.exec(String(input))?.[1] ?? '1';
             return { json: async () => ({ ...template, template_name: `template ${which}` }) } as never;
         });
-        vi.mocked(getAllUsers).mockResolvedValue([]);
+        vi.mocked(getLoveNoteRecipients).mockResolvedValue({ users: [], total: 0, skip: 0, limit: 20 });
         vi.mocked(getCohorts).mockResolvedValue([]);
         vi.mocked(getReceivedLoveNotes).mockResolvedValue({ notes: [], total: 0, skip: 0, limit: 0 });
 
@@ -350,7 +350,7 @@ describe('the renderer paints what the fit and the sender asked for', () => {
         const { drawn, context, textarea } = await mountPage();
         const bodyField = TEMPLATE_3_BODY;
 
-        // The placeholder is the short-note case, and it is what proves the growth end of the
+        // The placeholder is the short-note case, and it is what proves the ceiling end of the
         // behaviour through the real page rather than only through the pure function.
         await waitFor(() => expect(drawn.length).toBeGreaterThan(0));
         const placeholderDraws = drawn.slice();
@@ -371,12 +371,12 @@ describe('the renderer paints what the fit and the sender asked for', () => {
         expect([...paintedSizes]).toHaveLength(1);
         const size = [...paintedSizes][0];
 
-        // This is the dynamic behaviour, asserted end to end: a short note is drawn large and a
-        // full one small, through the real canvas effect. When the page was still capping at the
-        // declared 32px, `placeholderSize` was 32 and this ratio was 1.
-        expect(placeholderSize).toBeGreaterThanOrEqual(32 * 3);
+        // This is the dynamic behaviour, asserted end to end: a short note is drawn at the
+        // moderate ceiling and a full one smaller, through the real canvas effect. When the page
+        // was still capping at the declared 32px, `placeholderSize` was 32 and the two were equal.
+        expect(placeholderSize).toBe(MAX_FONT_SIZE);
         expect(size).toBeLessThan(placeholderSize);
-        expect(placeholderSize / size).toBeGreaterThan(2);
+        expect(placeholderSize / size).toBeGreaterThan(1.5);
 
         // And every line must land inside the vertical bounds of the box. This is the assertion
         // that would have caught the draw-at-the-wrong-size bug: the lines were correct but drawn
@@ -508,37 +508,57 @@ describe('wrapText', () => {
     });
 });
 
-describe('maxSizeForBox', () => {
-    it('caps well below the full box height, so a short note sits on the card', () => {
-        // The ratio is the tuning knob for how large a short note may get, and the templates cannot
-        // express it -- the number they carried (32) was a placeholder. So the invariant worth
-        // pinning is that the cap stays a clear fraction of the height, not the exact pixels: a
-        // future tweak to the ratio should not fail a test that only ever meant "not enormous".
+describe('MAX_FONT_SIZE', () => {
+    it('is a moderate ceiling, not a fraction of the card', () => {
+        // The ceiling used to be two fifths of the box height, which on the tallest template came
+        // to 320px -- a two-word note rendered as a billboard. It is one constant now, so the
+        // bounds stay loose on purpose: the value is worth tuning, but it must remain
+        // heading-sized -- clearly larger than the declared 32 the templates shipped, and
+        // nowhere near a headline on the 1920x1080 card. It also has to sit on every body box
+        // rather than dominate even the tightest one (template 3 is 328 tall).
+        expect(MAX_FONT_SIZE).toBeGreaterThan(32);
+        expect(MAX_FONT_SIZE).toBeLessThanOrEqual(64);
         for (const box of [TEMPLATE_1_BODY, TEMPLATE_3_BODY, TEMPLATE_5_BODY]) {
-            const cap = maxSizeForBox(box);
-            expect(cap).toBeGreaterThan(MIN_FONT_SIZE);
-            expect(cap).toBeLessThan(box.height * 0.5);
-            expect(cap).toBeGreaterThan(box.height * 0.3);
+            expect(MAX_FONT_SIZE).toBeLessThanOrEqual(box.height / 2);
         }
     });
 
-    it('gives a taller box a larger cap', () => {
-        // Proportional to the box rather than one number for every card, which is the whole point
-        // of deriving it: template 5 is 800 tall and template 3 is 328.
-        expect(maxSizeForBox(TEMPLATE_5_BODY)).toBeGreaterThan(maxSizeForBox(TEMPLATE_3_BODY));
+    it('draws a short note at the same size on every card', () => {
+        // The complaint this answers: the ceiling tracked the box, so the same two words were
+        // drawn at a different size on every template, largest on the tallest. "hi" fits every
+        // box at the ceiling, so the ceiling is the size on all of them now.
+        for (const box of [TEMPLATE_1_BODY, TEMPLATE_3_BODY, TEMPLATE_5_BODY]) {
+            const fitted = fitTextToBox(
+                measureAtFor(makeContext()),
+                SANS,
+                'hi',
+                box,
+                MAX_FONT_SIZE
+            );
+            expect(fitted.fontSize, `${box.width}x${box.height}`).toBe(MAX_FONT_SIZE);
+        }
     });
 
-    it('never returns a cap below the floor', () => {
-        // A box too short to have a usable fraction still has to yield something drawable.
-        expect(maxSizeForBox({ x: 0, y: 0, width: 100, height: 4 })).toBe(MIN_FONT_SIZE);
+    it('never draws below the floor, even under a cap that is', () => {
+        // The old cap function clamped a below-the-floor request up rather than trusting it, and
+        // `fitTextToBox` keeps that rule now that it owns the ceiling: a caller can impose a cap
+        // but cannot talk the renderer below its floor.
+        const fitted = fitTextToBox(
+            measureAtFor(makeContext()),
+            SANS,
+            'hi',
+            TEMPLATE_1_BODY,
+            2
+        );
+        expect(fitted.fontSize).toBe(MIN_FONT_SIZE);
     });
 });
 
-describe('the size is derived from the box, not declared in the template', () => {
+describe('the ceiling is a moderate constant and the fit moves below it', () => {
     // Every shipped template declares `body.font.size: 32` against boxes from 830x800 to 1570x570
     // on a 1920x1080 card. A uniform 32 across those is a placeholder, not a design: it is 1.7% of
-    // the card's width, which is why the message read as tiny, and it left the fit with no room to
-    // shrink within. These are the numbers the page now actually produces.
+    // the card's width, which is why the message read as tiny. The ceiling is `MAX_FONT_SIZE`
+    // instead -- one moderate number for every card -- and these are the sizes the page produces.
 
     const BOXES: [string, TextBox][] = [
         ['template 1', TEMPLATE_1_BODY],
@@ -552,47 +572,34 @@ describe('the size is derived from the box, not declared in the template', () =>
             SANS,
             messageOfLength(length),
             box,
-            maxSizeForBox(box)
+            MAX_FONT_SIZE
         ).fontSize;
 
-    it.each(BOXES)('draws a short note far larger than the declared 32 on %s', (_name, box) => {
-        // A two-character note reaches the cap on every card. A ten-character one would not --
-        // at 400px, ten characters are wider than template 5's 830px box -- which is the
-        // constraint doing its job, not a failure to size up.
-        const size = fitTextToBox(
-            measureAtFor(makeContext()),
-            SANS,
-            'hi',
-            box,
-            maxSizeForBox(box)
-        ).fontSize;
-        expect(size).toBe(maxSizeForBox(box));
-        // The regression in one assertion, stated against the number this used to use rather than
-        // a round number of my own: the declared `font.size` was 32 on every card.
-        expect(size).toBeGreaterThanOrEqual(32 * 3);
-    });
+    it.each(BOXES)('shrinks the type only once the message stops fitting on %s', (_name, box) => {
+        const sizes = [10, 300, 600, 1000].map((length) => sizeFor(box, length));
 
-    it.each(BOXES)('shrinks the type as the message grows on %s', (_name, box) => {
-        const sizes = [10, 50, 150, 400, 1000].map((length) => sizeFor(box, length));
-
-        // Strictly decreasing: each step is a real drop, not noise. This is the behaviour that was
-        // invisible before, when every message started from the same 32px.
+        // Never larger than the ceiling, and never growing as the message grows: the fit only
+        // ever moves down, and only because the box leaves it no choice.
+        for (const size of sizes) expect(size).toBeLessThanOrEqual(MAX_FONT_SIZE);
         for (let i = 1; i < sizes.length; i += 1) {
-            expect(sizes[i]).toBeLessThan(sizes[i - 1]);
+            expect(sizes[i]).toBeLessThanOrEqual(sizes[i - 1]);
         }
-        // And a wide range between the ends, so it is visibly dynamic rather than nominally so.
-        expect(sizes[0] / sizes[sizes.length - 1]).toBeGreaterThan(2);
+        // A short message sits at the ceiling -- not resized for no reason...
+        expect(sizes[0]).toBe(MAX_FONT_SIZE);
+        // ...and a full-length one really has been brought down, so the shrink is real rather
+        // than nominal.
+        expect(sizes[sizes.length - 1]).toBeLessThan(MAX_FONT_SIZE);
     });
 
     it.each(BOXES)('keeps a full-length note inside the box on %s', (_name, box) => {
-        // Growth upwards must not have cost the original guarantee: at the server's cap, all
+        // The ceiling change must not cost the original guarantee: at the server's cap, all
         // 1000 characters still reach the card at a legible size.
         const fitted = fitTextToBox(
             measureAtFor(makeContext()),
             SANS,
             messageOfLength(1000),
             box,
-            maxSizeForBox(box)
+            MAX_FONT_SIZE
         );
         expect(fitted.truncated).toBe(false);
         expect(fitted.lines.length * fitted.fontSize).toBeLessThanOrEqual(box.height);
@@ -618,7 +625,7 @@ describe('the size is derived from the box, not declared in the template', () =>
                 SANS,
                 messageOfLength(1000),
                 box,
-                maxSizeForBox(box)
+                MAX_FONT_SIZE
             );
             expect(fitted.truncated, `${box.width}x${box.height}`).toBe(false);
             expect(fitted.fontSize, `${box.width}x${box.height}`).toBeGreaterThanOrEqual(16);
@@ -698,7 +705,7 @@ describe('fontForPreset', () => {
 
 describe('fitTextToBox', () => {
     it('honours a cap the caller imposes, using it whole for a short message', () => {
-        // The cap is a real input, not an internal detail: the page derives one from the box, but
+        // The cap is a real input, not an internal detail: the page passes `MAX_FONT_SIZE`, but
         // a caller with a different idea can impose one. A short message fits under the cap, so
         // the cap is the size -- the fit takes the largest that works, and that is the cap.
         const ctx = makeContext();

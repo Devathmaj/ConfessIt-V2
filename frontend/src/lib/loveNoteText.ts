@@ -8,11 +8,11 @@
  * overflow off with an ellipsis. A note of 300 characters was drawn whole and a note of 500
  * quietly lost its last line, with nothing on the page to say so.
  *
- * So the size is fitted rather than fixed. The template's declared size is the *ceiling*: a
- * short note is still set in it, at exactly the size it always was, and the size only comes
- * down when the message genuinely does not fit. That direction matters. A note that could be
- * set larger is never set larger, because the template's size is what the card was drawn
- * around.
+ * So the size is fitted rather than fixed. `MAX_FONT_SIZE` is the *ceiling*: a short note is set
+ * in it on every card, and the size only comes down when the message genuinely does not fit the
+ * box. That direction matters. Nothing is ever drawn above the ceiling, however few words it
+ * has -- see `MAX_FONT_SIZE` for why that is one moderate number rather than a fraction of the
+ * card.
  *
  * Fitting is not the same as being able to read it, and the two limits here are not the same
  * kind of thing. `LOVE_NOTE_BODY_MAX` on the server is the one that keeps real messages
@@ -166,27 +166,20 @@ export const wrapText = (
 };
 
 /**
- * The largest size this module will draw `text` at, derived from the box rather than declared.
+ * The largest size a message is ever drawn at.
  *
- * The templates all shipped `body.font.size: 32` against boxes that differ by roughly 2x in area
- * (830x800 up to 1570x570) on a 1920x1080 card. A uniform 32 is not a tuned value, it is a
- * placeholder: it is 1.7% of the card's width, which is why the message looked tiny and why
- * there was no visible range to shrink within -- the fit could only ever go down from a ceiling
- * that was already far too low. Treating the box as the authority, as the character limit
- * already does, is the same argument applied to the type size.
- *
- * The cap is a fraction of the box height rather than the whole of it: uncapped, a two-word note is
- * laid out as one enormous line that dominates the artwork rather than sitting on it. The fraction
- * is the tuning knob for how large a short note may get, and it is the only place that judgement
- * lives -- the templates cannot express it, since the number they carried (32) was a placeholder
- * (see above). Two fifths is a deliberate under-shoot: it is still where the search has somewhere
- * to go, since three or four lines is what forces the type back down, while leaving a short note
- * clearly the loudest thing on the card without it becoming the card.
+ * One number, the same on every card, because the amount of text is what should make a note
+ * smaller -- not the artwork behind it. The ceiling used to be a fraction of the box height,
+ * which on the tallest template (830x800) came to 320px: two words were laid out as a
+ * billboard that dominated the card rather than a message sitting on it, and the same two
+ * words were a different size on every template. The templates cannot express a tuned value
+ * either -- every one of them shipped the same `body.font.size: 32`, a placeholder that read
+ * as tiny. 48px on the 1920x1080 card is 2.5% of its width: clearly larger than that
+ * placeholder, and small enough that a short note reads as a note. A longer message is
+ * unaffected by this number -- it shrinks below it exactly as before, and only when it cannot
+ * fit the box at 48.
  */
-const MAX_SIZE_RATIO_OF_BOX_HEIGHT = 0.4;
-
-export const maxSizeForBox = (box: TextBox): number =>
-    Math.max(MIN_FONT_SIZE, Math.floor(box.height * MAX_SIZE_RATIO_OF_BOX_HEIGHT));
+export const MAX_FONT_SIZE = 48;
 
 /**
  * The largest size, at or below `maxFontSize`, at which all of `text` fits inside `box`.

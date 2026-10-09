@@ -219,14 +219,18 @@ def test_the_recipient_list_returns_numbers(db, _confession_author_client):
     """``GET /love-notes/users`` declares ``year: str`` on ``UserRecipient`` and would 500 too.
 
     Same cause as the cohort list, on the screen that matters most: this is the recipient picker
-    the love note is addressed to, and it carries a year on every row.
+    the love note is addressed to, and it carries a year on every row. ``include_same_gender``
+    is on because the fixture and the seeded participants are all ``other`` -- without it the
+    default filter would correctly exclude every one of them and leave nothing to assert.
     """
     seed_one_slot(db)
 
-    response = _confession_author_client.get("/love-notes/users")
+    response = _confession_author_client.get(
+        "/love-notes/users", params={"include_same_gender": "true"}
+    )
 
     assert response.status_code == 200
-    recipients = response.json()
+    recipients = response.json()["users"]
     assert recipients
     assert all(isinstance(recipient["year"], int) for recipient in recipients)
     assert {recipient["year"] for recipient in recipients} >= {2, 10}

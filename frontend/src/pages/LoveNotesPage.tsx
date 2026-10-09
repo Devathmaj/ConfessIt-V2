@@ -37,20 +37,20 @@ import {
     Users,
     Search,
     Info,
-    Flag
+    Flag,
+    ChevronDown
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { ReportLoveNoteDialog } from '@/components/ReportLoveNoteDialog';
-import { getAllUsers, getCohorts, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
+import { getLoveNoteRecipients, getCohorts, sendLoveNote, getReceivedLoveNotes, markLoveNoteRead } from '@/services/api';
 import type { Cohort } from '@/lib/accountFields';
 import {
   ALL_COHORTS,
   cohortFromKey,
   cohortKey,
   cohortLabel,
-  isSameCohort,
 } from '@/lib/accountFields';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
 import {
@@ -58,7 +58,7 @@ import {
     fontString,
     fontForPreset,
     maxFittingCharacters,
-    maxSizeForBox,
+    MAX_FONT_SIZE,
     wrapText,
     STYLE_PRESETS,
     type FontStyle,
@@ -158,6 +158,14 @@ const characterCount = (value: string): number => [...value].length;
  */
 const INBOX_PAGE_SIZE = 12;
 
+/**
+ * How many recipients one page of the picker holds. Small enough that opening the send
+ * dialog never reads the participant table, large enough that the four-visible-rows list
+ * can be scrolled a few times before a "load more" click. The backend clamps anything
+ * larger regardless.
+ */
+const RECIPIENT_PAGE_SIZE = 20;
+
 /** The rows inside an inbox answer, whether it is the page envelope or a legacy bare array. */
 const inboxRowsOf = (answer: unknown): LoveNote[] => {
   if (Array.isArray(answer)) return answer as LoveNote[];
@@ -226,15 +234,72 @@ const [selectedNote, setSelectedNote] = useState<LoveNote | null>(null);
 
     // State for recipient selection modal
     const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
-    const [allUsers, setAllUsers] = useState<Recipient[]>([]);
+    /**
+     * The recipient window on screen: the contiguous [0, length) slice of the server's
+     * name-ordered list, exactly like the inbox. Paging, searching and filtering all
+     * happen in SQL -- this page never holds the participant table.
+     */
+    const [recipients, setRecipients] = useState<Recipient[]>([]);
+    /** How many recipients match the filters, loaded or not. */
+    const [recipientsTotal, setRecipientsTotal] = useState(0);
+    const [loadingRecipients, setLoadingRecipients] = useState(false);
+    const [loadingMoreRecipients, setLoadingMoreRecipients] = useState(false);
 const [cohorts, setCohorts] = useState<Cohort[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
+    /** The search the server has actually answered; typing alone searches nothing. */
+    const [appliedSearch, setAppliedSearch] = useState('');
     // A cohort key rather than a cohort, because the Select it drives carries a string. `ALL_COHORTS`
     // is the sentinel for "show everybody", which is not the same as "show one cohort".
     const [selectedCohortKey, setSelectedCohortKey] = useState(ALL_COHORTS);
+    /**
+     * Whether the picker widens to the viewer's own gender. Off by default: the server
+     * answers with "not my gender" unless this is on.
+     */
+    const [includeSameGender, setIncludeSameGender] = useState(false);
     const [selectedRecipient, setSelectedRecipient] = useState<Recipient | null>(null);
     const [isUnavailableConfirmOpen, setIsUnavailableConfirmOpen] = useState(false);
     const [isSending, setIsSending] = useState(false);
+
+    /**
+     * One recipient page from the server: the next `RECIPIENT_PAGE_SIZE` people the current
+     * filters match, starting at `skip`.
+     *
+     * `filters` overrides let a handler that has just changed a filter read with the new
+     * value in the same click, rather than with state React has not re-rendered yet.
+     * `append` grows the window downwards, so a "load more" click adds beneath the rows
+     * already on screen and the reader's place never moves.
+     */
+    const loadRecipientsPage = async (
+        skip: number,
+        append: boolean,
+        filters?: { search?: string; cohortKey?: string; includeSameGender?: boolean }
+    ) => {
+        const search = filters?.search ?? appliedSearch;
+        const cohort = cohortFromKey(filters?.cohortKey ?? selectedCohortKey);
+        const widenGender = filters?.includeSameGender ?? includeSameGender;
+        if (append) {
+            setLoadingMoreRecipients(true);
+        } else {
+            setLoadingRecipients(true);
+        }
+        try {
+            const page = await getLoveNoteRecipients({
+                skip,
+                limit: RECIPIENT_PAGE_SIZE,
+                ...(search.trim() ? { q: search.trim() } : {}),
+                includeSameGender: widenGender,
+                ...(cohort ? { year: cohort.year, department: cohort.department } : {}),
+            });
+            setRecipients((previous) => (append ? [...previous, ...page.users] : page.users));
+            setRecipientsTotal(page.total);
+        } catch (error) {
+            console.error("Failed to load recipients:", error);
+            toast.error("Could not load recipients. Please try again.");
+        } finally {
+            setLoadingRecipients(false);
+            setLoadingMoreRecipients(false);
+        }
+    };
 
     /**
      * One inbox read into state: the rows replace or extend the window, and the total
@@ -275,7 +340,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
     };
 
 
-// Used to fetch templates, users, cohorts, and inbox count
+// Used to fetch templates, cohorts, and the first inbox page
     useEffect(() => {
         const fetchInitialData = async () => {
             // Claimed before anything awaits, so the tab effect below can tell "not
@@ -290,15 +355,14 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 setTemplates(loadedTemplates);
                 setSelectedTemplate(loadedTemplates[0]);
 
-                // Fetch users, cohorts, and the first inbox page in parallel. Only
-                // the first page travels here: the inbox grows through "show more",
-                // not by loading every note behind a card grid.
-                const [usersData, cohortsData, notesPage] = await Promise.all([
-                    getAllUsers(),
+                // Fetch cohorts and the first inbox page in parallel. Only the first
+                // inbox page travels here: the inbox grows through "show more", not by
+                // loading every note behind a card grid. The recipient list is not read
+                // at all -- the picker reads it one page at a time when it is opened.
+                const [cohortsData, notesPage] = await Promise.all([
                     getCohorts(),
                     getReceivedLoveNotes({ skip: 0, limit: INBOX_PAGE_SIZE })
                 ]);
-                setAllUsers(usersData);
                 setCohorts(cohortsData);
                 applyInboxPage(notesPage, false);
 
@@ -561,17 +625,18 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 // and the counter above is the honest report in both cases. Surfacing it would
                 // mean threading canvas-load state back into render for a branch the sender
                 // cannot reach.
-                // The ceiling comes from the box, not from `field.font.size`. Every template
-                // shipped the same declared 32 against boxes spanning 830x800 to 1570x570 on a
-                // 1920x1080 card, so 32 was a placeholder rather than a tuned value -- it made a
-                // short note look tiny and left no room to shrink within, which is the opposite
-                // of what the fit is for. See `maxSizeForBox`.
+                // The ceiling is one moderate constant, not `field.font.size` (every template
+                // shipped the same declared 32, a placeholder that made a short note look tiny)
+                // and not a fraction of the box either -- that made the same two words huge on a
+                // tall box and merely large on a short one. See `MAX_FONT_SIZE`. The box still
+                // governs everything below the ceiling: the fit comes down from it only when the
+                // message cannot otherwise be contained.
                 const fitted = isBody                    ? fitTextToBox(
                           measureAt,
                           font,
                           textToRender,
                           field,
-                          maxSizeForBox(field)
+                          MAX_FONT_SIZE
                       )
                     : {
                           lines: wrapText(
@@ -644,6 +709,30 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
             return;
         }
         setIsRecipientModalOpen(true);
+        // The first page is read when the picker opens, not at mount: nobody who never
+        // sends a note ever pays for a recipient query.
+        void loadRecipientsPage(0, false);
+    };
+
+    /**
+     * Run the typed search against the server. Names are matched in SQL and only the
+     * matching page travels back, so the box never filters a list it already holds.
+     */
+    const submitRecipientSearch = () => {
+        const cleaned = searchTerm.trim();
+        setAppliedSearch(cleaned);
+        void loadRecipientsPage(0, false, { search: cleaned });
+    };
+
+    /** Changing a filter re-reads the first page: the rows below it belong to the old one. */
+    const handleRecipientCohortChange = (key: string) => {
+        setSelectedCohortKey(key);
+        void loadRecipientsPage(0, false, { cohortKey: key });
+    };
+
+    const handleIncludeSameGenderChange = (checked: boolean) => {
+        setIncludeSameGender(checked);
+        void loadRecipientsPage(0, false, { includeSameGender: checked });
     };
 
     // Used to send the note after confirming recipient. A recipient an admin has blocked
@@ -697,8 +786,12 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
             setNoteMessage('');
             setSelectedEmoji(null);
             setSelectedRecipient(null);
-setSearchTerm('');
+            setSearchTerm('');
+            setAppliedSearch('');
             setSelectedCohortKey(ALL_COHORTS);
+            setIncludeSameGender(false);
+            setRecipients([]);
+            setRecipientsTotal(0);
             // Used to refresh user data to get the updated love_notes_send_enabled status
             if (token) {
                 fetchAndSetUser(token);
@@ -729,19 +822,6 @@ setSearchTerm('');
             toast.success('Note downloaded! 📱');
         }
     };
-
-// Used to filter users based on search term and cohort
-    const filteredUsers = useMemo(() => {
-        // Resolved once per filter change rather than per user: the key is a string, so the
-        // comparison has to be turned back into a pair somewhere, and doing it per row would
-        // repeat that parse for every recipient on the list.
-        const selected = cohortFromKey(selectedCohortKey);
-        return allUsers.filter(u => {
-            const nameMatch = u.name.toLowerCase().includes(searchTerm.toLowerCase());
-            const cohortMatch = selected === null || isSameCohort(u, selected);
-            return nameMatch && cohortMatch;
-        });
-    }, [allUsers, searchTerm, selectedCohortKey]);
 
     return (
         <>
@@ -983,7 +1063,7 @@ setSearchTerm('');
                                     <Button
                                         onClick={handleOpenRecipientModal}
                                         disabled={user?.love_notes_send_enabled}
-                                        className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3 mt-4"
+                                        className="w-full font-dancing text-lg py-3 mt-4"
                                     >
                                         <Send className="w-5 h-5 mr-2" />
                                         {user?.love_notes_send_enabled ? "You've Already Sent Your Note" : "Send Your Love Note"}
@@ -1147,18 +1227,38 @@ setSearchTerm('');
                             </ul>
                         </div>
 
-                        {/* Filters */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Search by name..."
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="pl-10"
-                                />
+                        {/* Filters. Every one of these re-reads a page from the server:
+                            the search only runs when submitted, and the cohort and gender
+                            controls re-read the first page immediately. */}
+                        <div className="space-y-3">
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                                    <Input
+                                        placeholder="Search by name..."
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        // Enter submits the same way the button does, so a search is a
+                                        // deliberate act either way -- the box does not re-query per keystroke.
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                submitRecipientSearch();
+                                            }
+                                        }}
+                                        className="pl-10"
+                                    />
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={submitRecipientSearch}
+                                    aria-label="Search recipients"
+                                >
+                                    Search
+                                </Button>
                             </div>
-<Select value={selectedCohortKey} onValueChange={setSelectedCohortKey}>
+<Select value={selectedCohortKey} onValueChange={handleRecipientCohortChange}>
                                 <SelectTrigger>
                                     <SelectValue placeholder="Filter by cohort" />
                                 </SelectTrigger>
@@ -1174,31 +1274,69 @@ setSearchTerm('');
                                     })}
                                 </SelectContent>
                             </Select>
+                            {/* Off: the server answers with everyone whose gender is not the
+                                viewer's. On: it answers with both genders. */}
+                            <div className="flex items-center space-x-2">
+                                <Switch
+                                    id="include-same-gender-switch"
+                                    checked={includeSameGender}
+                                    onCheckedChange={handleIncludeSameGenderChange}
+                                />
+                                <Label htmlFor="include-same-gender-switch" className="text-romantic font-semibold">
+                                    Include same gender
+                                </Label>
+                            </div>
                         </div>
 
-                        {/* User List */}
+                        {/* User List. The window only grows downwards: "load more" appends the next
+                            page beneath the rows already read, so the reader's place never moves. */}
                         <ScrollArea className="h-64 border rounded-md p-2">
                             <div className="space-y-2">
-                                {filteredUsers.length > 0 ? filteredUsers.map(u => (
-                                    <div
-                                        key={u.id}
-                                        onClick={() => setSelectedRecipient(u)}
-                                        className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?.id === u.id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
-                                    >
-                                        <ProfileAvatar
-                                            src={u.profile_picture_url}
-                                            name={u.name}
-                                            className="w-10 h-10 mr-4"
-                                        />
-                                        <div>
-                                            <p className="font-semibold">{u.name}</p>
-                                            <p className="text-sm text-muted-foreground">{cohortLabel(u.year, u.department)}</p>
-                                        </div>
-                                        {u.is_blocked && (
-                                            <Badge variant="secondary" className="ml-auto">Not available</Badge>
-                                        )}
+                                {loadingRecipients ? (
+                                    <div className="flex justify-center items-center py-8">
+                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-romantic"></div>
                                     </div>
-                                )) : (
+                                ) : recipients.length > 0 ? (
+                                    <>
+                                        {recipients.map(u => (
+                                            <div
+                                                key={u.id}
+                                                onClick={() => setSelectedRecipient(u)}
+                                                className={`flex items-center p-3 rounded-md cursor-pointer transition-all duration-200 ${selectedRecipient?.id === u.id ? 'bg-romantic/20 border-romantic border' : 'hover:bg-muted/50'}`}
+                                            >
+                                                <ProfileAvatar
+                                                    src={u.profile_picture_url}
+                                                    name={u.name}
+                                                    className="w-10 h-10 mr-4"
+                                                />
+                                                <div>
+                                                    <p className="font-semibold">{u.name}</p>
+                                                    <p className="text-sm text-muted-foreground">{cohortLabel(u.year, u.department)}</p>
+                                                </div>
+                                                {u.is_blocked && (
+                                                    <Badge variant="secondary" className="ml-auto">Not available</Badge>
+                                                )}
+                                            </div>
+                                        ))}
+                                        {recipients.length < recipientsTotal && (
+                                            <div className="flex justify-center pt-2 pb-1">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => void loadRecipientsPage(recipients.length, true)}
+                                                    disabled={loadingMoreRecipients}
+                                                    aria-label="Load more recipients"
+                                                >
+                                                    <ChevronDown className="w-4 h-4 mr-1" />
+                                                    {loadingMoreRecipients
+                                                        ? 'Loading…'
+                                                        : `Load more (${recipientsTotal - recipients.length} remaining)`}
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
                                     <p className="text-center text-muted-foreground py-8">No users found.</p>
                                 )}
                             </div>
@@ -1213,7 +1351,7 @@ setSearchTerm('');
                         <Button
                             onClick={handleConfirmAndSend}
                             disabled={!selectedRecipient || isSending}
-                            className="w-full bg-gradient-romantic hover:opacity-90 text-white font-dancing text-lg py-3"
+                            className="w-full font-dancing text-lg py-3"
                         >
                             <Send className="w-5 h-5 mr-2" />
                             Confirm & Send Note
@@ -1241,7 +1379,6 @@ setSearchTerm('');
                         <AlertDialogAction
                             onClick={sendSelectedNote}
                             disabled={isSending}
-                            className="bg-gradient-romantic hover:opacity-90 text-white"
                         >
                             Send anyway
                         </AlertDialogAction>

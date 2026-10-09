@@ -10,10 +10,11 @@ from ..utils import isoformat_datetime
 from datetime import datetime, timezone
 
 from ..dependencies import get_db
-from ..accounts import AccountRef
+from ..limits import USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from ..models import Cohort, UserDetails
 from ..services.authorization import require_participant
 from ..services.love_note_service import (
+    LOVE_NOTE_RECIPIENTS_MAX_LIMIT,
     LoveNoteCreate,
     LoveNoteReportCreate,
     get_all_users_service,
@@ -50,15 +51,47 @@ class UserRecipient(BaseModel):
     # the sender just has to confirm it first. The flag is what lets the client warn.
     is_blocked: bool = False
 
-@router.get("/users", response_model=List[UserRecipient])
+class RecipientListPage(BaseModel):
+    """
+    One page of the recipient list, with the total behind it.
+
+    An envelope rather than a bare list because the picker pages: ``total`` is what tells
+    the screen how many people are left below the page it already holds, and the rows
+    themselves are still validated one by one as ``UserRecipient``.
+    """
+    users: List[UserRecipient]
+    total: int
+    skip: int
+    limit: int
+
+@router.get("/users", response_model=RecipientListPage)
 def get_all_users(
     current_user: Annotated[UserDetails, Depends(require_participant)],
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
+    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    limit: int = Query(50, ge=1, le=LOVE_NOTE_RECIPIENTS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole participant table."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the participant's name, run in SQL."),
+    include_same_gender: bool = Query(False, description="Widen the list to the viewer's own gender. Off by default, so the picker opens on the genders the sender is not in."),
+    year: Optional[int] = Query(None, ge=USER_YEAR_MIN, le=USER_YEAR_MAX, description="Exact year of study."),
+    department: Optional[str] = Query(None, max_length=USER_DEPARTMENT_MAX, description="Exact department, case-insensitive."),
 ):
     """
-    Used to fetch all users from the database, excluding the current user.
+    Used to fetch one page of users available as note recipients, excluding the current user.
+
+    Every filter is a SQL WHERE and the page a SQL LIMIT/OFFSET: with thousands of
+    participants the backend reads and serialises at most ``limit`` rows, never the whole
+    table, and the search matches names in the database rather than over a loaded list.
     """
-    return get_all_users_service(db, AccountRef.of(current_user))
+    return get_all_users_service(
+        db,
+        current_user,
+        skip=skip,
+        limit=limit,
+        query=q,
+        include_same_gender=include_same_gender,
+        year=year,
+        department=department,
+    )
 
 @router.get("/cohorts", response_model=List[Cohort])
 def get_all_cohorts(
