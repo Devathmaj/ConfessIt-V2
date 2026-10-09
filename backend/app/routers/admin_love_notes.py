@@ -12,10 +12,12 @@ from ..services.authorization import require_capability
 from ..services.love_note_service import (
     LOVE_NOTES_MAX_LIMIT,
     get_admin_love_notes_data,
+    regenerate_love_note_moderation_body,
     update_love_note_status_service,
     delete_love_note_service,
     get_love_note_reports_for_admin,
 )
+from ..services.pii_detection_service import PiiDetectionError, pii_error_to_http
 from ..services.report_resolution_service import resolve_love_note_report
 
 router = APIRouter(prefix="/admin/love-notes", tags=["Admin - Love Notes"])
@@ -74,6 +76,32 @@ def delete_love_note(
     return delete_love_note_service(note_id, db)
 
 
+@router.post("/{note_id}/redact")
+def regenerate_love_note_redaction(
+    note_id: str,
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_REVIEW))
+) -> Dict[str, Any]:
+    """
+    Re-run PII redaction for one note whose moderation preview is missing.
+
+    A preview is produced when a note is sent and is the only rendering of the note
+    the moderation screens ever carry. When the provider was unavailable at send time
+    the note was still accepted (the sender's note is not held hostage to a preview)
+    but stored no preview; this endpoint lets a reviewer regenerate it on demand.
+
+    The response carries the redacted preview and the note id -- never the original
+    body. A note that already has a preview is returned unchanged without a provider
+    call. Provider or configuration failures answer 503 with a generic message so the
+    screen keeps its explicit "preview unavailable" state; there is no response shape
+    in which the raw body could escape.
+    """
+    try:
+        return regenerate_love_note_moderation_body(note_id, db)
+    except PiiDetectionError as exc:
+        raise pii_error_to_http(exc)
+
+
 # The report queue carries the reporting capabilities rather than the love-note ones, so that
 # reading reports and ruling on them stay separately grantable from approving a note. Nothing
 # here shadows a handler above: FastAPI matches on method first, and neither ``GET
@@ -87,7 +115,7 @@ def get_love_note_reports(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the note body, the reporter regno and the sender name/regno."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the note's redacted moderation preview, the reporter regno and the sender name/regno."),
     db: Database = Depends(get_db),
     admin: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW)),
     response: Response = None

@@ -42,6 +42,7 @@ def make_note(db, sender, recipient, *, status="approved", body="a love note", c
             image_public_id=None,
             image_format="png",
             body=body,
+            moderation_body=body,
             anonymous=False,
             status=status,
             created_at=created_at or datetime.now(timezone.utc),
@@ -118,7 +119,7 @@ def test_status_narrows_in_the_database(db, admin_client):
 
     pending = admin_client.get("/admin/love-notes", params={"status": "pending_review"}).json()
     assert pending["total"] == 1
-    assert [note["body"] for note in pending["notes"]] == ["waiting"]
+    assert [note["moderation_body"] for note in pending["notes"]] == ["waiting"]
 
     everything = admin_client.get("/admin/love-notes").json()
     assert everything["total"] == 3
@@ -132,10 +133,10 @@ def test_order_walks_the_timeline_newest_or_oldest_first(db, admin_client):
     make_note(db, sender, recipient, body="third", created_at=base)
 
     newest = admin_client.get("/admin/love-notes", params={"order": "newest"}).json()
-    assert [note["body"] for note in newest["notes"]] == ["third", "second", "first"]
+    assert [note["moderation_body"] for note in newest["notes"]] == ["third", "second", "first"]
 
     oldest = admin_client.get("/admin/love-notes", params={"order": "oldest"}).json()
-    assert [note["body"] for note in oldest["notes"]] == ["first", "second", "third"]
+    assert [note["moderation_body"] for note in oldest["notes"]] == ["first", "second", "third"]
 
 
 def test_a_ruled_note_moves_between_status_totals(db, admin_client):

@@ -766,6 +766,27 @@ export const updateAdminLoveNoteStatus = async (noteId: string, status: "approve
     return response.data;
 };
 
+/**
+ * Re-run PII redaction for one love note whose moderation preview is missing.
+ *
+ * The note was accepted even though the provider failed at send time, so the preview
+ * column is empty and the moderation screen shows an explicit unavailable state. This
+ * asks the backend to try again and answers `{ id, moderation_body }` -- the redacted
+ * preview, never the original note text, which has no field in any response. A note
+ * that already has a preview comes back unchanged without a provider call; a provider
+ * failure is a 503 and the caller keeps the unavailable state.
+ */
+export const retryAdminLoveNoteRedaction = async (
+    noteId: string
+): Promise<{ id: string; moderation_body: string }> => {
+    const response = await axios.post(
+        `${API_URL}/admin/love-notes/${noteId}/redact`,
+        {},
+        { headers: getAuthHeaders() }
+    );
+    return response.data;
+};
+
 export const deleteAdminLoveNote = async (noteId: string) => {
     const response = await axios.delete(`${API_URL}/admin/love-notes/${noteId}`, { headers: getAuthHeaders() });
     return response.data;

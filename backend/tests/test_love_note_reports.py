@@ -81,6 +81,7 @@ def make_note(db, sender, recipient, *, status="approved", body="a love note", a
             image_public_id=None,
             image_format="png",
             body=body,
+            moderation_body=body,
             anonymous=anonymous,
             status=status,
             created_at=datetime.now(timezone.utc),
@@ -294,7 +295,7 @@ def test_a_report_reaches_the_queue_carrying_the_note_and_its_sender(admin_clien
     report = only_report(admin_client.get("/admin/love-notes/reports"))
 
     assert report["love_note_id"] == note_id
-    assert report["body"] == "the note that was reported"
+    assert report["moderation_body"] == "the note that was reported"
     assert report["anonymous"] is False
     assert report["note_status"] == "approved"
     assert report["reporter"] == {"regno": RECIPIENT, "name": "Recipient Name"}
@@ -641,7 +642,7 @@ def test_the_review_list_carries_the_words_and_nothing_about_the_people(admin_cl
 
     assert [note["id"] for note in listed] == [note_id]
     note = listed[0]
-    assert note["body"] == "the words under review"
+    assert note["moderation_body"] == "the words under review"
     for withheld in (
         "sender", "recipient", "image_url", "anonymous", "read_at",
         "sender_id", "recipient_id",

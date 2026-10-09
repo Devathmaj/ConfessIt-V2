@@ -736,6 +736,11 @@ class LoveNote(BaseModel):
     recipient_id: str
     image: LoveNoteImageIdentity
     body: str
+    # The privacy-safe preview of ``body`` shown to reviewers (see
+    # ``db_models.LoveNoteRecord.moderation_body``). Optional because a failed or
+    # not-yet-run redaction legitimately has no preview to show; the moderation
+    # screen renders an explicit unavailable state rather than reading ``body``.
+    moderation_body: Optional[str] = None
     anonymous: bool = False
     status: str = "pending_review"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

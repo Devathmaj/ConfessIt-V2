@@ -416,3 +416,65 @@ def _mock_content_safety_safe(monkeypatch):
     monkeypatch.setattr(_css, "moderate_content", _safe_decision)
     monkeypatch.setattr(_css, "moderate_confession_text", _safe_confession)
     monkeypatch.setattr(_css, "moderate_profile_picture", _safe_profile_picture)
+
+
+@pytest.fixture(autouse=True)
+def _mock_pii_redaction_safe(monkeypatch):
+    """Offline PII-redaction default so existing creation paths keep working.
+
+    Love-note sends now run Azure AI Language PII detection once, at creation,
+    to store the redacted moderation preview. Without this, every pre-existing
+    test that sends a love note would call the real endpoint. This provides
+    dummy config and a pass-through redaction: sample test bodies contain no
+    personal data, so the provider's honest answer for them is the text
+    unchanged, and the admin payload (``moderation_body``) equals the body the
+    test wrote.
+
+    Validation is preserved exactly like the Content Safety fixture: missing
+    endpoint/key still raises ``missing_config`` and empty/over-long text still
+    raises ``invalid_input``, so the failure paths remain testable by clearing
+    settings. Tests that need real redaction logic restore the real functions
+    and fake the SDK client at the ``get_pii_client`` seam (see
+    ``test_love_note_pii_redaction.py``).
+    """
+    monkeypatch.setattr(settings, "PII_DETECTION_ENDPOINT", "https://test-pii.example.com")
+    monkeypatch.setattr(settings, "PII_DETECTION_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "PII_DETECTION_REGION", "test-region")
+    from app.services import pii_detection_service as _pds
+
+    def _safe_redact(body, *, config=None):
+        cfg = config if config is not None else _pds.config_from_settings(settings)
+        if not cfg.endpoint or not str(cfg.endpoint).strip():
+            raise _pds.PiiDetectionError(
+                "PII detection is not configured: PII_DETECTION_ENDPOINT is missing.",
+                code="missing_config",
+            )
+        if not cfg.api_key or not str(cfg.api_key).strip():
+            raise _pds.PiiDetectionError(
+                "PII detection is not configured: PII_DETECTION_API_KEY is missing.",
+                code="missing_config",
+            )
+        text = body or ""
+        if not text.strip():
+            raise _pds.PiiDetectionError(
+                "Empty text cannot be redacted.",
+                code="invalid_input",
+            )
+        if len(text) > _pds.TEXT_MAX_LENGTH:
+            raise _pds.PiiDetectionError(
+                "Submitted text exceeds the PII detection limit.",
+                code="invalid_input",
+            )
+        return _pds.LoveNoteRedaction(
+            moderation_body=text,
+            languages=("en",),
+            entity_count=0,
+        )
+
+    monkeypatch.setattr(_pds, "redact_love_note_body", _safe_redact)
+    # ``love_note_service`` imported the function by name, so the module-local
+    # reference has to be replaced too -- patching only the defining module
+    # would leave the send path and the retry endpoint calling the real one.
+    from app.services import love_note_service as _lns
+
+    monkeypatch.setattr(_lns, "redact_love_note_body", _safe_redact)

@@ -8,7 +8,7 @@ import { LoveNotesReview } from '@/pages/LoveNotesReview';
 /**
  * Moderating love notes, page by page.
  *
- * Three properties are pinned here, each failing in a way the old fetch-everything
+ * Four properties are pinned here, each failing in a way the old fetch-everything
  * screen could not have caught:
  *
  * * **Sections grow downwards.** Each moderation state holds its own contiguous window
@@ -19,11 +19,15 @@ import { LoveNotesReview } from '@/pages/LoveNotesReview';
  * * **An action refreshes what it touched.** Approving, rejecting or hiding re-reads the
  *   source and destination windows, so the moved note lands in its new section with true
  *   totals beside it instead of sitting patched in the old one.
+ * * **The preview is the only text there is.** Rows carry `moderation_body` (the
+ *   PII-redacted rendering) and never the original note; a null preview renders the
+ *   explicit unavailable state with a generate button that fills it in place.
  */
 
 const api = vi.hoisted(() => ({
   getAdminLoveNotes: vi.fn(),
   updateAdminLoveNoteStatus: vi.fn(),
+  retryAdminLoveNoteRedaction: vi.fn(),
   deleteAdminLoveNote: vi.fn(),
 }));
 
@@ -39,7 +43,7 @@ vi.mock('sonner', () => ({ toast, Toaster: () => null }));
 
 type NoteRow = {
   id: string;
-  body: string;
+  moderation_body: string | null;
   status: 'pending_review' | 'approved' | 'rejected';
   created_at: string;
 };
@@ -49,10 +53,10 @@ let db: NoteRow[];
 
 const note = (
   id: string,
-  body: string,
+  moderationBody: string | null,
   status: NoteRow['status'],
   createdAt: string,
-): NoteRow => ({ id, body, status, created_at: createdAt });
+): NoteRow => ({ id, moderation_body: moderationBody, status, created_at: createdAt });
 
 const stamp = (day: number) => `2026-01-${String(day).padStart(2, '0')}T10:00:00.000Z`;
 
@@ -232,8 +236,8 @@ describe('LoveNotesReview: paged moderation', () => {
 
   it('still splits a legacy bare-array answer by status with no pager', async () => {
     api.getAdminLoveNotes.mockResolvedValue([
-      { id: 'p1', body: 'pending words', status: 'pending_review', created_at: stamp(3) },
-      { id: 'a1', body: 'accepted words', status: 'approved', created_at: stamp(2) },
+      { id: 'p1', moderation_body: 'pending words', status: 'pending_review', created_at: stamp(3) },
+      { id: 'a1', moderation_body: 'accepted words', status: 'approved', created_at: stamp(2) },
     ]);
 
     await renderPage();
@@ -241,5 +245,43 @@ describe('LoveNotesReview: paged moderation', () => {
     expect(openBodyAt(groupNamed('Pending review'), 0, 'pending words')).toHaveTextContent('pending words');
     expect(openBodyAt(groupNamed('Accepted notes'), 0, 'accepted words')).toHaveTextContent('accepted words');
     expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument();
+  });
+
+  it('offers a retry when a note has no preview and fills it in without refetching', async () => {
+    db = [note('n1', null, 'pending_review', stamp(5))];
+    api.retryAdminLoveNoteRedaction.mockResolvedValue({ id: 'n1', moderation_body: 'Call **********' });
+    await renderPage();
+
+    fireEvent.click(triggersIn(groupNamed('Pending review'))[0]);
+    expect(
+      within(groupNamed('Pending review')).getByText(/No privacy-safe preview is available/),
+    ).toBeInTheDocument();
+
+    const callsBeforeRetry = api.getAdminLoveNotes.mock.calls.length;
+    fireEvent.click(
+      within(groupNamed('Pending review')).getByRole('button', { name: /generate preview/i }),
+    );
+
+    expect(await within(groupNamed('Pending review')).findByText('Call **********')).toBeInTheDocument();
+    expect(api.retryAdminLoveNoteRedaction).toHaveBeenCalledWith('n1');
+    // The retry patches the row it was about; it does not re-read or move the section.
+    expect(api.getAdminLoveNotes.mock.calls.length).toBe(callsBeforeRetry);
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('keeps the unavailable state and reports an error when the retry fails', async () => {
+    db = [note('n1', null, 'pending_review', stamp(5))];
+    api.retryAdminLoveNoteRedaction.mockRejectedValue(new Error('503'));
+    await renderPage();
+
+    fireEvent.click(triggersIn(groupNamed('Pending review'))[0]);
+    fireEvent.click(
+      within(groupNamed('Pending review')).getByRole('button', { name: /generate preview/i }),
+    );
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(
+      within(groupNamed('Pending review')).getByText(/No privacy-safe preview is available/),
+    ).toBeInTheDocument();
   });
 });

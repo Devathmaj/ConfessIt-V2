@@ -108,6 +108,9 @@ SAMPLE_ROUTES = [
 ("GET", "/admin/love-notes"),
 ("PUT", "/admin/love-notes/{note_id}/status"),
 ("DELETE", "/admin/love-notes/{note_id}"),
+    # Regenerating a note's missing moderation preview is part of review, not a
+    # ruling on the note, so it carries the review capability like the list does.
+    ("POST", "/admin/love-notes/{note_id}/redact"),
 ("GET", "/admin/love-notes/reports"),
 ("PATCH", "/admin/love-notes/reports/{report_id}"),
     # Wordle sessions. ``POST /admin/wordle`` is the Update action (end the current

@@ -137,7 +137,7 @@ TRGM_INDEX_COLUMNS: tuple[tuple[str, str], ...] = (
     ("confession_comments", "body"),
     ("reports", "reason"),
     ("reports", "reported_by_name"),
-    ("love_notes", "body"),
+    ("love_notes", "moderation_body"),
     ("love_note_reports", "reason"),
     ("love_note_reports", "reporter_regno"),
     ("notifications", "heading"),

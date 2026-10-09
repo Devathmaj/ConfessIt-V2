@@ -77,7 +77,7 @@ const loveNoteRow = (id: string, reason: string, overrides: Partial<QueueRow> = 
   reported_at: stamp(10),
   reporter: { id: 'r1', name: 'Rita Reporter', regno: 'R1' },
   reported_user: { id: 's1', name: 'Sam Sender', regno: 'S1' },
-  body: `reported note ${id}`,
+  moderation_body: `reported note ${id}`,
   ...overrides,
 });
 

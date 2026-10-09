@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/accordion';
 import {
   getAdminLoveNotes,
+  retryAdminLoveNoteRedaction,
   updateAdminLoveNoteStatus,
 } from '@/services/api';
 import {
@@ -35,12 +36,16 @@ import {
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import { EyeOff, ShieldCheck, XCircle } from 'lucide-react';
 
-/** What the moderation list returns: the note's words and the fields needed to act on it.
- * No sender, no recipient, no image, no anonymity flag -- see
+/** What the moderation list returns: the note's redacted words and the fields needed to act
+ * on it. No sender, no recipient, no image, no anonymity flag -- see
  * ``get_admin_love_notes_data`` for why the review screen never receives identities. */
 interface AdminLoveNote {
   id: string;
-  body: string;
+  /** The PII-redacted rendering of the note, produced by the backend when it was sent.
+   * ``null`` means no preview could be produced (the redaction provider failed); the
+   * screen then shows that state with a retry and never the original text, which it does
+   * not receive at all. */
+  moderation_body: string | null;
   status: 'approved' | 'rejected' | 'pending_review';
   created_at: string | null;
   content_removed?: boolean;
@@ -80,7 +85,7 @@ const totalOf = (answer: unknown, fallback: number): number => {
 
 const normalizeNote = (item: Partial<AdminLoveNote>, index: number): AdminLoveNote => ({
   id: item.id ?? `love-note-${index}`,
-  body: item.body ?? '',
+  moderation_body: typeof item.moderation_body === 'string' ? item.moderation_body : null,
   status: (item.status as AdminLoveNote['status']) ?? 'pending_review',
   created_at: item.created_at ?? null,
   content_removed: item.content_removed ?? false,
@@ -389,6 +394,40 @@ export const LoveNotesReview = () => {
     }
   };
 
+  /** Which note's preview is regenerating, so only that row's button reads busy.
+   *
+   * A note with no preview was still accepted at send time -- the sender's note is not
+   * held hostage to the redaction provider -- and this is how staff ask for the preview
+   * again. The response carries the redacted text only, which is patched into whichever
+   * list holds the row; nothing on this screen can ever receive the raw note. */
+  const [redacting, setRedacting] = useState<string | null>(null);
+
+  const retryRedaction = async (noteId: string) => {
+    if (redacting !== null) return;
+    setRedacting(noteId);
+    try {
+      const { moderation_body } = await retryAdminLoveNoteRedaction(noteId);
+      const patch = (items: AdminLoveNote[]) =>
+        items.map((item) =>
+          item.id === noteId ? { ...item, moderation_body: moderation_body ?? item.moderation_body } : item,
+        );
+      setSections((prev) => {
+        const next = { ...prev };
+        (Object.keys(next) as NoteStatus[]).forEach((status) => {
+          next[status] = { ...next[status], items: patch(next[status].items) };
+        });
+        return next;
+      });
+      setLegacyRows((prev) => (prev ? patch(prev) : prev));
+      toast.success('Privacy-safe preview generated.');
+    } catch (error) {
+      console.error('Failed to generate the moderation preview', error);
+      toast.error('Unable to generate the moderation preview. Please try again shortly.');
+    } finally {
+      setRedacting(null);
+    }
+  };
+
   return (
     <div className="relative min-h-screen bg-background">
       <AdminNavigation />
@@ -517,7 +556,32 @@ export const LoveNotesReview = () => {
                             <AccordionContent className="space-y-5 bg-background/40 px-4 pb-5 pt-2">
                               <div className="rounded-2xl border border-border bg-background/60 p-4">
                                 <p className="text-sm uppercase tracking-wide text-muted-foreground">Message</p>
-                                <p className="mt-2 whitespace-pre-line text-base leading-relaxed">{note.body}</p>
+                                {/* The reviewer reads the padlock, not the safe: this is the
+                                    PII-redacted preview and it is the only rendering of the
+                                    note this screen has. When no preview could be produced
+                                    the row says so and offers a retry -- it never silently
+                                    falls back to anything, because there is nothing else
+                                    here to fall back to. */}
+                                {note.moderation_body !== null ? (
+                                  <p className="mt-2 whitespace-pre-line text-base leading-relaxed">
+                                    {note.moderation_body}
+                                  </p>
+                                ) : (
+                                  <div className="mt-2 space-y-2">
+                                    <p className="text-sm text-muted-foreground">
+                                      No privacy-safe preview is available for this note. The original
+                                      text is never shown on this screen.
+                                    </p>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => retryRedaction(note.id)}
+                                      disabled={redacting !== null}
+                                    >
+                                      {redacting === note.id ? 'Generating…' : 'Generate preview'}
+                                    </Button>
+                                  </div>
+                                )}
                               </div>
 
                               {note.content_removed ? (

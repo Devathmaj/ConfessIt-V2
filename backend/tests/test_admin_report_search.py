@@ -101,6 +101,7 @@ def make_note(db, sender, recipient, *, body="a love note"):
             image_public_id=None,
             image_format="png",
             body=body,
+            moderation_body=body,
             anonymous=False,
             status="approved",
             created_at=datetime.now(timezone.utc),

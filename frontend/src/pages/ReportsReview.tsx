@@ -109,7 +109,10 @@ interface ConfessionReport {
 interface LoveNoteReport {
   id: string;
   love_note_id: string;
-  body: string | null;
+  /** The PII-redacted preview of the note, never the original body: this queue is a
+   *  moderator-facing read of the same note the moderation list shows, so the raw text
+   *  has no path out through it. Null means no preview could be produced. */
+  moderation_body: string | null;
   anonymous: boolean;
   note_status: string | null;
   note_created_at: string | null;
@@ -1144,10 +1147,10 @@ export const ReportsReview = () => {
 
                   <div className="rounded-2xl border border-border bg-background/60 p-4">
                     <p className="text-sm uppercase tracking-wide text-muted-foreground">
-                      The note as the recipient received it
+                      The note text, with personal information redacted
                     </p>
                     <p className="mt-2 whitespace-pre-line text-base leading-relaxed">
-                      {report.body ?? '[The note no longer exists]'}
+                      {report.moderation_body ?? '[No privacy-safe preview is available for this note]'}
                     </p>
                     {report.image_url && (
                       <img
@@ -1199,7 +1202,7 @@ export const ReportsReview = () => {
                     title={`${isCaseClosed ? 'Detective thread message' : 'Message'} reported by ${partyName(report.reporter)}`}
                     status={statusBadge(report.status, report.reporter?.name)}
                     reason={report.reason}
-                    content={report.body}
+                  content={report.moderation_body}
                     meta={
                       <>
                         Reported {formatTimestamp(report.reported_at)} · Sent{' '}

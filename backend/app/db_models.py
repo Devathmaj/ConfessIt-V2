@@ -783,6 +783,16 @@ class LoveNoteRecord(RemovedContentColumns, Base):
     # that is supposed to be the enforcement path would be unreachable dead weight. The CHECK is
     # the enforcement path here, exactly as it is for confessions and messages.
     body: Mapped[str] = mapped_column(Text)
+    # The privacy-safe rendering of ``body`` that every admin-facing love-note read
+    # hands out. Azure AI Language's PII detection produces it once, when the note is
+    # created (see ``pii_detection_service.redact_love_note_body``); reviewer retries
+    # for failed previews are written by ``regenerate_love_note_moderation_body``.
+    # Nullable on purpose: a failed or not-yet-run redaction stores nothing at all,
+    # and the moderation screen renders an explicit "preview unavailable" state rather
+    # than ever being handed ``body`` as a fallback. ``body`` itself is never modified
+    # -- the image the sender rasterised and the copy the recipient receives are both
+    # built from it.
+    moderation_body: Mapped[Optional[str]] = mapped_column(Text)
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

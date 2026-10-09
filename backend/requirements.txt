@@ -22,6 +22,14 @@ redis==8.1.0
 azure-ai-contentsafety==1.0.0
 azure-core==1.41.0
 isodate==0.7.2
+# Azure AI Language PII detection for the love-note moderation preview
+# (app/services/pii_detection_service.py). Official SDK per
+# https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/textanalytics/azure-ai-textanalytics
+# (TextAnalyticsClient + detect_language/recognize_pii_entities,
+# api-version 2023-04-01). 5.4.0 is the latest stable line; it reuses the
+# azure-core/isodate pins above and adds only azure-common as a transitive
+# dependency, so no existing pin is moved.
+azure-ai-textanalytics==5.4.0
 # Plot Twist story generation talks to the configured provider through one of
 # these SDKs: Groq's own SDK when LLM_PROVIDER is groq (Strict Structured
 # Outputs), the OpenAI SDK for OpenAI-compatible surfaces such as Microsoft

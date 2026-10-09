@@ -13,6 +13,7 @@ from fastapi import HTTPException, status
 
 from ..models import UserDetails, LoveNote, LoveNoteImageIdentity
 from ..services.storage_service import storage_service
+from .pii_detection_service import PiiDetectionError, redact_love_note_body
 from ..services.report_resolution_service import resolve_status_filter
 from ..accounts import AccountRef, Capability, has_capability
 from ..services.matchmaking_slot_service import list_participant_cohorts
@@ -211,6 +212,30 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
         status="pending_review"
     )
 
+    # The moderator-facing preview is produced exactly once, here, and stored with
+    # the row. The review screen is a list that reloads as staff scroll and act, so
+    # redacting on read would re-run the provider for identical text on every view
+    # and make a provider outage a moderation outage. A failure stores *nothing*
+    # rather than falling back to the raw body: the moderation API only ever hands
+    # out ``moderation_body``, and an unset value renders as an explicit
+    # "preview unavailable" state that a reviewer can retry from the note row.
+    # Neither the body nor the key is ever logged here -- only the failure code.
+    moderation_body: Optional[str] = None
+    try:
+        moderation_body = redact_love_note_body(note_data.body).moderation_body
+    except PiiDetectionError as exc:
+        logger.warning(
+            "PII redaction failed for love note %s (%s); no moderation preview stored",
+            note_id,
+            exc.code,
+        )
+    except Exception:
+        logger.error(
+            "Unexpected PII redaction failure for love note %s; no moderation preview stored",
+            note_id,
+            exc_info=True,
+        )
+
     try:
         with db.sessions.begin() as session:
             row = LoveNoteRecord(
@@ -218,6 +243,7 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
                 sender_id=sender.id, recipient_id=str(note_data.recipient_id),
                 image_public_id=stored_image["public_id"], image_format=stored_image["format"],
                 body=note_data.body,
+                moderation_body=moderation_body,
                 anonymous=note_data.anonymous, status="pending_review",
                 created_at=love_note.created_at,
             )
@@ -275,10 +301,17 @@ LOVE_NOTE_ORDERS = frozenset({"newest", "oldest"})
 
 
 def _serialise_admin_love_note(doc: Any) -> Dict[str, Any]:
-    """One love note as the moderation list carries it: text and audit fields, no people."""
+    """One love note as the moderation list carries it: preview text and audit fields, no people.
+
+    ``moderation_body`` is the PII-redacted preview produced when the note was created
+    (or refilled by the retry endpoint). The original ``body`` is a stored column and is
+    deliberately absent from this payload: the moderation API has no field in which it
+    could travel, so no future edit to this screen can leak it by accident. ``None``
+    means "no preview available" -- the client must render that state, never the body.
+    """
     return {
         "id": str(doc.id),
-        "body": doc.body,
+        "moderation_body": doc.moderation_body,
         "status": doc.status,
         "created_at": isoformat_datetime(doc.created_at),
         # Flagged, not filtered: staff see removed notes so a removal can be audited, and
@@ -313,9 +346,10 @@ def get_admin_love_notes_data(
     would put the identities in the response where a future field could surface them.
     The image is withheld for the same reason: a reviewer can only rule on the words the
     reviewer can read. What stays is what moderation needs to act and to be audited: the
-    note id (every action takes it), the body, the moderation status, when it arrived,
-    and the removal flags -- so a removed note is still listed and still shows who took
-    it down and when.
+    note id (every action takes it), the PII-redacted moderation preview, the moderation
+    status, when it arrived, and the removal flags -- so a removed note is still listed
+    and still shows who took it down and when. The original ``body`` is not among them:
+    it is never exposed by this endpoint, only its redacted rendering.
     """
     skip = max(0, int(skip or 0))
     limit = max(1, min(int(limit or 50), LOVE_NOTES_MAX_LIMIT))
@@ -465,6 +499,59 @@ def update_love_note_status_service(
     return {"id": note_id, "status": status_value}
 
 
+def regenerate_love_note_moderation_body(note_id: str, db: Database) -> Dict[str, Any]:
+    """Re-run PII redaction for one note and persist the refreshed moderation preview.
+
+    The escape hatch for a note whose preview was never stored -- the provider was
+    down when it was sent, or the note predates this column. The body itself is read
+    only to hand it to the redaction service; it is never returned, and nothing here
+    can put it in a response. When a preview already exists this is a no-op that
+    makes no provider call, so a double-click or an impatient retry cannot re-run
+    redaction over text that already has an answer. A failed retry raises
+    :class:`PiiDetectionError` (mapped by the router to an explicit 503) so the
+    screen keeps its unavailable state instead of being handed anything raw.
+    """
+    if not is_valid_id(note_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid love note id",
+        )
+
+    with db.sessions() as session:
+        note = session.get(LoveNoteRecord, str(note_id))
+    if note is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Love note not found",
+        )
+    if note.moderation_body is not None:
+        return {"id": str(note.id), "moderation_body": note.moderation_body}
+
+    # Provider call outside any open transaction: the Language request can take
+    # seconds, and holding a pool connection across it would trade a slow provider
+    # for exhausted connections on every other endpoint.
+    result = redact_love_note_body(note.body)
+
+    with db.sessions.begin() as session:
+        row = session.get(LoveNoteRecord, str(note_id))
+        if row is None:
+            # Deleted between the read and the write; the caller asked to refresh a
+            # note that no longer exists, which is the same 404 as above.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Love note not found",
+            )
+        row.moderation_body = result.moderation_body
+
+    logger.info(
+        "Stored moderation preview for love note %s (passes=%s, entities=%s)",
+        note_id,
+        ",".join(result.languages),
+        result.entity_count,
+    )
+    return {"id": str(note_id), "moderation_body": result.moderation_body}
+
+
 def report_love_note_service(
     note_id: str,
     report_data: LoveNoteReportCreate,
@@ -571,11 +658,12 @@ def get_love_note_reports_for_admin(
     cannot outlive its note; an outer join would only ever render a "[deleted]" row that no
     code path can produce.
 
-    ``query`` narrows in SQL to reports whose reason, note body, reporter regno or sender
-    name/regno matches, with the total counted under the same filter so the screen pages
-    the question it asked. The sender is searchable here -- unlike a confession author --
-    because this queue names them on every row: searching cannot reveal what the response
-    does not already say.
+    ``query`` narrows in SQL to reports whose reason, note moderation preview, reporter
+    regno or sender name/regno matches, with the total counted under the same filter so
+    the screen pages the question it asked. The sender is searchable here -- unlike a
+    confession author -- because this queue names them on every row: searching cannot
+    reveal what the response does not already say. The note text that is searchable and
+    carried is the redacted preview, never the original body.
     """
     filters = []
     if status_filter:
@@ -586,7 +674,7 @@ def get_love_note_reports_for_admin(
         filters.append(or_(
             ilike_contains(LoveNoteReportRecord.reason, cleaned),
             ilike_contains(LoveNoteReportRecord.reporter_regno, cleaned),
-            ilike_contains(LoveNoteRecord.body, cleaned),
+            ilike_contains(LoveNoteRecord.moderation_body, cleaned),
             ilike_contains(UserRecord.name, cleaned),
             ilike_contains(UserRecord.regno, cleaned),
         ))
@@ -642,7 +730,11 @@ def get_love_note_reports_for_admin(
         items.append({
             "id": str(report.id),
             "love_note_id": str(report.love_note_id),
-            "body": note.body,
+            # The redacted preview, for the same reason the moderation list carries it:
+            # this queue is another moderator-facing view of the same note, and the
+            # original body must have no path out through it either. ``None`` renders
+            # as "preview unavailable" on the client, never as the raw note.
+            "moderation_body": note.moderation_body,
             "anonymous": bool(note.anonymous),
             "note_status": note.status,
             "note_created_at": isoformat_datetime(note.created_at),
