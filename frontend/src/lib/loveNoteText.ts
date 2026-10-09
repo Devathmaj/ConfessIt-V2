@@ -174,12 +174,12 @@ export const wrapText = (
  * billboard that dominated the card rather than a message sitting on it, and the same two
  * words were a different size on every template. The templates cannot express a tuned value
  * either -- every one of them shipped the same `body.font.size: 32`, a placeholder that read
- * as tiny. 48px on the 1920x1080 card is 2.5% of its width: clearly larger than that
+ * as tiny. 62px on the 1920x1080 card is 3.2% of its width: clearly larger than that
  * placeholder, and small enough that a short note reads as a note. A longer message is
  * unaffected by this number -- it shrinks below it exactly as before, and only when it cannot
- * fit the box at 48.
+ * fit the box at 62.
  */
-export const MAX_FONT_SIZE = 48;
+export const MAX_FONT_SIZE = 62;
 
 /**
  * The largest size, at or below `maxFontSize`, at which all of `text` fits inside `box`.

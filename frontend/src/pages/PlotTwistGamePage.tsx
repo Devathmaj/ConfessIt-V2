@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpenText, HeartHandshake, Loader2, RefreshCw, ScrollText, Trophy } from 'lucide-react';
 import { toast } from 'sonner';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { PartnerPicker } from '@/components/games/PartnerPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import {
@@ -15,7 +14,6 @@ import {
   selectPlotTwistPartner,
   startPlotTwistEvent,
   submitPlotTwistChoice,
-  type CouplePartnerCandidate,
   type PlotTwistState,
 } from '@/services/api';
 
@@ -30,32 +28,16 @@ import {
  * refresh, a navigation away and back, or a reconnect all land on the same
  * scene with the same history, because the session, its module selection
  * and every decision live in the database rather than in this component.
+ *
+ * The partner list is the shared PartnerPicker: paged, searched and filtered
+ * in SQL, so this page never holds the participant table.
  */
 
-const sameGenderOf = (mine: string | undefined, candidate: string) =>
-  mine ? candidate === mine : true;
-
-const defaultVisibleOf = (mine: string | undefined, candidate: string) => {
-  if (!mine || mine === 'other') return true;
-  if (mine === 'male') return candidate === 'female' || candidate === 'other';
-  if (mine === 'female') return candidate === 'male' || candidate === 'other';
-  return true;
-};
-
 export const PlotTwistGamePage = () => {
-  const { user } = useAuth();
-  const myGender = user?.gender;
-
   const [state, setState] = useState<PlotTwistState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-
-  const [partners, setPartners] = useState<CouplePartnerCandidate[]>([]);
-  const [partnersError, setPartnersError] = useState<string | null>(null);
-  const [showSameGender, setShowSameGender] = useState(false);
-  const [search, setSearch] = useState('');
-  const [choosingId, setChoosingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
@@ -74,29 +56,6 @@ export const PlotTwistGamePage = () => {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  // Partner candidates only matter before the pair exists.
-  useEffect(() => {
-    if (state === null) return;
-    if (state.stage !== 'selecting_partner' && state.stage !== 'no_game') return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await getPlotTwistPartners();
-        if (!cancelled) {
-          setPartners(list);
-          setPartnersError(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setPartnersError(describeApiError(error, 'Could not load people to choose from.'));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [state?.stage]);
 
   // While waiting for the partner's decision, re-read so their choice
   // appears without a manual refresh. Nothing else polls.
@@ -123,27 +82,12 @@ export const PlotTwistGamePage = () => {
     };
   }, [state?.stage]);
 
-  const visiblePartners = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return partners.filter((candidate) => {
-      const genderOk = showSameGender
-        ? sameGenderOf(myGender, candidate.gender)
-        : defaultVisibleOf(myGender, candidate.gender);
-      if (!genderOk) return false;
-      if (needle && !candidate.name.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [partners, showSameGender, myGender, search]);
-
   const handleChoose = async (candidateId: string) => {
-    setChoosingId(candidateId);
     try {
       setState(await selectPlotTwistPartner(candidateId));
     } catch (error) {
       toast.error(describeApiError(error, 'Could not save your choice.'));
       await refresh();
-    } finally {
-      setChoosingId(null);
     }
   };
 
@@ -222,21 +166,56 @@ export const PlotTwistGamePage = () => {
       />
 
       {(state.stage === 'no_game' || state.stage === 'selecting_partner') && (
-        <PartnerPicker
-          stage={state.stage}
-          partners={visiblePartners}
-          partnersError={partnersError}
-          search={search}
-          onSearch={setSearch}
-          showSameGender={showSameGender}
-          onToggleGender={() => setShowSameGender((value) => !value)}
-          choosingId={choosingId}
-          onChoose={handleChoose}
-          selectionName={state.my_selection?.selected_user_name ?? null}
-          partnerName={state.partner?.name ?? null}
-          starting={starting}
-          onBegin={handleStart}
-        />
+        <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <HeartHandshake className="h-5 w-5" />
+              Choose your partner
+            </CardTitle>
+            <CardDescription>
+              {state.stage === 'no_game'
+                ? 'There is no active Plot Twist event right now — but you can still pick your partner ahead of it.'
+                : 'Pick the person you’ll write this story with. The story starts once they pick you back.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {state.my_selection && !state.partner && (
+              <p className="text-sm">
+                You chose{' '}
+                <span className="font-semibold">{state.my_selection.selected_user_name}</span>.
+                Waiting for them to choose you back.
+              </p>
+            )}
+            {state.partner && (
+              <div className="rounded-xl border border-romantic/40 bg-romantic/5 p-4">
+                <p className="text-sm">
+                  You and <span className="font-semibold">{state.partner.name}</span> chose each
+                  other.
+                </p>
+                <Button
+                  type="button"
+                  className="mt-3 rounded-full"
+                  disabled={starting}
+                  onClick={handleStart}
+                >
+                  {starting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <HeartHandshake className="h-4 w-4" />
+                  )}
+                  {starting ? 'Opening…' : 'Begin the story'}
+                </Button>
+              </div>
+            )}
+            <PartnerPicker
+              layout="grid"
+              loadPartners={getPlotTwistPartners}
+              selectedId={state.my_selection?.selected_user_id ?? null}
+              onChoose={handleChoose}
+              emptyMessage="Nobody matches — try a different search."
+            />
+          </CardContent>
+        </Card>
       )}
 
       {(state.stage === 'awaiting_you' || state.stage === 'awaiting_partner') && state.scene && (
@@ -391,126 +370,5 @@ export const PlotTwistGamePage = () => {
     </div>
   );
 };
-
-const PartnerPicker = ({
-  stage,
-  partners,
-  partnersError,
-  search,
-  onSearch,
-  showSameGender,
-  onToggleGender,
-  choosingId,
-  onChoose,
-  selectionName,
-  partnerName,
-  starting,
-  onBegin,
-}: {
-  stage: string;
-  partners: CouplePartnerCandidate[];
-  partnersError: string | null;
-  search: string;
-  onSearch: (value: string) => void;
-  showSameGender: boolean;
-  onToggleGender: () => void;
-  choosingId: string | null;
-  onChoose: (candidateId: string) => void;
-  selectionName: string | null;
-  partnerName: string | null;
-  starting: boolean;
-  onBegin: () => void;
-}) => (
-  <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
-    <CardHeader>
-      <CardTitle className="flex items-center gap-2 text-xl">
-        <HeartHandshake className="h-5 w-5" />
-        Choose your partner
-      </CardTitle>
-      <CardDescription>
-        {stage === 'no_game'
-          ? 'There is no active Plot Twist event right now — but you can still pick your partner ahead of it.'
-          : 'Pick the person you’ll write this story with. The story starts once they pick you back.'}
-      </CardDescription>
-    </CardHeader>
-    <CardContent className="space-y-4">
-      {selectionName && !partnerName && (
-        <p className="text-sm">
-          You chose <span className="font-semibold">{selectionName}</span>. Waiting for them to choose you back.
-        </p>
-      )}
-      {partnerName && (
-        <div className="rounded-xl border border-romantic/40 bg-romantic/5 p-4">
-          <p className="text-sm">
-            You and <span className="font-semibold">{partnerName}</span> chose each other.
-          </p>
-          <Button
-            type="button"
-            className="mt-3 rounded-full"
-            disabled={starting}
-            onClick={onBegin}
-          >
-            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <HeartHandshake className="h-4 w-4" />}
-            {starting ? 'Opening…' : 'Begin the story'}
-          </Button>
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={search}
-          onChange={(event) => onSearch(event.target.value)}
-          placeholder="Search by name…"
-          className="max-w-64 rounded-full"
-          aria-label="Search people by name"
-        />
-        <Button
-          type="button"
-          variant={showSameGender ? 'default' : 'outline'}
-          size="sm"
-          className="rounded-full"
-          onClick={onToggleGender}
-        >
-          Same-gender
-        </Button>
-      </div>
-      {partnersError && (
-        <p role="alert" className="text-sm font-medium text-destructive">
-          {partnersError}
-        </p>
-      )}
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {partners.map((candidate) => (
-          <li
-            key={candidate.id}
-            className="flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-background/40 p-3"
-          >
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold">{candidate.name}</span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {[candidate.year ? `Year ${candidate.year}` : null, candidate.department]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </span>
-            </span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="shrink-0 rounded-full"
-              disabled={choosingId !== null}
-              onClick={() => void onChoose(candidate.id)}
-            >
-              {choosingId === candidate.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-              Choose
-            </Button>
-          </li>
-        ))}
-      </ul>
-      {partners.length === 0 && !partnersError && (
-        <p className="text-sm text-muted-foreground">Nobody matches — try a different search.</p>
-      )}
-    </CardContent>
-  </Card>
-);
 
 export default PlotTwistGamePage;

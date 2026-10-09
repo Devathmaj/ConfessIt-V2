@@ -1,12 +1,13 @@
 # app/routers/plot_twist.py
 
-from typing import List
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..dependencies import get_db
+from ..limits import USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from ..models import (
-    CouplePartnerCandidate,
+    CouplePartnerPage,
     CoupleSelectionRequest,
     PlotTwistChoiceSubmitRequest,
     PlotTwistCurrentState,
@@ -15,6 +16,7 @@ from ..models import (
 from ..postgres import Database
 from ..services import plot_twist_gameplay
 from ..services.authorization import require_participant
+from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 
 router = APIRouter(prefix="/games/plot-twist", tags=["Plot Twist"])
 
@@ -41,17 +43,50 @@ def current_state(
     return plot_twist_gameplay.current_state(db, user)
 
 
-@router.get("/partners", response_model=List[CouplePartnerCandidate])
+@router.get("/partners", response_model=CouplePartnerPage)
 def partner_candidates(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
-) -> List[CouplePartnerCandidate]:
-    """Every participant the caller may choose, excluding only themselves.
+    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=COUPLE_PARTNERS_MAX_LIMIT,
+        description="How many matching participants to return. Clamped so one request can never materialise the whole participant table.",
+    ),
+    q: Optional[str] = Query(
+        None,
+        max_length=100,
+        description="Case-insensitive substring match on the candidate's name, run in SQL.",
+    ),
+    gender_mode: Literal["different", "same"] = Query(
+        "different",
+        description="'different' hides the caller's own gender; 'same' shows only it. A discovery aid, never a rule about who may be chosen.",
+    ),
+    year: Optional[int] = Query(
+        None, ge=USER_YEAR_MIN, le=USER_YEAR_MAX, description="Exact year of study, half of the cohort filter."
+    ),
+    department: Optional[str] = Query(
+        None, max_length=USER_DEPARTMENT_MAX, description="Exact department, half of the cohort filter, case-insensitive."
+    ),
+) -> CouplePartnerPage:
+    """One page of participants the caller may choose, excluding only themselves.
 
     The questionnaire's candidate list, not a second one: pairing here and
-    pairing there choose from the same people under the same rules.
+    pairing there choose from the same people under the same rules, page in
+    SQL, search in SQL and cohort/gender filters in SQL (see
+    ``couple_gameplay.list_partners``).
     """
-    return plot_twist_gameplay.list_partners(db, user)
+    return plot_twist_gameplay.list_partners(
+        db,
+        user,
+        skip=skip,
+        limit=limit,
+        query=q,
+        gender_mode=gender_mode,
+        year=year,
+        department=department,
+    )
 
 
 @router.post("/selection", response_model=PlotTwistCurrentState)

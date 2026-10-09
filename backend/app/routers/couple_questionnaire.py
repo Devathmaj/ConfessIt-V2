@@ -1,14 +1,15 @@
 # app/routers/couple_questionnaire.py
 
-from typing import List
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..dependencies import get_db
+from ..limits import USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from ..models import (
     CoupleAnswerRequest,
     CoupleCurrentState,
-    CouplePartnerCandidate,
+    CouplePartnerPage,
     CouplePredictionRequest,
     CoupleSelectionRequest,
     UserDetails,
@@ -44,19 +45,52 @@ def current_state(
     return couple_gameplay.current_state(db, user)
 
 
-@router.get("/partners", response_model=List[CouplePartnerCandidate])
+@router.get("/partners", response_model=CouplePartnerPage)
 def partner_candidates(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
-) -> List[CouplePartnerCandidate]:
-    """Every participant the caller may choose, excluding only themselves.
+    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=couple_gameplay.COUPLE_PARTNERS_MAX_LIMIT,
+        description="How many matching participants to return. Clamped so one request can never materialise the whole participant table.",
+    ),
+    q: Optional[str] = Query(
+        None,
+        max_length=100,
+        description="Case-insensitive substring match on the candidate's name, run in SQL.",
+    ),
+    gender_mode: Literal["different", "same"] = Query(
+        "different",
+        description="'different' hides the caller's own gender; 'same' shows only it. A discovery aid, never a rule about who may be chosen.",
+    ),
+    year: Optional[int] = Query(
+        None, ge=USER_YEAR_MIN, le=USER_YEAR_MAX, description="Exact year of study, half of the cohort filter."
+    ),
+    department: Optional[str] = Query(
+        None, max_length=USER_DEPARTMENT_MAX, description="Exact department, half of the cohort filter, case-insensitive."
+    ),
+) -> CouplePartnerPage:
+    """One page of participants the caller may choose, excluding only themselves.
 
     Declared before ``/{...}``-style routes so ``partners`` is never read as an
-    id. The male/female/other default and the same-gender toggle live on the
-    screen; this list carries the gender each row needs for that filter and
-    decides nothing about who may be chosen.
+    id. Every filter is a SQL WHERE, the page a SQL LIMIT/OFFSET and the search
+    a SQL ILIKE, so the screen pages downwards instead of downloading the
+    participant table to filter it in the browser. The male/female/other
+    default and the same-gender toggle stay discovery aids: this decides
+    nothing about who may be chosen, and picking an id is validated on its own.
     """
-    return couple_gameplay.list_partners(db, user)
+    return couple_gameplay.list_partners(
+        db,
+        user,
+        skip=skip,
+        limit=limit,
+        query=q,
+        gender_mode=gender_mode,
+        year=year,
+        department=department,
+    )
 
 
 @router.post("/selection", response_model=CoupleCurrentState)

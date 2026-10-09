@@ -6,7 +6,7 @@ import type { ContextType } from 'react';
 import { PlotTwistGamePage } from '@/pages/PlotTwistGamePage';
 import { AuthContext } from '@/contexts/AuthContext';
 import type { Capability } from '@/lib/capabilities';
-import type { CouplePartnerCandidate, PlotTwistState } from '@/services/api';
+import type { CouplePartnerCandidate, CouplePartnersPage, PlotTwistState } from '@/services/api';
 
 /**
  * The Plot Twist screen against its API boundary.
@@ -17,11 +17,14 @@ import type { CouplePartnerCandidate, PlotTwistState } from '@/services/api';
  * full decision history for both sides. The screen reads its state on
  * entry and after every write; a refresh lands on the same scene because
  * the session lives in the database rather than in this component.
+ * Discovery is the shared server-side picker: the partner page rides the
+ * endpoint's query, never a client-side slice of the participant table.
  */
 
 vi.mock('@/services/api', () => ({
   getPlotTwistState: vi.fn(),
   getPlotTwistPartners: vi.fn(),
+  getPartnerCohorts: vi.fn(),
   selectPlotTwistPartner: vi.fn(),
   startPlotTwistEvent: vi.fn(),
   submitPlotTwistChoice: vi.fn(),
@@ -40,6 +43,7 @@ vi.mock('sonner', () => ({
 const {
   getPlotTwistState,
   getPlotTwistPartners,
+  getPartnerCohorts,
   selectPlotTwistPartner,
   startPlotTwistEvent,
   submitPlotTwistChoice,
@@ -76,6 +80,13 @@ const candidate = (
   department: 'Class',
   ...overrides,
 });
+
+/** One page of the partner endpoint: the rows plus the matching-row count. */
+const partnerPage = (
+  partners: CouplePartnerCandidate[],
+  total: number = partners.length,
+  skip = 0,
+): CouplePartnersPage => ({ partners, total, skip, limit: 20 });
 
 const baseState = (overrides: Partial<PlotTwistState> = {}): PlotTwistState => ({
   stage: 'selecting_partner',
@@ -127,18 +138,19 @@ const renderGame = (gender: 'male' | 'female' | 'other' = 'male') =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getPlotTwistState).mockResolvedValue(baseState());
-  vi.mocked(getPlotTwistPartners).mockResolvedValue([]);
+  vi.mocked(getPlotTwistPartners).mockResolvedValue(partnerPage([]));
+  vi.mocked(getPartnerCohorts).mockResolvedValue([]);
 });
 
 describe('partner selection', () => {
   it('lists candidates and saves the pick', async () => {
-    vi.mocked(getPlotTwistPartners).mockResolvedValue([candidate()]);
+    vi.mocked(getPlotTwistPartners).mockResolvedValue(partnerPage([candidate()]));
     vi.mocked(selectPlotTwistPartner).mockResolvedValue(
       baseState({ my_selection: { selected_user_id: 'id-b', selected_user_name: 'Sam' } }),
     );
     renderGame();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Choose' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Sam as partner' }));
 
     await waitFor(() => expect(selectPlotTwistPartner).toHaveBeenCalledWith('id-b'));
     expect(await screen.findByText(/waiting for them to choose you back/i)).toBeInTheDocument();

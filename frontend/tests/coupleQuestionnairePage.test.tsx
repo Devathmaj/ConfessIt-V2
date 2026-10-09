@@ -10,6 +10,7 @@ import type { Capability } from '@/lib/capabilities';
 import type {
   CoupleCurrentState,
   CouplePartnerCandidate,
+  CouplePartnersPage,
   CouplePredictionView,
   CoupleQuestionView,
 } from '@/services/api';
@@ -22,14 +23,15 @@ import type {
  * server reports. Choosing a partner is a pending pick that a re-pick
  * replaces; answering and predicting submit one option per question and lock
  * the answered row; the settled score arrives only with the completed stage.
- * The gender filter is a discovery aid on the screen -- the list it filters
- * comes from the server unfiltered, and the default shows everyone but the
- * caller's own gender.
+ * Discovery is server-side: the picker asks the server for one page at a time
+ * (the gender mode, the search word and the year-and-division cohort all ride
+ * the query), and "load more" appends the next page beneath the rows at hand.
  */
 
 vi.mock('@/services/api', () => ({
   getCoupleState: vi.fn(),
   getCouplePartners: vi.fn(),
+  getPartnerCohorts: vi.fn(),
   selectCouplePartner: vi.fn(),
   submitCoupleAnswer: vi.fn(),
   submitCouplePrediction: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock('sonner', () => ({
 const {
   getCoupleState,
   getCouplePartners,
+  getPartnerCohorts,
   selectCouplePartner,
   submitCoupleAnswer,
   submitCouplePrediction,
@@ -84,6 +87,13 @@ const candidate = (
   department: 'Class',
   ...overrides,
 });
+
+/** One page of the partner endpoint: the rows plus the matching-row count. */
+const partnerPage = (
+  partners: CouplePartnerCandidate[],
+  total: number = partners.length,
+  skip = 0,
+): CouplePartnersPage => ({ partners, total, skip, limit: 20 });
 
 const question = (
   overrides: Partial<CoupleQuestionView> = {},
@@ -143,39 +153,117 @@ const renderGame = (gender: 'male' | 'female' | 'other' = 'male') =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getCoupleState).mockResolvedValue(baseState());
-  vi.mocked(getCouplePartners).mockResolvedValue([]);
+  vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([]));
+  vi.mocked(getPartnerCohorts).mockResolvedValue([]);
 });
 
 describe('partner selection', () => {
-  it('shows everyone but the caller’s own gender by default', async () => {
-    vi.mocked(getCouplePartners).mockResolvedValue([
-      candidate({ id: 'id-b', name: 'Sam', gender: 'female' }),
-      candidate({ id: 'id-c', name: 'Jo', gender: 'other' }),
-      candidate({ id: 'id-d', name: 'Max', gender: 'male' }),
-    ]);
+  /**
+   * A gender-aware answer, as the server would give it: the default mode
+   * hides the caller's own gender, the same-gender mode is only it.
+   */
+  const genderAnswer = (same: boolean) =>
+    same
+      ? partnerPage([candidate({ id: 'id-d', name: 'Max', gender: 'male' })])
+      : partnerPage([
+          candidate({ id: 'id-b', name: 'Sam', gender: 'female' }),
+          candidate({ id: 'id-c', name: 'Jo', gender: 'other' }),
+        ]);
+
+  it('asks the server for everyone but the caller’s own gender by default', async () => {
+    vi.mocked(getCouplePartners).mockImplementation(async (query) =>
+      genderAnswer(query?.genderMode === 'same'),
+    );
     renderGame('male');
 
     expect(await screen.findByText('Sam')).toBeInTheDocument();
     expect(screen.getByText('Jo')).toBeInTheDocument();
     expect(screen.queryByText('Max')).not.toBeInTheDocument();
+    expect(getCouplePartners).toHaveBeenCalledWith(
+      expect.objectContaining({ genderMode: 'different', skip: 0, limit: 20 }),
+    );
   });
 
-  it('switches to the same gender on request', async () => {
-    vi.mocked(getCouplePartners).mockResolvedValue([
-      candidate({ id: 'id-b', name: 'Sam', gender: 'female' }),
-      candidate({ id: 'id-d', name: 'Max', gender: 'male' }),
-    ]);
+  it('switches to the same gender on request, in SQL', async () => {
+    vi.mocked(getCouplePartners).mockImplementation(async (query) =>
+      genderAnswer(query?.genderMode === 'same'),
+    );
     renderGame('male');
     await screen.findByText('Sam');
 
     fireEvent.click(screen.getByRole('button', { name: /show same gender/i }));
 
+    expect(await screen.findByText('Max')).toBeInTheDocument();
     expect(screen.queryByText('Sam')).not.toBeInTheDocument();
-    expect(screen.getByText('Max')).toBeInTheDocument();
+    expect(getCouplePartners).toHaveBeenLastCalledWith(
+      expect.objectContaining({ genderMode: 'same' }),
+    );
+  });
+
+  it('runs the typed search in SQL only when it is submitted', async () => {
+    vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([candidate()]));
+    renderGame('male');
+    await screen.findByText('Sam');
+
+    // Typing alone issues no request: the box is a draft until submitted.
+    fireEvent.change(screen.getByLabelText('Find someone'), { target: { value: 'sa' } });
+    expect(getCouplePartners).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() =>
+      expect(getCouplePartners).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: 'sa', skip: 0 }),
+      ),
+    );
+  });
+
+  it('filters by the single year-and-division cohort in SQL', async () => {
+    vi.mocked(getPartnerCohorts).mockResolvedValue([{ year: 2, department: 'CSE' }]);
+    vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([candidate()]));
+    renderGame('male');
+    await screen.findByText('Sam');
+
+    // A Radix trigger holds no value a change event could set: open the
+    // combobox and click the portalled option, as the reader would.
+    fireEvent.pointerDown(screen.getByRole('combobox'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'CSE · 2' }));
+
+    await waitFor(() =>
+      expect(getCouplePartners).toHaveBeenLastCalledWith(
+        expect.objectContaining({ year: 2, department: 'CSE', skip: 0 }),
+      ),
+    );
+  });
+
+  it('pages twenty at a time and appends the rest under the rows at hand', async () => {
+    const first = Array.from({ length: 20 }, (_, index) =>
+      candidate({ id: `p-${index + 1}`, name: `Person ${index + 1}`, gender: 'female' }),
+    );
+    const second = [candidate({ id: 'p-21', name: 'Person 21', gender: 'female' })];
+    vi.mocked(getCouplePartners).mockImplementation(async (query) =>
+      (query?.skip ?? 0) >= 20 ? partnerPage(second, 21, 20) : partnerPage(first, 21),
+    );
+    renderGame('male');
+
+    expect(await screen.findByText('Person 1')).toBeInTheDocument();
+    expect(screen.queryByText('Person 21')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more people' }));
+
+    expect(await screen.findByText('Person 21')).toBeInTheDocument();
+    expect(screen.getByText('Person 1')).toBeInTheDocument();
+    expect(getCouplePartners).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skip: 20, limit: 20 }),
+    );
   });
 
   it('saves the pick and advances on the response’s state', async () => {
-    vi.mocked(getCouplePartners).mockResolvedValue([candidate()]);
+    vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([candidate()]));
     const answering = baseState({
       stage: 'answering',
       session_id: 's-1',
@@ -199,7 +287,7 @@ describe('partner selection', () => {
     vi.mocked(getCoupleState).mockResolvedValue(
       baseState({ my_selection: { selected_user_id: 'id-b', selected_user_name: 'Sam' } }),
     );
-    vi.mocked(getCouplePartners).mockResolvedValue([candidate()]);
+    vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([candidate()]));
     renderGame('male');
 
     expect(await screen.findByText('Sam')).toBeInTheDocument();
@@ -355,7 +443,7 @@ describe('prediction and results', () => {
 
   it('explains a day with no featured game yet still offers the pick', async () => {
     vi.mocked(getCoupleState).mockResolvedValue(baseState({ stage: 'no_game', game_id: null, game_date: null }));
-    vi.mocked(getCouplePartners).mockResolvedValue([candidate()]);
+    vi.mocked(getCouplePartners).mockResolvedValue(partnerPage([candidate()]));
     renderGame('male');
 
     expect(await screen.findByText('No featured day yet')).toBeInTheDocument();

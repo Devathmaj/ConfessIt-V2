@@ -22,6 +22,7 @@ import type { TwoKeyEscapeState } from '@/services/api';
 vi.mock('@/services/api', () => ({
   getTwoKeyEscapeState: vi.fn(),
   getTwoKeyEscapePartners: vi.fn(),
+  getPartnerCohorts: vi.fn(),
   selectTwoKeyEscapePartner: vi.fn(),
   submitTwoKeyEscapeRole: vi.fn(),
   changeTwoKeyEscapeRole: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('sonner', () => ({
 const {
   getTwoKeyEscapeState,
   getTwoKeyEscapePartners,
+  getPartnerCohorts,
   selectTwoKeyEscapePartner,
   spendTwoKeyEscapeKey,
   submitTwoKeyEscapeRole,
@@ -113,6 +115,7 @@ const renderPage = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getTwoKeyEscapeLeaderboard).mockResolvedValue([]);
+  vi.mocked(getPartnerCohorts).mockResolvedValue([]);
 });
 
 describe('role selection stays local until confirmed', () => {
@@ -314,7 +317,12 @@ describe('partner choice', () => {
 
   it('offers everyone to choose from and chooses through the shared selection', async () => {
     vi.mocked(getTwoKeyEscapeState).mockResolvedValue(noCouple());
-    vi.mocked(getTwoKeyEscapePartners).mockResolvedValue([sam]);
+    vi.mocked(getTwoKeyEscapePartners).mockResolvedValue({
+      partners: [sam],
+      total: 1,
+      skip: 0,
+      limit: 20,
+    });
     vi.mocked(selectTwoKeyEscapePartner).mockResolvedValue(noCouple());
 
     renderPage();
@@ -340,7 +348,12 @@ describe('partner choice', () => {
         my_selection: { selected_user_id: 'id-b', selected_user_name: 'Sam' },
       }),
     );
-    vi.mocked(getTwoKeyEscapePartners).mockResolvedValue([sam]);
+    vi.mocked(getTwoKeyEscapePartners).mockResolvedValue({
+      partners: [sam],
+      total: 1,
+      skip: 0,
+      limit: 20,
+    });
 
     renderPage();
     await screen.findByText('Choose your partner');

@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { AlarmClock, FileSearch, Fingerprint, Loader2, MessagesSquare, RefreshCw, Scale, Trophy, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { PartnerPicker } from '@/components/games/PartnerPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import { CaseClosedChatDialog } from '@/components/CaseClosedChatDialog';
@@ -22,18 +21,7 @@ import {
   startCaseClosedEvent,
   type CaseClosedResult,
   type CaseClosedState,
-  type CouplePartnerCandidate,
 } from '@/services/api';
-
-const sameGenderOf = (mine: string | undefined, candidate: string) =>
-  mine ? candidate === mine : true;
-
-const defaultVisibleOf = (mine: string | undefined, candidate: string) => {
-  if (!mine || mine === 'other') return true;
-  if (mine === 'male') return candidate === 'female' || candidate === 'other';
-  if (mine === 'female') return candidate === 'male' || candidate === 'other';
-  return true;
-};
 
 const formatElapsed = (seconds: number | null | undefined) => {
   if (seconds === null || seconds === undefined) return '—';
@@ -46,17 +34,10 @@ const formatElapsed = (seconds: number | null | undefined) => {
 };
 
 export const CaseClosedGamePage = () => {
-  const { user } = useAuth();
-  const myGender = user?.gender;
-
   const [state, setState] = useState<CaseClosedState | null>(null);
   const [result, setResult] = useState<CaseClosedResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [partners, setPartners] = useState<CouplePartnerCandidate[]>([]);
-  const [search, setSearch] = useState('');
-  const [showSameGender, setShowSameGender] = useState(false);
-  const [choosingId, setChoosingId] = useState<string | null>(null);
   const [investigatingId, setInvestigatingId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [selectedSuspect, setSelectedSuspect] = useState<string | null>(null);
@@ -93,27 +74,13 @@ export const CaseClosedGamePage = () => {
     return () => window.clearInterval(id);
   }, [state?.stage, refresh]);
 
-  useEffect(() => {
-    if (state === null) return;
-    if (state.stage !== 'selecting_partner' && state.stage !== 'no_game') return;
-    (async () => {
-      try {
-        setPartners(await getCaseClosedPartners());
-      } catch (error) {
-        toast.error(describeApiError(error, 'Could not load partners.'));
-      }
-    })();
-  }, [state?.stage]);
-
-  const visiblePartners = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return partners.filter((p) => {
-      if (!showSameGender && sameGenderOf(myGender, p.gender)) return false;
-      if (!defaultVisibleOf(myGender, p.gender) && !showSameGender) return false;
-      if (q && !p.name.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [partners, search, showSameGender, myGender]);
+  const handleChoose = async (candidateId: string) => {
+    try {
+      setState(await selectCaseClosedPartner(candidateId));
+    } catch (error) {
+      toast.error(describeApiError(error, 'Could not select partner.'));
+    }
+  };
 
   if (loading || state === null) {
     return (
@@ -140,19 +107,11 @@ export const CaseClosedGamePage = () => {
           <CardHeader><CardTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> Choose your partner</CardTitle>
             <CardDescription>Pairing reuses your Couple Questionnaire mutual selection.</CardDescription></CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <div className="flex gap-2">
-              <Input placeholder="Search by name…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <Button variant="outline" onClick={() => setShowSameGender((v) => !v)}>{showSameGender ? 'Hide' : 'Show'} same gender</Button>
-            </div>
-            {visiblePartners.map((p) => (
-              <div key={p.id} className="flex items-center justify-between rounded-xl border px-3 py-2">
-                <div><div className="font-medium">{p.name}</div><div className="text-xs text-muted-foreground">{p.gender}</div></div>
-                <Button size="sm" disabled={choosingId !== null} onClick={async () => {
-                  setChoosingId(p.id);
-                  try { setState(await selectCaseClosedPartner(p.id)); } catch (e) { toast.error(describeApiError(e, 'Could not select partner.')); } finally { setChoosingId(null); }
-                }}>{choosingId === p.id ? 'Choosing…' : 'Choose'}</Button>
-              </div>
-            ))}
+            <PartnerPicker
+              loadPartners={getCaseClosedPartners}
+              selectedId={null}
+              onChoose={handleChoose}
+            />
             <Button disabled={starting} onClick={async () => {
               setStarting(true);
               try { setState(await startCaseClosedEvent()); } catch (e) { toast.error(describeApiError(e, 'Could not start the event.')); } finally { setStarting(false); }

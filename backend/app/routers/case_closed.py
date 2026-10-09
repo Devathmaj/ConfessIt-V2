@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from typing import List, Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -14,14 +14,17 @@ from ..limits import (
     CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
     MESSAGE_BODY_MAX,
     REPORT_REASON_MAX,
+    USER_DEPARTMENT_MAX,
     USER_REGNO_MAX,
+    USER_YEAR_MAX,
+    USER_YEAR_MIN,
 )
 from ..logger import get_logger
 from ..models import (
     CaseClosedConfirmRequest,
     CaseClosedInvestigationSubmitRequest,
     CaseClosedProposeRequest,
-    CouplePartnerCandidate,
+    CouplePartnerPage,
     CoupleSelectionRequest,
 )
 from ..postgres import Database
@@ -32,6 +35,7 @@ from ..services.case_closed_schemas import (
     CaseClosedCurrentState,
     CaseClosedResultView,
 )
+from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 from ..services.redis_service import redis_service
 
 logger = get_logger(__name__)
@@ -75,12 +79,48 @@ def current_state(
     return CaseClosedCurrentState(**case_closed_gameplay.current_state(db, user))
 
 
-@router.get("/partners", response_model=List[CouplePartnerCandidate])
+@router.get("/partners", response_model=CouplePartnerPage)
 def partner_candidates(
     db: Database = Depends(get_db),
     user=Depends(require_participant),
-) -> List[CouplePartnerCandidate]:
-    return case_closed_gameplay.list_partners(db, user)
+    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=COUPLE_PARTNERS_MAX_LIMIT,
+        description="How many matching participants to return. Clamped so one request can never materialise the whole participant table.",
+    ),
+    q: Optional[str] = Query(
+        None,
+        max_length=100,
+        description="Case-insensitive substring match on the candidate's name, run in SQL.",
+    ),
+    gender_mode: Literal["different", "same"] = Query(
+        "different",
+        description="'different' hides the caller's own gender; 'same' shows only it. A discovery aid, never a rule about who may be chosen.",
+    ),
+    year: Optional[int] = Query(
+        None, ge=USER_YEAR_MIN, le=USER_YEAR_MAX, description="Exact year of study, half of the cohort filter."
+    ),
+    department: Optional[str] = Query(
+        None, max_length=USER_DEPARTMENT_MAX, description="Exact department, half of the cohort filter, case-insensitive."
+    ),
+) -> CouplePartnerPage:
+    """One page of participants the caller may choose, excluding only themselves.
+
+    The questionnaire's shared candidate list: the page, search and filters
+    are its SQL ones (see ``couple_gameplay.list_partners``).
+    """
+    return case_closed_gameplay.list_partners(
+        db,
+        user,
+        skip=skip,
+        limit=limit,
+        query=q,
+        gender_mode=gender_mode,
+        year=year,
+        department=department,
+    )
 
 
 @router.post("/selection", response_model=CaseClosedCurrentState)

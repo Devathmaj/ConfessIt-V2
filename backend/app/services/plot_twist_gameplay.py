@@ -75,7 +75,7 @@ from ..limits import (
     PLOT_TWIST_TREASURE_BONUS_MAX,
 )
 from ..models import (
-    CouplePartnerCandidate,
+    CouplePartnerPage,
     CouplePartnerView,
     CoupleSelectionView,
     PlotTwistCurrentState,
@@ -539,14 +539,19 @@ def current_state(db: Database, user: UserDetails) -> PlotTwistCurrentState:
 # --- pairing (reused, not reimplemented) ---------------------------------------
 
 
-def list_partners(db: Database, user: UserDetails) -> list[CouplePartnerCandidate]:
-    """The questionnaire's candidate list, not a second one."""
+def list_partners(db: Database, user: UserDetails, **filters) -> CouplePartnerPage:
+    """One page of the questionnaire's candidate list, not a second one.
+
+    ``filters`` are the questionnaire's own: the game's playability is checked
+    first, then the page, search, cohort and gender filters are its SQL ones
+    (see ``couple_gameplay.list_partners`` for what each accepts).
+    """
     from . import couple_gameplay
     from .game_configs import check_playable
 
     with db.sessions.begin() as session:
         check_playable(session, GAME_ID)
-    return couple_gameplay.list_partners(db, user)
+    return couple_gameplay.list_partners(db, user, **filters)
 
 
 def choose_partner(db: Database, user: UserDetails, selected_user_id: str) -> PlotTwistCurrentState:

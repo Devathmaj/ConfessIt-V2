@@ -85,7 +85,7 @@ from ..limits import (
     two_key_escape_key_charges,
 )
 from ..models import (
-    CouplePartnerCandidate,
+    CouplePartnerPage,
     CouplePartnerView,
     CoupleSelectionView,
     TwoKeyEscapeKeyView,
@@ -638,15 +638,17 @@ def current_state(db: Database, user: UserDetails) -> TwoKeyEscapeState:
 # --- pairing (reused, not reimplemented) ---------------------------------
 
 
-def partner_candidates(db: Database, user: UserDetails) -> list[CouplePartnerCandidate]:
-    """Every participant the caller may choose, excluding only themselves.
+def partner_candidates(db: Database, user: UserDetails, **filters) -> CouplePartnerPage:
+    """One page of participants the caller may choose, excluding only themselves.
 
     The questionnaire's own candidate list, not a second one: settling the
-    pairing here or there chooses from the same people under the same rules.
+    pairing here or there chooses from the same people under the same rules,
+    and the page, search and filters are its SQL ones (see
+    ``couple_gameplay.list_partners`` for what each accepts).
     """
     from . import couple_gameplay
 
-    return couple_gameplay.list_partners(db, user)
+    return couple_gameplay.list_partners(db, user, **filters)
 
 
 def choose_partner(db: Database, user: UserDetails, selected_user_id: str) -> TwoKeyEscapeState:

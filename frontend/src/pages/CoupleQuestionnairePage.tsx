@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { HeartHandshake, Loader2, RefreshCw, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { PartnerPicker } from '@/components/games/PartnerPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import {
@@ -17,7 +15,6 @@ import {
   submitCoupleAnswer,
   submitCouplePrediction,
   type CoupleCurrentState,
-  type CouplePartnerCandidate,
 } from '@/services/api';
 
 /**
@@ -35,17 +32,10 @@ import {
  * creates the one session for the pair. Answering renders the bank's `X` as
  * "you"; predicting renders it as the partner's name -- both substitutions
  * arrive already done from the server, so this page never rewrites a question.
+ *
+ * The partner list itself is the shared PartnerPicker: paged, searched and
+ * filtered in SQL, so the page never holds the participant table.
  */
-
-const sameGenderOf = (mine: string | undefined, candidate: string) =>
-  mine ? candidate === mine : true;
-
-const defaultVisibleOf = (mine: string | undefined, candidate: string) => {
-  if (!mine || mine === 'other') return true;
-  if (mine === 'male') return candidate === 'female' || candidate === 'other';
-  if (mine === 'female') return candidate === 'male' || candidate === 'other';
-  return true;
-};
 
 const ProgressDots = ({ done, total }: { done: number; total: number }) => (
   <div className="flex flex-wrap gap-1" aria-label={`${done} of ${total} done`}>
@@ -62,19 +52,10 @@ const ProgressDots = ({ done, total }: { done: number; total: number }) => (
 );
 
 export const CoupleQuestionnairePage = () => {
-  const { user } = useAuth();
-  const myGender = user?.gender;
-
   const [state, setState] = useState<CoupleCurrentState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-
-  const [partners, setPartners] = useState<CouplePartnerCandidate[]>([]);
-  const [partnersError, setPartnersError] = useState<string | null>(null);
-  const [showSameGender, setShowSameGender] = useState(false);
-  const [search, setSearch] = useState('');
-  const [choosingId, setChoosingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -93,49 +74,12 @@ export const CoupleQuestionnairePage = () => {
     void refresh();
   }, [refresh]);
 
-  useEffect(() => {
-    if (state === null) return;
-    if (state.stage !== 'selecting_partner' && state.stage !== 'no_game') return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await getCouplePartners();
-        if (!cancelled) {
-          setPartners(list);
-          setPartnersError(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setPartnersError(describeApiError(error, 'Could not load people to choose from.'));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [state?.stage]);
-
-  const visiblePartners = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return partners.filter((candidate) => {
-      const genderOk = showSameGender
-        ? sameGenderOf(myGender, candidate.gender)
-        : defaultVisibleOf(myGender, candidate.gender);
-      if (!genderOk) return false;
-      if (needle && !candidate.name.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [partners, showSameGender, myGender, search]);
-
   const handleChoose = async (candidateId: string) => {
-    setChoosingId(candidateId);
     try {
       setState(await selectCouplePartner(candidateId));
       toast.success('Choice saved. The game starts when they choose you back.');
     } catch (error) {
       toast.error(describeApiError(error, 'Could not save your choice.'));
-    } finally {
-      setChoosingId(null);
     }
   };
 
@@ -261,77 +205,11 @@ export const CoupleQuestionnairePage = () => {
               </p>
             )}
 
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex min-w-44 flex-1 flex-col gap-2">
-                <Label htmlFor="couple-partner-search">Find someone</Label>
-                <Input
-                  id="couple-partner-search"
-                  value={search}
-                  placeholder="Type a name"
-                  autoComplete="off"
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-              <Button
-                type="button"
-                variant={showSameGender ? 'default' : 'outline'}
-                size="sm"
-                aria-pressed={showSameGender}
-                onClick={() => setShowSameGender((value) => !value)}
-              >
-                {showSameGender ? 'Showing same gender' : 'Show same gender'}
-              </Button>
-            </div>
-
-            {partnersError && (
-              <p role="alert" className="text-sm font-medium text-destructive">
-                {partnersError}
-              </p>
-            )}
-
-            {!partnersError && visiblePartners.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Nobody matches that filter yet. Try the search or the gender toggle.
-              </p>
-            )}
-
-            {visiblePartners.length > 0 && (
-              <ul className="flex flex-col gap-2">
-                {visiblePartners.map((candidate) => {
-                  const isCurrent = state.my_selection?.selected_user_id === candidate.id;
-                  return (
-                    <li
-                      key={candidate.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 p-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">{candidate.name}</p>
-                        <p className="truncate text-xs capitalize text-muted-foreground">
-                          {candidate.gender} · {candidate.department} · Year {candidate.year}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCurrent && <Badge variant="secondary">Your pick</Badge>}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={isCurrent ? 'ghost' : 'outline'}
-                          disabled={choosingId !== null}
-                          onClick={() => void handleChoose(candidate.id)}
-                          aria-label={`Choose ${candidate.name} as partner`}
-                        >
-                          {choosingId === candidate.id
-                            ? 'Saving…'
-                            : isCurrent
-                              ? 'Chosen'
-                              : 'Choose'}
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <PartnerPicker
+              loadPartners={getCouplePartners}
+              selectedId={state.my_selection?.selected_user_id ?? null}
+              onChoose={handleChoose}
+            />
           </CardContent>
         </Card>
       )}

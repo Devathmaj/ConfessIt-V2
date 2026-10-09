@@ -1104,6 +1104,20 @@ class CouplePartnerCandidate(BaseModel):
     department: str
 
 
+class CouplePartnerPage(BaseModel):
+    """One page of partner candidates, with the total behind the current filters.
+
+    An envelope rather than a bare list because the picker pages: ``total`` is
+    what tells the screen how many candidates are left below the page it
+    already holds, so "load more" can say what remains and stop at the end.
+    """
+
+    partners: List[CouplePartnerCandidate]
+    total: int
+    skip: int
+    limit: int
+
+
 class CoupleSelectionRequest(BaseModel):
     """Choosing a partner: the one user this caller wants to play with.
 

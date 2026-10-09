@@ -423,8 +423,8 @@ def test_escape_lists_the_questionnaire_candidates(db, http):
     questionnaire_list = client_for(http, alice).get("/games/couple-questionnaire/partners")
     assert questionnaire_list.status_code == 200, questionnaire_list.text
     assert escape_list.json() == questionnaire_list.json()
-    assert all(entry["id"] != alice.id for entry in escape_list.json())
-    assert any(entry["id"] == bob.id for entry in escape_list.json())
+    assert all(entry["id"] != alice.id for entry in escape_list.json()["partners"])
+    assert any(entry["id"] == bob.id for entry in escape_list.json()["partners"])
 
 
 def test_pairing_settled_across_both_games(db, http):

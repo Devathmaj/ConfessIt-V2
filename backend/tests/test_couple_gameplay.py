@@ -181,9 +181,64 @@ def test_partners_lists_everyone_but_the_caller(http, db, players):
     client = client_for(http, players["a"])
     response = client.get("/games/couple-questionnaire/partners")
     assert response.status_code == 200, response.text
-    ids = {entry["id"] for entry in response.json()}
+    body = response.json()
+    ids = {entry["id"] for entry in body["partners"]}
     assert A_ID not in ids
     assert {B_ID, C_ID} <= ids
+    assert body["total"] >= 2
+    assert body["skip"] == 0
+
+
+def test_partners_search_and_cohort_filters_run_in_sql(http, db, players):
+    """The search and the "CSE 1" filter are WHERE clauses, not browser work."""
+    client = client_for(http, players["a"])
+
+    searched = client.get("/games/couple-questionnaire/partners", params={"q": "Sa"})
+    assert searched.status_code == 200, searched.text
+    assert [entry["id"] for entry in searched.json()["partners"]] == [B_ID]
+    assert searched.json()["total"] == 1
+
+    # The cohort filter is the two halves at once: year 2, department "Class".
+    cohort = client.get(
+        "/games/couple-questionnaire/partners",
+        params={"year": 2, "department": "class"},
+    )
+    assert cohort.status_code == 200, cohort.text
+    assert {entry["id"] for entry in cohort.json()["partners"]} >= {B_ID, C_ID}
+
+    # A year nobody is in answers empty under the same filter.
+    other_year = client.get("/games/couple-questionnaire/partners", params={"year": 3})
+    assert other_year.json()["partners"] == []
+    assert other_year.json()["total"] == 0
+
+
+def test_partners_page_the_table_and_the_gender_mode_is_sql_side(http, db, players):
+    """The list is a LIMIT/OFFSET on the database: no request holds everyone."""
+    client = client_for(http, players["a"])
+
+    first = client.get("/games/couple-questionnaire/partners", params={"skip": 0, "limit": 1})
+    assert first.status_code == 200, first.text
+    assert len(first.json()["partners"]) == 1
+    assert first.json()["total"] == 2  # Sam and Jo; Alex is never his own candidate.
+
+    second = client.get("/games/couple-questionnaire/partners", params={"skip": 1, "limit": 1})
+    assert [entry["id"] for entry in second.json()["partners"]] != [
+        entry["id"] for entry in first.json()["partners"]
+    ]
+
+    # The same-gender mode is a WHERE too: Alex is the only male, and he is
+    # excluded as the caller, so the page is empty rather than carrying rows
+    # the screen would have to filter out one by one.
+    same = client.get("/games/couple-questionnaire/partners", params={"gender_mode": "same"})
+    assert same.status_code == 200, same.text
+    assert same.json()["partners"] == []
+
+
+def test_partner_cohorts_are_the_distinct_pairs_that_exist(http, db, players):
+    client = client_for(http, players["a"])
+    response = client.get("/games/partner-cohorts")
+    assert response.status_code == 200, response.text
+    assert {"year": 2, "department": "Class"} in response.json()
 
 
 # --- partner selection -------------------------------------------------------------

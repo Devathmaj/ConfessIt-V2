@@ -44,6 +44,7 @@ from ..limits import (
     CASE_CLOSED_DEFAULT_MAX_POINTS,
     CASE_CLOSED_SESSION_LOCK_KEY,
 )
+from ..models import CouplePartnerPage
 from ..postgres import Database, is_valid_id
 
 GAME_ID = "case-closed"
@@ -443,10 +444,15 @@ def enter_event(db: Database, user) -> dict:
     return snapshot
 
 
-def list_partners(db: Database, user):
+def list_partners(db: Database, user, **filters) -> CouplePartnerPage:
+    """One page of the questionnaire's candidate list, not a second one.
+
+    The page, search and filters are the shared SQL ones (see
+    ``couple_gameplay.list_partners`` for what each accepts).
+    """
     from . import couple_gameplay
 
-    return couple_gameplay.list_partners(db, user)
+    return couple_gameplay.list_partners(db, user, **filters)
 
 
 def choose_partner(db: Database, user, selected_user_id: str) -> dict:

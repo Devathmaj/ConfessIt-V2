@@ -17,9 +17,9 @@ from ..db_models import (
     WordleGameRecord,
 )
 from ..dependencies import get_db
-from ..models import GameSelectEntry, GameSelectResponse, UserDetails
+from ..models import Cohort, GameSelectEntry, GameSelectResponse, UserDetails
 from ..postgres import Database
-from ..services import featured_games
+from ..services import couple_gameplay, featured_games
 from ..services.authorization import require_participant
 from ..services.game_configs import get_config
 
@@ -173,6 +173,23 @@ def _entry(
         session_status="active",
         featured=featured_id == game_id,
     )
+
+
+@router.get("/partner-cohorts", response_model=list[Cohort])
+def partner_cohorts(
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> list[Cohort]:
+    """Every ``(year, department)`` pair the partner pickers may filter by.
+
+    One list for all four couple games: they pair from the same participant
+    table and their filter is the pair -- "CSE" and year 1 at once -- so they
+    are offered the same palette of cohorts that actually exist rather than
+    four separately derived copies. Declared before any ``/{...}``-style route
+    so ``partner-cohorts`` is never read as an id.
+    """
+    del user  # identity gates the route; the palette is the same for everyone.
+    return couple_gameplay.list_partner_cohorts(db)
 
 
 @router.get("/select", response_model=GameSelectResponse)

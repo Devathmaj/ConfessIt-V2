@@ -1578,6 +1578,85 @@ export interface CouplePartnerCandidate {
     department: string;
 }
 
+/**
+ * One page of partner candidates, with the total behind the current filters.
+ *
+ * The picker pages, searches and filters in SQL: `total` is what tells the
+ * screen how many candidates the filters match so "load more" can say what
+ * remains and stop at the end. The backend reads and serialises at most
+ * `limit` rows per answer however big the participant table gets.
+ */
+export interface CouplePartnersPage {
+    partners: CouplePartnerCandidate[];
+    total: number;
+    skip: number;
+    limit: number;
+}
+
+/** The SQL-side filters the partner picker may send. */
+export interface CouplePartnersQuery {
+    skip?: number;
+    limit?: number;
+    /** Case-insensitive substring match on the name, run in SQL. */
+    q?: string;
+    /** 'different' hides the caller's own gender (the default); 'same' shows only it. */
+    genderMode?: 'different' | 'same';
+    /** Half of the cohort filter: the year in "CSE 2". */
+    year?: number;
+    /** The other half: the department in "CSE 2", matched case-insensitively. */
+    department?: string;
+}
+
+/**
+ * One page from one game's partner endpoint.
+ *
+ * Accepts both the `{partners, total, skip, limit}` envelope and a legacy bare array
+ * (older servers and unit-test mocks), normalising the latter to a single page whose
+ * total is the array length. The rows themselves are `CouplePartnerCandidate`s.
+ */
+const fetchCouplePartners = async (
+    path: string,
+    params?: CouplePartnersQuery
+): Promise<CouplePartnersPage> => {
+    const response = await axios.get(`${API_URL}${path}`, {
+        headers: getAuthHeaders(),
+        params: {
+            ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+            ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params?.q ? { q: params.q } : {}),
+            ...(params?.genderMode ? { gender_mode: params.genderMode } : {}),
+            ...(params?.year !== undefined ? { year: params.year } : {}),
+            ...(params?.department ? { department: params.department } : {}),
+        },
+    });
+    const data = response.data;
+    if (Array.isArray(data)) {
+        return { partners: data, total: data.length, skip: 0, limit: data.length };
+    }
+    const rows = data?.partners ?? [];
+    return {
+        partners: Array.isArray(rows) ? rows : [],
+        total: data?.total ?? (Array.isArray(rows) ? rows.length : 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (Array.isArray(rows) ? rows.length : 0),
+    };
+};
+
+/**
+ * Every `(year, department)` pair a partner candidate can belong to, for the pickers' filter.
+ *
+ * One route serves all four couple games: they pair from the same participant table, so
+ * they are offered the same palette of cohorts that actually exist -- the picker's single
+ * "CSE 1" option means the year and the department at once, and both halves come from the
+ * rows themselves rather than a hand-typed list that can drift.
+ */
+export const getPartnerCohorts = async (): Promise<Cohort[]> => {
+    const response = await axios.get(`${API_URL}/games/partner-cohorts`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 /** One of the caller's own questions, with the bank's `X` rendered as "you". */
 export interface CoupleQuestionView {
     session_question_id: string;
@@ -1656,13 +1735,11 @@ export const getCoupleState = async (): Promise<CoupleCurrentState> => {
     return response.data;
 };
 
-/** Every participant the caller may choose, excluding only themselves. */
-export const getCouplePartners = async (): Promise<CouplePartnerCandidate[]> => {
-    const response = await axios.get(`${API_URL}/games/couple-questionnaire/partners`, {
-        headers: getAuthHeaders(),
-    });
-    return response.data;
-};
+/** One page of participants the caller may choose, excluding only themselves. */
+export const getCouplePartners = (
+    params?: CouplePartnersQuery
+): Promise<CouplePartnersPage> =>
+    fetchCouplePartners('/games/couple-questionnaire/partners', params);
 
 /**
  * Record the caller's partner choice. A changed mind replaces the previous
@@ -1780,13 +1857,11 @@ export const getPlotTwistState = async (): Promise<PlotTwistState> => {
   return response.data;
 };
 
-/** Every participant the caller may choose, excluding only themselves. */
-export const getPlotTwistPartners = async (): Promise<CouplePartnerCandidate[]> => {
-  const response = await axios.get(`${API_URL}/games/plot-twist/partners`, {
-    headers: getAuthHeaders(),
-  });
-  return response.data;
-};
+/** One page of participants the caller may choose, excluding only themselves. */
+export const getPlotTwistPartners = (
+  params?: CouplePartnersQuery
+): Promise<CouplePartnersPage> =>
+  fetchCouplePartners('/games/plot-twist/partners', params);
 
 /** Record the caller's partner choice through the shared selection. */
 export const selectPlotTwistPartner = async (
@@ -2094,10 +2169,10 @@ export const getCaseClosedState = async (): Promise<CaseClosedState> => {
   return response.data;
 };
 
-export const getCaseClosedPartners = async (): Promise<CouplePartnerCandidate[]> => {
-  const response = await axios.get(`${API_URL}/games/case-closed/partners`, { headers: getAuthHeaders() });
-  return response.data;
-};
+export const getCaseClosedPartners = (
+  params?: CouplePartnersQuery
+): Promise<CouplePartnersPage> =>
+  fetchCouplePartners('/games/case-closed/partners', params);
 
 export const selectCaseClosedPartner = async (selectedUserId: string): Promise<CaseClosedState> => {
   const response = await axios.post(
@@ -3251,16 +3326,15 @@ export const getTwoKeyEscapeState = async (): Promise<TwoKeyEscapeState> => {
 };
 
 /**
- * Every participant the caller may choose, excluding only themselves. The
+ * One page of participants the caller may choose, excluding only themselves. The
  * Questionnaire's own candidate list: settling the pairing here or there
- * chooses from the same people under the same rules.
+ * chooses from the same people under the same rules, and the page, search and
+ * filters are its SQL ones.
  */
-export const getTwoKeyEscapePartners = async (): Promise<CouplePartnerCandidate[]> => {
-    const response = await axios.get(`${API_URL}/games/two-key-escape/partners`, {
-        headers: getAuthHeaders(),
-    });
-    return response.data;
-};
+export const getTwoKeyEscapePartners = (
+    params?: CouplePartnersQuery
+): Promise<CouplePartnersPage> =>
+    fetchCouplePartners('/games/two-key-escape/partners', params);
 
 /**
  * Record the caller's partner choice through the Questionnaire's selection.

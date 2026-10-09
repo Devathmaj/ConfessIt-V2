@@ -67,9 +67,11 @@ from ..limits import (
     COUPLE_SESSION_SHARED_QUESTIONS,
 )
 from ..models import (
+    Cohort,
     CoupleAnswerRequest,
     CoupleCurrentState,
     CouplePartnerCandidate,
+    CouplePartnerPage,
     CouplePartnerView,
     CouplePredictionRequest,
     CouplePredictionView,
@@ -80,6 +82,7 @@ from ..models import (
     UserDetails,
 )
 from ..postgres import Database, is_valid_id
+from ..utils import ilike_contains
 from .couple_service import format_couple_question
 
 # The answering-phase rendering of the bank placeholder: the person answering is
@@ -97,6 +100,14 @@ _YOU_PATTERN = re.compile(r"\bX\b")
 # Arbitrary but fixed, namespaced beside the account-cap keys: an advisory lock
 # is a number the callers agree on, and this one must not be reused elsewhere.
 _COUPLE_SESSION_LOCK_KEY = 7_250_001
+
+# The page the partner picker gets when it asks for none, and the ceiling it is
+# clamped to. Mirrors ``LOVE_NOTE_RECIPIENTS_MAX_LIMIT``: the endpoint refuses
+# anything larger, so no client -- present or future, well-meaning or not --
+# can ask for every participant at once and make the backend materialise them
+# all.
+COUPLE_PARTNERS_PAGE_DEFAULT = 50
+COUPLE_PARTNERS_MAX_LIMIT = 100
 
 
 def _today():
@@ -160,24 +171,77 @@ def _is_mine(assignment: str, session_row: CoupleGameSessionRecord, user_id: str
 # --- reading -------------------------------------------------------------------
 
 
-def list_partners(db: Database, user: UserDetails) -> List[CouplePartnerCandidate]:
-    """Every participant the caller may choose, excluding only themselves.
+def list_partners(
+    db: Database,
+    user: UserDetails,
+    *,
+    skip: int = 0,
+    limit: int = COUPLE_PARTNERS_PAGE_DEFAULT,
+    query: Optional[str] = None,
+    gender_mode: str = "different",
+    year: Optional[int] = None,
+    department: Optional[str] = None,
+) -> CouplePartnerPage:
+    """One page of participants the caller may choose, filtered and counted in SQL.
 
-    No gender, cohort or opt-out filtering here: the male/female/other default
-    and the same-gender toggle are discovery aids the screen applies, not rules
-    about who may technically be chosen. Blocked accounts stay listed for the
-    same reason love-note recipients do -- visibility is not entitlement, and
-    nothing about playing is decided by this list.
+    Every filter is a WHERE and the page is a LIMIT/OFFSET on the database
+    itself, with ``total`` a COUNT under the same filters, so the backend reads
+    and serialises at most ``limit`` rows however big the participant table
+    gets -- the picker never downloads the table to search or filter it in the
+    browser.
+
+    What the page holds, and why:
+
+    * the caller is excluded -- nobody partners with themselves;
+    * ``query`` is a case-insensitive substring match on the name, run in SQL;
+    * ``gender_mode`` is the discovery aid the screen's toggle drives:
+      ``"different"`` (the default) hides the caller's own gender -- and only
+      that, so an ``other`` caller still sees everyone -- while ``"same"``
+      shows only it. Neither is a rule about who may be chosen: the chosen id
+      is validated on its own, and nothing about playing is decided here;
+    * ``year``/``department`` are the cohort filter, exact (department
+      case-insensitively), so the screen's single "CSE 1" option means both
+      halves at once.
+
+    No opt-out filtering: blocked accounts stay listed for the same reason
+    love-note recipients do -- visibility is not entitlement.
     """
     with db.sessions.begin() as session:
         _require_playable(session)
+
+    skip = max(0, int(skip or 0))
+    limit = max(1, min(int(limit or COUPLE_PARTNERS_PAGE_DEFAULT), COUPLE_PARTNERS_MAX_LIMIT))
+
+    filters: list = [UserRecord.id != user.id]
+    cleaned_query = (query or "").strip()
+    if cleaned_query:
+        filters.append(ilike_contains(UserRecord.name, cleaned_query))
+    if gender_mode == "same":
+        filters.append(UserRecord.gender == user.gender)
+    elif user.gender in ("male", "female"):
+        filters.append(UserRecord.gender != user.gender)
+    if year is not None:
+        filters.append(UserRecord.year == year)
+    cleaned_department = (department or "").strip()
+    if cleaned_department:
+        filters.append(func.lower(UserRecord.department) == cleaned_department.lower())
+
     with db.sessions() as session:
+        total = session.scalar(select(func.count()).select_from(UserRecord).where(*filters)) or 0
         rows = session.scalars(
             select(UserRecord)
-            .where(UserRecord.id != user.id)
-            .order_by(UserRecord.name.asc())
+            .where(*filters)
+            # ``id`` seconds the name so two participants who share one still
+            # come back in the same order on every page: an unordered tail
+            # reshuffles between the count and the read, and a load-more list
+            # that reorders under the reader shows some people twice and skips
+            # others.
+            .order_by(UserRecord.name.asc(), UserRecord.id.asc())
+            .offset(skip)
+            .limit(limit)
         ).all()
-        return [
+    return CouplePartnerPage(
+        partners=[
             CouplePartnerCandidate(
                 id=str(row.id),
                 name=row.name,
@@ -186,7 +250,24 @@ def list_partners(db: Database, user: UserDetails) -> List[CouplePartnerCandidat
                 department=row.department,
             )
             for row in rows
-        ]
+        ],
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+def list_partner_cohorts(db: Database) -> List[Cohort]:
+    """Every ``(year, department)`` pair a partner candidate can belong to.
+
+    The same distinct pairs the love-note recipient filter offers, from the
+    same query (``matchmaking_slot_service.list_participant_cohorts``): the
+    picker's single "CSE 1" option is a pair, so it is fed by the pairs that
+    actually exist in ``users`` rather than a hand-typed list that can drift.
+    """
+    from .matchmaking_slot_service import list_participant_cohorts
+
+    return [Cohort(**row) for row in list_participant_cohorts(db)]
 
 
 def _assemble_state(session, user: UserDetails) -> CoupleCurrentState:

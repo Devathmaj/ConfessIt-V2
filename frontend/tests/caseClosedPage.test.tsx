@@ -10,6 +10,7 @@ import type { CaseClosedState } from '@/services/api';
 vi.mock('@/services/api', () => ({
   getCaseClosedState: vi.fn(),
   getCaseClosedPartners: vi.fn(),
+  getPartnerCohorts: vi.fn(),
   selectCaseClosedPartner: vi.fn(),
   startCaseClosedEvent: vi.fn(),
   investigateCaseClosedLead: vi.fn(),
@@ -75,6 +76,24 @@ describe('CaseClosedGamePage', () => {
       game_id: 'g1', session_id: 's1', messages: [], count: 0, total: 0,
       quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 0, participant_count: 0, conversation_remaining: 400, participant_remaining: 200, can_send: true, limit_reached: null },
     });
+  });
+
+  it('pairs through the shared server-side picker before the case opens', async () => {
+    getState.mockResolvedValue(baseState({ stage: 'selecting_partner', session_id: null }));
+    (api.getCaseClosedPartners as ReturnType<typeof vi.fn>).mockResolvedValue({
+      partners: [{ id: 'id-b', name: 'Sam', gender: 'female', year: 2, department: 'Class' }],
+      total: 1,
+      skip: 0,
+      limit: 20,
+    });
+    (api.getPartnerCohorts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.selectCaseClosedPartner as ReturnType<typeof vi.fn>).mockResolvedValue(baseState());
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose Sam as partner' }));
+
+    await waitFor(() => expect(api.selectCaseClosedPartner).toHaveBeenCalledWith('id-b'));
+    expect(await screen.findByText('The Missing Mascot')).toBeTruthy();
   });
 
   it('shows leads, budgets, evidence board and timer placeholder', async () => {

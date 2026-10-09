@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -11,12 +11,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
+import { PartnerPicker } from '@/components/games/PartnerPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useAuth } from '@/contexts/AuthContext';
 import { describeApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 import {
@@ -28,7 +26,6 @@ import {
   selectTwoKeyEscapePartner,
   spendTwoKeyEscapeKey,
   submitTwoKeyEscapeRole,
-  type CouplePartnerCandidate,
   type TwoKeyEscapeDirection,
   type TwoKeyEscapeLeaderboardEntry,
   type TwoKeyEscapeRole,
@@ -73,21 +70,11 @@ const formatElapsed = (totalSeconds: number | null): string => {
  * Nothing is shown as committed before the backend accepts it: every action
  * awaits the response and renders that, and a refusal toasts the server's
  * sentence and re-reads rather than rolling anything forward.
+ *
+ * The partner list is the shared PartnerPicker: paged, searched and filtered
+ * in SQL, so this page never holds the participant table.
  */
-const sameGenderOf = (mine: string | undefined, candidate: string) =>
-  mine ? candidate === mine : true;
-
-const defaultVisibleOf = (mine: string | undefined, candidate: string) => {
-  if (!mine || mine === 'other') return true;
-  if (mine === 'male') return candidate === 'female' || candidate === 'other';
-  if (mine === 'female') return candidate === 'male' || candidate === 'other';
-  return true;
-};
-
 export const TwoKeyEscapePage = () => {
-  const { user } = useAuth();
-  const myGender = user?.gender;
-
   const [state, setState] = useState<TwoKeyEscapeState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -98,15 +85,6 @@ export const TwoKeyEscapePage = () => {
   // explicit confirm below sends the submission to the server.
   const [localRole, setLocalRole] = useState<TwoKeyEscapeRole | null>(null);
   const [changingRole, setChangingRole] = useState(false);
-
-  // Partner discovery, settled exactly like the Couple Questionnaire: the
-  // list and the choice below are that game's own pairing, so a pair formed
-  // here opens the Questionnaire too, and vice versa.
-  const [partners, setPartners] = useState<CouplePartnerCandidate[]>([]);
-  const [partnersError, setPartnersError] = useState<string | null>(null);
-  const [showSameGender, setShowSameGender] = useState(false);
-  const [search, setSearch] = useState('');
-  const [choosingId, setChoosingId] = useState<string | null>(null);
 
   const [leaderboard, setLeaderboard] = useState<TwoKeyEscapeLeaderboardEntry[]>([]);
   const [cooldown, setCooldown] = useState(0);
@@ -149,49 +127,12 @@ export const TwoKeyEscapePage = () => {
     }
   }, [state?.stage, state?.state_version, refreshLeaderboard]);
 
-  const partnerStage = state?.stage;
-  useEffect(() => {
-    if (partnerStage !== 'no_couple') return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await getTwoKeyEscapePartners();
-        if (!cancelled) {
-          setPartners(list);
-          setPartnersError(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setPartnersError(describeApiError(error, 'Could not load people to choose from.'));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [partnerStage]);
-
-  const visiblePartners = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return partners.filter((candidate) => {
-      const genderOk = showSameGender
-        ? sameGenderOf(myGender, candidate.gender)
-        : defaultVisibleOf(myGender, candidate.gender);
-      if (!genderOk) return false;
-      if (needle && !candidate.name.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [partners, showSameGender, myGender, search]);
-
   const handleChoose = async (candidateId: string) => {
-    setChoosingId(candidateId);
     try {
       setState(await selectTwoKeyEscapePartner(candidateId));
       toast.success('Choice saved. The maze opens when they choose you back.');
     } catch (error) {
       toast.error(describeApiError(error, 'Could not save your choice.'));
-    } finally {
-      setChoosingId(null);
     }
   };
 
@@ -408,77 +349,11 @@ export const TwoKeyEscapePage = () => {
               </p>
             )}
 
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex min-w-44 flex-1 flex-col gap-2">
-                <Label htmlFor="escape-partner-search">Find someone</Label>
-                <Input
-                  id="escape-partner-search"
-                  value={search}
-                  placeholder="Type a name"
-                  autoComplete="off"
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-              <Button
-                type="button"
-                variant={showSameGender ? 'default' : 'outline'}
-                size="sm"
-                aria-pressed={showSameGender}
-                onClick={() => setShowSameGender((value) => !value)}
-              >
-                {showSameGender ? 'Showing same gender' : 'Show same gender'}
-              </Button>
-            </div>
-
-            {partnersError && (
-              <p role="alert" className="text-sm font-medium text-destructive">
-                {partnersError}
-              </p>
-            )}
-
-            {!partnersError && visiblePartners.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Nobody matches that filter yet. Try the search or the gender toggle.
-              </p>
-            )}
-
-            {visiblePartners.length > 0 && (
-              <ul className="flex flex-col gap-2">
-                {visiblePartners.map((candidate) => {
-                  const isCurrent = state.my_selection?.selected_user_id === candidate.id;
-                  return (
-                    <li
-                      key={candidate.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 p-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">{candidate.name}</p>
-                        <p className="truncate text-xs capitalize text-muted-foreground">
-                          {candidate.gender} · {candidate.department} · Year {candidate.year}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isCurrent && <Badge variant="secondary">Your pick</Badge>}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={isCurrent ? 'ghost' : 'outline'}
-                          disabled={choosingId !== null}
-                          onClick={() => void handleChoose(candidate.id)}
-                          aria-label={`Choose ${candidate.name} as partner`}
-                        >
-                          {choosingId === candidate.id
-                            ? 'Saving…'
-                            : isCurrent
-                              ? 'Chosen'
-                              : 'Choose'}
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <PartnerPicker
+              loadPartners={getTwoKeyEscapePartners}
+              selectedId={state.my_selection?.selected_user_id ?? null}
+              onChoose={handleChoose}
+            />
           </CardContent>
         </Card>
       )}
