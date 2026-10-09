@@ -142,8 +142,8 @@ const PARTICIPANTS = 'Participants';
  */
 const namesIn = (section: HTMLElement) =>
   within(section)
-    .getAllByRole('button', { name: /^View profile for/ })
-    .map((card) => (card.getAttribute('aria-label') ?? '').replace('View profile for ', ''));
+    .getAllByRole('button', { name: /^Edit profile for/ })
+    .map((card) => (card.getAttribute('aria-label') ?? '').replace('Edit profile for ', ''));
 
 /** Whether `first` is rendered before `second`. */
 const precedes = (first: Element, second: Element) =>
@@ -453,10 +453,10 @@ describe('ProfileReview: card order', () => {
     expect(namesIn(groupNamed(MODERATORS))).toEqual(['Yves Moderator', 'Bea Moderator']);
   });
 
-  it('leaves the flagged section split by cohort rather than merging them', async () => {
-    // Filtering by cohort narrows each section; it never moves an account between them. If it did,
-    // the number in the header and the "more than 5 removals" threshold would be describing two
-    // different populations from one list.
+  it('narrows the flagged queue by cohort while Participants keeps the whole filtered population', async () => {
+    // Filtering by cohort narrows each section; it never moves an account between them. The
+    // queue keeps only the matching flagged rows, and Participants keeps everyone who matches
+    // -- the flagged ones included, because they are part of the population that list names.
     await renderPage([
       participant('Alpha', { year: 2, removals: 9 }),
       participant('Bravo', { year: 3, removals: 9 }),
@@ -466,7 +466,7 @@ describe('ProfileReview: card order', () => {
     await filterByYear(2);
 
     expect(namesIn(groupNamed(REPEATED))).toEqual(['Alpha']);
-    expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(['Charlie']);
+    expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(['Alpha', 'Charlie']);
   });
 
   it('puts an account with no name last whichever direction is chosen', async () => {

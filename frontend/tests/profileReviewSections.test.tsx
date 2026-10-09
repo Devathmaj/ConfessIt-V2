@@ -20,11 +20,12 @@ import {
  *
  * Two properties are pinned here, and they fail differently:
  *
- * **Which group an account lands in.** Every row must appear in exactly one group. An account
- * rendered twice would double its block button and double every count; an account rendered
- * nowhere would be invisible on the only screen an operator uses to find it. The threshold is
- * `> 5`, and the interesting case is the boundary and the sum, because the three counters are
- * stored per kind and the rule is about the total.
+ * **Which group an account lands in.** Staff land in exactly one group, because their sections
+ * name a table. The flagged participant is the one deliberate duplicate: they are in the queue
+ * above the threshold and in the Participants list, which is the whole population. An account
+ * rendered nowhere would be invisible on the only screen an operator uses to find it. The
+ * threshold is `> 5`, and the interesting case is the boundary and the sum, because the three
+ * counters are stored per kind and the rule is about the total.
  *
  * **What the grouping is *not*.** Only upheld removals count. A participant reported many times
  * and cleared every time has still had nothing taken down, and putting them in the group above
@@ -92,7 +93,7 @@ const moderator = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-/** A participant, whose tally is what decides which of the two participant groups they join. */
+/** A participant, whose tally decides whether they also join the flagged queue. */
 const participant = (
   id: string,
   name: string,
@@ -115,7 +116,9 @@ const participant = (
  * Load exactly the given accounts and wait for one of them to be on screen.
  *
  * `expected` cannot be omitted, because the page shell renders before the accounts arrive and
- * waiting on it would let an assertion run against an empty list.
+ * waiting on it would let an assertion run against an empty list. `findAllByText` rather than
+ * `findByText`: a name above the threshold is rendered twice on purpose, in the queue and in
+ * the Participants list, and a singular find would mistake the duplication for a failure.
  */
 function renderRows(rows: unknown[], expected: string) {
   api.getAdminUsers.mockResolvedValue(rows);
@@ -133,7 +136,7 @@ function renderRows(rows: unknown[], expected: string) {
       </MemoryRouter>
     </AuthContext.Provider>,
   );
-  return screen.findByText(expected);
+  return screen.findAllByText(expected);
 }
 
 /** The group an account is rendered in, found through the heading that labels the section. */
@@ -193,7 +196,7 @@ describe('ProfileReview: account groups', () => {
     ]);
   });
 
-  it('files each account into exactly one group', async () => {
+  it('files staff once and a flagged participant into both participant groups', async () => {
     await renderRows(
       [
         admin(),
@@ -208,16 +211,29 @@ describe('ProfileReview: account groups', () => {
     expect(within(groupNamed(MODERATORS)).getByText('Mo Moderator')).toBeInTheDocument();
     expect(within(groupNamed(REPEATED)).getByText('Repeat')).toBeInTheDocument();
     expect(within(groupNamed(PARTICIPANTS)).getByText('Ordinary')).toBeInTheDocument();
+    // Above the threshold puts a participant in the queue, not out of the population:
+    // they belong in Participants as well, by name like everybody else.
+    expect(within(groupNamed(PARTICIPANTS)).getByText('Repeat')).toBeInTheDocument();
 
-    // And nowhere else. A row shown twice would double its block button and its counts.
+    // Each badge counts its own list. The legacy answers repeat the full list to every
+    // read, so an unguarded server total would print "4 accounts" on all four; the
+    // Participants badge holds two because the flagged participant is counted there too.
+    for (const heading of [ADMINS, MODERATORS, REPEATED]) {
+      expect(within(groupNamed(heading)).getByText(/^1 account$/)).toBeInTheDocument();
+    }
+    expect(within(groupNamed(PARTICIPANTS)).getByText('2 accounts')).toBeInTheDocument();
+
+    // And nowhere they do not belong. Staff are table-bound, so each appears once; the
+    // flagged participant is the one deliberate duplicate.
     expect(within(groupNamed(ADMINS)).queryByText('Ordinary')).not.toBeInTheDocument();
     expect(within(groupNamed(MODERATORS)).queryByText('Ada Admin')).not.toBeInTheDocument();
     expect(within(groupNamed(REPEATED)).queryByText('Ordinary')).not.toBeInTheDocument();
-    expect(within(groupNamed(PARTICIPANTS)).queryByText('Repeat')).not.toBeInTheDocument();
+    expect(within(groupNamed(PARTICIPANTS)).queryByText('Ada Admin')).not.toBeInTheDocument();
 
-    for (const name of ['Ada Admin', 'Mo Moderator', 'Repeat', 'Ordinary']) {
+    for (const name of ['Ada Admin', 'Mo Moderator', 'Ordinary']) {
       expect(screen.getAllByText(name)).toHaveLength(1);
     }
+    expect(screen.getAllByText('Repeat')).toHaveLength(2);
   });
 
   it('sums removals across every kind of content to decide the group', async () => {
@@ -236,7 +252,9 @@ describe('ProfileReview: account groups', () => {
     );
 
     expect(within(groupNamed(REPEATED)).getByText('Spread')).toBeInTheDocument();
-    expect(within(groupNamed(PARTICIPANTS)).queryByText('Spread')).not.toBeInTheDocument();
+    // In Participants too: the queue is a view of the same population, so the row is
+    // never moved out of the list an operator scans for somebody.
+    expect(within(groupNamed(PARTICIPANTS)).getByText('Spread')).toBeInTheDocument();
   });
 
   it('leaves a participant exactly at the threshold in the ordinary group', async () => {
@@ -297,8 +315,11 @@ describe('ProfileReview: accounts as cards', () => {
   it('lays the accounts out as a grid of cards', async () => {
     await renderRows([participant(ORDINARY, 'One'), participant(REPEAT, 'Two')], 'One');
 
+    // Scoped to Participants because the flagged row is rendered in both participant groups.
     const cards = ['One', 'Two'].map((name) =>
-      screen.getByRole('button', { name: `View profile for ${name}` }),
+      within(groupNamed(PARTICIPANTS)).getByRole('button', {
+        name: `Edit profile for ${name}`,
+      }),
     );
 
     // Both accounts share one multi-column container. Two full-width rows would each be the only
@@ -311,11 +332,16 @@ describe('ProfileReview: accounts as cards', () => {
     expect(cards[0].closest('.grid')).toBe(cards[1].closest('.grid'));
   });
 
-  it('opens the editor from anywhere on the card', async () => {
+  it('opens the editor from the explicit edit button and nowhere else', async () => {
     await renderRows([participant(ORDINARY, 'One')], 'One');
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for One' }));
+
+    // The card body is read-only: clicking the name to read or copy it must go nowhere.
+    fireEvent.click(screen.getByText('One'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for One' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Edit profile')).toBeInTheDocument();
   });
@@ -324,8 +350,9 @@ describe('ProfileReview: accounts as cards', () => {
     api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: true });
     await renderRows([participant(ORDINARY, 'One')], 'One');
 
-    // The card body is the click target and the block button is outside it. When the button lived
-    // inside the clickable row, one press both suspended the account and opened its editor.
+    // The block button and the editor are separate controls, and one press must only ever do
+    // the thing it says. When the block button lived inside a clickable card body, one press
+    // both suspended the account and opened its editor.
     fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Block account' }));
 
@@ -439,15 +466,27 @@ describe('ProfileReview: accounts as cards', () => {
     );
 
     // The group heading scrolls out of view; the card has to still say why it is on the page.
-    const card = screen.getByRole('button', { name: 'View profile for Repeat' });
+    // The edit button names the card, and the card root is what carries the marks.
+    const card = within(groupNamed(REPEATED))
+      .getByRole('button', { name: 'Edit profile for Repeat' })
+      .closest('[data-slot="card"]') as HTMLElement;
     expect(within(card).getByText('Repeated removals')).toBeInTheDocument();
     expect(within(card).getByText('6 removed')).toBeInTheDocument();
+
+    // The mark follows the account, not the section: the same row in Participants carries
+    // it too, because the tally is what is worth a decision wherever the card is read.
+    const listed = within(groupNamed(PARTICIPANTS))
+      .getByRole('button', { name: 'Edit profile for Repeat' })
+      .closest('[data-slot="card"]') as HTMLElement;
+    expect(within(listed).getByText('Repeated removals')).toBeInTheDocument();
   });
 
   it('leaves an ordinary card unmarked', async () => {
     await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
 
-    const card = screen.getByRole('button', { name: 'View profile for Ordinary' });
+    const card = screen
+      .getByRole('button', { name: 'Edit profile for Ordinary' })
+      .closest('[data-slot="card"]') as HTMLElement;
     expect(within(card).queryByText('Repeated removals')).not.toBeInTheDocument();
   });
 });
@@ -801,7 +840,7 @@ describe('ProfileReview: editing a staff account', () => {
   it('offers only the columns a moderator actually has', async () => {
     await renderRows([moderator()], 'Mo Moderator');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
 
     // The `moderator` table has these three columns and no others. Everything asserted absent
@@ -829,7 +868,7 @@ describe('ProfileReview: editing a staff account', () => {
     await renderRows([moderator()], 'Mo Moderator');
 
     // A shorter form reads as the screen having less to say, not as the account having less on it.
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
     expect(
       within(dialog).getByText(/A moderator account has no gender, year or department/i),
@@ -844,7 +883,7 @@ describe('ProfileReview: editing a staff account', () => {
     });
     await renderRows([moderator()], 'Mo Moderator');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Full name'), {
       target: { value: 'Mo Renamed' },
@@ -863,7 +902,7 @@ describe('ProfileReview: editing a staff account', () => {
   it('offers no toggle of any kind for a moderator', async () => {
     await renderRows([moderator({ notifications_enabled: true })], 'Mo Moderator');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
     // `notifications_enabled` has a column on all three account tables, so it is the one switch
     // that would never have been ignored. It is gone anyway: this dialog writes identity, and a
@@ -881,7 +920,7 @@ describe('ProfileReview: editing a staff account', () => {
 
     // The identity-only change must not narrow the participant form by accident: year and
     // department are the whole reason a participant row carries a cohort at all.
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     // Both halves present, and the stored year is shown rather than dropped: `2nd Year` came from
     // the fixture, so a select sitting empty here would mean the editor refused a valid stored
@@ -903,7 +942,7 @@ describe('ProfileReview: editing a staff account', () => {
     });
     await renderRows([participant(ORDINARY, 'Ordinary')], 'Ordinary');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Department/Division'), {
       target: { value: 'ECE' },
@@ -927,7 +966,7 @@ describe('ProfileReview: editing a staff account', () => {
       'Ordinary',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Full name'), {
       target: { value: 'Renamed' },
@@ -957,7 +996,7 @@ describe('ProfileReview: editing a staff account', () => {
       'Ordinary',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Ordinary' }));
     const dialog = await screen.findByRole('dialog');
     await chooseOption(dialog, 'Female', 'Gender');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
@@ -968,7 +1007,7 @@ describe('ProfileReview: editing a staff account', () => {
     // Reopening on the value just written must report no change. If the form kept comparing the
     // displayed value against the row it was fetched with, a participant edited for any other
     // reason would have their gender rewritten on that save instead.
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Ordinary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Ordinary' }));
     const reopened = await screen.findByRole('dialog');
     await chooseOption(reopened, 'Female', 'Gender');
     fireEvent.click(within(reopened).getByRole('button', { name: 'Save changes' }));
@@ -989,7 +1028,7 @@ describe('ProfileReview: editing a staff account', () => {
     // the admin overwriting someone's face without them being able to refuse -- so this is pinned
     // for the participant form too, not only the staff one.
     for (const label of ['Ordinary', 'Mo Moderator']) {
-      fireEvent.click(screen.getByRole('button', { name: `View profile for ${label}` }));
+      fireEvent.click(screen.getByRole('button', { name: `Edit profile for ${label}` }));
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).queryByLabelText('Profile picture')).not.toBeInTheDocument();
       expect(within(dialog).queryByRole('textbox', { name: /picture|photo|image|url/i })).toBeNull();
@@ -1058,7 +1097,7 @@ describe('ProfileReview: the fields an admin does not get', () => {
     });
     await renderRows([moderator()], 'Mo Moderator');
 
-    fireEvent.click(screen.getByRole('button', { name: 'View profile for Mo Moderator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for Mo Moderator' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Full name'), {
       target: { value: 'Mo Renamed' },

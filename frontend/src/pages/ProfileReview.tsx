@@ -38,6 +38,7 @@ import type { AdminUserCreatePayload } from '@/services/api';
 import {
   Crown,
   Mail,
+  Pencil,
   Plus,
   Search,
   ShieldAlert,
@@ -128,12 +129,13 @@ const FLAGGED_SECTION_ID = 'flagged';
 const PARTICIPANTS_SECTION_ID = 'participants';
 
 /**
- * How many participant rows one server read returns. The backend clamps to 100; fifty
- * keeps one page to a single screenful of cards while keeping the request count low.
+ * How many participant rows one server read returns. The backend clamps to 102; fifty-one
+ * keeps one page to a single screenful of cards while keeping the request count low, and
+ * is a multiple of three so the last row of the card grid is never left ragged under it.
  * Staff reads use a larger bound because those tables are tiny by construction.
  */
-const PARTICIPANT_PAGE_SIZE = 50;
-const STAFF_PAGE_SIZE = 100;
+const PARTICIPANT_PAGE_SIZE = 51;
+const STAFF_PAGE_SIZE = 102;
 
 /** The rows inside a `getAdminUsers` answer, whether it is the new page envelope or a legacy bare array. */
 const rowsOf = (answer: unknown): AdminUserProfile[] => {
@@ -585,10 +587,10 @@ interface ProfileSection {
  * two people, and the comparison is what this screen exists for. A card carries the same facts as
  * the row it replaces, laid out to be read as one unit.
  *
- * The upper block opens the editor and is the only part that is clickable; the block button sits
- * below it in the card footer so pressing it cannot also open the dialog. Keyboard activation is
- * handled explicitly rather than left to a native button, because the clickable area is a `div`
- * holding an `Avatar`, a tally and a button-adjacent footer.
+ * Nothing on the card body is clickable. Editing starts from the explicit Edit button in the
+ * card footer, so reading a card -- clicking a name to copy it, selecting a register number --
+ * cannot drop the operator into an edit form against their intent, which is what a whole-card
+ * click did.
  */
 const ProfileCard = ({
   profile,
@@ -601,7 +603,11 @@ const ProfileCard = ({
   profile: AdminUserProfile;
   blocked: boolean;
   busy: boolean;
-  /** Above `FLAGGED_REMOVAL_THRESHOLD` upheld removals, which is what put them in that section. */
+  /**
+   * Above `FLAGGED_REMOVAL_THRESHOLD` upheld removals. Derived from the account rather than
+   * from the section, because the same card also appears in the Participants list and has to
+   * keep saying why it is worth a decision wherever it is read.
+   */
   flagged: boolean;
   onOpen: (profile: AdminUserProfile) => void;
   onToggleBlock: (profile: AdminUserProfile) => void;
@@ -613,20 +619,8 @@ const ProfileCard = ({
   const totalRemovals = totalRemovalsFor(profile);
 
   return (
-    <Card className="flex flex-col overflow-hidden transition hover:border-primary/40 hover:shadow-md">
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpen(profile)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onOpen(profile);
-          }
-        }}
-        aria-label={`View profile for ${profile.name ?? 'user'}`}
-        className="flex cursor-pointer flex-col gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      >
+    <Card className="flex flex-col overflow-hidden">
+      <div className="flex flex-col gap-3 p-4 text-left">
         <div className="flex items-start gap-3">
           <ProfileAvatar src={profile.profile_picture_url} name={profile.name} className="h-11 w-11 shrink-0" />
           <div className="grid min-w-0 flex-1 gap-1">
@@ -708,6 +702,17 @@ const ProfileCard = ({
       </div>
 
       <div className="mt-auto flex flex-col gap-2 border-t border-border p-3">
+        {/* The one way into the editor, and deliberately the only one: a card body that
+            opens a form on click makes reading the list an exercise in not clicking. */}
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Edit profile for ${profile.name ?? 'user'}`}
+          onClick={() => onOpen(profile)}
+        >
+          <Pencil className="mr-2 h-4 w-4" />
+          Edit
+        </Button>
         {/* An unblocked admin gets no block button rather than a disabled one. A permanently
             greyed-out control with no explanation reads as a bug or a permissions problem, and
             the reason is not obvious from the row; saying so is more honest than showing a
@@ -807,6 +812,17 @@ export const ProfileReview = () => {
    * pager read the server totals for envelopes and the merged rows for arrays.
    */
   const [useServerTotals, setUseServerTotals] = useState(false);
+  /**
+   * The rows of each participant read, kept apart from the merged list.
+   *
+   * The two participant sections stopped being complements: the flagged queue is a view of
+   * the same population, so a participant above the threshold belongs in the queue and in
+   * the Participants list at the same time. The merged list cannot say which read a row came
+   * from once the same id is deduped, and each section has to show exactly the page its own
+   * pager asked for, so each read's rows are kept as returned.
+   */
+  const [flaggedRows, setFlaggedRows] = useState<AdminUserProfile[]>([]);
+  const [ordinaryRows, setOrdinaryRows] = useState<AdminUserProfile[]>([]);
   /** Background page/filter fetches after the first load; the grid stays up while they run. */
   const [refreshing, setRefreshing] = useState(false);
   /** Whether the next fetch is still the first one, which is the only one that takes the loading screen. */
@@ -912,10 +928,13 @@ export const ProfileReview = () => {
         // Four bounded reads rather than one unbounded one. Staff tables are tiny by
         // construction, so both arrive whole; each participant read is one SQL page
         // (WHERE plus LIMIT/OFFSET on the database), so the backend serialises at most
-        // two pages no matter how many participants exist. The flagged queue is its own
-        // read in removal order because it is a work queue, not a slice of the ordinary
-        // list: the most-removed participant platform-wide belongs on top even when the
-        // ordinary list is sorted by name and sitting on page nine.
+        // two pages no matter how many participants exist. The ordinary read asks for the
+        // whole participant population, flagged included: a participant above the removal
+        // threshold is still a participant and must not vanish from the Participants list.
+        // The flagged read is the same population's work queue in removal order -- the
+        // most-removed participant platform-wide belongs on top even when the Participants
+        // list is sorted by name and sitting on page nine -- and it deliberately overlaps
+        // the ordinary read rather than partitioning it.
         const [admins, moderators, flagged, ordinary] = await Promise.all([
           getAdminUsers({ account_type: 'admin', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
           getAdminUsers({ account_type: 'moderator', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
@@ -931,7 +950,6 @@ export const ProfileReview = () => {
           }),
           getAdminUsers({
             account_type: 'users',
-            flagged: 'ordinary',
             sort: ordinarySort,
             skip: page * PARTICIPANT_PAGE_SIZE,
             limit: PARTICIPANT_PAGE_SIZE,
@@ -955,6 +973,8 @@ export const ProfileReview = () => {
           }
         }
         setProfiles(merged);
+        setFlaggedRows(rowsOf(flagged) as AdminUserProfile[]);
+        setOrdinaryRows(rowsOf(ordinary) as AdminUserProfile[]);
         setStaffTotal(totalOf(admins, 0) + totalOf(moderators, 0));
         setFlaggedTotal(totalOf(flagged, 0));
         setOrdinaryTotal(totalOf(ordinary, 0));
@@ -1105,17 +1125,19 @@ export const ProfileReview = () => {
   /**
    * The four groups this screen shows, in the order an operator should meet them.
    *
-   * The order is a reading order rather than an alphabetical accident. Admins first because a
-   * staff account with the wrong privileges is the most consequential mistake on the page, and
-   * moderators next because they are the accounts that actually do the reviewing. Participants
-   * come last, split by the one thing that separates a routine account from one that needs a
-   * decision: how much of their content has actually been taken down.
+   * The row order is a reading order rather than an alphabetical accident. Admins first,
+   * because a staff account with the wrong privileges is the most consequential mistake on
+   * the page, and moderators next because they are the accounts that actually do the
+   * reviewing. Participants come last, split by the one thing that separates a routine
+   * account from one that needs a decision: how much of their content has actually been
+   * taken down.
    *
-   * Every row lands in exactly one section. The two staff sections name a table, so they cannot
-   * overlap; the two participant sections are complements of the same predicate, so a participant
-   * is in one or the other and never both.
+   * The staff rows land in exactly one section, because the two staff sections name a table.
+   * The two participant sections overlap on purpose: a participant above the removal
+   * threshold is in the flagged queue -- the work list a moderator is meant to act on -- and
+   * in Participants, which is the whole population and must not quietly omit anybody.
    *
-   * Only the ordinary participants are handed to the sort picker, and the staff sections keep the
+   * Only the Participants list is handed to the sort picker, and the staff sections keep the
    * server's by-name order untouched: a year or a surname is not what an operator is reading a list
    * of administrators for, and a staff row has no year to order by in the first place.
    */
@@ -1123,14 +1145,22 @@ export const ProfileReview = () => {
     const admins = filteredProfiles.filter((profile) => profile.account_type === 'admin');
     const moderators = filteredProfiles.filter((profile) => profile.account_type === 'moderator');
     const participants = filteredProfiles.filter((profile) => !isStaffAccount(profile));
+    // Against the real server each section shows exactly the page its own read returned: the
+    // queue one page of the removal-ordered flagged read, Participants one page of the
+    // ordinary read, which includes those rows. Against legacy bare-array answers the one
+    // merged list is everything, so the same split runs here: the queue is the participants
+    // above the threshold, and Participants is all of them.
+    //
     // Most removals first, unconditionally. This is a work queue and the order a moderator works
     // through it in is not theirs to rearrange, so `sortOption` is deliberately not consulted.
-    const flagged = participants
-      .filter((profile) => totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD)
-      .sort(byMostRemovals);
-    const ordinary = participants.filter(
-      (profile) => totalRemovalsFor(profile) <= FLAGGED_REMOVAL_THRESHOLD
-    );
+    const flagged = useServerTotals
+      ? flaggedRows
+      : participants
+          .filter((profile) => totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD)
+          .sort(byMostRemovals);
+    // A participant above the threshold is in this list too, by name like everybody else:
+    // the queue above is a view of this population, not a separate one.
+    const ordinary = useServerTotals ? ordinaryRows : participants;
 
     // Each participant section is one server page: the pager walks the database pages while the
     // section itself keeps showing whatever the current page holds. The counts beside them are
@@ -1183,7 +1213,7 @@ export const ProfileReview = () => {
         pagination: {
           page: flaggedPage,
           pageCount: flaggedPageCount,
-          total: flaggedTotal,
+          total: useServerTotals ? flaggedTotal : flagged.length,
           onPrev: () => {
             setFlaggedPage((prev) => Math.max(0, prev - 1));
             scrollToSectionTop(FLAGGED_SECTION_ID);
@@ -1200,7 +1230,7 @@ export const ProfileReview = () => {
         id: PARTICIPANTS_SECTION_ID,
         title: 'Participants',
         description:
-          'Everyone else on the platform, at or below the removal threshold. Blocked accounts stay here unless removals put them in the section above.',
+          'Every participant account, including anyone above the removal threshold listed in the section above: that section is a work queue cut from this same list, not a separate population. Blocked accounts stay here too.',
         emptyNote: filtersNarrowed
           ? 'No participant matches the current filters.'
           : 'No participants match.',
@@ -1211,7 +1241,7 @@ export const ProfileReview = () => {
         pagination: {
           page,
           pageCount: ordinaryPageCount,
-          total: ordinaryTotal,
+          total: useServerTotals ? ordinaryTotal : ordinary.length,
           onPrev: () => {
             setPage((prev) => Math.max(0, prev - 1));
             scrollToSectionTop(PARTICIPANTS_SECTION_ID);
@@ -1225,7 +1255,7 @@ export const ProfileReview = () => {
         },
       },
     ];
-  }, [filteredProfiles, filtersNarrowed, sortOption, page, flaggedPage, ordinaryTotal, flaggedTotal, useServerTotals]);
+  }, [filteredProfiles, filtersNarrowed, sortOption, page, flaggedPage, ordinaryTotal, flaggedTotal, useServerTotals, flaggedRows, ordinaryRows]);
 
   /**
    * Whether a filter has hidden every account on the platform.
@@ -1238,17 +1268,20 @@ export const ProfileReview = () => {
 
   /**
    * The server total for the work queue under the current filters, not just the rows on
-   * this page. The section badge still counts the cards it shows; this is what the header
-   * reports, so a queue of two hundred reads as two hundred with fifty on screen. Falls
-   * back to the cards when the answers were legacy bare arrays, whose per-read counts
-   * would otherwise quadruple-count one list.
+   * this page. The header reports it beside the platform totals, so a queue of two hundred
+   * reads as two hundred with one page on screen. Falls back to the cards when the answers
+   * were legacy bare arrays, whose per-read counts would otherwise quadruple-count one list.
    */
   const flaggedCount = useServerTotals
     ? flaggedTotal
     : (sections.find((section) => section.id === FLAGGED_SECTION_ID)?.accounts.length ?? 0);
 
-  /** Every account the server reports under the current filters, across all four reads. */
-  const serverTotal = useServerTotals ? staffTotal + ordinaryTotal + flaggedTotal : profiles.length;
+  /**
+   * Every account the server reports under the current filters. The flagged read is a view
+   * of rows the ordinary read already counts, so it is deliberately not added in: doing so
+   * would count every flagged participant twice.
+   */
+  const serverTotal = useServerTotals ? staffTotal + ordinaryTotal : profiles.length;
 
   /**
    * Whether the create dialog is currently making a participant.
@@ -1550,6 +1583,11 @@ export const ProfileReview = () => {
   const renderSection = (section: ProfileSection) => {
     const Icon = section.icon;
     const accountCount = section.accounts.length;
+    // The badge counts the accounts the section holds under the current filters, not the
+    // cards one page renders: a paginated section shows a single server page, so "51
+    // accounts" above a list of two hundred would be the page talking, not the group.
+    // Staff sections are unpaginated and arrive whole, so for them the two coincide.
+    const accountTotal = section.pagination ? section.pagination.total : accountCount;
     const create = section.create;
     return (
       <section aria-labelledby={`profile-section-${section.id}`}>
@@ -1565,7 +1603,7 @@ export const ProfileReview = () => {
               </CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant={section.badgeVariant}>
-                  {accountCount} {accountCount === 1 ? 'account' : 'accounts'}
+                  {accountTotal} {accountTotal === 1 ? 'account' : 'accounts'}
                 </Badge>
                 {/* Sits with the group it creates into, so the control and the form it
                     opens name the same kind of account. */}
@@ -1599,7 +1637,7 @@ export const ProfileReview = () => {
                     profile={profile}
                     blocked={Boolean(profile.is_blocked)}
                     busy={blocking === profile.id}
-                    flagged={section.id === FLAGGED_SECTION_ID}
+                    flagged={totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD}
                     onOpen={openProfileEditor}
                     onToggleBlock={toggleBlock}
                   />

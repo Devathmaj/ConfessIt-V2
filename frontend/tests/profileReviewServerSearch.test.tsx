@@ -19,7 +19,13 @@ import { ProfileReview } from '@/pages/ProfileReview';
  *   the page on screen is displayed as returned -- never narrowed a second time, which
  *   would hide rows the server correctly sent and break the pager totals beside them;
  * * turning the pager re-reads that same filtered question with a new offset, and brings
- *   the section heading back into view.
+ *   the section heading back into view;
+ * * the flagged queue and the Participants list overlap by design: the ordinary read asks
+ *   for the whole participant population, so a flagged participant is in both sections and
+ *   the screen must not treat the two reads as disjoint;
+ * * the section badge reports the filtered group's server total -- fifty-two accounts
+ *   still reads fifty-two while one page of fifty-one is on screen, because the badge
+ *   answers how many accounts exist, not how many cards happen to be rendered.
  */
 
 const api = vi.hoisted(() => ({
@@ -65,7 +71,7 @@ const pageOf = (rows: unknown[], total: number, skip = 0) => ({
   users: rows,
   total,
   skip,
-  limit: 50,
+  limit: 51,
 });
 
 const emptyPage = () => pageOf([], 0);
@@ -93,8 +99,8 @@ const groupNamed = (heading: string) =>
 
 const namesIn = (section: HTMLElement) =>
   within(section)
-    .getAllByRole('button', { name: /^View profile for/ })
-    .map((card) => (card.getAttribute('aria-label') ?? '').replace('View profile for ', ''));
+    .getAllByRole('button', { name: /^Edit profile for/ })
+    .map((card) => (card.getAttribute('aria-label') ?? '').replace('Edit profile for ', ''));
 
 const callsWith = () =>
   api.getAdminUsers.mock.calls.map((call) => call[0] as Record<string, unknown>);
@@ -119,7 +125,7 @@ describe('ProfileReview: server-driven search', () => {
       return pageOf([alpha, participant('Bravo')], 2);
     });
     await renderPage();
-    await screen.findByRole('button', { name: 'View profile for Alpha' });
+    await screen.findByRole('button', { name: 'Edit profile for Alpha' });
 
     // Four reads for the unfiltered first page, and nothing else while the draft changes.
     expect(api.getAdminUsers).toHaveBeenCalledTimes(4);
@@ -135,6 +141,8 @@ describe('ProfileReview: server-driven search', () => {
       expect(params.q).toBe('Alpha');
     }
     expect(namesIn(groupNamed('Participants'))).toEqual(['Alpha']);
+    // The badge names the filtered group, not the page: one match, singular.
+    expect(within(groupNamed('Participants')).getByText('1 account')).toBeInTheDocument();
   });
 
   it('sends the cohort filters to the database and pages the filtered question', async () => {
@@ -148,7 +156,7 @@ describe('ProfileReview: server-driven search', () => {
       return pageOf([secondYear, participant('ThirdYear', { year: 3 })], 2);
     });
     await renderPage();
-    await screen.findByRole('button', { name: 'View profile for SecondYear' });
+    await screen.findByRole('button', { name: 'Edit profile for SecondYear' });
 
     fireEvent.pointerDown(screen.getByLabelText('Year'), {
       button: 0,
@@ -164,33 +172,69 @@ describe('ProfileReview: server-driven search', () => {
     expect(namesIn(groupNamed('Participants'))).toEqual(['SecondYear']);
   });
 
+  it('shows a flagged participant in the queue and in the Participants list', async () => {
+    const flagged = participant('Flagged', {
+      report_history: {
+        confession: { reports: 8, removals: 7 },
+        love_note: { reports: 0, removals: 0 },
+        message: { reports: 0, removals: 0 },
+      },
+    });
+    const normal = participant('Normal');
+    api.getAdminUsers.mockImplementation(async (params: Record<string, unknown> = {}) => {
+      if (params.account_type === 'admin' || params.account_type === 'moderator') {
+        return emptyPage();
+      }
+      if (params.flagged === 'flagged') return pageOf([flagged], 1);
+      return pageOf([flagged, normal], 2);
+    });
+    await renderPage();
+    await screen.findAllByRole('button', { name: 'Edit profile for Normal' });
+
+    // In the queue and in the population: the queue is a view of rows the ordinary read
+    // also returns, and the screen must show the same row in both sections.
+    expect(namesIn(groupNamed('Participants with more than 5 removals'))).toEqual(['Flagged']);
+    expect(namesIn(groupNamed('Participants'))).toEqual(['Flagged', 'Normal']);
+    expect(within(groupNamed('Participants')).getByText('2 accounts')).toBeInTheDocument();
+
+    // Read one: no read may ask the server to exclude the queue from the population.
+    // `flagged: 'ordinary'` is what used to hide flagged participants from Participants.
+    expect(callsWith().every((params) => params.flagged !== 'ordinary')).toBe(true);
+  });
+
   it('re-reads the filtered question with a new offset on Next and returns to the section top', {
-    // Two full page renders with fifty rows each: under a loaded parallel run this
+    // Two full page renders with fifty-one rows each: under a loaded parallel run this
     // legitimately exceeds the 5s default, so the budget -- not the assertions -- grows.
     timeout: 15000,
   }, async () => {
     const scrollSpy = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = scrollSpy as never;
     try {
-      const firstFifty = Array.from({ length: 50 }, (_, index) => participant(`P${index}`));
-      const lastOne = [participant('P50')];
+      const firstPage = Array.from({ length: 51 }, (_, index) => participant(`P${index}`));
+      const lastOne = [participant('P51')];
       api.getAdminUsers.mockImplementation(async (params: Record<string, unknown> = {}) => {
         if (params.account_type === 'admin' || params.account_type === 'moderator') {
           return emptyPage();
         }
         if (params.flagged === 'flagged') return emptyPage();
-        if (params.skip === 50) return pageOf(lastOne, 51, 50);
-        return pageOf(firstFifty, 51);
+        if (params.skip === 51) return pageOf(lastOne, 52, 51);
+        return pageOf(firstPage, 52);
       });
       await renderPage();
       await screen.findByText(/Page 1 of 2/);
+
+      // Fifty-two accounts in the filtered group, fifty-one of them rendered: the badge
+      // must count the group, not the cards.
+      expect(within(groupNamed('Participants')).getByText('52 accounts')).toBeInTheDocument();
+      expect(namesIn(groupNamed('Participants'))).toHaveLength(51);
 
       fireEvent.click(screen.getByRole('button', { name: 'Next participants page' }));
       await screen.findByText(/Page 2 of 2/);
 
       // Same question, next slice: the offset went out and only the new slice came back.
-      expect(callsWith().some((params) => params.skip === 50 && params.limit === 50)).toBe(true);
-      expect(namesIn(groupNamed('Participants'))).toEqual(['P50']);
+      expect(callsWith().some((params) => params.skip === 51 && params.limit === 51)).toBe(true);
+      expect(namesIn(groupNamed('Participants'))).toEqual(['P51']);
+      expect(within(groupNamed('Participants')).getByText('52 accounts')).toBeInTheDocument();
 
       // And the operator is looking at the section heading again, not at the pager that
       // carried them here.

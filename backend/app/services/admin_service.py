@@ -26,8 +26,9 @@ FLAGGED_REMOVAL_THRESHOLD = 5
 
 # Hard ceiling for one page of the admin user list. The endpoint clamps anything larger,
 # so no client -- present or future, well-meaning or not -- can ask for 10 000 rows and
-# make the backend materialise them all at once.
-ADMIN_USERS_MAX_LIMIT = 100
+# make the backend materialise them all at once. 102 is a multiple of three, which the
+# profile-review screen's three-column card grid asks for so no row is left ragged.
+ADMIN_USERS_MAX_LIMIT = 102
 
 # Deep-OFFSET guard: a skip past this is refused (422) rather than executed, so a
 # client cannot force the database to scan-and-discard an unbounded prefix on every

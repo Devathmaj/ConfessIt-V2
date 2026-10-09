@@ -5,7 +5,7 @@ SELECTs, serialised whole. With ten thousand participants that one request mater
 ten thousand rows at once. These tests pin the replacement contract:
 
 * every read answers ``{users, total, skip, limit}`` and never a bare list;
-* ``limit`` is clamped (anything over 100 is a 422), so no client can ask for the table;
+* ``limit`` is clamped (anything over 102 is a 422), so no client can ask for the table;
 * ``skip``/``limit`` are a SQL OFFSET/LIMIT on the filtered query, not a Python slice of
   a full load -- paging through five participants with ``limit=2`` takes three requests
   to see them all and no request holds more than two participant rows;
@@ -66,6 +66,19 @@ def test_limit_is_clamped_so_no_request_can_ask_for_the_table(db, admin_client):
     response = admin_client.get("/admin/users", params={"limit": 1000})
 
     assert response.status_code == 422, response.text
+
+
+def test_the_profile_review_staff_page_size_is_inside_the_clamp(db, admin_client):
+    """The staff reads ride the clamp's edge: 102 must pass, one more must not."""
+    make_user(db, "page-clamp-2")
+    at_the_ceiling = admin_client.get(
+        "/admin/users", params={"account_type": "users", "limit": 102}
+    )
+    assert at_the_ceiling.status_code == 200, at_the_ceiling.text
+    assert at_the_ceiling.json()["limit"] == 102
+
+    one_past = admin_client.get("/admin/users", params={"account_type": "users", "limit": 103})
+    assert one_past.status_code == 422, one_past.text
 
 
 def test_skip_and_limit_page_through_participants_without_holding_them_all(db, admin_client):
