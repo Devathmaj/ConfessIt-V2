@@ -36,6 +36,13 @@ every removal path passes through: the ruling screens, the two direct hides, and
 content-safety takedowns all end in :func:`record_removal`, so none of them has to remember the
 rule and none of them can get it wrong on its own.
 
+A block is also news an administrator needs -- they are the only role that can clear it -- so
+the transition stages one admin-only staff notice into the same transaction
+(``staff_notification_service.notify_user_auto_blocked``). Same reasoning as the session
+retirement below: an alert about a block that rolled back is an admin chasing a state that does
+not exist. Staged here rather than by the callers for the same funnel reason as the rule
+itself: no removal path has to know that an admin is being told.
+
 Blocking is the existing ``users.is_blocked`` flag, so every auth path already enforces it --
 the next request, refresh, magic-link mint or redemption is refused without anything new here
 having to reach into sign-in. The block is a stored fact rather than a condition recomputed at
@@ -62,6 +69,7 @@ from sqlalchemy import func, update
 from ..accounts import AccountType
 from ..db_models import UserRecord
 from .auth_service import retire_account_sessions
+from .staff_notification_service import notify_user_auto_blocked
 
 # The three kinds of content a participant can be reported for. A confession and a comment on
 # one share a kind -- see ``UserRecord`` for why.
@@ -171,20 +179,34 @@ def _block_if_over_threshold(session, clause) -> bool:
     again by their *next* removal -- the rule is "over the threshold", not "just crossed it" --
     which is the same line the flagged queue shows.
 
-    The flag and the session retirement share the caller's transaction: a block whose live
-    sessions stay ``active`` is a session table that disagrees with the account table.
+    The flag, the session retirement and the admin's notice share the caller's transaction: a
+    block whose live sessions stay ``active`` is a session table that disagrees with the
+    account table, and an alert about a block that rolled back is an admin chasing a state
+    that does not exist. The returning row carries the identity and the new total the notice's
+    copy needs, so one statement both blocks and answers "who, and how far over".
     """
-    blocked_id = session.scalar(
+    blocked = session.execute(
         update(UserRecord)
         .where(clause)
         .where(UserRecord.is_blocked.is_(False))
         .where(_total_removals_expr() > REMOVAL_AUTO_BLOCK_THRESHOLD)
         .values(is_blocked=True)
-        .returning(UserRecord.id)
-    )
-    if blocked_id is None:
+        .returning(
+            UserRecord.id,
+            UserRecord.regno,
+            UserRecord.name,
+            _total_removals_expr().label("removal_total"),
+        )
+    ).first()
+    if blocked is None:
         return False
-    retire_account_sessions(session, str(blocked_id), AccountType.USERS.value)
+    retire_account_sessions(session, str(blocked.id), AccountType.USERS.value)
+    notify_user_auto_blocked(
+        session,
+        regno=blocked.regno,
+        name=blocked.name,
+        removal_total=int(blocked.removal_total),
+    )
     return True
 
 
@@ -228,9 +250,10 @@ def record_removal(
 
     This is also the one place the automatic block happens (see the module docstring): the
     removal that takes the participant's total past ``REMOVAL_AUTO_BLOCK_THRESHOLD`` blocks
-    the account, and every removal path in the application funnels through here, so no caller
-    has to remember to ask. The return value stays "did this removal count", not "was the
-    participant blocked", so no call site changes meaning because the block exists.
+    the account and stages one admin notice about it, and every removal path in the
+    application funnels through here, so no caller has to remember to ask. The return value
+    stays "did this removal count", not "was the participant blocked" or "was an admin told",
+    so no call site changes meaning because the block exists.
     """
     counted = _bump(
         session, kind=kind, author_user_id=author_user_id, author_regno=author_regno,

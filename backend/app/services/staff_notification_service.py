@@ -9,6 +9,14 @@ needs feeding -- so ``report`` and ``love_note`` events are stored once with
 ``audience='all'`` and read by whichever role asks, rather than fanned out
 into one row per staff account.
 
+One event is news for admins alone: a participant blocked automatically at the
+removal threshold (``notify_user_auto_blocked``). Clearing a block is an
+admin-only capability, so the notice is stored with ``audience='admin'`` and a
+moderator has no route on which it could be acted on. Unlike every other stored
+notice, it is staged into the caller's transaction rather than written through
+``create_staff_notification``'s own, because it must commit with the block it
+reports -- see ``notify_user_auto_blocked``.
+
 ``game`` alerts are the exception and are *computed live* on every read: a
 missing featured pick or a pending manual-mode session stops being news the
 moment an admin fixes it, and a stored row would linger as a stale alarm (or
@@ -49,8 +57,10 @@ from ..postgres import Database, is_valid_id
 from ..utils import ilike_contains, isoformat_datetime
 
 # The whole category vocabulary. ``report`` covers every report queue
-# (confession/comment, love-note and chat-message reports); ``love_note`` is a
-# note awaiting approval; ``game`` is anything an admin must feed.
+# (confession/comment, love-note and chat-message reports) and the automatic
+# block at the removal threshold, which shares the category because it leaves no
+# queue entry of its own; ``love_note`` is a note awaiting approval; ``game`` is
+# anything an admin must feed.
 STAFF_NOTIFICATION_CATEGORIES: tuple[str, ...] = ("report", "love_note", "game")
 
 # What each role may see. Moderators rule on content, so reports and the
@@ -191,6 +201,49 @@ def notify_profile_picture_rejected(
             f"for user {regno}."
         ),
         dedup_key=f"profile-picture-rejected:{regno}:{isoformat_datetime(occurred_at)}",
+    )
+
+
+def notify_user_auto_blocked(
+    session, *, regno: str, name: str, removal_total: int
+) -> None:
+    """Stage one admin-only ``report`` notice about an automatic block.
+
+    *Staged into the caller's session*, unlike every ``notify_*`` above: this
+    notice must commit with the block it reports, or not at all. A block whose
+    transaction rolls back must not leave an alert behind, and a committed
+    block must not be able to lose its alert, so the row joins the same
+    transaction as the ``is_blocked`` write and the session retirement (see
+    ``report_counters._block_if_over_threshold``) -- the same reasoning that
+    puts ``retire_account_sessions`` in the caller's transaction.
+
+    Addressed to ``admin`` rather than ``all``: the block is the one moderation
+    outcome a moderator cannot act on -- clearing it is ``users:update``, an
+    admin-only capability -- so the notice is actionable for one role and
+    noise for the other. It carries ``report`` all the same, like
+    :func:`notify_profile_picture_rejected`: it is moderation news that leaves
+    no report row of its own to open, not a fourth category.
+
+    No ``dedup_key``: the block is written only on the ``is_blocked``
+    transition, and a re-removal after an admin unblocks the account is a
+    second, equally worth-notifying event rather than a duplicate of this one.
+
+    ``removal_total`` is the participant's upheld-removal total as the blocking
+    update left it, so the reader sees the figure that crossed the line without
+    opening anything.
+    """
+    body = (
+        f"User {regno} ({name}) was automatically blocked after "
+        f"{removal_total} upheld removals."
+    )
+    session.add(
+        StaffNotificationRecord(
+            audience="admin",
+            category="report",
+            heading="Participant automatically blocked",
+            body=body[:500],
+            created_at=datetime.now(timezone.utc),
+        )
     )
 
 

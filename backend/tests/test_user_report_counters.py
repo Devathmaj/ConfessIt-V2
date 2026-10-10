@@ -31,6 +31,13 @@ sign in again. The block does not write itself on every removal past the line, o
 transition: a manual unblock stays an unblock until a further removal arrives. The tests below
 pin the boundary (five is ordinary, six is blocked), the cross-kind sum, and the fact that a
 dismissed report cannot block anybody, because only the authoritative count is read.
+
+**The same transition tells the admins.** An admin is the only role that can clear the block,
+so the sixth removal stages one stored staff notice (``audience='admin'``, category
+``report``) in the same transaction as the flag. The tests pin the boundary on the notice
+too -- five removals leave the inbox empty -- and the two ways the notice could go wrong:
+a dismissed report must not produce one, and a re-block after an unblock is a new event that
+must produce another rather than being swallowed as a duplicate.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -50,6 +57,7 @@ from app.db_models import (
     MessageReportRecord,
     ModeratorRecord,
     ReportRecord,
+    StaffNotificationRecord,
     UserRecord,
 )
 from app.models import ReportCreate, UserDetails
@@ -606,6 +614,17 @@ def is_blocked(db, account_id):
         return row.is_blocked
 
 
+def admin_notices(db):
+    """Every stored staff notice, oldest first. The fixtures start each test from empty."""
+    with db.sessions() as session:
+        return session.scalars(
+            select(StaffNotificationRecord).order_by(
+                StaffNotificationRecord.created_at.asc(),
+                StaffNotificationRecord.id.asc(),
+            )
+        ).all()
+
+
 def test_five_removals_do_not_block_and_the_sixth_does(db):
     """The boundary in one test, both sides of it.
 
@@ -653,7 +672,8 @@ def test_a_dismissed_report_cannot_block_anybody(db):
     """Only upheld removals move the authoritative count, so cleared complaints are inert.
 
     Six reports filed and six dismissed is somebody people complained about six times, not
-    somebody whose content six moderators took down -- and the block reads the second.
+    somebody whose content six moderators took down -- and the block reads the second. The
+    admin's inbox reads it too: no block, no notice.
     """
     person = make_user(db, "person")
     for index in range(6):
@@ -662,6 +682,7 @@ def test_a_dismissed_report_cannot_block_anybody(db):
         resolve_confession_report(db, report_id, "dismissed", "mod")
 
     assert is_blocked(db, person["id"]) is False
+    assert admin_notices(db) == []
 
 
 def test_an_admin_unblock_stays_until_the_next_removal(db, admin_client):
@@ -683,6 +704,55 @@ def test_an_admin_unblock_stays_until_the_next_removal(db, admin_client):
 
     hide_confession(db, confession_ids[6], "mod")
     assert is_blocked(db, author["id"]) is True
+
+
+def test_the_automatic_block_notifies_the_admins(db):
+    """The block is news an administrator needs, and the boundary is the same one.
+
+    Five removals leave the account -- and the admin's inbox -- alone; the sixth both blocks
+    and tells. The notice is pinned to the admin audience and the report category: a
+    moderator cannot clear a block, so the news is not theirs, and ``report`` is where the
+    other moderation-side notices live.
+    """
+    author = make_user(db, "author")
+    confession_ids = [make_confession(db, author) for _ in range(6)]
+
+    for confession_id in confession_ids[:5]:
+        hide_confession(db, confession_id, "mod")
+    assert admin_notices(db) == []
+
+    hide_confession(db, confession_ids[5], "mod")
+
+    notices = admin_notices(db)
+    assert len(notices) == 1
+    notice = notices[0]
+    assert notice.audience == "admin"
+    assert notice.category == "report"
+    assert author["regno"] in notice.body
+    assert "6 upheld removals" in notice.body
+    # Re-hiding the same content is not a second removal, so it is not a second notice.
+    hide_confession(db, confession_ids[5], "mod")
+    assert len(admin_notices(db)) == 1
+
+
+def test_a_re_block_after_an_unblock_notifies_again(db):
+    """Each block is its own event: the notice is not deduplicated by account.
+
+    An account unblocked and blocked again by a further removal is exactly the case an
+    admin needs to hear about twice, so the second block stages a second notice rather
+    than being swallowed as a duplicate of the first.
+    """
+    author = make_user(db, "author")
+    confession_ids = [make_confession(db, author) for _ in range(7)]
+    for confession_id in confession_ids[:6]:
+        hide_confession(db, confession_id, "mod")
+    assert len(admin_notices(db)) == 1
+
+    with db.sessions.begin() as session:
+        session.get(UserRecord, str(author["id"])).is_blocked = False
+    hide_confession(db, confession_ids[6], "mod")
+
+    assert len(admin_notices(db)) == 2
 
 
 def test_a_filing_and_an_upheld_removal_both_count(db):

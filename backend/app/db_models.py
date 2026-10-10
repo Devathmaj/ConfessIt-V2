@@ -2665,7 +2665,10 @@ class GameScoreAwardRecord(Base):
 #
 # Three categories, and they are the whole vocabulary:
 #
-# * ``report`` -- a confession/comment, love-note or chat-message report was filed.
+# * ``report`` -- a confession/comment, love-note or chat-message report was filed,
+#   or a participant was automatically blocked at the removal threshold (an
+#   admin-only notice -- it appears in the same category because it is moderation
+#   news that leaves no report row to open, not a fourth kind of queue).
 # * ``love_note`` -- a love note arrived and waits for approval/rejection.
 # * ``game`` -- an admin-feedable game needs its content (a pending manual-mode
 #   session, a Connections puzzle, a Trivia Drop question) or no featured game
@@ -2689,12 +2692,15 @@ class StaffNotificationRecord(Base):
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     # Who this is news to: ``admin``, ``moderator`` or ``all`` (both roles).
-    # Report and love-note events are ``all``; game events are admin-only and
-    # are computed live rather than stored (see staff_notification_service).
+    # Report and love-note events are ``all``; the automatic block at the removal
+    # threshold is ``admin`` (only an admin can unblock); game events are
+    # admin-only and are computed live rather than stored (see
+    # staff_notification_service).
     audience: Mapped[str] = mapped_column(String(16), index=True)
     # One of ``report``, ``love_note`` or ``game``. Stored rows only ever carry
-    # the first two; the ``game`` value exists so a future stored game event
-    # does not need a migration to be writable.
+    # the first two; the automatic block notice shares ``report`` with the
+    # filed-report notices, and the ``game`` value exists so a future stored game
+    # event does not need a migration to be writable.
     category: Mapped[str] = mapped_column(String(16), index=True)
     heading: Mapped[str] = mapped_column(String(120))
     body: Mapped[str] = mapped_column(String(500))

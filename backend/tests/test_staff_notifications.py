@@ -43,6 +43,7 @@ from app.db_models import (
 from app.main import app
 from app.models import AccountDetails, UserDetails
 from app.services.auth_service import get_current_user
+from app.services.report_counters import CONFESSION, record_removal
 from app.services.staff_notification_service import (
     create_staff_notification,
     notify_love_note_pending,
@@ -153,6 +154,32 @@ def test_report_hook_notifies_both_roles_exactly_once(db, api):
                 StaffNotificationRecord.dedup_key == "report:retry-me")
         ).all()
     assert len(dupes) == 1
+
+
+def test_auto_block_notice_reaches_admins_only(db, api):
+    """The automatic block at the removal threshold stores an admin-only notice.
+
+    Driven through ``record_removal`` itself -- the one funnel every removal path passes
+    through -- so the test pins where the notice is staged rather than re-implementing the
+    threshold. The audience is the point: an admin can clear the block, a moderator cannot,
+    so only the admin's page carries it.
+    """
+    person = make_user(db, "person")
+    with db.sessions.begin() as session:
+        for _ in range(6):
+            record_removal(session, kind=CONFESSION, author_user_id=person["id"])
+
+    with act_as(**ADMIN):
+        page = api.get("/staff/notifications", params={"category": "report"}).json()
+    assert page["total"] == 1, page
+    notice = page["notifications"][0]
+    assert notice["audience"] == "admin"
+    assert notice["category"] == "report"
+    assert person["regno"] in notice["body"]
+
+    with act_as(**MODERATOR):
+        page = api.get("/staff/notifications", params={"category": "report"}).json()
+    assert page["total"] == 0, page
 
 
 def test_love_note_pending_notifies_both_roles(db, api):
