@@ -2624,6 +2624,28 @@ class GameCategoryMe(BaseModel):
     entries: List[GameCategoryEntry]
 
 
+class GameRecordHighlight(BaseModel):
+    """One game's headline record board and its current top row.
+
+    The admin overview reads these, so an operator sees "fastest time",
+    "fewest guesses" and the like without opening every game's board.
+    ``entry`` is null when the game has no finalized result yet.
+    """
+
+    game_id: str
+    category: str
+    label: str
+    scope: str
+    entry: Optional[GameCategoryEntry] = None
+
+
+class GameRecordHighlights(BaseModel):
+    """Every game's headline record, all-time, for the admin overview."""
+
+    period: Literal["all_time"] = "all_time"
+    highlights: List[GameRecordHighlight]
+
+
 class LeagueFinalizeRequest(BaseModel):
     """Finalize one closed event's league awards (idempotent repair path)."""
 
@@ -2637,3 +2659,34 @@ class LeagueSummary(BaseModel):
     """Finalized opportunities and live awards per game, for operators."""
 
     games: Dict[str, Dict[str, int]]
+
+
+# --- Player activity summary ---------------------------------------------------
+#
+# The caller's own play history for the Games dashboard. Composed from the
+# games' native participation tables (see services/player_stats.py) rather
+# than the league ledger, so a round played today shows immediately instead
+# of waiting for finalization. Performance numbers only: answers, words,
+# scrambles, prompts and selections never travel through these models.
+
+
+class PlayerRecentPlay(BaseModel):
+    """One finished round in the caller's history, newest first."""
+
+    game_id: str
+    played_at: datetime
+    summary: str
+    score: Optional[float] = None
+    score_label: Optional[str] = None
+
+
+class PlayerGameSummary(BaseModel):
+    """The caller's finished rounds, streaks and this week's activity."""
+
+    games_played: int
+    current_streak_days: int
+    longest_streak_days: int
+    plays_this_week: int
+    #: Distinct game ids played this week, sorted; the weekly challenge's progress.
+    games_this_week: List[str]
+    recent_plays: List[PlayerRecentPlay]

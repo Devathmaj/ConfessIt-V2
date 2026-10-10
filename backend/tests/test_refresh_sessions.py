@@ -26,11 +26,13 @@ the real session row and the real deadline live.
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import threading
+import time
 
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 
 from app.accounts import AccountType
 from app.config import settings
@@ -374,6 +376,89 @@ def test_two_concurrent_refreshes_of_one_token_leave_exactly_one_winner(db, no_a
     assert winner_cookie is not None and winner_cookie != cookie
     assert winner_client.post(REFRESH_ENDPOINT).status_code == 200
     assert browser.get("/auth/me", headers=_bearer(access_token)).status_code == 200
+
+
+def _await_login_tokens_lock_wait(db, timeout=10.0):
+    """Wait until a refresh statement is genuinely blocked on a row lock."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with db.sessions() as session:
+            waiting = session.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "AND wait_event_type = 'Lock' "
+                    "AND query LIKE 'UPDATE login_tokens%'"
+                )
+            ).scalar_one()
+        if waiting:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_replayed_refresh_does_not_deadlock_its_own_transaction(db, no_auth_override):
+    """A loser's replay bookkeeping must never contend with its own row lock.
+
+    Regression: after PostgreSQL's READ COMMITTED re-check, the rotation's zero-row
+    UPDATE keeps a tuple lock on the row until its transaction ends. The replay
+    bookkeeping used to open a *second* connection inside that transaction to update
+    the same row, so it waited on a lock the caller could only release after it
+    returned -- a self-deadlock. The connection stayed checked out forever, later
+    refreshes queued behind it, and the pool exhausted into 500s that left the
+    frontend stuck on "Initializing...".
+    """
+    _seed_user(db, "replay-deadlock-user")
+    browser = _browser()
+    _redeem_token(browser, _mint_token_for(db, "replay-deadlock-user"))
+    cookie = _refresh_cookie(browser)
+    assert cookie is not None
+    session_id = session_id_of(db, cookie)
+
+    # A concurrent winner: rotate the row in an open transaction so the request's
+    # UPDATE waits on it, then re-checks -- and fails the predicate -- when this
+    # commits. That re-check is what leaves the tuple lock behind.
+    blocker = db.engine.connect()
+    transaction = blocker.begin()
+    blocker.execute(
+        update(LoginTokenRecord)
+        .where(LoginTokenRecord.id == session_id)
+        .values(
+            refresh_token_hash=hash_token(
+                "rotated-by-another-tab", domain=TOKEN_HASH_DOMAIN_REFRESH
+            ),
+            refresh_token_replaced_hash=hash_token(
+                cookie, domain=TOKEN_HASH_DOMAIN_REFRESH
+            ),
+            last_seen_at=datetime.now(timezone.utc),
+        )
+    )
+
+    outcome = {}
+
+    def refresh():
+        client = _browser()
+        outcome["response"] = client.post(
+            REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: cookie}
+        )
+
+    thread = threading.Thread(target=refresh, daemon=True)
+    try:
+        thread.start()
+        # Release the row only once the request is waiting on it; a fixed sleep
+        # would make the test depend on scheduling.
+        assert _await_login_tokens_lock_wait(db), "refresh never waited on the row lock"
+        transaction.commit()
+        thread.join(timeout=15)
+        assert not thread.is_alive(), (
+            "refresh deadlocked against its own replay bookkeeping"
+        )
+        assert outcome["response"].status_code == 401
+        assert outcome["response"].json()["detail"] == "Could not validate credentials"
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        blocker.close()
 
 
 def test_a_superseded_session_cannot_refresh(db, no_auth_override):

@@ -2657,6 +2657,39 @@ export const getFeaturedToday = async (): Promise<{
     return response.data;
 };
 
+/** One finished round in the caller's own history, newest first. */
+export interface PlayerRecentPlay {
+    game_id: string;
+    played_at: string;
+    summary: string;
+    score: number | null;
+    score_label: string | null;
+}
+
+/** The caller's finished rounds, streaks and this week's activity. */
+export interface PlayerGameSummary {
+    games_played: number;
+    current_streak_days: number;
+    longest_streak_days: number;
+    plays_this_week: number;
+    games_this_week: string[];
+    recent_plays: PlayerRecentPlay[];
+}
+
+/**
+ * The caller's own play history across every game, for the dashboard.
+ *
+ * Composed server-side from the games' native participation tables, so a
+ * round played today is in this list immediately -- unlike league awards,
+ * which are issued only when an event finalizes.
+ */
+export const getPlayerGameSummary = async (): Promise<PlayerGameSummary> => {
+    const response = await axios.get(`${API_URL}/games/summary`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 // --- Reaction Time Configuration Endpoints ---
 
 /**
@@ -3649,6 +3682,52 @@ export const getGameCategoryMe = async (
         `${API_URL}/leaderboards/games/${gameId}/boards/${category}/me`,
         { headers: getAuthHeaders(), params: gameCategoryParams(query) },
     );
+    return response.data;
+};
+
+/** Selectable leaderboard views for one game, as the console reads them. */
+export const getAdminGameCategories = async (gameId: string): Promise<GameCategoryInfo[]> => {
+    const response = await axios.get(
+        `${API_URL}/admin/leaderboards/games/${gameId}/categories`,
+        { headers: getAuthHeaders() },
+    );
+    return response.data;
+};
+
+/** One game's category leaderboard for the console. */
+export const getAdminGameCategoryBoard = async (
+    gameId: string,
+    category: string,
+    query: GameCategoryQuery = {},
+): Promise<GameCategoryBoard> => {
+    const response = await axios.get(
+        `${API_URL}/admin/leaderboards/games/${gameId}/boards/${category}`,
+        { headers: getAuthHeaders(), params: gameCategoryParams(query) },
+    );
+    return response.data;
+};
+
+/** One game's headline record board with its current top row. */
+export interface GameRecordHighlight {
+    game_id: string;
+    category: string;
+    label: string;
+    /** 'period': selected UTC window. 'record': all-time record board. */
+    scope: 'period' | 'record';
+    /** Null when the game has no finalized result yet. */
+    entry: GameCategoryEntry | null;
+}
+
+export interface GameRecordHighlights {
+    period: string;
+    highlights: GameRecordHighlight[];
+}
+
+/** Every game's headline record (all-time) for the console overview. */
+export const getAdminGameRecords = async (): Promise<GameRecordHighlights> => {
+    const response = await axios.get(`${API_URL}/admin/leaderboards/records`, {
+        headers: getAuthHeaders(),
+    });
     return response.data;
 };
 

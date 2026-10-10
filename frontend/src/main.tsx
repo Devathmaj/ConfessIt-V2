@@ -44,7 +44,6 @@ initFloralCaching()
 
 createRoot(document.getElementById("root")!).render(
     <ThemeProvider 
-        attribute="class" 
         defaultTheme="dark" 
         storageKey="vite-ui-theme"
     >

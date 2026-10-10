@@ -36,6 +36,9 @@ import {
   getAdminReactionTimeGames,
   getAdminWordleGames,
   getAdminCouplesLeaderboard,
+  getAdminGameCategories,
+  getAdminGameCategoryBoard,
+  getAdminGameRecords,
   getCurrentAdminAnagramSession,
   getCurrentAdminCoupleSession,
   getCurrentAdminReactionTimeSession,
@@ -141,6 +144,9 @@ vi.mock('@/services/api', () => ({
   getFeaturedToday: vi.fn(),
   getAdminIndividualLeaderboard: vi.fn(),
   getAdminCouplesLeaderboard: vi.fn(),
+  getAdminGameCategories: vi.fn(),
+  getAdminGameCategoryBoard: vi.fn(),
+  getAdminGameRecords: vi.fn(),
   getGameLeaderboard: vi.fn(),
   getMyLeagueStanding: vi.fn(),
 }));
@@ -271,6 +277,17 @@ beforeEach(() => {
   vi.mocked(getFeaturedToday).mockResolvedValue({ game_id: null, game_date: null, server_date: todayIso() });
   vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue(emptyIndividualBoard());
   vi.mocked(getAdminCouplesLeaderboard).mockResolvedValue(emptyCoupleBoard());
+  vi.mocked(getAdminGameCategories).mockResolvedValue([]);
+  vi.mocked(getAdminGameCategoryBoard).mockResolvedValue({
+    game_id: 'wordle',
+    category: 'performance',
+    scope: 'period',
+    period: 'weekly',
+    anchor: todayIso(),
+    total: 0,
+    entries: [],
+  });
+  vi.mocked(getAdminGameRecords).mockResolvedValue({ period: 'all_time', highlights: [] });
 });
 
 /** The day the server would default to, which is what the date field starts on. */
@@ -378,6 +395,41 @@ describe('AdminGamesDashboard: the front page', () => {
 
     expect(await screen.findByText('Ada')).toBeInTheDocument();
     expect(screen.getByText('2 events this week')).toBeInTheDocument();
+  });
+
+  it('shows each game\'s headline record -- best time and the rest', async () => {
+    vi.mocked(getAdminGameRecords).mockResolvedValue({
+      period: 'all_time',
+      highlights: [
+        {
+          game_id: 'wordle',
+          category: 'fastest_solve',
+          label: 'Fastest Solve',
+          scope: 'record',
+          entry: {
+            rank: 1,
+            user_id: 'user-1',
+            display_name: 'Ada',
+            metrics: { fastest_s: 45, guesses: 3, solved: 4 },
+            records: [],
+          },
+        },
+        {
+          game_id: 'reaction-time',
+          category: 'fastest',
+          label: 'All-Time Fastest',
+          scope: 'record',
+          entry: null,
+        },
+      ],
+    });
+    renderSection('/admin/games');
+
+    expect(await screen.findByText('Top records')).toBeInTheDocument();
+    expect(screen.getByText('Fastest Solve · Ada')).toBeInTheDocument();
+    expect(screen.getByText('45 s')).toBeInTheDocument();
+    expect(screen.getByText('All-Time Fastest')).toBeInTheDocument();
+    expect(screen.getByText('No results yet')).toBeInTheDocument();
   });
 });
 
@@ -832,6 +884,71 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
     await waitFor(() => {
       expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
         expect.objectContaining({ gameId: 'wordle' }),
+      );
+    });
+  });
+
+  it('shows the expanded rankings for the selected game', async () => {
+    vi.mocked(getAdminGameCategories).mockResolvedValue([
+      {
+        id: 'performance',
+        label: 'Performance',
+        description: 'Cross-session solving performance.',
+        scope: 'period',
+        is_default: true,
+      },
+      {
+        id: 'fewest_guesses',
+        label: 'Fewest Guesses',
+        description: 'Best single solve in the window.',
+        scope: 'period',
+        is_default: false,
+      },
+    ]);
+    vi.mocked(getAdminGameCategoryBoard).mockResolvedValue({
+      game_id: 'wordle',
+      category: 'performance',
+      scope: 'period',
+      period: 'weekly',
+      anchor: todayIso(),
+      total: 1,
+      entries: [
+        {
+          rank: 1,
+          user_id: 'user-9',
+          display_name: 'Ada',
+          metrics: {
+            solved: 4,
+            opportunities: 5,
+            solve_rate: 0.8,
+            avg_guesses: 3.25,
+            best_guesses: 2,
+          },
+          records: [],
+        },
+      ],
+    });
+    renderSection('/admin/games/leaderboard');
+
+    await chooseOption(1, 'Wordle');
+
+    // Same metric views players get: the default board first, its siblings
+    // as tabs, and the default's entries in the table.
+    expect(await screen.findByRole('tab', { name: 'Performance' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /fewest guesses/i })).toBeInTheDocument();
+    expect(await screen.findByText('Ada')).toBeInTheDocument();
+    expect(getAdminGameCategoryBoard).toHaveBeenCalledWith(
+      'wordle',
+      'performance',
+      expect.objectContaining({ period: 'weekly' }),
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /fewest guesses/i }));
+    await waitFor(() => {
+      expect(getAdminGameCategoryBoard).toHaveBeenCalledWith(
+        'wordle',
+        'fewest_guesses',
+        expect.anything(),
       );
     });
   });

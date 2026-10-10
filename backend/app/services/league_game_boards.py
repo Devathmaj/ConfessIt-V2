@@ -1333,3 +1333,54 @@ def category_me(
         "scope": definition.scope,
         "entries": entries,
     }
+
+
+# ---------------------------------------------------------------------------
+# Headline records: one game's best result at a glance, for the admin overview
+# ---------------------------------------------------------------------------
+
+# The board each game is represented by when one "best result" is wanted:
+# the record-style view where a game has one (fastest solve, fastest answer,
+# fastest escape), otherwise the board whose top row is the game's best
+# single result. Case Closed has no category boards yet and is absent.
+HEADLINE_RECORD_CATEGORIES: dict[str, str] = {
+    "wordle": "fastest_solve",
+    "anagram": "fastest_solve",
+    "reaction-time": "fastest",
+    "connections": "best_quality",
+    "trivia-drop": "fastest_answer",
+    "couple-questionnaire": "score",
+    "two-key-escape": "fastest_escape",
+    "plot-twist": "most_treasures",
+}
+
+
+def record_highlights(db: Database, *, limit_per_game: int = 1) -> list[dict]:
+    """The top of every game's headline record board, all-time.
+
+    One pass through the same category builders the expanded rankings use, so
+    the overview's "fastest time" can never disagree with the board it links
+    to. A game with no finalized results keeps its highlight with a null
+    entry rather than disappearing from the list.
+    """
+    highlights = []
+    for game_id, category in HEADLINE_RECORD_CATEGORIES.items():
+        definition = category_def(game_id, category)
+        board = category_board(
+            db,
+            game_id=game_id,
+            category=category,
+            period=PERIOD_ALL_TIME,
+            skip=0,
+            limit=limit_per_game,
+        )
+        highlights.append(
+            {
+                "game_id": game_id,
+                "category": category,
+                "label": definition.label,
+                "scope": definition.scope,
+                "entry": board["entries"][0] if board["entries"] else None,
+            }
+        )
+    return highlights

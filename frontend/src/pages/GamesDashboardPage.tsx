@@ -16,27 +16,35 @@ import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
 import { GameCard } from '@/components/games/GameCard';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { FloralDecor } from '@/components/FloralDecor';
 import { StatCard } from '@/components/games/StatCard';
 import { AVAILABLE_GAMES, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
+import { formatPlayedAt, weeklyChallengeProgress } from '@/lib/gamesStats';
 import {
+  getFeaturedToday,
   getIndividualLeaderboard,
   getMyLeagueStanding,
+  getPlayerGameSummary,
   type LeagueIndividualEntry,
   type LeagueMyStanding,
+  type PlayerGameSummary,
 } from '@/services/api';
-import { MOCK_RECENTLY_PLAYED } from '@/lib/gamesStats';
 
 /**
  * The Games dashboard: the landing screen of the section.
  *
- * Quick access and the featured spotlight read the real catalogue and the
- * shared configuration. Points, rank and the top-players teaser read the
- * weekly individual league board; streaks, challenges and recent plays stay
- * empty until their backends exist.
+ * The stat strip and "recently played" read the caller's own finished rounds
+ * (`GET /games/summary`), the points/rank tiles and the top-players teaser
+ * read the weekly individual league board, and today's spotlight is the
+ * server's pick. The dashboard deliberately never falls back to the local
+ * rotation: naming a game the server never featured is a mock, so a day with
+ * nothing in the spotlight says so instead.
  */
+
+type LoadState = 'loading' | 'ready' | 'error';
 
 /** Plays a game: every catalogued game has a real screen behind its route. */
 const useLaunchPlay = () => {
@@ -52,6 +60,16 @@ export const GamesDashboardPage = () => {
 
   const [topPlayers, setTopPlayers] = useState<LeagueIndividualEntry[]>([]);
   const [standing, setStanding] = useState<LeagueMyStanding | null>(null);
+  // The caller's own history. `stats === null` covers both "no rounds yet"
+  // and "could not load"; `statsState` keeps those two apart for the copy.
+  const [stats, setStats] = useState<PlayerGameSummary | null>(null);
+  const [statsState, setStatsState] = useState<LoadState>('loading');
+  // Today's spotlight, resolved by the server exactly like /games/featured
+  // does. `undefined` while in flight, the game id -- or null when the day
+  // has no pick -- once the server answers; the failure flag keeps "nothing
+  // is featured" distinct from "could not ask".
+  const [spotlightId, setSpotlightId] = useState<string | null | undefined>(undefined);
+  const [spotlightFailed, setSpotlightFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,16 +92,49 @@ export const GamesDashboardPage = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getPlayerGameSummary()
+      .then((response) => {
+        if (cancelled) return;
+        setStats(response);
+        setStatsState('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStats(null);
+        setStatsState('error');
+      });
+    getFeaturedToday()
+      .then((response) => {
+        if (!cancelled) setSpotlightId(response.game_id);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSpotlightId(null);
+        setSpotlightFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const summary = standing?.entries[0] ?? null;
-  // The administrator's pick, resolved through the shared configuration -- the same source the
-  // featured page and the manage screen read, so all three can never disagree.
-  const { featured, isEnabled } = useGamesConfig();
-  const game = featured?.game;
-  const FeaturedIcon = game?.icon;
+  // The administrator's configuration still gates the quick-access grid; the
+  // spotlight itself comes from the server above, never from the local seed.
+  const { isEnabled } = useGamesConfig();
   const quickAccessGames = AVAILABLE_GAMES.filter(
     (game) => game.status === 'available' && isEnabled(game.id),
   ).slice(0, 4);
   const firstName = user?.name?.trim().split(' ')[0];
+
+  const statsReady = statsState === 'ready';
+  const streakDays = stats?.current_streak_days ?? 0;
+  const longestStreakDays = stats?.longest_streak_days ?? 0;
+  const challenge = weeklyChallengeProgress(stats);
+  const spotlightGame = spotlightId ? getGameById(spotlightId) : undefined;
+  const spotlightLoading = spotlightId === undefined && !spotlightFailed;
+  const FeaturedIcon = spotlightGame?.icon;
 
   return (
     <div className="relative">
@@ -114,7 +165,7 @@ export const GamesDashboardPage = () => {
         }
       />
 
-      {/* Stat strip: weekly league figures; the rest is empty until telemetry exists. */}
+      {/* Stat strip: league figures plus the caller's own play history. */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard
           label="Points"
@@ -132,15 +183,31 @@ export const GamesDashboardPage = () => {
         />
         <StatCard
           label="Current streak"
-          value="—"
-          hint="No streak data yet"
+          value={streakDays > 0 ? `${streakDays} ${streakDays === 1 ? 'day' : 'days'}` : '—'}
+          hint={
+            statsState === 'loading'
+              ? 'Loading your streak…'
+              : statsState === 'error'
+                ? 'Stats are unavailable'
+                : streakDays > 0
+                  ? `Longest: ${longestStreakDays} ${longestStreakDays === 1 ? 'day' : 'days'}`
+                  : 'Play a round to start one'
+          }
           icon={Flame}
           accent="bg-gradient-passion"
         />
         <StatCard
           label="Games played"
-          value="—"
-          hint="No play history yet"
+          value={statsReady && stats ? stats.games_played.toLocaleString() : '—'}
+          hint={
+            statsState === 'loading'
+              ? 'Loading your history…'
+              : statsState === 'error'
+                ? 'Stats are unavailable'
+                : stats && stats.plays_this_week > 0
+                  ? `${stats.plays_this_week} ${stats.plays_this_week === 1 ? 'round' : 'rounds'} this week`
+                  : 'No rounds yet — jump into a game'
+          }
           icon={Gamepad2}
           accent="bg-gradient-love"
         />
@@ -155,25 +222,35 @@ export const GamesDashboardPage = () => {
               <CardDescription>Your last few rounds, newest first.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {MOCK_RECENTLY_PLAYED.length === 0 ? (
-                <div className="[border-radius:var(--edge-card-sm)] border border-dashed border-border/70 px-4 py-8 text-center">
-                  <p className="text-sm font-semibold">No games played yet</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Your history will show up here after your first round.
-                  </p>
-                  <Button asChild size="sm" variant="outline" className="mt-4 [border-radius:var(--edge-pill)]">
-                    <NavLink to="/games/select">Browse games</NavLink>
-                  </Button>
+              {statsState === 'loading' ? (
+                <div className="space-y-2" role="status" aria-label="Loading your recent games">
+                  {[0, 1, 2].map((row) => (
+                    <div
+                      key={row}
+                      className="flex items-center gap-3 [border-radius:var(--edge-card-sm)] border border-border/50 bg-background/40 p-3"
+                    >
+                      <Skeleton className="h-10 w-10 shrink-0 [border-radius:var(--edge-icon)]" />
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <Skeleton className="h-4 w-1/3" />
+                        <Skeleton className="h-3 w-1/2" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ) : (
-                MOCK_RECENTLY_PLAYED.map((play) => {
-                  const game = getGameById(play.gameId);
+              ) : statsState === 'error' ? (
+                <div className="[border-radius:var(--edge-card-sm)] border border-dashed border-border/70 px-4 py-8 text-center">
+                  <p className="text-sm font-semibold">Play history is unavailable right now</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Refresh the page to try again.</p>
+                </div>
+              ) : stats && stats.recent_plays.length > 0 ? (
+                stats.recent_plays.map((play) => {
+                  const game = getGameById(play.game_id);
                   if (!game) return null;
                   const Icon = game.icon;
 
                   return (
                     <div
-                      key={`${play.gameId}-${play.playedAt}`}
+                      key={`${play.game_id}-${play.played_at}`}
                       className="flex items-center gap-3 [border-radius:var(--edge-card-sm)] border border-border/50 bg-background/40 p-3 transition-colors hover:border-romantic/40"
                     >
                       <span
@@ -184,14 +261,17 @@ export const GamesDashboardPage = () => {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold">{game.name}</p>
                         <p className="truncate text-xs text-muted-foreground">
-                          {play.playedAt}
-                          {play.personalBest ? ' · Personal best' : ''}
+                          {formatPlayedAt(play.played_at)} · {play.summary}
                         </p>
                       </div>
-                      <div className="hidden text-right sm:block">
-                        <p className="text-sm font-bold tabular-nums">{play.score}</p>
-                        <p className="text-xs text-muted-foreground">points</p>
-                      </div>
+                      {play.score !== null && play.score_label && (
+                        <div className="hidden text-right sm:block">
+                          <p className="text-sm font-bold tabular-nums">
+                            {play.score.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{play.score_label}</p>
+                        </div>
+                      )}
                       <Button
                         type="button"
                         size="sm"
@@ -205,6 +285,16 @@ export const GamesDashboardPage = () => {
                     </div>
                   );
                 })
+              ) : (
+                <div className="[border-radius:var(--edge-card-sm)] border border-dashed border-border/70 px-4 py-8 text-center">
+                  <p className="text-sm font-semibold">No games played yet</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Your history will show up here after your first round.
+                  </p>
+                  <Button asChild size="sm" variant="outline" className="mt-4 [border-radius:var(--edge-pill)]">
+                    <NavLink to="/games/select">Browse games</NavLink>
+                  </Button>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -231,57 +321,124 @@ export const GamesDashboardPage = () => {
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Today's featured */}
-          <Card className="[border-radius:var(--edge-card)] border-transparent bg-[var(--action)] text-white shadow-[var(--shadow-romantic)] dark:bg-gradient-romantic">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/90">
-                  Today&apos;s featured
-                </p>
-                <Sparkles className="h-4 w-4 text-white/90" />
-              </div>
-              <div className="mt-4 flex items-center gap-3">
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center [border-radius:var(--edge-icon)] bg-white/20">
-                  {FeaturedIcon ? (
-                    <FeaturedIcon className="h-6 w-6 text-white" />
-                  ) : (
-                    <Sparkles className="h-6 w-6 text-white" />
-                  )}
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate font-bold">{game?.name ?? 'Spotlight paused'}</p>
-                  <p className="truncate text-xs text-white/80">
-                    {game ? `${game.players} · ${game.duration}` : 'No game in the spotlight'}
+          {/* Today's featured: the server's pick, or an honest empty state. */}
+          {spotlightLoading ? (
+            <Card className="[border-radius:var(--edge-card)] border-transparent bg-[var(--action)] text-white shadow-[var(--shadow-romantic)] dark:bg-gradient-romantic">
+              <CardContent className="p-5" role="status" aria-label="Loading today's featured game">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/90">
+                    Today&apos;s featured
                   </p>
+                  <Sparkles className="h-4 w-4 text-white/90" />
                 </div>
-              </div>
-              <Button
-                asChild
-                variant="ghost"
-                size="sm"
-                className="mt-4 w-full [border-radius:var(--edge-pill)] font-semibold text-white hover:bg-white/20 hover:text-white"
-              >
-                <NavLink to="/games/featured">
-                  View featured
-                  <ArrowRight />
-                </NavLink>
-              </Button>
-            </CardContent>
-          </Card>
+                <div className="mt-4 flex items-center gap-3">
+                  <Skeleton className="h-12 w-12 shrink-0 bg-white/20 [border-radius:var(--edge-icon)]" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <Skeleton className="h-4 w-2/3 bg-white/20" />
+                    <Skeleton className="h-3 w-1/2 bg-white/20" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : spotlightGame ? (
+            <Card className="[border-radius:var(--edge-card)] border-transparent bg-[var(--action)] text-white shadow-[var(--shadow-romantic)] dark:bg-gradient-romantic">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/90">
+                    Today&apos;s featured
+                  </p>
+                  <Sparkles className="h-4 w-4 text-white/90" />
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center [border-radius:var(--edge-icon)] bg-white/20">
+                    {FeaturedIcon ? (
+                      <FeaturedIcon className="h-6 w-6 text-white" />
+                    ) : (
+                      <Sparkles className="h-6 w-6 text-white" />
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-bold">{spotlightGame.name}</p>
+                    <p className="truncate text-xs text-white/80">
+                      {spotlightGame.players} · {spotlightGame.duration}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="sm"
+                  className="mt-4 w-full [border-radius:var(--edge-pill)] font-semibold text-white hover:bg-white/20 hover:text-white"
+                >
+                  <NavLink to="/games/featured">
+                    View featured
+                    <ArrowRight />
+                  </NavLink>
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Today&apos;s featured
+                  </p>
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <p className="mt-4 text-sm font-semibold">
+                  {spotlightFailed ? 'The spotlight could not be loaded' : 'No featured game today'}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {spotlightFailed
+                    ? 'Refresh the page to try again, or browse the full library.'
+                    : 'The spotlight rotates daily — check back tomorrow or browse the full library.'}
+                </p>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="mt-4 w-full [border-radius:var(--edge-pill)] font-semibold"
+                >
+                  <NavLink to="/games/select">Browse games</NavLink>
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Weekly challenge: empty until challenges exist on the backend. */}
+          {/* Weekly challenge: progress read from the caller's own week. */}
           <Card className="[border-radius:var(--edge-card)] border-border/60 bg-card/70 backdrop-blur">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base font-bold">
                 <Target className="h-4 w-4 text-romantic" />
                 Weekly challenge
               </CardTitle>
-              <CardDescription>No weekly challenge right now</CardDescription>
+              <CardDescription>
+                {challenge?.label ?? 'Play 3 different games this week'}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <Progress value={0} className="h-2.5 [border-radius:var(--edge-pill)]" />
+              <Progress
+                value={challenge ? Math.round((challenge.current / challenge.target) * 100) : 0}
+                className="h-2.5 [border-radius:var(--edge-pill)]"
+              />
               <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>Check back once challenges go live</span>
+                {statsState === 'loading' ? (
+                  <span>Tracking your week…</span>
+                ) : statsState === 'error' ? (
+                  <span>Progress is unavailable right now</span>
+                ) : challenge ? (
+                  <>
+                    <span>
+                      {challenge.current} of {challenge.target} games
+                    </span>
+                    <span>
+                      {challenge.complete
+                        ? 'Challenge complete'
+                        : `${challenge.target - challenge.current} to go`}
+                    </span>
+                  </>
+                ) : null}
               </div>
             </CardContent>
           </Card>

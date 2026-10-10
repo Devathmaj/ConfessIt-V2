@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { LeaguePeriod } from '@/services/api';
 import {
+  getAdminGameCategories,
+  getAdminGameCategoryBoard,
   getGameCategories,
   getGameCategoryBoard,
   getGameCategoryMe,
@@ -29,16 +31,31 @@ interface GameCategorySectionProps {
   gameName: string;
   period: LeaguePeriod;
   anchor: string;
+  /**
+   * 'player' (the default) reads the player-facing endpoints and shows the
+   * viewer's own row. 'admin' is the console mirror: staff hold no
+   * participant row, so the admin endpoints are read and the personal card
+   * is omitted.
+   */
+  viewer?: 'player' | 'admin';
 }
 
 /**
  * Per-game leaderboard categories: metric rankings across sessions.
  *
- * Rendered in place of the points podium whenever one game is selected.
- * Record-scope categories answer all-time history no matter the rolling
- * window, and say so; period categories follow the page's timeframe.
+ * Rendered in place of the points podium whenever one game is selected, for
+ * players and for the console alike. Record-scope categories answer all-time
+ * history no matter the rolling window, and say so; period categories follow
+ * the page's timeframe.
  */
-export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCategorySectionProps) => {
+export const GameCategorySection = ({
+  gameId,
+  gameName,
+  period,
+  anchor,
+  viewer = 'player',
+}: GameCategorySectionProps) => {
+  const admin = viewer === 'admin';
   const [categories, setCategories] = useState<GameCategoryInfo[]>([]);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [board, setBoard] = useState<GameCategoryBoard | null>(null);
@@ -61,11 +78,16 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
     setBoard(null);
     setMe(null);
     setExpanded(new Set());
-    getGameCategories(gameId)
+    const loadCategories = admin ? getAdminGameCategories : getGameCategories;
+    loadCategories(gameId)
       .then((list) => {
         if (cancelled) return;
         setCategories(list);
-        setCategoryId(list.find((entry) => entry.is_default)?.id ?? list[0]?.id ?? null);
+        const defaultId = list.find((entry) => entry.is_default)?.id ?? list[0]?.id ?? null;
+        setCategoryId(defaultId);
+        // A game with no metric views has nothing left to fetch; without
+        // this it would sit on "Loading standings…" forever.
+        if (defaultId === null) setLoading(false);
       })
       .catch(() => {
         if (!cancelled) {
@@ -77,7 +99,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
     return () => {
       cancelled = true;
     };
-  }, [gameId]);
+  }, [gameId, admin]);
 
   const fetchBoard = useCallback(
     async (offset: number, append: boolean) => {
@@ -93,8 +115,10 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
           ? { skip: offset, limit: PAGE_SIZE }
           : { period, ...(period === 'all_time' ? {} : { anchor }), skip: offset, limit: PAGE_SIZE };
         const [answer, mine] = await Promise.all([
-          getGameCategoryBoard(gameId, categoryId, query),
-          append
+          admin
+            ? getAdminGameCategoryBoard(gameId, categoryId, query)
+            : getGameCategoryBoard(gameId, categoryId, query),
+          append || admin
             ? Promise.resolve(null)
             : getGameCategoryMe(
                 gameId,
@@ -121,7 +145,7 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
         setLoadingMore(false);
       }
     },
-    [gameId, categoryId, isRecord, period, anchor],
+    [admin, gameId, categoryId, isRecord, period, anchor],
   );
 
   useEffect(() => {
@@ -234,6 +258,15 @@ export const GameCategorySection = ({ gameId, gameName, period, anchor }: GameCa
           >
             Try again
           </Button>
+        </div>
+      ) : categories.length === 0 ? (
+        <div className="border border-dashed border-border/70 px-6 py-14 text-center [border-radius:var(--edge-card)]">
+          <Inbox className="mx-auto h-8 w-8 text-muted-foreground" />
+          <p className="mt-3 text-base font-bold">No expanded rankings for {gameName} yet</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+            This game has no metric boards — its finalized results still score on the
+            league board.
+          </p>
         </div>
       ) : !board || board.entries.length === 0 ? (
         <div className="border border-dashed border-border/70 px-6 py-14 text-center [border-radius:var(--edge-card)]">

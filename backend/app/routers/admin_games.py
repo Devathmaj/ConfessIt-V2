@@ -12,15 +12,24 @@ from ..models import (
     FeaturedGame,
     FeaturedGameCreate,
     FeaturedGameRangeCreate,
+    GameCategoryBoard,
+    GameCategoryInfo,
     GameConfig,
     GameConfigUpdate,
+    GameRecordHighlights,
     LeagueCoupleBoard,
     LeagueFinalizeRequest,
     LeagueIndividualBoard,
     LeagueSummary,
 )
 from ..postgres import Database
-from ..services import featured_games, game_configs, league_boards, league_finalization
+from ..services import (
+    featured_games,
+    game_configs,
+    league_boards,
+    league_finalization,
+    league_game_boards,
+)
 from ..services.authorization import require_capability
 from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
 
@@ -318,3 +327,65 @@ def admin_game_board(
     if competition_type == COMPETITION_COUPLE:
         return LeagueCoupleBoard(**board)
     return LeagueIndividualBoard(**board)
+
+
+@router.get(
+    "/leaderboards/games/{game_id}/categories",
+    response_model=List[GameCategoryInfo],
+)
+def admin_game_categories(
+    game_id: str,
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> List[GameCategoryInfo]:
+    """The selectable metric views for one game, the console mirror.
+
+    The same descriptors the player-facing board offers -- Performance,
+    Fastest Solve, All-Time Fastest and the rest -- so an operator reads the
+    expanded rankings exactly as players do.
+    """
+    return [
+        GameCategoryInfo(**info) for info in league_game_boards.list_categories(game_id)
+    ]
+
+
+@router.get(
+    "/leaderboards/games/{game_id}/boards/{category}",
+    response_model=GameCategoryBoard,
+)
+def admin_game_category_board(
+    game_id: str,
+    category: str,
+    period: str = Query(default="weekly"),
+    anchor: Optional[date] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> GameCategoryBoard:
+    """One game's category board: metric rankings over finalized results.
+
+    Record-scope categories always answer all-time history; the response says
+    so (``period: "all_time"``) rather than echoing an ignored window. There
+    is deliberately no admin ``/me``: staff hold no participant row to rank.
+    """
+    board = league_game_boards.category_board(
+        db, game_id=game_id, category=category, period=period,
+        anchor=anchor, skip=skip, limit=limit,
+    )
+    return GameCategoryBoard(**board)
+
+
+@router.get("/leaderboards/records", response_model=GameRecordHighlights)
+def admin_game_records(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> GameRecordHighlights:
+    """Every game's headline record, all-time, for the console overview.
+
+    One leader per game (fastest time, fewest guesses, fastest escape, ...)
+    read through the same category builders the expanded rankings use, so the
+    overview can never disagree with the board behind it.
+    """
+    return GameRecordHighlights(
+        highlights=league_game_boards.record_highlights(db)
+    )

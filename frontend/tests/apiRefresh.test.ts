@@ -99,8 +99,12 @@ describe('handleResponseError (access-token refresh)', () => {
     expect(mockedAxios.post).toHaveBeenCalledWith(
       'http://localhost:8001/auth/refresh',
       {},
-      { withCredentials: true },
+      expect.objectContaining({ withCredentials: true }),
     );
+    // The boot path awaits this refresh, so it must carry a timeout: a backend that
+    // never answers has to read as "signed out", not as an endless "Initializing...".
+    const refreshConfig = mockedAxios.post.mock.calls[0][2] as { signal?: AbortSignal };
+    expect(refreshConfig.signal).toBeInstanceOf(AbortSignal);
     expect(mockedAxios).toHaveBeenCalledTimes(1);
     const retryConfig = retriedConfigOf(mockedAxios.mock.calls[0]);
     expect(retryConfig).toBe(originalError.config);
@@ -283,7 +287,9 @@ describe('handleResponseError (access-token refresh)', () => {
     const [refreshUrl, refreshBody, refreshConfig] = mockedAxios.post.mock.calls[0];
     expect(refreshUrl).toBe('http://localhost:8001/auth/refresh');
     expect(refreshBody).toEqual({});
-    expect(refreshConfig).toEqual({ withCredentials: true });
+    expect(refreshConfig).toEqual(
+      expect.objectContaining({ withCredentials: true, signal: expect.any(AbortSignal) }),
+    );
 
     const [retryConfig] = mockedAxios.mock.calls[0];
     expect(retryConfig).not.toHaveProperty('withCredentials');

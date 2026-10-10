@@ -7,8 +7,10 @@ import { GamesDashboardPage } from '@/pages/GamesDashboardPage';
 import { GamesLeaderboardPage } from '@/pages/GamesLeaderboardPage';
 import {
   getCouplesLeaderboard,
+  getFeaturedToday,
   getIndividualLeaderboard,
   getMyLeagueStanding,
+  getPlayerGameSummary,
 } from '@/services/api';
 
 vi.mock('@/services/api', () => ({
@@ -16,6 +18,8 @@ vi.mock('@/services/api', () => ({
   getCouplesLeaderboard: vi.fn(),
   getGameLeaderboard: vi.fn(),
   getMyLeagueStanding: vi.fn(),
+  getPlayerGameSummary: vi.fn(),
+  getFeaturedToday: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
@@ -111,6 +115,19 @@ beforeEach(() => {
     competition_type: 'individual',
     period: 'weekly',
     entries: [individualBoard().entries[0]],
+  });
+  vi.mocked(getPlayerGameSummary).mockResolvedValue({
+    games_played: 0,
+    current_streak_days: 0,
+    longest_streak_days: 0,
+    plays_this_week: 0,
+    games_this_week: [],
+    recent_plays: [],
+  });
+  vi.mocked(getFeaturedToday).mockResolvedValue({
+    game_id: null,
+    game_date: null,
+    server_date: new Date().toISOString(),
   });
 });
 

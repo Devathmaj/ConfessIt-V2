@@ -678,3 +678,89 @@ class TestCategoryEndpoints:
 
         assert client.get("/leaderboards/games/wordle/boards/nope").status_code == 400
         assert client.get("/leaderboards/games/nope/categories").status_code == 400
+
+
+class TestAdminCategoryEndpoints:
+    def test_admin_reads_the_expanded_rankings(self, db, admin_client):
+        day = today() - timedelta(days=3)
+        user = make_user(db, "AC")
+        session_id = add_wordle_session(db, day)
+        add_wordle_result(db, session_id, user.id, 2, True)
+        from app.services import league_finalization
+
+        league_finalization.finalize_due_opportunities(db, ["wordle"])
+
+        categories = admin_client.get("/admin/leaderboards/games/wordle/categories")
+        assert categories.status_code == 200, categories.text
+        assert {c["id"] for c in categories.json()} == {
+            "performance", "most_solved", "fewest_guesses", "fastest_solve",
+        }
+
+        game = admin_client.get(
+            "/admin/leaderboards/games/wordle/boards/fewest_guesses?period=all_time"
+        )
+        assert game.status_code == 200, game.text
+        body = game.json()
+        assert body["category"] == "fewest_guesses"
+        assert body["entries"][0]["user_id"] == user.id
+        assert body["entries"][0]["metrics"]["best_guesses"] == 2
+
+        assert admin_client.get(
+            "/admin/leaderboards/games/wordle/boards/nope"
+        ).status_code == 400
+        assert admin_client.get(
+            "/admin/leaderboards/games/nope/categories"
+        ).status_code == 400
+
+    def test_admin_reads_the_headline_records(self, db, admin_client):
+        day = today() - timedelta(days=3)
+        wordle_user = make_user(db, "AR1")
+        reflex_user = make_user(db, "AR2")
+        # An explicit start/solve pair: fastest_solve needs a real duration,
+        # and the shared result helper stamps "now" for both ends.
+        session_id = add_wordle_session(db, day)
+        with db.sessions.begin() as session:
+            from app.db_models import WordleUserGameRecord
+
+            start = midnight(day).replace(hour=10)
+            session.add(
+                WordleUserGameRecord(
+                    wordle_game_id=session_id, user_id=wordle_user.id,
+                    attempt_count=3, status="won", success=True,
+                    guesses=["a", "b", "cigar"], started_at=start,
+                    completed_at=start + timedelta(seconds=45),
+                    solved_at=start + timedelta(seconds=45),
+                )
+            )
+        reaction = add_reaction_session(db, day)
+        add_reaction_result(db, reaction, reflex_user.id, 205)
+        from app.services import league_finalization
+
+        league_finalization.finalize_due_opportunities(db, ["wordle", "reaction-time"])
+
+        response = admin_client.get("/admin/leaderboards/records")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["period"] == "all_time"
+        highlights = {entry["game_id"]: entry for entry in body["highlights"]}
+        assert set(highlights) == {
+            "wordle", "anagram", "reaction-time", "connections",
+            "trivia-drop", "couple-questionnaire", "two-key-escape", "plot-twist",
+        }
+        wordle = highlights["wordle"]
+        assert wordle["category"] == "fastest_solve"
+        assert wordle["label"] == "Fastest Solve"
+        assert wordle["entry"]["display_name"] == wordle_user.name
+        assert wordle["entry"]["metrics"]["fastest_s"] == 45.0
+        reaction = highlights["reaction-time"]
+        assert reaction["label"] == "All-Time Fastest"
+        assert reaction["entry"]["metrics"]["fastest_ms"] == 205
+        # A game with no finalized play keeps its slot with no entry.
+        assert highlights["connections"]["entry"] is None
+
+    def test_participants_cannot_read_the_admin_rankings(self, db):
+        client = TestClient(app, follow_redirects=False)
+        assert client.get(
+            "/admin/leaderboards/games/wordle/categories"
+        ).status_code == 403
+        assert client.get("/admin/leaderboards/records").status_code == 403

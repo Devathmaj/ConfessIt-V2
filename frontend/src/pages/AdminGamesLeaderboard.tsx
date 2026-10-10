@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { StatCard } from '@/components/games/StatCard';
+import { GameCategorySection } from '@/components/games/GameCategorySection';
 import {
   ALL_GAMES_FILTER,
   LEAGUE_COMPETITIONS,
@@ -35,8 +36,11 @@ import { cn } from '@/lib/utils';
 
 /**
  * The administrative leaderboard: the same server-calculated standings the
- * player board shows, with the columns an operator inspects. Read-only:
- * awards are written by event finalization, never edited here.
+ * player board shows, with the columns an operator inspects. Selecting one
+ * game swaps the points list for that game's expanded rankings (Performance,
+ * Fastest Solve, All-Time Fastest and the rest) -- the same metric boards
+ * players read. Read-only: awards are written by event finalization, never
+ * edited here.
  */
 
 const PAGE_SIZE = 25;
@@ -64,6 +68,9 @@ export const AdminGamesLeaderboard = () => {
   const scopeGames = useMemo(() => gamesForCompetition(competition), [competition]);
   const periodOption = LEAGUE_PERIODS.find((option) => option.id === period);
   const currentGame = scopeGames.find((game) => game.id === gameId);
+  // One game selected: the expanded rankings below own that view, so the
+  // points list stands down (the fetch still feeds the summary tiles).
+  const gameSelected = gameId !== ALL_GAMES_FILTER;
   const filterCaption =
     gameId === ALL_GAMES_FILTER
       ? `Overall · ${periodOption?.label ?? ''}`
@@ -121,7 +128,9 @@ export const AdminGamesLeaderboard = () => {
         <h1 className="text-3xl font-semibold">Leaderboard</h1>
         <p className="text-sm text-muted-foreground">
           League standings as players see them, per competition, period and
-          game. Awards are written when events close; nothing here edits them.
+          game. Pick a title to read its expanded rankings — fastest solves,
+          best times, most solved and the rest. Awards are written when events
+          close; nothing here edits them.
         </p>
       </header>
 
@@ -241,6 +250,22 @@ export const AdminGamesLeaderboard = () => {
         />
       </section>
 
+      {gameSelected ? (
+        <>
+          <GameCategorySection
+            viewer="admin"
+            gameId={gameId}
+            gameName={currentGame?.name ?? 'this game'}
+            period={period}
+            anchor={anchor}
+          />
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Category boards rank finalized results by their own metric — never
+            session placements — and never feed global scores.
+          </p>
+        </>
+      ) : (
+      <>
       <section aria-label="Standings" className="space-y-3">
         {loading ? (
           <Card className="rounded-2xl border-border/60 bg-card/70">
@@ -330,6 +355,8 @@ export const AdminGamesLeaderboard = () => {
             {loadingMore ? 'Loading…' : `Show more (${total - entries.length} left)`}
           </Button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

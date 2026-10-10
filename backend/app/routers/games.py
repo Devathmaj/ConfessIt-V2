@@ -17,9 +17,15 @@ from ..db_models import (
     WordleGameRecord,
 )
 from ..dependencies import get_db
-from ..models import Cohort, GameSelectEntry, GameSelectResponse, UserDetails
+from ..models import (
+    Cohort,
+    GameSelectEntry,
+    GameSelectResponse,
+    PlayerGameSummary,
+    UserDetails,
+)
 from ..postgres import Database
-from ..services import couple_gameplay, featured_games
+from ..services import couple_gameplay, featured_games, player_stats
 from ..services.authorization import require_participant
 from ..services.game_configs import get_config
 
@@ -242,3 +248,18 @@ def featured_today(
             "game_date": featured.game_date.isoformat(),
             "server_date": today.isoformat(),
         }
+
+
+@router.get("/summary", response_model=PlayerGameSummary)
+def player_summary(
+    db: Database = Depends(get_db),
+    user: UserDetails = Depends(require_participant),
+) -> PlayerGameSummary:
+    """The caller's own finished rounds, streaks and this week's activity.
+
+    Read from the games' native participation tables so a round played today
+    appears immediately, not when its league event finalizes. The summary is
+    strictly personal: every collector filters on the caller's id, and no
+    other player's activity is ever materialized.
+    """
+    return PlayerGameSummary(**player_stats.build_player_summary(db, user_id=user.id))

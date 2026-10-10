@@ -12,8 +12,18 @@ import {
   gamesAnalytics,
   type GamesActivityKind,
 } from '@/lib/adminGamesAnalytics';
-import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
-import { getAdminIndividualLeaderboard, type LeagueIndividualEntry } from '@/services/api';
+import { AVAILABLE_GAMES, getGameById } from '@/lib/gamesCatalog';
+import {
+  categoryEntryName,
+  categoryUI,
+  formatMetric,
+} from '@/lib/gameCategoryBoards';
+import {
+  getAdminGameRecords,
+  getAdminIndividualLeaderboard,
+  type GameRecordHighlight,
+  type LeagueIndividualEntry,
+} from '@/services/api';
 import { featuredDateLongLabel } from '@/lib/gamesFeaturedSchedule';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +52,10 @@ export const AdminGamesDashboard = () => {
   // The weekly individual board, top of the list only: enough to tell
   // whether play is happening and who is leading.
   const [snapshot, setSnapshot] = useState<LeagueIndividualEntry[]>([]);
+  // Each game's headline record (fastest time, fewest guesses, ...) so the
+  // overview shows the expanded rankings' headline figures without opening
+  // every board. Null while the request is in flight.
+  const [records, setRecords] = useState<GameRecordHighlight[] | null>(null);
   useEffect(() => {
     let cancelled = false;
     getAdminIndividualLeaderboard({ period: 'weekly', limit: 5 })
@@ -50,6 +64,13 @@ export const AdminGamesDashboard = () => {
       })
       .catch(() => {
         if (!cancelled) setSnapshot([]);
+      });
+    getAdminGameRecords()
+      .then((answer) => {
+        if (!cancelled) setRecords(answer.highlights);
+      })
+      .catch(() => {
+        if (!cancelled) setRecords([]);
       });
     return () => {
       cancelled = true;
@@ -324,6 +345,82 @@ export const AdminGamesDashboard = () => {
               </span>
             </div>
             ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Headline records: each game's best finalized result, all-time.
+          The same category builders behind the expanded rankings answer
+          these, so the overview can never disagree with the board. */}
+      <Card className="rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="text-xl">Top records</CardTitle>
+              <CardDescription>
+                Each game's best finalized result, all-time — fastest solves and
+                reactions, fewest guesses and the rest.
+              </CardDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <NavLink to="/admin/games/leaderboard">
+                Open expanded rankings
+                <ArrowRight />
+              </NavLink>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {records === null ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">Loading records…</p>
+          ) : records.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              No finalized results yet. Records appear once events close.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {records.map((highlight) => {
+                const game = getGameById(highlight.game_id);
+                const Icon = game?.icon ?? Star;
+                const ui = categoryUI(highlight.game_id, highlight.category);
+                const entry = highlight.entry;
+                const value =
+                  entry && ui.primary.key
+                    ? formatMetric(entry.metrics[ui.primary.key], ui.primary.format)
+                    : null;
+                return (
+                  <div
+                    key={highlight.game_id}
+                    className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/40 p-3"
+                  >
+                    <span
+                      className={cn(
+                        'shrink-0 rounded-xl p-2 text-white',
+                        game?.accent ?? 'bg-gradient-romantic',
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold">
+                        {game?.name ?? highlight.game_id}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {highlight.label}
+                        {entry ? ` · ${categoryEntryName(entry)}` : ''}
+                      </p>
+                    </div>
+                    {value !== null ? (
+                      <span className="shrink-0 text-sm font-bold tabular-nums">{value}</span>
+                    ) : (
+                      <span className="shrink-0 text-xs font-medium text-muted-foreground">
+                        No results yet
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </CardContent>
       </Card>

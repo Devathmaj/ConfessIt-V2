@@ -37,11 +37,26 @@ export const getAuthHeaders = () => {
  * revoked cookie, a superseded session, a network gap — answers null so the caller can end
  * the session instead of looping.
  */
+
+/** How long a refresh may wait before the session is treated as absent. */
+const REFRESH_TIMEOUT_MS = 15_000;
+
 export const refreshAccessToken = async (): Promise<string | null> => {
   try {
     // Carries the refresh cookie: without credentials the cookie never travels and
     // there is no session to extend.
-    const response = await axios.post(`${API_URL}/auth/refresh`, {}, { withCredentials: true });
+    const response = await axios.post(
+      `${API_URL}/auth/refresh`,
+      {},
+      {
+        withCredentials: true,
+        // The boot path awaits this before rendering any route, so a backend that
+        // stops answering must not leave the app on "Initializing..." forever.
+        // After this budget the refresh is a failed one: null, and the sign-in
+        // screen renders. Same budget as magic-link verification.
+        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+      },
+    );
     const accessToken = response.data?.access_token;
     if (typeof accessToken !== 'string') return null;
     setAccessToken(accessToken);

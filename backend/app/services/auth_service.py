@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import jwt
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import OperationalError
 from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, find_account_in_table,
                          resolve_account)
 from fastapi import Depends, HTTPException, Request, status
@@ -1015,6 +1016,28 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
 _REFRESH_REPLAY_NOTICE_TTL_SECONDS = 3600
 
 
+# A refresh write only ever waits on one row, and a healthy rotation holds that row
+# for milliseconds. Bounding the wait keeps a genuinely stuck transaction (a crashed
+# worker, an orphaned connection) from parking every later refresh in a row-lock
+# queue until the pool is exhausted: the wait fails, the request answers 401, and the
+# connection goes back to the pool.
+_AUTH_ROW_LOCK_TIMEOUT = "5s"
+
+
+def _bound_auth_row_lock_wait(session) -> None:
+    """Cap this transaction's wait for a ``login_tokens`` row lock (``SET LOCAL``)."""
+    session.execute(text(f"SET LOCAL lock_timeout = '{_AUTH_ROW_LOCK_TIMEOUT}'"))
+
+
+def _is_lock_timeout(error: BaseException) -> bool:
+    """Whether a SQLAlchemy error is PostgreSQL's ``lock_not_available`` (55P03)."""
+    original = getattr(error, "orig", error)
+    return (
+        getattr(original, "sqlstate", None) == "55P03"
+        or getattr(original, "pgcode", None) == "55P03"
+    )
+
+
 def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional[str]) -> None:
     """Count a proven refresh replay and, sparingly, tell the holder (SEC-008).
 
@@ -1029,9 +1052,17 @@ def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional
     bookkeeping must not turn a refusal into a 500. Runs in its own transaction
     because the caller's is rolling back, and the holder notice is gated to one per
     hour per session in Redis (skipped entirely when Redis is unreachable).
+
+    The caller must invoke this **after** its own transaction has closed. Opening
+    this second connection while the caller still held a lock on the same
+    ``login_tokens`` row deadlocked the request against itself: the rotation's
+    zero-row UPDATE keeps a tuple lock for the rest of its transaction (the READ
+    COMMITTED re-check), this UPDATE waits for that lock, and the caller cannot commit
+    until this returns. That wedged the connection, then the whole pool.
     """
     try:
         with db.sessions.begin() as session:
+            _bound_auth_row_lock_wait(session)
             session.execute(
                 update(LoginTokenRecord)
                 .where(LoginTokenRecord.id == session_id)
@@ -1092,6 +1123,10 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
     the freshly rotated token too would punish the legitimate user (or a second tab of
     theirs that lost a concurrent refresh race) rather than the replay.
 
+    Replay bookkeeping runs only after the rotation's transaction has closed: it needs
+    its own connection, and a second connection that waits on this transaction's own
+    tuple lock can never be satisfied. See ``_record_refresh_replay``.
+
     Nothing about the account's authority is taken from the token. The session row is
     re-read, the account is re-resolved from the current table, and the blocked/deleted
     states are applied on this request, so a revoked or demoted account stops refreshing on
@@ -1103,98 +1138,122 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
     hashed = hash_token(raw_token, domain=TOKEN_HASH_DOMAIN_REFRESH)
     now = datetime.now(timezone.utc)
 
-    with db.sessions.begin() as session:
-        row = session.scalar(
-            select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
-        )
-        if row is None:
-            logger.debug(
-                f"Refresh rejected: no session holds refresh token "
-                f"(hash_hint={hashed[:6]})"
-            )
-            logger.warning("Refresh rejected: no session holds refresh token")
-            raise credentials_exception()
+    # Set inside the rowcount branch and acted on after the transaction has closed.
+    replay_proven = False
+    replay_holder: Optional[str] = None
+    refusal: Optional[HTTPException] = None
 
-        session_id = str(row.id)
-        account_type = str(row.account_type)
-        account_id = str(row.account_id)
+    try:
+        with db.sessions.begin() as session:
+            _bound_auth_row_lock_wait(session)
+            row = session.scalar(
+                select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
+            )
+            if row is None:
+                logger.debug(
+                    f"Refresh rejected: no session holds refresh token "
+                    f"(hash_hint={hashed[:6]})"
+                )
+                logger.warning("Refresh rejected: no session holds refresh token")
+                raise credentials_exception()
 
-        if row.session_status == SESSION_STATUS_SUPERSEDED:
-            logger.warning(
-                f"Refresh rejected: session {session_id} was superseded by "
-                f"session {row.superseded_by}"
-            )
-            raise _session_superseded_exception()
-        if row.session_status != SESSION_STATUS_ACTIVE:
-            logger.warning(
-                f"Refresh rejected: session {session_id} is not active "
-                f"(status={row.session_status!r})"
-            )
-            raise credentials_exception()
+            session_id = str(row.id)
+            account_type = str(row.account_type)
+            account_id = str(row.account_id)
 
-        if _deadline_passed(row.session_expires_at, now):
-            # The session has hit its hard ceiling. No write is needed here: the admin
-            # "active sessions" sweep already moves a session past its 24-hour window to
-            # `expired`, and this refusal is the enforcement.
-            logger.warning(
-                f"Refresh rejected: session {session_id} passed its absolute deadline "
-                f"({row.session_expires_at})"
-            )
-            raise credentials_exception()
-
-        account = resolve_account(session, account_type, account_id)
-        if account is None:
-            logger.warning(
-                f"Refresh rejected: session {session_id} account {account_id} does not exist"
-            )
-            raise credentials_exception()
-        if account.is_blocked:
-            logger.warning(
-                f"Refresh rejected: session {session_id} account {account_id} is blocked"
-            )
-            raise credentials_exception()
-
-        new_raw = generate_refresh_token()
-        result = session.execute(
-            update(LoginTokenRecord)
-            .where(
-                LoginTokenRecord.id == session_id,
-                LoginTokenRecord.refresh_token_hash == hashed,
-            )
-            .values(
-                refresh_token_hash=hash_token(new_raw, domain=TOKEN_HASH_DOMAIN_REFRESH),
-                refresh_token_replaced_hash=hashed,
-                last_seen_at=now,
-            )
-        )
-        if result.rowcount != 1:
-            # Lost the race against a concurrent rotation of the same value, or the session
-            # changed underneath us. Re-read the row to say which.
-            fresh = session.get(LoginTokenRecord, session_id)
-            if fresh is not None and fresh.session_status == SESSION_STATUS_SUPERSEDED:
+            if row.session_status == SESSION_STATUS_SUPERSEDED:
                 logger.warning(
-                    f"Refresh raced with a login: session {session_id} superseded by "
-                    f"session {fresh.superseded_by}"
+                    f"Refresh rejected: session {session_id} was superseded by "
+                    f"session {row.superseded_by}"
                 )
                 raise _session_superseded_exception()
-            if fresh is not None and fresh.refresh_token_replaced_hash == hashed:
-                logger.debug(
-                    f"Refresh token replayed: session {session_id} already rotated away "
-                    f"this value (hash_hint={hashed[:6]})"
-                )
+            if row.session_status != SESSION_STATUS_ACTIVE:
                 logger.warning(
-                    f"Refresh token replayed: session {session_id} already rotated away "
-                    f"this value"
+                    f"Refresh rejected: session {session_id} is not active "
+                    f"(status={row.session_status!r})"
                 )
-                # Proven second use of a consumed value (SEC-008): count it and, at
-                # most hourly, tell the holder. The 401 below is unchanged -- the
-                # value can never succeed again, and killing the live session too
-                # would punish a benign double-submit (two tabs racing a refresh)
-                # rather than the replay.
-                _record_refresh_replay(db, session_id, getattr(account, "regno", None))
-            else:
-                logger.warning(f"Refresh race lost for session {session_id}")
-            raise credentials_exception()
+                raise credentials_exception()
+
+            if _deadline_passed(row.session_expires_at, now):
+                # The session has hit its hard ceiling. No write is needed here: the admin
+                # "active sessions" sweep already moves a session past its 24-hour window to
+                # `expired`, and this refusal is the enforcement.
+                logger.warning(
+                    f"Refresh rejected: session {session_id} passed its absolute deadline "
+                    f"({row.session_expires_at})"
+                )
+                raise credentials_exception()
+
+            account = resolve_account(session, account_type, account_id)
+            if account is None:
+                logger.warning(
+                    f"Refresh rejected: session {session_id} account {account_id} does not exist"
+                )
+                raise credentials_exception()
+            if account.is_blocked:
+                logger.warning(
+                    f"Refresh rejected: session {session_id} account {account_id} is blocked"
+                )
+                raise credentials_exception()
+
+            new_raw = generate_refresh_token()
+            result = session.execute(
+                update(LoginTokenRecord)
+                .where(
+                    LoginTokenRecord.id == session_id,
+                    LoginTokenRecord.refresh_token_hash == hashed,
+                )
+                .values(
+                    refresh_token_hash=hash_token(new_raw, domain=TOKEN_HASH_DOMAIN_REFRESH),
+                    refresh_token_replaced_hash=hashed,
+                    last_seen_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                # Lost the race against a concurrent rotation of the same value, or the
+                # session changed underneath us. Re-read the row to say which. The refusal
+                # is raised after this transaction closes (the replay bookkeeping below
+                # needs its own connection); raising here would roll the transaction back
+                # before that bookkeeping could run.
+                fresh = session.get(LoginTokenRecord, session_id)
+                if fresh is not None and fresh.session_status == SESSION_STATUS_SUPERSEDED:
+                    logger.warning(
+                        f"Refresh raced with a login: session {session_id} superseded by "
+                        f"session {fresh.superseded_by}"
+                    )
+                    refusal = _session_superseded_exception()
+                elif fresh is not None and fresh.refresh_token_replaced_hash == hashed:
+                    logger.debug(
+                        f"Refresh token replayed: session {session_id} already rotated away "
+                        f"this value (hash_hint={hashed[:6]})"
+                    )
+                    logger.warning(
+                        f"Refresh token replayed: session {session_id} already rotated away "
+                        f"this value"
+                    )
+                    # Proven second use of a consumed value (SEC-008): count it and, at
+                    # most hourly, tell the holder. The 401 below is unchanged -- the
+                    # value can never succeed again, and killing the live session too
+                    # would punish a benign double-submit (two tabs racing a refresh)
+                    # rather than the replay.
+                    replay_proven = True
+                    replay_holder = getattr(account, "regno", None)
+                    refusal = credentials_exception()
+                else:
+                    logger.warning(f"Refresh race lost for session {session_id}")
+                    refusal = credentials_exception()
+    except OperationalError as exc:
+        if _is_lock_timeout(exc):
+            logger.warning("Refresh rejected: timed out waiting for the session row lock")
+            raise credentials_exception() from exc
+        raise
+
+    # Only now that the rotation's transaction has ended: its zero-row UPDATE keeps a
+    # tuple lock until commit, and the replay's own connection would wait on it forever.
+    if replay_proven:
+        _record_refresh_replay(db, session_id, replay_holder)
+    if refusal is not None:
+        raise refusal
 
     new_access_token = create_access_token(
         data={
