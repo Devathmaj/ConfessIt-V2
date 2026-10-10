@@ -1,12 +1,13 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { CAPABILITIES, Capability } from "./lib/capabilities";
 import { landingPathFor } from "./lib/landing";
+import { rememberVisitedPage } from "./lib/navigationMemory";
 import { Login, AdminLogin, ModeratorLogin } from "./pages/Login";
 import { UserDashboard } from "./pages/UserDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
@@ -481,6 +482,20 @@ const AppRoutes = () => {
   );
 };
 
+/**
+ * Records the main-app page a person is on, for the Games section's
+ * "Back to ConfessIt" links. Renders nothing; mounted inside the router so every
+ * navigation passes through it. Games and auth routes are skipped inside
+ * `rememberLastPage`, so this only ever stores a page those links may return to.
+ */
+const RememberLastPage = () => {
+  const { pathname, search, hash } = useLocation();
+  useEffect(() => {
+    rememberVisitedPage(pathname, search, hash);
+  }, [pathname, search, hash]);
+  return null;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -492,6 +507,7 @@ const App = () => (
             instance it owns. */}
         <GamesConfigProvider>
           <BrowserRouter>
+            <RememberLastPage />
             <AppRoutes />
           </BrowserRouter>
         </GamesConfigProvider>

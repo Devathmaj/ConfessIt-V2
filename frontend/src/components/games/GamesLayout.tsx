@@ -5,16 +5,17 @@ import { ModeToggle } from '@/components/ui/ModeToggle';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
+import { isPlayRoute, lastConfessItPage, lastGamesPage } from '@/lib/navigationMemory';
 import { cn } from '@/lib/utils';
 
 /**
  * The shell for the whole Games section.
  *
  * Games is a section of ConfessIt with its own navigation rather than a set of pages under
- * the main navbar: everything under /games renders inside this layout, so the back link, the
+ * the main navbar: everything under /games renders inside this layout, so the back links, the
  * section brand and the tab strip are declared once and persist across every Games route via
  * the nested <Outlet />. The main ConfessIt navbar deliberately does not render here -- the
- * Games tabs replace it, with a single escape hatch back to /dashboard.
+ * Games tabs replace it, with a single escape hatch back to the last page of the main app.
  */
 
 interface GamesNavItem {
@@ -50,6 +51,12 @@ export const GamesLayout = () => {
   const isFeatured = pathname === '/games/featured';
   const isLeaderboard = pathname === '/games/leaderboard';
   const isSelect = pathname === '/games/select';
+  const isPlaying = isPlayRoute(pathname);
+  // The two escape hatches return to where the person actually was: the last
+  // main-app page for "Back to ConfessIt", the last Games section page for a
+  // game's own back control. Both fall back to their section home in a fresh tab.
+  const confessItHome = lastConfessItPage();
+  const gamesBackTo = lastGamesPage();
   return (
   <div className="relative flex min-h-screen flex-col">
     <div
@@ -87,9 +94,9 @@ export const GamesLayout = () => {
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur-xl">
       <div className="mx-auto max-w-7xl px-3 sm:px-6">
         <div className="flex h-14 items-center justify-between gap-3 sm:h-16">
-          {/* The one way out of the section: straight back to the main dashboard. */}
+          {/* The one way out of the section: back to the main-app page last open. */}
           <NavLink
-            to="/dashboard"
+            to={confessItHome}
             className="inline-flex shrink-0 items-center gap-2 border border-border/70 bg-card/70 px-3 py-2 text-xs font-bold text-foreground/80 transition-colors hover:border-romantic/60 hover:text-romantic sm:px-4 sm:text-sm [border-radius:var(--edge-pill)]"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -143,6 +150,18 @@ export const GamesLayout = () => {
     </header>
 
     <main className="mx-auto w-full max-w-7xl flex-1 px-3 py-6 sm:px-6 sm:py-9">
+      {isPlaying && (
+        // Inside a game, the section tabs are still above but there is no way
+        // back to the Games page that launched it. This is that way out; it is
+        // shown only while a game is open, never on a section page.
+        <NavLink
+          to={gamesBackTo}
+          className="mb-4 inline-flex items-center gap-2 border border-border/70 bg-card/70 px-3 py-2 text-xs font-bold text-foreground/80 transition-colors hover:border-romantic/60 hover:text-romantic sm:text-sm [border-radius:var(--edge-pill)]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to games
+        </NavLink>
+      )}
       <Outlet />
     </main>
 
@@ -150,7 +169,7 @@ export const GamesLayout = () => {
       <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-3 py-4 text-xs text-muted-foreground sm:flex-row sm:px-6">
         <span className="font-semibold">ConfessIt Games</span>
         <span>More titles are on the way.</span>
-        <NavLink to="/dashboard" className="font-semibold text-romantic hover:underline">
+        <NavLink to={confessItHome} className="font-semibold text-romantic hover:underline">
           Back to ConfessIt
         </NavLink>
       </div>
