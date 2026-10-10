@@ -1271,7 +1271,15 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             {/* Message Input */}
             {canChat && !is_blocked && (
               <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-xs text-muted-foreground">
-                You can send up to 100 messages in this conversation.
+                <p>You can send up to 100 messages in this conversation.</p>
+                {/* What automated moderation does, stated where a sender writes: a
+                    violating message is the only one staff receive, so this is a
+                    privacy promise about the rest of the thread, not a threat. */}
+                <p className="mt-1" role="note">
+                  Messages are checked against our content policy. If a message breaks
+                  it, that message is reported to admins and moderators &mdash; only that
+                  message is visible to them, never the rest of your conversation history.
+                </p>
               </div>
             )}
 

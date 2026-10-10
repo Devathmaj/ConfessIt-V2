@@ -267,4 +267,18 @@ describe('ConversationDialog: paged thread', () => {
     expect(messaging.messagingClient.connect).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
+
+  it('states that only a violating message -- never the thread -- reaches moderation', async () => {
+    db = [message(0)];
+    await renderDialog();
+
+    // The composer's notice must match what the report queue actually carries:
+    // the reported message's own body, and thread counts/participants -- never
+    // the other messages in the conversation.
+    const notice = screen.getByRole('note');
+    expect(notice).toHaveTextContent(/messages are checked against our content policy/i);
+    expect(notice).toHaveTextContent(/reported to admins and moderators/i);
+    expect(notice).toHaveTextContent(/only that message is visible to them/i);
+    expect(notice).toHaveTextContent(/never the rest of your conversation history/i);
+  });
 });

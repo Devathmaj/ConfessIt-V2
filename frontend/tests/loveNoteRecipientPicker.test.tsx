@@ -136,6 +136,21 @@ describe('LoveNotesPage: recipient picker', () => {
     expect(api.getLoveNoteRecipients).not.toHaveBeenCalled();
   });
 
+  it('states the review and privacy rules before the note is sent', async () => {
+    await openPicker();
+
+    // The one dialog a sender must pass through names every rule the review
+    // pipeline actually applies: one note, both staff roles reviewing, PII
+    // redacted from the reviewers' copy, and identities only on reported notes.
+    const important = screen.getByRole('alert');
+    expect(important).toHaveTextContent(/only send one love note this season/i);
+    expect(important).toHaveTextContent(/reviewed by moderators and admins/i);
+    expect(important).toHaveTextContent(/automatically redacted/i);
+    expect(important).toHaveTextContent(/names, phone numbers, email addresses/i);
+    expect(important).toHaveTextContent(/cannot see who sent or received a note/i);
+    expect(important).toHaveTextContent(/unless that note is reported/i);
+  });
+
   it('loads one page with the total and grows the list downwards', async () => {
     candidates = Array.from({ length: 25 }, (_, index) =>
       candidate(

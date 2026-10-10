@@ -1224,7 +1224,9 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                             <p className="font-bold flex items-center"><Info className="w-5 h-5 mr-2" />Important</p>
                             <ul className="list-disc list-inside mt-2 text-sm space-y-1">
                                 <li>You can only send <strong>one</strong> Love Note this season. Are you sure you want to use it now?</li>
-                                <li>All notes are <strong>reviewed by moderators</strong> before being delivered to the recipient.</li>
+                                <li>All notes are <strong>reviewed by moderators and admins</strong> before being delivered to the recipient.</li>
+                                <li>Personal details such as names, phone numbers, email addresses and the like are <strong>automatically redacted</strong> from the copy our reviewers see.</li>
+                                <li>Reviewers <strong>cannot see who sent or received a note</strong> unless that note is reported.</li>
                             </ul>
                         </div>
 
