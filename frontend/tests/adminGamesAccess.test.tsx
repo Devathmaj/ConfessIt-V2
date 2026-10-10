@@ -165,10 +165,12 @@ describe('the Games item in the admin navigation', () => {
     renderNav(moderator);
 
     expect(screen.queryByRole('link', { name: 'Games' })).not.toBeInTheDocument();
-    // Everything else the moderator can actually open is still offered -- and the console's
-    // own "Dashboard" is not among them, because that too sits behind `stats:read`.
+    // Everything else the moderator can actually open is still offered. Neither landing page
+    // is a pill for anyone now: the console sits behind `stats:read`, and the hub is the
+    // wordmark's to open for this account (matched on its whole accessible name).
     expect(screen.getByRole('link', { name: 'Reports' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Moderation' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^moderation$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /confessit moderation/i })).toBeInTheDocument();
   });
 });

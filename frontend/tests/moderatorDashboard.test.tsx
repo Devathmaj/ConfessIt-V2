@@ -251,8 +251,9 @@ describe('AdminNavigation: what it calls the area', () => {
 
   it('says Moderation to a moderator, and Admin to an admin', () => {
     // Matched on the wordmark link's whole accessible name, "ConfessIt" plus the area beneath
-    // it. Querying the bare word "Moderation" would be ambiguous -- the nav item below the
-    // wordmark carries the same name, which is correct and not what is being tested here.
+    // it -- the way the area is named on the bar. The bare area word alone must not be asked
+    // for here: it would match the wordmark's own name too, which is not the distinction
+    // under test.
     const { unmount } = renderWith(<AdminNavigation />, MODERATION_CAPABILITIES);
     expect(screen.getByRole('link', { name: /confessit moderation/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /confessit admin/i })).not.toBeInTheDocument();
@@ -263,17 +264,18 @@ describe('AdminNavigation: what it calls the area', () => {
     expect(screen.queryByRole('link', { name: /confessit moderation/i })).not.toBeInTheDocument();
   });
 
-  it('offers the hub to a moderator and not to an admin', () => {
-    // The bar and the route declare the same pair of conditions -- needs `reports:review`,
-    // does not hold `stats:read` -- so the hub can never be linked where it would be refused,
-    // nor refused where it was offered. An admin holds every moderation capability, so without
-    // the exclusion this would point them at the hub as a second place to do the same work.
+  it('keeps the hub off the pill row for both roles', () => {
+    // The landing pages are the wordmark's to carry (see the href test below), not a pill's:
+    // a "Moderation" item would be a second control for the page the wordmark already opens.
+    // An admin never had it -- the hub is not a second place for them to work -- and a
+    // moderator must not be offered it again as though it were a queue.
     const { unmount } = renderWith(<AdminNavigation />, MODERATION_CAPABILITIES);
-    expect(screen.getByRole('link', { name: /^moderation$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^moderation$/i })).not.toBeInTheDocument();
     unmount();
 
     renderWith(<AdminNavigation />, ADMIN_CAPABILITIES);
     expect(screen.queryByRole('link', { name: /^moderation$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^dashboard$/i })).not.toBeInTheDocument();
     // The queues the hub would have listed are still all offered, so nothing is lost with it.
     expect(screen.getByRole('link', { name: /reports/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /confessions/i })).toBeInTheDocument();
@@ -292,8 +294,13 @@ describe('AdminNavigation: what it calls the area', () => {
   });
 
   it('sends the wordmark to the account it belongs to', () => {
-    renderWith(<AdminNavigation />, MODERATION_CAPABILITIES);
-
+    // The wordmark is the bar's whole route back to the landing page -- there is no
+    // Dashboard/Moderation pill -- so both roles are pinned to their own home here.
+    const { unmount } = renderWith(<AdminNavigation />, MODERATION_CAPABILITIES);
     expect(screen.getByRole('link', { name: /confessit/i })).toHaveAttribute('href', '/moderation');
+    unmount();
+
+    renderWith(<AdminNavigation />, ADMIN_CAPABILITIES);
+    expect(screen.getByRole('link', { name: /confessit/i })).toHaveAttribute('href', '/admin');
   });
 });

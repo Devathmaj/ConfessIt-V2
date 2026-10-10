@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, LayoutDashboard, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, ClipboardCheck, LogOut, Gamepad2, Bell } from "lucide-react";
+import { Heart, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, LogOut, Gamepad2, Bell } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -11,7 +11,6 @@ interface NavItem {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
-  exact?: boolean;
   /**
    * The capability a visit to this page needs. Each one is the same capability that gates the
    * endpoints the page calls, so a link is shown only when opening it would actually work.
@@ -19,36 +18,27 @@ interface NavItem {
   capability: Capability;
   /**
    * A capability that disqualifies the account even when it holds `capability` -- the same pair
-   * of conditions the matching `CapabilityRoute` declares. Only the hub needs it: an admin holds
-   * every moderation capability, so `reports:review` alone would offer them the moderation
-   * dashboard, which is not on an admin's way anywhere and whose route refuses them anyway.
+   * of conditions the matching `CapabilityRoute` declares. Only the moderator's Alerts entry
+   * needs it: an inbox is one per role, and without the exclusion an admin -- who holds every
+   * moderation capability -- would be offered the moderator's inbox beside their own.
    */
   without?: Capability;
 }
 
+// Only the working screens carry a pill. Neither landing page does: the wordmark goes back to
+// whichever home the account belongs on -- the console for an admin, the hub for a moderator --
+// the same way the brand block on the participant bar is the link to the dashboard. A
+// "Dashboard"/"Moderation" pill would be a second control for a page the wordmark already owns.
 const navItems: NavItem[] = [
-  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true, capability: CAPABILITIES.STATS_READ },
-  // The hub calls no endpoint of its own -- it counts the queues it links to, each gated
-  // separately -- so its capability is the queue it is built around rather than one of its own
-  // requests. It is the same question the route asks, plus the exclusion, so an account that
-  // cannot open it is never offered it and an admin is never shown a second landing page.
-  {
-    to: "/moderation",
-    label: "Moderation",
-    icon: ClipboardCheck,
-    exact: true,
-    capability: CAPABILITIES.REPORTS_REVIEW,
-    without: CAPABILITIES.STATS_READ,
-  },
   { to: "/admin/configuration", label: "Config", icon: Settings, capability: CAPABILITIES.APP_CONFIG_READ },
   // The Games console manages the catalogue rather than a moderation queue, but it asks the
   // route the same question every other item here does. `stats:read` is admin-only, which is
   // exactly what the section is, so a moderator is never offered a link they would be refused.
   { to: "/admin/games", label: "Games", icon: Gamepad2, capability: CAPABILITIES.STATS_READ },
   { to: "/admin/reports", label: "Reports", icon: Flag, capability: CAPABILITIES.REPORTS_REVIEW },
-  // One inbox per role, like the Dashboard/Moderation pair above: an admin's
-  // notices live under the console path and a moderator's under the hub path,
-  // and the route guards refuse each account the other's URL.
+  // One inbox per role: an admin's notices live under the console path and a
+  // moderator's under the hub path, and the route guards refuse each account
+  // the other's URL.
   { to: "/admin/notifications", label: "Alerts", icon: Bell, capability: CAPABILITIES.STATS_READ },
   {
     to: "/moderation/notifications",
@@ -78,7 +68,9 @@ const inactiveLink = "text-foreground/70 hover:text-foreground hover:bg-secondar
  *
  * Nothing here is a capability check on its own account, though: the links are filtered by
  * capability, so the bar never offers a screen the account could not open, and each label is
- * answered from the same `landingPathFor` the wordmark links to.
+ * answered from the same `landingPathFor` the wordmark links to -- the wordmark being the
+ * bar's whole route back to the console or the hub, exactly as the brand block is the
+ * participant bar's route back to the dashboard.
  */
 export const AdminNavigation = () => {
   const [open, setOpen] = useState(false);
@@ -93,18 +85,15 @@ export const AdminNavigation = () => {
   // Filtered rather than individually hidden so a moderator is simply not offered the
   // account-management screen. The route guard refuses it either way; omitting the link
   // means it is never presented as something they can open.
-  //
-  // Which also drops "Dashboard" for a moderator: that link is the administration console, and
-  // the console is behind `stats:read`, so a moderator is offered "Moderation" in its place.
-  // And it drops "Moderation" for an admin, who holds every moderation capability and would
-  // otherwise be pointed at the hub as though it were a second place to work.
   const visibleItems = navItems.filter(
     (item) => can(item.capability) && !(item.without !== undefined && can(item.without)),
   );
 
   // The wordmark goes back to whichever landing page this account belongs on rather than
   // always to the console, so a moderator clicking it lands on their own dashboard instead of
-  // being turned away from this one.
+  // being turned away from this one. Since neither landing page carries a pill -- the console
+  // and the hub are not working screens with a queue of their own -- the wordmark is also the
+  // only control that leads there.
   const home = landingPathFor(can);
   const area = landingAreaLabel(can);
 
@@ -112,7 +101,6 @@ export const AdminNavigation = () => {
     <NavLink
       key={item.to}
       to={item.to}
-      end={item.exact}
       onClick={() => setOpen(false)}
       className={({ isActive }) => `${baseLink} ${isActive ? activeLink : inactiveLink}`}
     >
@@ -136,11 +124,12 @@ export const AdminNavigation = () => {
 
         {/* The middle row owns the leftover width and may shrink to nothing: without
             `min-w-0` a flex child refuses to go narrower than its content, which is what
-            pushed the pills past the bar's right edge once the Alerts link made eight. */}
+            pushed the pills past the bar's right edge once the Alerts link made eight --
+            seven now that the landing page lives on the wordmark alone. */}
         <div className="flex-1 flex justify-center min-w-0">
-          {/* Full pill row only from `xl` up: eight pills plus the wordmark and actions
-              need ~1200px, so at `md`/`lg` the bar shows the hamburger instead of
-              overflowing the container to the right. */}
+          {/* Full pill row only from `xl` up: even one pill fewer wants the width of an
+              `xl` bar once the wordmark and the actions are counted, so at `md`/`lg` the
+              bar shows the hamburger instead of overflowing the container to the right. */}
           <div className="hidden items-center gap-2 xl:flex">
             {visibleItems.map(renderLink)}
           </div>

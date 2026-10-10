@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { useAuth } from '@/contexts/AuthContext';
 import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
 import type { AdminUserCreatePayload } from '@/services/api';
 import {
@@ -365,6 +366,20 @@ const isStaffAccount = (profile: AdminUserProfile) =>
 const isAdminAccount = (profile: AdminUserProfile) => profile.account_type === 'admin';
 
 /**
+ * Whether the signed-in operator may edit the account on a card.
+ *
+ * Participants and moderators are always editable; an admin's row is editable only by its own
+ * holder. The server enforces exactly this -- `PUT /admin/users/{id}` answers 403 for another
+ * admin -- and the card mirrors it by leaving the button off a colleague's card and saying why,
+ * the same treatment the block button gets and for the same reason: a control that can never
+ * succeed is worse than none. A viewer the page cannot name fails closed -- no id, no match, no
+ * button -- because the cost of a wrongly hidden button is one refused edit, while the cost of
+ * a wrongly shown one is only discovered as a 403 after the operator has typed a change.
+ */
+const canEditProfile = (profile: AdminUserProfile, viewerId?: string | null) =>
+  !isAdminAccount(profile) || (Boolean(viewerId) && profile.id === viewerId);
+
+/**
  * How a staff row reads in a sentence.
  *
  * Uses the table name, the same discriminator as `isStaffAccount`, and falls back to "staff" for a
@@ -633,6 +648,7 @@ const ProfileCard = ({
   blocked,
   busy,
   flagged,
+  canEdit,
   onOpen,
   onToggleBlock,
 }: {
@@ -645,6 +661,8 @@ const ProfileCard = ({
    * keep saying why it is worth a decision wherever it is read.
    */
   flagged: boolean;
+  /** Whether the signed-in operator may edit this account -- see `canEditProfile`. */
+  canEdit: boolean;
   onOpen: (profile: AdminUserProfile) => void;
   onToggleBlock: (profile: AdminUserProfile) => void;
 }) => {
@@ -739,16 +757,26 @@ const ProfileCard = ({
 
       <div className="mt-auto flex flex-col gap-2 border-t border-border p-3">
         {/* The one way into the editor, and deliberately the only one: a card body that
-            opens a form on click makes reading the list an exercise in not clicking. */}
-        <Button
-          variant="outline"
-          size="sm"
-          aria-label={`Edit profile for ${profile.name ?? 'user'}`}
-          onClick={() => onOpen(profile)}
-        >
-          <Pencil className="mr-2 h-4 w-4" />
-          Edit
-        </Button>
+            opens a form on click makes reading the list an exercise in not clicking. Left
+            off a colleague's admin card rather than disabled -- the server refuses that
+            edit, and a dead control with no explanation reads as a bug -- with the reason
+            stated in its place, exactly as the admin block button does below. */}
+        {canEdit ? (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={`Edit profile for ${profile.name ?? 'user'}`}
+            onClick={() => onOpen(profile)}
+          >
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Admins can edit only their own profile, so one admin cannot rewrite another's
+            identity.
+          </p>
+        )}
         {/* An unblocked admin gets no block button rather than a disabled one. A permanently
             greyed-out control with no explanation reads as a bug or a permissions problem, and
             the reason is not obvious from the row; saying so is more honest than showing a
@@ -794,6 +822,10 @@ const ProfileCard = ({
 };
 
 export const ProfileReview = () => {
+  // The signed-in operator, for one decision: whether the account on a card is their own.
+  // Only an admin's own row is editable by them; see `canEditProfile`.
+  const { user } = useAuth();
+
   const buildDefaultCreateForm = (accountType: AccountType): CreateUserForm => ({
     regno: '',
     name: '',
@@ -871,6 +903,16 @@ export const ProfileReview = () => {
   const [refreshing, setRefreshing] = useState(false);
   /** Whether the next fetch is still the first one, which is the only one that takes the loading screen. */
   const isFirstLoad = useRef(true);
+  /**
+   * The edit dialog's surface.
+   *
+   * The dialog opens focused *here* rather than in the first field: Radix's default would land
+   * in the Full name box, and the field an editor is least likely to be changing is the one
+   * they should have to reach for. Focusing the surface instead of leaving focus on the card's
+   * button keeps the modal's focus trap working (and Escape answering, and a screen reader
+   * announcing the dialog) without putting a cursor in anything.
+   */
+  const editDialogRef = useRef<HTMLDivElement | null>(null);
   /**
    * The year and the department the cards are narrowed to, or the sentinel for "not narrowed".
    *
@@ -1475,6 +1517,10 @@ export const ProfileReview = () => {
   };
 
   const openProfileEditor = (profile: AdminUserProfile) => {
+    // An admin edits their own profile only -- the server refuses anything else with a 403.
+    // The button is not rendered on a colleague's card; this is the belt to that braces, so a
+    // stale row or a keyboard-reachable remnant cannot open a form whose save would be refused.
+    if (!canEditProfile(profile, user?.id)) return;
     const isParticipant = !isStaffAccount(profile);
     setSelectedProfile(profile);
     setEditForm({
@@ -1811,6 +1857,7 @@ export const ProfileReview = () => {
                     blocked={Boolean(profile.is_blocked)}
                     busy={blocking === profile.id}
                     flagged={totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD}
+                    canEdit={canEditProfile(profile, user?.id)}
                     onOpen={openProfileEditor}
                     onToggleBlock={toggleBlock}
                   />
@@ -2053,7 +2100,23 @@ export const ProfileReview = () => {
           }
         }}
       >
-        <DialogContent className="max-w-2xl" aria-describedby={undefined}>
+        <DialogContent
+          ref={editDialogRef}
+          tabIndex={-1}
+          className="max-w-2xl focus:outline-none"
+          aria-describedby={undefined}
+          /* The dialog opens on itself, not in the first field. Radix's default is to focus the
+             first tabbable element, which here is the Full name box -- so opening the editor
+             put a cursor in a field the operator usually is not there to change (a rename is
+             the exception, not the rule). Focus lands on the dialog instead, which keeps the
+             focus trap, Escape and the screen-reader announcement intact; the operator clicks
+             or tabs into whichever field they came for. The create dialog keeps the default,
+             where an empty form's first field is the thing to fill in. */
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            editDialogRef.current?.focus();
+          }}
+        >
           {selectedProfile && editForm ? (
             <>
               <DialogHeader>

@@ -632,13 +632,24 @@ def update_user_details(
     user_id: str,
     update: AdminUserUpdate,
     db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE))
+    current_admin: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE))
 ) -> Dict[str, Any]:
     """Edit an account that already exists, in whichever table it lives.
 
     The account is found by id across all three tables and edited in place. Its table is not
     editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
     moderator into a participant and strand the content that references it.
+
+    **An admin edits only their own admin profile.** The one target this route refuses is
+    another admin's row, answered with a 403: an admin account is the kind that can mint,
+    block and edit other accounts, so letting one admin rewrite another's identity -- the
+    regno above all, because it is the sign-in handle -- is a way to take the account over
+    or lock its holder out, and neither is an edit this screen exists to make. Only the
+    *target* decides: a moderator and a participant are edited exactly as they were, and an
+    admin may still edit their own row. The rule lives here rather than in the form that
+    usually sends the request, so a direct API call is refused the same way; the form leaves
+    the button off a colleague's card so the refusal is not the first the operator hears
+    of it.
 
     The editable set is the account's identity: regno, name, email, and -- for a participant
     only -- gender, year and department. The picture, bio, interests and the four
@@ -685,6 +696,17 @@ def update_user_details(
         found = resolve_account_by_id(session, user_id)
         if found:
             account_type, account = found
+            # Another admin's row is not this route's to edit. Compared by id, not regno: the
+            # caller's id is what the session was minted with, while a regno can be renamed.
+            # Fail-closed on a missing caller id: no match, no write.
+            if (
+                normalize_account_type(account_type) == AccountType.ADMIN.value
+                and str(account.id) != str(current_admin.id)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="An admin can edit only their own profile.",
+                )
             # ``gender``, ``year`` and ``department`` are dropped for a staff account. The
             # participant-shaped form submits every field it knows about, and without this an
             # edit to a moderator's name would also try to write a cohort -- or a gender -- onto

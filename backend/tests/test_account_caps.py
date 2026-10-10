@@ -22,6 +22,8 @@ slot, and the cap would silently become a limit on how many accounts are *curren
 sign in* rather than on how many exist.
 """
 
+import contextlib
+
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
@@ -29,6 +31,9 @@ from sqlalchemy.exc import DBAPIError
 from app.accounts import AccountType, account_cap, account_cap_lock_key
 from app.config import settings
 from app.db_models import AdminRecord, ModeratorRecord, UserRecord
+from app.main import app
+from app.models import AccountDetails
+from app.services.auth_service import get_current_user
 
 
 ACCOUNT_MODELS_BY_TYPE = {
@@ -466,3 +471,90 @@ def test_creating_an_admin_with_is_blocked_is_refused(restore_caps, admin_client
         assert session.scalar(
             select(AdminRecord).where(AdminRecord.regno == "blocked-admin")
         ) is None
+
+
+# ----------------------------------------------------------- editing an admin's profile
+
+
+@contextlib.contextmanager
+def acting_as_admin(account_id: str, *, regno: str = "acting-admin"):
+    """Name one specific admin row as the caller for the block.
+
+    ``admin_client`` resolves to a fresh ``AccountDetails`` whose id is generated per call, so
+    it is never equal to any stored row's -- which is exactly the "somebody else" case. The
+    self-edit case needs a caller whose id *is* the row's, so the dependency override is
+    replaced for the block and put back afterwards.
+    """
+    previous = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: AccountDetails(
+        id=account_id,
+        regno=regno,
+        name="Acting Admin",
+        email=f"{regno}@example.com",
+        account_type=AccountType.ADMIN.value,
+    )
+    try:
+        yield
+    finally:
+        if previous is not None:
+            app.dependency_overrides[get_current_user] = previous
+        else:
+            app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_an_admin_edits_only_their_own_admin_profile(admin_client, db):
+    """Another admin's row answers 403 and does not move; the caller's own row is editable.
+
+    Two admins, one caller: the distinction is the target's identity, not the capability --
+    the caller holds ``users:update`` either way. The refused request is checked against the
+    *row* and not only the response, because a 403 that had already written the new name
+    would otherwise pass.
+    """
+    first = admin_client.post(
+        "/admin/users", json=_payload("first-admin", AccountType.ADMIN.value)
+    )
+    second = admin_client.post(
+        "/admin/users", json=_payload("second-admin", AccountType.ADMIN.value)
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_id = first.json()["id"]
+    second_id = second.json()["id"]
+
+    with acting_as_admin(second_id, regno="second-admin"):
+        own = admin_client.put(f"/admin/users/{second_id}", json={"name": "Second Renamed"})
+        another = admin_client.put(f"/admin/users/{first_id}", json={"name": "Taken Over"})
+
+    assert own.status_code == 200, own.text
+    assert own.json()["name"] == "Second Renamed"
+    assert another.status_code == 403, another.text
+    assert "own profile" in another.json()["detail"]
+
+    with db.sessions() as session:
+        assert session.get(AdminRecord, second_id).name == "Second Renamed"
+        assert session.get(AdminRecord, first_id).name == "Person first-admin"
+
+
+def test_editing_moderators_and_participants_is_untouched(admin_client, db):
+    """The restriction is about the *target*, so the two other account kinds still edit."""
+    moderator = admin_client.post(
+        "/admin/users", json=_payload("still-mod", AccountType.MODERATOR.value)
+    )
+    participant = admin_client.post(
+        "/admin/users", json=_payload("still-user", AccountType.USERS.value)
+    )
+    assert moderator.status_code == 201, moderator.text
+    assert participant.status_code == 201, participant.text
+
+    renamed_mod = admin_client.put(
+        f"/admin/users/{moderator.json()['id']}", json={"name": "Mod Renamed"}
+    )
+    renamed_user = admin_client.put(
+        f"/admin/users/{participant.json()['id']}",
+        json={"name": "User Renamed", "year": 3},
+    )
+
+    assert renamed_mod.status_code == 200, renamed_mod.text
+    assert renamed_mod.json()["name"] == "Mod Renamed"
+    assert renamed_user.status_code == 200, renamed_user.text
+    assert renamed_user.json()["name"] == "User Renamed"

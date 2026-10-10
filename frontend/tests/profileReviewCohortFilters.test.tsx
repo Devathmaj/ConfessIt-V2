@@ -142,7 +142,9 @@ const PARTICIPANTS = 'Participants';
  *
  * Read off the clickable area of each card rather than off the text, because a name query returns
  * the matches in document order but says nothing about which card each one belongs to -- and card
- * order is the entire claim being tested here.
+ * order is the entire claim being tested here. Only editable cards have that clickable area, so
+ * admin cards -- which carry no editor, since only their own holder may edit them -- are asserted
+ * by name text instead.
  */
 const namesIn = (section: HTMLElement) =>
   within(section)
@@ -238,7 +240,7 @@ it('puts them directly above the ordinary participants and below everything else
     // ever claims a search it does not have hid somebody: "No admin accounts exist yet" beside
     // a visible admin was the reading the original note on this screen was written to prevent,
     // and a note about a search box that is not there would be the same mistake in reverse.
-    expect(namesIn(groupNamed(ADMINS))).toEqual(['Ada Admin']);
+    expect(within(groupNamed(ADMINS)).getByText('Ada Admin')).toBeInTheDocument();
     expect(namesIn(groupNamed(MODERATORS))).toEqual(['Mo Moderator']);
     expect(
       screen.queryByText('No admin accounts match the current search.'),
@@ -285,7 +287,7 @@ describe('ProfileReview: each participant section searches for itself', () => {
     expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(
       expect.arrayContaining(['Alpha', 'Bravo', 'Charlie']),
     );
-    expect(namesIn(groupNamed(ADMINS))).toEqual(['Ada Admin']);
+    expect(within(groupNamed(ADMINS)).getByText('Ada Admin')).toBeInTheDocument();
   });
 
   it('narrows only Participants when its own box is used, leaving the queue whole', async () => {
@@ -378,7 +380,7 @@ describe('ProfileReview: cohort filters', () => {
     // department at all -- the server omits both keys on a staff row -- so there is nothing to
     // compare, and they stay. Hiding the only two accounts an operator can never afford to lose
     // behind a control set to find somebody else would be the wrong way round.
-    expect(namesIn(groupNamed(ADMINS))).toEqual(['Ada Admin']);
+    expect(within(groupNamed(ADMINS)).getByText('Ada Admin')).toBeInTheDocument();
     expect(namesIn(groupNamed(MODERATORS))).toEqual(['Mo Moderator']);
     expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(['Bravo']);
   });
@@ -531,7 +533,12 @@ describe('ProfileReview: card order', () => {
 
     await sortBy('Name (Z-A)');
 
-    expect(namesIn(groupNamed(ADMINS))).toEqual(['Zoe Admin', 'Amy Admin']);
+    // Admins are read by name text: their cards carry no editor for this viewer, so the
+    // `namesIn` button sweep would find nothing at all on them.
+    const admins = groupNamed(ADMINS);
+    expect(
+      precedes(within(admins).getByText('Zoe Admin'), within(admins).getByText('Amy Admin')),
+    ).toBe(true);
     expect(namesIn(groupNamed(MODERATORS))).toEqual(['Yves Moderator', 'Bea Moderator']);
   });
 

@@ -128,6 +128,7 @@ const participant = (
 function renderRows(
   rows: unknown[] | ((params: Record<string, unknown>) => unknown),
   expected: string,
+  viewerId?: string,
 ) {
   if (typeof rows === 'function') {
     api.getAdminUsers.mockImplementation(rows as never);
@@ -137,7 +138,16 @@ function renderRows(
   render(
     <AuthContext.Provider
       value={{
-        user: { regno: 'viewer', account_type: 'admin', capabilities: [], is_blocked: false },
+        user: {
+          // The viewer's id decides whether their own admin card carries an editor. Omitted
+          // by default, which is the fail-closed reading the page takes: no id, no match, no
+          // admin card editable (see `canEditProfile`).
+          ...(viewerId ? { id: viewerId } : {}),
+          regno: 'viewer',
+          account_type: 'admin',
+          capabilities: [],
+          is_blocked: false,
+        },
         isAuthenticated: true,
         loading: false,
         can: () => true,
@@ -358,6 +368,22 @@ describe('ProfileReview: accounts as cards', () => {
     expect(screen.getByText('Edit profile')).toBeInTheDocument();
   });
 
+  it('opens the editor with no field focused or selected', async () => {
+    await renderRows([participant(ORDINARY, 'One')], 'One');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile for One' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // Radix focuses the first tabbable element when a dialog opens, which here was the Full
+    // name box: opening the editor put a cursor in the field an operator is usually not there
+    // to change. Focus now lands on the dialog itself -- inside the modal, no field active,
+    // nothing selected -- and the operator reaches for the field they came for.
+    expect(dialog).toHaveFocus();
+    expect(within(dialog).getByLabelText('Full name')).not.toHaveFocus();
+    expect(within(dialog).getByLabelText('Register number')).not.toHaveFocus();
+    expect(within(dialog).getByLabelText('Email')).not.toHaveFocus();
+  });
+
   it('does not open the editor when the block button is pressed', async () => {
     api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: true });
     await renderRows([participant(ORDINARY, 'One')], 'One');
@@ -484,6 +510,43 @@ describe('ProfileReview: accounts as cards', () => {
     expect(screen.queryByRole('button', { name: /Block user/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Admins cannot be blocked/i)).toBeInTheDocument();
     expect(api.setAdminUserBlocked).not.toHaveBeenCalled();
+  });
+
+  it("offers the editor on the viewer's own admin card and not a colleague's", async () => {
+    const colleague = admin({
+      id: '99999999-9999-9999-9999-999999999999',
+      regno: 'staff-2',
+      name: 'Otto Admin',
+      email: 'otto@school.test',
+    });
+    // The viewer is Ada. Only the target admin's identity decides -- the caller is an admin
+    // either way -- so Ada's card is editable and Otto's is not, in the same render.
+    await renderRows([admin(), colleague], 'Ada Admin', ADMIN);
+
+    expect(
+      within(groupNamed(ADMINS)).getByRole('button', { name: 'Edit profile for Ada Admin' }),
+    ).toBeInTheDocument();
+
+    // Absent rather than disabled, with the reason in its place -- the treatment the block
+    // button gets, for the same reason: a control that can only come back a 403 is worse than
+    // none. The server enforces the rule either way (see the backend suite).
+    expect(
+      screen.queryByRole('button', { name: 'Edit profile for Otto Admin' }),
+    ).not.toBeInTheDocument();
+    const colleagueCard = screen.getByText('Otto Admin').closest('[data-slot="card"]') as HTMLElement;
+    expect(
+      within(colleagueCard).getByText(/Admins can edit only their own profile/i),
+    ).toBeInTheDocument();
+  });
+
+  it('leaves every admin card uneditable when the viewer is not named', async () => {
+    // The page cannot know whether an unnamed viewer is the holder, and "might be somebody
+    // else's" reads as not theirs: the server would refuse the write anyway, so the screen
+    // does not offer it.
+    await renderRows([admin()], 'Ada Admin');
+
+    expect(screen.queryByRole('button', { name: /Edit profile for/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Admins can edit only their own profile/i)).toBeInTheDocument();
   });
 
   it('still offers unblock for an admin, since a legacy blocked admin has to be recoverable', async () => {
