@@ -261,7 +261,8 @@ class UserRecord(AccountColumns, Base):
     = n + 1`` inside the same transaction as the report row or the removal stamp. Read-modify-
     write through the ORM would lose an increment whenever two reports for the same person were
     filed at once. See ``app.services.report_counters``, which is the only thing that writes
-    them.
+    them -- and the one place the removal total is compared against the threshold above which
+    the account is blocked automatically.
     """
 
     __tablename__ = "users"

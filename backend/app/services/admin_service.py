@@ -17,12 +17,14 @@ from ..accounts import AccountType, is_valid_account_type, normalize_account_typ
 from ..services.report_resolution_service import pending_report_totals, resolve_status_filter
 from ..services.storage_service import storage_service
 from ..utils import ilike_contains
-from .report_counters import tally_for_row
+from .report_counters import REMOVAL_AUTO_BLOCK_THRESHOLD, tally_for_row
 
-# Above how many upheld removals a participant lands in the flagged work queue.
-# Mirrors FLAGGED_REMOVAL_THRESHOLD on the profile-review screen: strictly more than
-# this, summed across the three content kinds, is flagged.
-FLAGGED_REMOVAL_THRESHOLD = 5
+# Above how many upheld removals a participant lands in the flagged work queue. It reads the
+# threshold the automatic block uses rather than restating it: the queue exists to surface the
+# participants at the line, and the two disagreeing would mean a participant the system blocked
+# was not in the queue for it, or vice versa. Mirrors FLAGGED_REMOVAL_THRESHOLD on the
+# profile-review screen: strictly more than this, summed across the three content kinds.
+FLAGGED_REMOVAL_THRESHOLD = REMOVAL_AUTO_BLOCK_THRESHOLD
 
 # Hard ceiling for one page of the admin user list. The endpoint clamps anything larger,
 # so no client -- present or future, well-meaning or not -- can ask for 10 000 rows and

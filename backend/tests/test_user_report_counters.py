@@ -24,8 +24,13 @@ never move -- which is asserted directly rather than left to the implementation.
 complaint about the same person, and a moderator reads the two queues as one screen; the tests
 assert both land in the same bucket so a future split cannot happen silently.
 
-Nothing here asserts an automatic ban or any other automatic consequence. These are counts to be
-read; blocking stays a decision a human makes.
+**The removal total blocks the participant automatically.** More than five upheld removals,
+summed across the three kinds, sets ``users.is_blocked`` -- the flag every auth path already
+enforces -- and an administrator has to clear it through the block route before the person can
+sign in again. The block does not write itself on every removal past the line, only on the
+transition: a manual unblock stays an unblock until a further removal arrives. The tests below
+pin the boundary (five is ordinary, six is blocked), the cross-kind sum, and the fact that a
+dismissed report cannot block anybody, because only the authoritative count is read.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -588,6 +593,96 @@ def test_hiding_twice_counts_one_removal(db):
     assert second["already_hidden"] is True
     assert second["content_removed"] is False
     assert only(db, author["id"], CONFESSION, None) == (0, 1)
+
+
+# --- the automatic block at the removal threshold ----------------------------------
+
+
+def is_blocked(db, account_id):
+    """The stored block flag, read straight off the row."""
+    with db.sessions() as session:
+        row = session.get(UserRecord, str(account_id))
+        assert row is not None, "the participant row vanished, which no test should cause"
+        return row.is_blocked
+
+
+def test_five_removals_do_not_block_and_the_sixth_does(db):
+    """The boundary in one test, both sides of it.
+
+    "More than five" is the rule, so exactly five reads as ordinary and the sixth takes the
+    account away. A test that only walked over the line could pass with an off-by-one that
+    blocks at five.
+    """
+    author = make_user(db, "author")
+    confession_ids = [make_confession(db, author) for _ in range(6)]
+
+    for confession_id in confession_ids[:5]:
+        hide_confession(db, confession_id, "mod")
+    assert is_blocked(db, author["id"]) is False
+
+    hide_confession(db, confession_ids[5], "mod")
+    assert is_blocked(db, author["id"]) is True
+
+
+def test_removals_of_different_kinds_sum_toward_the_block(db):
+    """The block reads the same sum the flagged queue does, not one kind at a time.
+
+    Three confessions and three love notes is six removals. A per-kind threshold would leave
+    this participant unblocked with six upheld removals on their record.
+    """
+    person = make_user(db, "person")
+    counterpart = make_user(db, "counterpart")
+    confessions = [make_confession(db, person) for _ in range(3)]
+    notes = [make_note(db, person, counterpart) for _ in range(3)]
+
+    for confession_id in confessions:
+        hide_confession(db, confession_id, "mod")
+    for note_id in notes[:2]:
+        resolve_love_note_report(
+            db, love_note_report_row(db, note_id, counterpart), "removed", reviewer()
+        )
+    assert is_blocked(db, person["id"]) is False
+
+    resolve_love_note_report(
+        db, love_note_report_row(db, notes[2], counterpart), "removed", reviewer()
+    )
+    assert is_blocked(db, person["id"]) is True
+
+
+def test_a_dismissed_report_cannot_block_anybody(db):
+    """Only upheld removals move the authoritative count, so cleared complaints are inert.
+
+    Six reports filed and six dismissed is somebody people complained about six times, not
+    somebody whose content six moderators took down -- and the block reads the second.
+    """
+    person = make_user(db, "person")
+    for index in range(6):
+        confession_id = make_confession(db, person)
+        report_id = report_row(db, confession_id, make_user(db, f"reporter-{index}"))
+        resolve_confession_report(db, report_id, "dismissed", "mod")
+
+    assert is_blocked(db, person["id"]) is False
+
+
+def test_an_admin_unblock_stays_until_the_next_removal(db, admin_client):
+    """The unblock is a stored decision, not a condition re-derived at sign-in.
+
+    Clearing the flag is the whole of the unblock: the account is not immediately re-blocked
+    for the six removals still on its record, because a rule that did that would make the
+    admin's action meaningless. The next removal is the new event that blocks again.
+    """
+    author = make_user(db, "author")
+    confession_ids = [make_confession(db, author) for _ in range(7)]
+    for confession_id in confession_ids[:6]:
+        hide_confession(db, confession_id, "mod")
+    assert is_blocked(db, author["id"]) is True
+
+    response = admin_client.put(f"/admin/users/{author['id']}/block?blocked=false")
+    assert response.status_code == 200, response.text
+    assert is_blocked(db, author["id"]) is False
+
+    hide_confession(db, confession_ids[6], "mod")
+    assert is_blocked(db, author["id"]) is True
 
 
 def test_a_filing_and_an_upheld_removal_both_count(db):

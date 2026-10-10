@@ -9,9 +9,9 @@ from ..dependencies import get_db
 from ..models import AccountDetails, AdminUserCreate, AdminUserUpdate, Year
 from ..db_models import (ACCOUNT_MODELS, CaseClosedMessageRecord,
     CaseClosedMessageReportRecord, CaseClosedSessionRecord, ConfessionRecord,
-    ConversationRecord, LoginTokenRecord, MessageRecord, MessageReportRecord,
+    ConversationRecord, MessageRecord, MessageReportRecord,
     UserRecord, find_account_in_table, resolve_account_by_id)
-from ..services.auth_service import SESSION_STATUS_ACTIVE, SESSION_STATUS_REVOKED
+from ..services.auth_service import retire_account_sessions
 from ..accounts import (
     AccountType, Capability, account_cap, account_cap_lock_key,
     normalize_account_type,
@@ -608,26 +608,10 @@ def set_user_block_state(
             row.is_blocked = blocked
             if became_blocked:
                 # Same transaction as the flag flip: a block that revokes nothing
-                # is a block the session table disagrees with.
-                session.execute(
-                    update(LoginTokenRecord)
-                    .where(
-                        LoginTokenRecord.account_id == str(user_id),
-                        LoginTokenRecord.account_type == blocked_type,
-                        LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
-                    )
-                    .values(session_status=SESSION_STATUS_REVOKED)
-                )
-                session.execute(
-                    update(LoginTokenRecord)
-                    .where(
-                        LoginTokenRecord.account_id == str(user_id),
-                        LoginTokenRecord.account_type == blocked_type,
-                        LoginTokenRecord.used.is_(False),
-                        LoginTokenRecord.revoked.is_(False),
-                    )
-                    .values(revoked=True)
-                )
+                # is a block the session table disagrees with. Shared with the
+                # automatic block at the removal threshold, so the two cannot
+                # disagree about what blocking retires.
+                retire_account_sessions(session, str(user_id), blocked_type)
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if became_blocked and blocked_type == AccountType.USERS.value:

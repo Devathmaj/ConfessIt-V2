@@ -119,9 +119,21 @@ const participant = (
  * waiting on it would let an assertion run against an empty list. `findAllByText` rather than
  * `findByText`: a name above the threshold is rendered twice on purpose, in the queue and in
  * the Participants list, and a singular find would mistake the duplication for a failure.
+ *
+ * `rows` is either the literal answer every read should give, or a function answering each
+ * read from its params. The function form is how the page-envelope shape is simulated: the
+ * real server answers the four reads with different rows, and a single literal would put the
+ * same accounts in every section.
  */
-function renderRows(rows: unknown[], expected: string) {
-  api.getAdminUsers.mockResolvedValue(rows);
+function renderRows(
+  rows: unknown[] | ((params: Record<string, unknown>) => unknown),
+  expected: string,
+) {
+  if (typeof rows === 'function') {
+    api.getAdminUsers.mockImplementation(rows as never);
+  } else {
+    api.getAdminUsers.mockResolvedValue(rows);
+  }
   render(
     <AuthContext.Provider
       value={{
@@ -422,6 +434,46 @@ describe('ProfileReview: accounts as cards', () => {
     await waitFor(() =>
       expect(api.setAdminUserBlocked).toHaveBeenCalledWith(ORDINARY, false),
     );
+  });
+
+  it('flips a participant card between Block and Unblock with no refetch when the server pages', async () => {
+    // Against the real server every read is a page envelope, so the two participant sections
+    // render from the per-read rows rather than the merged list. The block flip has to reach
+    // those copies too: updating only the merged list left the card offering the old action
+    // until a page change or a refresh refetched it.
+    const envelope = (users: unknown[]) => ({ users, total: users.length, skip: 0, limit: 51 });
+    await renderRows(
+      (params) =>
+        params?.account_type === 'users' && params.flagged !== 'flagged'
+          ? envelope([participant(ORDINARY, 'One')])
+          : envelope([]),
+      'One',
+    );
+    api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: true });
+    const reads = api.getAdminUsers.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Block user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Block account' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Unblock user/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /Block user/ })).not.toBeInTheDocument();
+    expect(await screen.findByText('Blocked')).toBeInTheDocument();
+    // The flip is local state, not a refetch: the four reads that loaded the page are all
+    // there has ever been.
+    expect(api.getAdminUsers).toHaveBeenCalledTimes(reads);
+
+    // And back again, in the same sitting: the toggle is two-way without a reload.
+    api.setAdminUserBlocked.mockResolvedValue({ id: ORDINARY, is_blocked: false });
+    fireEvent.click(screen.getByRole('button', { name: /Unblock user/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Unblock account' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Block user/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Blocked')).not.toBeInTheDocument();
+    expect(api.getAdminUsers).toHaveBeenCalledTimes(reads);
   });
 
   it('offers no block button for an admin, because the database refuses it', async () => {

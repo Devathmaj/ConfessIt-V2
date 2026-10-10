@@ -30,6 +30,23 @@ branch reaches here. A repeat request against already-removed content increments
 is the same gate that keeps the notification count and the ``comment_count`` decrement correct,
 for the same reason: one removal is one event.
 
+**A removal that takes the total past the threshold blocks the participant.** This is the one
+automatic consequence of the counts, and it lives here because this module is the single funnel
+every removal path passes through: the ruling screens, the two direct hides, and the automated
+content-safety takedowns all end in :func:`record_removal`, so none of them has to remember the
+rule and none of them can get it wrong on its own.
+
+Blocking is the existing ``users.is_blocked`` flag, so every auth path already enforces it --
+the next request, refresh, magic-link mint or redemption is refused without anything new here
+having to reach into sign-in. The block is a stored fact rather than a condition recomputed at
+sign-in on purpose: an administrator unblocks a participant by clearing the flag, and a rule
+that re-derived "has more than five removals" at login would re-block them the moment they
+tried, making the unblock meaningless. A participant who crosses the line again is blocked
+again, because the check is "over the threshold and not already blocked", not "just crossed
+it". The block retires the account's live sessions and unredeemed links in the same
+transaction (see ``auth_service.retire_account_sessions``), so no status reader sees a blocked
+account as signed in.
+
 **Writes are atomic SQL increments.** ``SET n = n + 1`` issued as a Core ``UPDATE``, not
 ``row.counter += 1`` on a loaded ORM object. Two reports against the same participant filed at
 the same moment is not a theoretical case -- it is what a popular participant's post attracting
@@ -40,9 +57,11 @@ It also avoids a stale-identity problem: the caller's session may already hold t
 
 from typing import Any, Dict, Optional
 
-from sqlalchemy import update
+from sqlalchemy import func, update
 
+from ..accounts import AccountType
 from ..db_models import UserRecord
+from .auth_service import retire_account_sessions
 
 # The three kinds of content a participant can be reported for. A confession and a comment on
 # one share a kind -- see ``UserRecord`` for why.
@@ -51,6 +70,14 @@ LOVE_NOTE = "love_note"
 MESSAGE = "message"
 
 REPORT_KINDS: tuple[str, ...] = (CONFESSION, LOVE_NOTE, MESSAGE)
+
+# Above how many upheld removals, summed across the three kinds, a participant is blocked
+# automatically by the next removal. Strictly more than this, so five removals leave the
+# account alone and the sixth takes it away. This is the same line the admin flagged queue
+# draws (``admin_service`` reads the constant from here), and deliberately so: the queue
+# exists to surface the participants at the line, and an operator reading it sees them in
+# the state the rule put them in -- not a second threshold that could disagree.
+REMOVAL_AUTO_BLOCK_THRESHOLD = 5
 
 # kind -> (total reports filed, reports that were upheld by a removal).
 _KIND_COLUMNS: Dict[str, tuple[str, str]] = {
@@ -120,6 +147,47 @@ def _bump(
     return result.rowcount > 0
 
 
+def _total_removals_expr():
+    """The participant's upheld-removal total, summed across the three kinds.
+
+    ``coalesce`` because a database old enough to have predated the columns can still hold a
+    NULL in one of them, and ``NULL + n`` would read as no total at all -- the one reading
+    that silently disables the block.
+    """
+    return (
+        func.coalesce(UserRecord.confession_removal_count, 0)
+        + func.coalesce(UserRecord.love_note_removal_count, 0)
+        + func.coalesce(UserRecord.message_removal_count, 0)
+    )
+
+
+def _block_if_over_threshold(session, clause) -> bool:
+    """Block the participant named by ``clause`` if their removal total is over the line.
+
+    Called only when a removal was just counted, so the increment this module made a statement
+    ago is what the condition reads. The ``is_blocked`` guard means the transition, not the
+    condition, is what writes: an account already blocked stays as it is and its retired
+    sessions are not retired again. A participant an administrator has unblocked is blocked
+    again by their *next* removal -- the rule is "over the threshold", not "just crossed it" --
+    which is the same line the flagged queue shows.
+
+    The flag and the session retirement share the caller's transaction: a block whose live
+    sessions stay ``active`` is a session table that disagrees with the account table.
+    """
+    blocked_id = session.scalar(
+        update(UserRecord)
+        .where(clause)
+        .where(UserRecord.is_blocked.is_(False))
+        .where(_total_removals_expr() > REMOVAL_AUTO_BLOCK_THRESHOLD)
+        .values(is_blocked=True)
+        .returning(UserRecord.id)
+    )
+    if blocked_id is None:
+        return False
+    retire_account_sessions(session, str(blocked_id), AccountType.USERS.value)
+    return True
+
+
 def record_report_filed(
     session,
     *,
@@ -157,11 +225,20 @@ def record_removal(
 
     Same-transaction and same-missing-author reasoning as :func:`record_report_filed`: the
     content is already down by the time this runs, and a counter must not be able to undo that.
+
+    This is also the one place the automatic block happens (see the module docstring): the
+    removal that takes the participant's total past ``REMOVAL_AUTO_BLOCK_THRESHOLD`` blocks
+    the account, and every removal path in the application funnels through here, so no caller
+    has to remember to ask. The return value stays "did this removal count", not "was the
+    participant blocked", so no call site changes meaning because the block exists.
     """
-    return _bump(
+    counted = _bump(
         session, kind=kind, author_user_id=author_user_id, author_regno=author_regno,
         which=_REMOVED_AT,
     )
+    if counted:
+        _block_if_over_threshold(session, _author_clause(author_user_id, author_regno))
+    return counted
 
 
 def tally_for_row(row: Any) -> Dict[str, Dict[str, int]]:

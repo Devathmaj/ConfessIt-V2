@@ -11,6 +11,9 @@ Two gaps, both enforcement-neutral on their own:
   status-only reader could tell a blocked session from a live one. Blocking now
   retires live sessions and unredeemed links in the same transaction, and
   unblocking does not resurrect them.
+* The automatic block at the removal threshold is the same block: the same flag,
+  the same retirement, and the same admin unblock route. The last test drives the
+  whole arc -- removal, refusal, unblock, sign-in -- so the two cannot drift.
 """
 
 from types import SimpleNamespace
@@ -30,6 +33,12 @@ from app.services.auth_service import (
     TOKEN_HASH_DOMAIN_REFRESH,
     get_current_user,
     hash_token,
+)
+from app.services.report_counters import (
+    CONFESSION,
+    LOVE_NOTE,
+    MESSAGE,
+    record_removal,
 )
 
 VERIFY_ENDPOINT = "/auth/login/magic/verify"
@@ -245,3 +254,64 @@ def test_blocking_an_account_retires_its_sessions_and_links(db, no_auth_override
     unblocked = admin_client.put(f"/admin/users/{user_id}/block?blocked=false")
     assert unblocked.status_code == 200, unblocked.text
     assert _session_row(db, live_id).session_status == SESSION_STATUS_REVOKED
+
+
+def test_the_automatic_block_retires_sessions_and_an_admin_unblocks_sign_in(
+    db, admin_client
+):
+    """Six removals block the account exactly as a manual block would.
+
+    Driven through ``record_removal``, the funnel every removal path -- rulings, direct hides
+    and the automated takedowns -- passes through, so the threshold logic is exercised where
+    all of them meet it. The live session and the unredeemed link are retired in the same
+    transaction, sign-in is refused while the flag is set, and the admin unblock route is what
+    lets the participant in again.
+    """
+    _seed_user(db, "repeat-offender")
+    browser = _browser()
+    access_token = _redeem_token(browser, _mint_token_for(db, "repeat-offender"))
+    cookie = _refresh_cookie(browser)
+    live_link = _mint_token_for(db, "repeat-offender")
+    assert access_token
+
+    with db.sessions() as session:
+        user_id = str(session.scalar(
+            select(UserRecord.id).where(UserRecord.regno == "repeat-offender")
+        ))
+        live_id = session.scalar(
+            select(LoginTokenRecord.id).where(
+                LoginTokenRecord.refresh_token_hash
+                == hash_token(cookie, domain=TOKEN_HASH_DOMAIN_REFRESH)
+            )
+        )
+    assert _session_row(db, live_id).session_status == SESSION_STATUS_ACTIVE
+
+    with db.sessions.begin() as session:
+        for kind in (CONFESSION, LOVE_NOTE, MESSAGE, CONFESSION, LOVE_NOTE, MESSAGE):
+            assert record_removal(session, kind=kind, author_regno="repeat-offender") is True
+
+    with db.sessions() as session:
+        assert session.get(UserRecord, user_id).is_blocked is True
+
+    assert _session_row(db, live_id).session_status == SESSION_STATUS_REVOKED
+    with db.sessions() as session:
+        link = session.scalar(
+            select(LoginTokenRecord).where(
+                LoginTokenRecord.token_hash
+                == hash_token(live_link, domain=TOKEN_HASH_DOMAIN_MAGIC)
+            )
+        )
+    assert link is not None and link.used is False and link.revoked is True
+
+    # The blocked account cannot sign in: a fresh link is refused at redemption.
+    refused = _browser().get(
+        f"{VERIFY_ENDPOINT}?token={_mint_token_for(db, 'repeat-offender')}"
+    )
+    assert refused.status_code == 403
+
+    unblocked = admin_client.put(f"/admin/users/{user_id}/block?blocked=false")
+    assert unblocked.status_code == 200, unblocked.text
+
+    # And once an administrator clears the flag, a fresh link works again.
+    fresh_access = _redeem_token(_browser(), _mint_token_for(db, "repeat-offender"))
+    assert fresh_access

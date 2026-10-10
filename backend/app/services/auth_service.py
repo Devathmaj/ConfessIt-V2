@@ -199,6 +199,40 @@ def _ensure_not_blocked(row: Any) -> None:
         )
 
 
+def retire_account_sessions(session, account_id: str, account_type: str) -> None:
+    """Retire an account's live sessions and unredeemed magic links in the caller's transaction.
+
+    The write side of a block, shared by the admin route and the automatic block at the removal
+    threshold so the two cannot disagree about what blocking does. Enforcement never depends on
+    it -- every auth path re-checks ``is_blocked`` per request -- but the session table must not
+    go on describing a blocked account as actively signed in, or a status-only reader (the admin
+    census of live sessions among them) sees a live session that cannot authenticate.
+
+    Live sessions move to ``revoked`` and links that were never redeemed are marked revoked, so
+    neither can be picked up again. Retirement is not undone by an unblock: the account signs in
+    fresh, which is also what rotates its credentials.
+    """
+    session.execute(
+        update(LoginTokenRecord)
+        .where(
+            LoginTokenRecord.account_id == str(account_id),
+            LoginTokenRecord.account_type == account_type,
+            LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
+        )
+        .values(session_status=SESSION_STATUS_REVOKED)
+    )
+    session.execute(
+        update(LoginTokenRecord)
+        .where(
+            LoginTokenRecord.account_id == str(account_id),
+            LoginTokenRecord.account_type == account_type,
+            LoginTokenRecord.used.is_(False),
+            LoginTokenRecord.revoked.is_(False),
+        )
+        .values(revoked=True)
+    )
+
+
 # ``HTTPBearer`` rather than ``OAuth2PasswordBearer``: there is no password grant and no
 # ``/auth/token`` endpoint (the tokenUrl in the old scheme's constructor advertised one
 # that does not exist). The bearer scheme extracts the ``Authorization: Bearer`` header,

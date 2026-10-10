@@ -1339,11 +1339,19 @@ export const ProfileReview = () => {
     try {
       setBlocking(profile.id);
       await setAdminUserBlocked(profile.id, nextState);
-      setProfiles((prev) =>
-        prev.map((item) =>
+      // The same flip in every list a card can be rendered from. Against the real server the
+      // two participant sections read `flaggedRows`/`ordinaryRows` rather than the merged
+      // `profiles` list -- each shows exactly the page its own read returned -- so updating
+      // only `profiles` left a participant card still offering "Block user" after a
+      // successful block, until a refetch. Staff sections derive from `profiles`, but the
+      // same map over all three keeps the copies from ever disagreeing either way.
+      const applyBlockState = (rows: AdminUserProfile[]) =>
+        rows.map((item) =>
           item.id === profile.id ? { ...item, is_blocked: nextState } : item
-        )
-      );
+        );
+      setProfiles(applyBlockState);
+      setFlaggedRows(applyBlockState);
+      setOrdinaryRows(applyBlockState);
       toast.success(`User ${nextState ? 'blocked' : 'unblocked'} successfully.`);
     } catch (error) {
       console.error('Failed to update block state', error);
