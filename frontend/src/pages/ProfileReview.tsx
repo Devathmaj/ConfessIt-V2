@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -540,6 +540,24 @@ const sortProfiles = (
   sort: ProfileSortOption
 ): AdminUserProfile[] => [...accounts].sort(SORT_COMPARATORS[sort]);
 
+/**
+ * Whether one participant row answers a section's own search query.
+ *
+ * Used only against legacy bare-array answers, which ignore request params: the section
+ * narrows the one list itself. Both halves of the cohort are in the haystack, so searching
+ * "CSE" and searching 2 both find the participant -- a single joined string would make the
+ * second of those depend on the order the server happened to render the two halves in.
+ */
+const matchesSearchQuery = (profile: AdminUserProfile, query: string): boolean => {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  const haystack = [profile.name, profile.regno, profile.email, profile.department, profile.year]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(needle);
+};
+
 interface ProfileSection {
   id: string;
   title: string;
@@ -577,6 +595,24 @@ interface ProfileSection {
     onNext: () => void;
     prevLabel: string;
     nextLabel: string;
+  };
+  /**
+   * Present only on the two participant sections, each of which searches for itself.
+   *
+   * The box lives inside the section it narrows rather than in one toolbar above the page:
+   * a query typed into the work queue is a question about the queue, and sending it against
+   * the Participants list below -- or against the staff sections, which have no box at all
+   * -- would make one section's question change another section's answer.
+   */
+  search?: {
+    /** The draft in the box. Nothing is fetched until it is submitted. */
+    value: string;
+    onValueChange: (value: string) => void;
+    onSubmit: () => void;
+    /** Distinct per section, so the box names the list it searches to a screen reader. */
+    placeholder: string;
+    /** The Search button's accessible name, likewise naming the section it submits for. */
+    buttonLabel: string;
   };
 }
 
@@ -784,17 +820,25 @@ export const ProfileReview = () => {
 
   const [profiles, setProfiles] = useState<AdminUserProfile[]>([]);
   const [loading, setLoading] = useState(true);
-  /** What the search box currently says. Draft only: nothing is fetched until it is submitted. */
-  const [searchTerm, setSearchTerm] = useState('');
+  /** What the flagged queue's search box currently says. Draft only: nothing is fetched until it is submitted. */
+  const [flaggedSearch, setFlaggedSearch] = useState('');
   /**
-   * The search text the server has actually been asked about.
+   * The search the flagged work queue has actually been asked about.
    *
-   * Set only by the Search button (or Enter), never by typing: each keystroke firing four
-   * reads against ten thousand participants would be a self-inflicted load test, and the
-   * half-typed query it answered would be obsolete before it returned. The box stays a
-   * draft until submitted, so the request that goes out is the question the operator meant.
+   * Set only by that section's Search button (or Enter), never by typing: each keystroke
+   * firing four reads against ten thousand participants would be a self-inflicted load
+   * test, and the half-typed query it answered would be obsolete before it returned. The
+   * box stays a draft until submitted, so the request that goes out is the question the
+   * operator meant.
+   *
+   * One query per participant section rather than one for the page: a question typed into
+   * the work queue is about the queue, and must not reach the Participants list below it
+   * -- nor the staff sections, which have no search box at all.
    */
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [flaggedQuery, setFlaggedQuery] = useState('');
+  /** Same draft/applied split, for the ordinary Participants section. */
+  const [ordinarySearch, setOrdinarySearch] = useState('');
+  const [ordinaryQuery, setOrdinaryQuery] = useState('');
   /** Which server page of ordinary participants is showing (zero-based). */
   const [page, setPage] = useState(0);
   /** Which server page of the flagged work queue is showing (zero-based). */
@@ -874,19 +918,24 @@ export const ProfileReview = () => {
   const [creating, setCreating] = useState(false);
 
   /**
-   * Submit the draft search box as the query every read is issued with.
+   * Submit one section's draft search box as the query that section's read is issued with.
    *
-   * Pages reset here rather than in an effect so a new question issues exactly one round
-   * of reads: the previous page number may not exist under the new filters, and staying
-   * on it would show an empty grid for a question that has answers.
+   * Only the section's own page resets, and here rather than in an effect, so a new
+   * question issues exactly one read: the previous page number may not exist under the new
+   * query, while the other participant section's page has nothing to do with this box and
+   * must not move under the operator.
    */
-  const submitSearch = () => {
-    setAppliedSearch(searchTerm.trim());
-    setPage(0);
+  const submitFlaggedSearch = useCallback(() => {
+    setFlaggedQuery(flaggedSearch.trim());
     setFlaggedPage(0);
-  };
+  }, [flaggedSearch]);
 
-  /** A new cohort question or order starts on the first page, for the same reason. */
+  const submitOrdinarySearch = useCallback(() => {
+    setOrdinaryQuery(ordinarySearch.trim());
+    setPage(0);
+  }, [ordinarySearch]);
+
+  /** A new cohort question starts both participant sections on their first page, for the same reason. */
   const changeYearFilter = (value: string) => {
     setYearFilter(value);
     setPage(0);
@@ -899,16 +948,21 @@ export const ProfileReview = () => {
     setFlaggedPage(0);
   };
 
+  /**
+   * Sort travels on the ordinary read alone -- the queue's order is fixed at removal order
+   * -- so only that section's page resets. The flagged pager keeps its place.
+   */
   const changeSortOption = (value: ProfileSortOption) => {
     setSortOption(value);
     setPage(0);
-    setFlaggedPage(0);
   };
 
-  /** Clear every narrowing control at once, search draft included, back on the first page. */
+  /** Clear every narrowing control at once -- both section searches included -- back on the first pages. */
   const clearAllFilters = () => {
-    setSearchTerm('');
-    setAppliedSearch('');
+    setFlaggedSearch('');
+    setFlaggedQuery('');
+    setOrdinarySearch('');
+    setOrdinaryQuery('');
     setYearFilter(ALL_YEARS);
     setDepartmentFilter(ALL_DEPARTMENTS);
     setPage(0);
@@ -921,30 +975,35 @@ export const ProfileReview = () => {
       try {
         if (isFirstLoad.current) setLoading(true);
         else setRefreshing(true);
-        const q = appliedSearch.trim() || undefined;
+        const fq = flaggedQuery.trim() || undefined;
+        const oq = ordinaryQuery.trim() || undefined;
         const year = yearFilter === ALL_YEARS ? undefined : Number(yearFilter);
         const department = departmentFromValue(departmentFilter) ?? undefined;
         const ordinarySort = SERVER_SORTS[sortOption];
         // Four bounded reads rather than one unbounded one. Staff tables are tiny by
-        // construction, so both arrive whole; each participant read is one SQL page
-        // (WHERE plus LIMIT/OFFSET on the database), so the backend serialises at most
-        // two pages no matter how many participants exist. The ordinary read asks for the
-        // whole participant population, flagged included: a participant above the removal
-        // threshold is still a participant and must not vanish from the Participants list.
-        // The flagged read is the same population's work queue in removal order -- the
-        // most-removed participant platform-wide belongs on top even when the Participants
-        // list is sorted by name and sitting on page nine -- and it deliberately overlaps
-        // the ordinary read rather than partitioning it.
+        // construction, so both arrive whole -- and neither staff read carries a search
+        // query, because neither staff section has a search box: a participant's question
+        // has no business narrowing the account class an operator must never lose sight of.
+        // Each participant read is one SQL page (WHERE plus LIMIT/OFFSET on the database)
+        // carrying only its own section's submitted query and the cohort filters, so the
+        // backend serialises at most two pages no matter how many participants exist. The
+        // ordinary read asks for the whole participant population, flagged included: a
+        // participant above the removal threshold is still a participant and must not
+        // vanish from the Participants list. The flagged read is the same population's
+        // work queue in removal order -- the most-removed participant platform-wide
+        // belongs on top even when the Participants list is sorted by name and sitting on
+        // page nine -- and it deliberately overlaps the ordinary read rather than
+        // partitioning it.
         const [admins, moderators, flagged, ordinary] = await Promise.all([
-          getAdminUsers({ account_type: 'admin', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
-          getAdminUsers({ account_type: 'moderator', limit: STAFF_PAGE_SIZE, ...(q ? { q } : {}) }),
+          getAdminUsers({ account_type: 'admin', limit: STAFF_PAGE_SIZE }),
+          getAdminUsers({ account_type: 'moderator', limit: STAFF_PAGE_SIZE }),
           getAdminUsers({
             account_type: 'users',
             flagged: 'flagged',
             sort: 'removals_desc',
             skip: flaggedPage * PARTICIPANT_PAGE_SIZE,
             limit: PARTICIPANT_PAGE_SIZE,
-            ...(q ? { q } : {}),
+            ...(fq ? { q: fq } : {}),
             ...(year !== undefined ? { year } : {}),
             ...(department ? { department } : {}),
           }),
@@ -953,7 +1012,7 @@ export const ProfileReview = () => {
             sort: ordinarySort,
             skip: page * PARTICIPANT_PAGE_SIZE,
             limit: PARTICIPANT_PAGE_SIZE,
-            ...(q ? { q } : {}),
+            ...(oq ? { q: oq } : {}),
             ...(year !== undefined ? { year } : {}),
             ...(department ? { department } : {}),
           }),
@@ -996,7 +1055,7 @@ export const ProfileReview = () => {
     return () => {
       cancelled = true;
     };
-  }, [appliedSearch, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
+  }, [flaggedQuery, ordinaryQuery, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
 
   /**
    * The years and departments the cards can be filtered to, accumulated across every page
@@ -1054,54 +1113,44 @@ export const ProfileReview = () => {
   const availableDepartments = useMemo(() => seenDepartments, [seenDepartments]);
 
   /**
-   * The search text currently narrowing the list: the submitted query against the real
-   * server, the live draft against legacy bare-array answers (tests and older servers),
-   * which ignore request params and hand back one unfiltered list.
+   * The search each participant section is currently answering with: the submitted query
+   * against the real server, the live draft against legacy bare-array answers (tests and
+   * older servers), which ignore request params and hand back one unfiltered list.
+   *
+   * One per section, because each section's box searches only its own list. They are held
+   * apart deliberately: a query typed into the work queue is not a question about the
+   * Participants below it, and neither is a question about admins or moderators, which
+   * have no box and are never narrowed by either.
    */
-  const activeSearch = useServerTotals ? appliedSearch : searchTerm;
-
+  const activeFlaggedSearch = useServerTotals ? flaggedQuery : flaggedSearch;
+  const activeOrdinarySearch = useServerTotals ? ordinaryQuery : ordinarySearch;
   /**
-   * The accounts left after the search box and the two cohort filters.
+   * The accounts left after the two cohort filters.
    *
-   * Against the real server this is the reads themselves: every read already carries the
-   * submitted query and the cohort filters as SQL WHERE, and re-applying them here would
-   * narrow one database page a second time -- hiding rows the server correctly returned
-   * and breaking the pager totals beside them. Against legacy bare-array answers the
-   * params went nowhere, so the same three predicates run here over the one list, which
-   * is also what keeps the narrowing immediate while typing there.
+   * Against the real server this is the reads themselves: every participant read already
+   * carries the cohort filters as SQL WHERE, and re-applying them here would narrow one
+   * database page a second time -- hiding rows the server correctly returned and breaking
+   * the pager totals beside them. Against legacy bare-array answers the params went
+   * nowhere, so the cohort predicates run here over the one list, which is also what keeps
+   * the narrowing immediate while typing there.
    *
-   * All three are applied here rather than in parallel memos feeding the sections, because the
-   * header count, the "no accounts match" message and the sections themselves all have to be
-   * describing the same set of rows. Three memos that each filtered independently would agree
-   * until the day one of them was not wired into all three places.
+   * Search does not run here. Each participant section narrows itself with its own query
+   * -- in legacy mode the draft narrows it live, in envelope mode the server already
+   * answered the submitted one -- and neither query may reach the staff sections, which
+   * have no search box and no reason to lose an account because of a participant's name.
+   *
+   * The cohort predicates run here rather than in parallel memos feeding the sections,
+   * because the header count, the "no accounts match" message and the sections themselves
+   * all have to be describing the same set of rows. Three memos that each filtered
+   * independently would agree until the day one of them was not wired into all three places.
    */
   const filteredProfiles = useMemo(() => {
     if (useServerTotals) return profiles;
-    const query = searchTerm.trim().toLowerCase();
     const year = yearFilter === ALL_YEARS ? null : Number(yearFilter);
     const department = departmentFromValue(departmentFilter);
-    const narrowing = year !== null || department !== null;
+    if (year === null && department === null) return profiles;
 
     return profiles.filter((profile) => {
-      if (query) {
-        const haystack = [
-          profile.name,
-          profile.regno,
-          profile.email,
-          // Both halves, so searching "CSE" and searching 2 both find the participant. A
-          // single joined string would make the second of those depend on the order the server
-          // happened to render the two halves in.
-          profile.department,
-          profile.year,
-        ]
-          .filter(Boolean)
-          .join(' ') // join to single string
-          .toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-
-      if (!narrowing) return true;
-
       // Admins and moderators are not narrowed by cohort. They have no year or department to
       // match on, so there is nothing to compare -- and dropping them would hide the one account
       // class an operator must never lose sight of behind a filter they set to find somebody else.
@@ -1116,11 +1165,17 @@ export const ProfileReview = () => {
       }
       return true;
     });
-  }, [profiles, searchTerm, yearFilter, departmentFilter, useServerTotals]);
+  }, [profiles, yearFilter, departmentFilter, useServerTotals]);
 
-  /** Whether anything at all is narrowing the list, which is what the clear button is for. */
-  const filtersNarrowed =
-    activeSearch.trim() !== '' || yearFilter !== ALL_YEARS || departmentFilter !== ALL_DEPARTMENTS;
+  /**
+   * Whether anything at all is narrowing either participant section, which is what the
+   * clear button and the whole-page no-match card are for. Staff are never narrowed, so
+   * nothing here can be about them.
+   */
+  const cohortNarrowed = yearFilter !== ALL_YEARS || departmentFilter !== ALL_DEPARTMENTS;
+  const flaggedNarrowed = activeFlaggedSearch.trim() !== '' || cohortNarrowed;
+  const ordinaryNarrowed = activeOrdinarySearch.trim() !== '' || cohortNarrowed;
+  const filtersNarrowed = flaggedNarrowed || ordinaryNarrowed;
 
   /**
    * The four groups this screen shows, in the order an operator should meet them.
@@ -1147,9 +1202,10 @@ export const ProfileReview = () => {
     const participants = filteredProfiles.filter((profile) => !isStaffAccount(profile));
     // Against the real server each section shows exactly the page its own read returned: the
     // queue one page of the removal-ordered flagged read, Participants one page of the
-    // ordinary read, which includes those rows. Against legacy bare-array answers the one
-    // merged list is everything, so the same split runs here: the queue is the participants
-    // above the threshold, and Participants is all of them.
+    // ordinary read, which includes those rows -- each read already narrowed by its own
+    // submitted query and the cohort filters. Against legacy bare-array answers the one
+    // merged list is everything, so each participant section narrows it itself: by its own
+    // live search draft as well as the cohort, which `filteredProfiles` has already applied.
     //
     // Most removals first, unconditionally. This is a work queue and the order a moderator works
     // through it in is not theirs to rearrange, so `sortOption` is deliberately not consulted.
@@ -1157,10 +1213,14 @@ export const ProfileReview = () => {
       ? flaggedRows
       : participants
           .filter((profile) => totalRemovalsFor(profile) > FLAGGED_REMOVAL_THRESHOLD)
+          .filter((profile) => matchesSearchQuery(profile, activeFlaggedSearch))
           .sort(byMostRemovals);
     // A participant above the threshold is in this list too, by name like everybody else:
-    // the queue above is a view of this population, not a separate one.
-    const ordinary = useServerTotals ? ordinaryRows : participants;
+    // the queue above is a view of this population, not a separate one. The sort picker is
+    // applied to whichever list this is further down, at the section itself.
+    const ordinary = useServerTotals
+      ? ordinaryRows
+      : participants.filter((profile) => matchesSearchQuery(profile, activeOrdinarySearch));
 
     // Each participant section is one server page: the pager walks the database pages while the
     // section itself keeps showing whatever the current page holds. The counts beside them are
@@ -1180,9 +1240,10 @@ export const ProfileReview = () => {
         title: 'Admins',
         description:
           'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page. Admin accounts cannot be created here; this screen is the only place that creates them.',
-        emptyNote: filtersNarrowed
-          ? 'No admin accounts match the current search.'
-          : 'No admin accounts exist yet.',
+        // No search box reaches this section and the cohort filters skip staff rows, so an
+        // empty admin list is always the platform's own state: the note never has to hedge
+        // about a filter that could have hidden somebody.
+        emptyNote: 'No admin accounts exist yet.',
         icon: Crown,
         badgeVariant: 'default',
         accounts: admins,
@@ -1192,9 +1253,7 @@ export const ProfileReview = () => {
         title: 'Moderators',
         description:
           'Accounts that review and rule on reports. They reach fewer moderation screens than an admin, and they hold no participant content of their own, so a moderator needs no year, department, bio or interests.',
-        emptyNote: filtersNarrowed
-          ? 'No moderator accounts match the current search.'
-          : 'No moderator accounts exist yet.',
+        emptyNote: 'No moderator accounts exist yet.',
         icon: ShieldHalf,
         badgeVariant: 'secondary',
         accounts: moderators,
@@ -1204,12 +1263,20 @@ export const ProfileReview = () => {
         id: FLAGGED_SECTION_ID,
         title: `Participants with more than ${FLAGGED_REMOVAL_THRESHOLD} removals`,
         description: `Participants whose content has been taken down more than ${FLAGGED_REMOVAL_THRESHOLD} times in total, counting confessions and their comments together, love notes and chat messages. Complaints that were dismissed do not count towards this.`,
-        emptyNote: filtersNarrowed
-          ? `No participant above ${FLAGGED_REMOVAL_THRESHOLD} removals matches the current filters.`
+        emptyNote: flaggedNarrowed
+          ? `No participant above ${FLAGGED_REMOVAL_THRESHOLD} removals matches the current search or filters.`
           : `No participant is above ${FLAGGED_REMOVAL_THRESHOLD} upheld removals.`,
         icon: ShieldAlert,
         badgeVariant: 'destructive',
         accounts: flagged,
+        search: {
+          value: flaggedSearch,
+          onValueChange: setFlaggedSearch,
+          onSubmit: submitFlaggedSearch,
+          placeholder:
+            'Search flagged participants by name, register number, email, or class',
+          buttonLabel: 'Search flagged participants',
+        },
         pagination: {
           page: flaggedPage,
           pageCount: flaggedPageCount,
@@ -1231,13 +1298,20 @@ export const ProfileReview = () => {
         title: 'Participants',
         description:
           'Every participant account, including anyone above the removal threshold listed in the section above: that section is a work queue cut from this same list, not a separate population. Blocked accounts stay here too.',
-        emptyNote: filtersNarrowed
-          ? 'No participant matches the current filters.'
+        emptyNote: ordinaryNarrowed
+          ? 'No participant matches the current search or filters.'
           : 'No participants match.',
         icon: Users,
         badgeVariant: 'outline',
         accounts: sortProfiles(ordinary, sortOption),
         create: { label: 'Create participant', accountType: 'users' },
+        search: {
+          value: ordinarySearch,
+          onValueChange: setOrdinarySearch,
+          onSubmit: submitOrdinarySearch,
+          placeholder: 'Search participants by name, register number, email, or class',
+          buttonLabel: 'Search participants',
+        },
         pagination: {
           page,
           pageCount: ordinaryPageCount,
@@ -1255,14 +1329,36 @@ export const ProfileReview = () => {
         },
       },
     ];
-  }, [filteredProfiles, filtersNarrowed, sortOption, page, flaggedPage, ordinaryTotal, flaggedTotal, useServerTotals, flaggedRows, ordinaryRows]);
+  }, [
+    filteredProfiles,
+    flaggedNarrowed,
+    ordinaryNarrowed,
+    activeFlaggedSearch,
+    activeOrdinarySearch,
+    flaggedSearch,
+    ordinarySearch,
+    submitFlaggedSearch,
+    submitOrdinarySearch,
+    sortOption,
+    page,
+    flaggedPage,
+    ordinaryTotal,
+    flaggedTotal,
+    useServerTotals,
+    flaggedRows,
+    ordinaryRows,
+  ]);
 
   /**
-   * Whether a filter has hidden every account on the platform.
+   * Whether the narrowing controls have hidden every account on the platform.
    *
    * Distinguishes "the filters matched nothing" from "the platform is empty", which look identical
    * in the row count and need to be rendered differently: the first is a dead end the operator has
    * to be able to back out of, the second is a page whose create buttons are the point.
+   *
+   * Staff rows cannot be narrowed by anything here, so reaching this state with staff on the
+   * platform is impossible: the card appears when a cohort or a section search has emptied
+   * the participant reads against a platform with no staff to fall back on.
    */
   const nothingMatches = filteredProfiles.length === 0 && filtersNarrowed;
 
@@ -1279,9 +1375,25 @@ export const ProfileReview = () => {
   /**
    * Every account the server reports under the current filters. The flagged read is a view
    * of rows the ordinary read already counts, so it is deliberately not added in: doing so
-   * would count every flagged participant twice.
+   * would count every flagged participant twice. The ordinary read carries the ordinary
+   * section's own query, so this figure follows that section's question -- the queue's
+   * query is the queue's alone and does not move it.
    */
   const serverTotal = useServerTotals ? staffTotal + ordinaryTotal : profiles.length;
+
+  /**
+   * The accounts the header badge counts as "showing": the staff rows plus the ordinary
+   * page currently loaded (the whole cohort-filtered list against legacy answers).
+   *
+   * Staff plus the ordinary page rather than the union of every loaded row, because the
+   * flagged queue can hold rows answering a different search than the ordinary read, and
+   * counting those could put the badge above the very total it is a fraction of. The
+   * ordinary page is always at most its own server total, so the two numbers here can
+   * never disagree about which is larger.
+   */
+  const shownProfiles = useServerTotals
+    ? profiles.filter((profile) => isStaffAccount(profile)).length + ordinaryRows.length
+    : filteredProfiles.length;
 
   /**
    * Whether the create dialog is currently making a participant.
@@ -1491,11 +1603,18 @@ export const ProfileReview = () => {
       setSaving(true);
       const updatedProfile = await updateAdminUser(selectedProfile.id, payload);
 
-      setProfiles((prev) =>
-        prev.map((profile) =>
+      // The same update in every list a card can be rendered from, for the same reason as
+      // `confirmBlock`: against the real server the two participant sections read
+      // `flaggedRows`/`ordinaryRows` rather than the merged `profiles`, so touching only
+      // `profiles` would leave an edited participant card showing the old values until a
+      // refetch, while staff sections derive from `profiles` and would show the new ones.
+      const applyUpdate = (rows: AdminUserProfile[]) =>
+        rows.map((profile) =>
           profile.id === selectedProfile.id ? { ...profile, ...updatedProfile } : profile,
-        )
-      );
+        );
+      setProfiles(applyUpdate);
+      setFlaggedRows(applyUpdate);
+      setOrdinaryRows(applyUpdate);
       toast.success('Profile updated successfully.');
       resetEditor();
     } catch (error) {
@@ -1566,7 +1685,18 @@ export const ProfileReview = () => {
       setCreating(true);
       const createdProfile = await createAdminUser(payload);
 
+      // Into `profiles` first: staff sections and the legacy merged list read from it, so a
+      // new admin or moderator appears the moment it is made. A participant also joins the
+      // row lists the real server's participant sections read, or the card the operator just
+      // created would be missing from Participants until a refetch -- and into the queue as
+      // well if it somehow came in above the removal threshold.
       setProfiles((prev) => [createdProfile, ...prev]);
+      if (isParticipant) {
+        setOrdinaryRows((prev) => [createdProfile, ...prev]);
+        if (totalRemovalsFor(createdProfile) > FLAGGED_REMOVAL_THRESHOLD) {
+          setFlaggedRows((prev) => [createdProfile, ...prev]);
+        }
+      }
       toast.success(`${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`);
       resetCreateDialog();
     } catch (error: unknown) {
@@ -1590,6 +1720,7 @@ export const ProfileReview = () => {
    */
   const renderSection = (section: ProfileSection) => {
     const Icon = section.icon;
+    const search = section.search;
     const accountCount = section.accounts.length;
     // The badge counts the accounts the section holds under the current filters, not the
     // cards one page renders: a paginated section shows a single server page, so "51
@@ -1628,6 +1759,40 @@ export const ProfileReview = () => {
               </div>
             </div>
             <CardDescription>{section.description}</CardDescription>
+            {/* The box is a draft; the button sends it. Firing four reads per keystroke
+                against ten thousand participants would answer a query the operator had
+                already retyped, so typing only edits the draft and Search (or Enter)
+                issues the one request the database answers for this section -- and this
+                section alone, which is why the box sits inside the heading it searches
+                rather than in one toolbar above the page. */}
+            {search && (
+              <div className="flex w-full gap-2 pt-1 sm:max-w-xl">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder={search.placeholder}
+                    value={search.value}
+                    onChange={(event) => search.onValueChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        search.onSubmit();
+                      }
+                    }}
+                    className="pl-9"
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={search.onSubmit}
+                  disabled={refreshing}
+                  aria-label={search.buttonLabel}
+                >
+                  <Search className="mr-2 h-4 w-4" />
+                  Search
+                </Button>
+              </div>
+            )}
           </CardHeader>
           <CardContent>
             {accountCount === 0 ? (
@@ -1693,47 +1858,17 @@ export const ProfileReview = () => {
   };
 
   /**
-   * The search box, the two cohort filters, the sort picker and the way back out of all of them.
+   * The two cohort filters, the sort picker and the way back out of all of them.
    *
    * Held as a value rather than written into the tree so the same controls can be emitted in the
    * two places that need them: immediately above the ordinary participants, which is where they
    * belong, and above the no-match card when a filter has hidden everything, where they are the
-   * only way back.
+   * only way back. The search boxes are not here: each lives inside the participant section it
+   * narrows, so a query reaches its own list and nothing else.
    */
   const filterControls = (
     <>
       <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-4">
-        {/* The box is a draft; the button sends it. Firing four reads per keystroke against
-            ten thousand participants would answer a query the operator had already retyped,
-            so typing only edits the draft and Search (or Enter) issues the one request the
-            database answers -- one filtered, counted page per section. */}
-        <div className="flex w-full gap-2 lg:max-w-xl">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by name, register number, email, or class"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  submitSearch();
-                }
-              }}
-              className="pl-9"
-            />
-          </div>
-          <Button
-            variant="secondary"
-            onClick={submitSearch}
-            disabled={refreshing}
-            aria-label="Search profiles"
-          >
-            <Search className="mr-2 h-4 w-4" />
-            Search
-          </Button>
-        </div>
-
         {/* `htmlFor` onto the trigger's `id` rather than an `aria-label` on the trigger: the
             visible word is then the accessible name, so a screen reader announces "Year" and not
             something the operator cannot see. */}
@@ -1816,14 +1951,17 @@ export const ProfileReview = () => {
       {/* Said rather than left for the operator to infer. Three sections are above these
           controls and one is below, and the controls do not treat the four the same way, so
           without this the placement reads as an arbitrary split rather than as a deliberate
-          one. It also draws the line exactly where the line is: the search box reaches every
-          section, the two cohort selects reach only the participants, and the sort picker is
-          offered only for the ordinary participants. */}
+          one. It also draws the line exactly where the line is: each participant section has
+          its own search box inside its own heading, the two cohort selects reach both
+          participant sections, and the sort picker is offered only for the ordinary ones. */}
       <p className="-mt-4 text-xs text-muted-foreground">
-        Search applies to all four sections once submitted, and pages through the matching
-        accounts like everything else here. The year and department filters apply to both
-        participant sections only: admins and moderators have neither to match on, so those two
-        sections stay complete whatever you pick here.
+        Each participant section searches for itself: the queue's box narrows the queue, the
+        Participants box narrows the list below it, and neither reaches the other section --
+        or the staff sections above, which have no search box because nothing on them is
+        being searched. The year and department filters apply to both participant sections
+        only: admins and moderators have neither to match on, so those two sections stay
+        complete whatever you pick here. Sort orders Participants only; the queue stays in
+        removal order.
       </p>
     </>
   );
@@ -1852,7 +1990,7 @@ export const ProfileReview = () => {
                 a page. */}
             <Badge variant="secondary" className="w-max gap-2">
               <Users className="h-4 w-4" />
-              Showing {filteredProfiles.length} of {serverTotal} profiles
+              Showing {shownProfiles} of {serverTotal} profiles
             </Badge>
           </div>
         </header>

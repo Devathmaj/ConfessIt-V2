@@ -13,12 +13,16 @@ import { ProfileReview } from '@/pages/ProfileReview';
  * that puts the people they need to look at next to each other. These tests hold that apart from
  * the grouping, which `profileReviewSections.test.tsx` already covers.
  *
- * Five properties are pinned here, and each fails in a way a test that only checked the happy path
+ * Six properties are pinned here, and each fails in a way a test that only checked the happy path
  * would not notice:
  *
  * **Where the controls are.** They sit at the bottom of the page, hard against the ordinary
  * participants -- the list they exist to narrow and order -- and below the work queue, whose own
  * order is fixed and whose rows are still narrowed by them.
+ *
+ * **Each participant section searches for itself.** The queue's box narrows the work queue, the
+ * Participants box narrows the list below it, and neither query reaches the other section -- nor
+ * the staff sections, which have no search box at all.
  *
  * **The two cohort filters are independent.** "Every second-year" and "everyone in CSE" are both
  * real questions and a single combined cohort picker can only ask one of them.
@@ -174,8 +178,26 @@ function openFilter(label: string) {
 const filterByYear = (year: number | string) => choose('Year', String(year));
 const filterByDepartment = (department: string) => choose('Department', department);
 const sortBy = (order: string) => choose('Sort', order);
-const search = (term: string) =>
-  fireEvent.change(screen.getByPlaceholderText(/Search by name/), { target: { value: term } });
+
+/**
+ * Types into one participant section's own search box.
+ *
+ * There are two boxes now -- the queue's and the Participants' -- and each is scoped to the
+ * section it narrows, because that scoping is the property under test: an unscoped placeholder
+ * query would match whichever of the two the document order happened to put first, which is
+ * exactly the coupling these tests exist to rule out. These suites answer with legacy bare
+ * arrays, so the draft narrows its own section live; nothing is submitted here.
+ */
+const searchParticipants = (term: string) =>
+  fireEvent.change(
+    within(groupNamed(PARTICIPANTS)).getByPlaceholderText(/Search participants by name/),
+    { target: { value: term } },
+  );
+const searchFlagged = (term: string) =>
+  fireEvent.change(
+    within(groupNamed(REPEATED)).getByPlaceholderText(/Search flagged participants by name/),
+    { target: { value: term } },
+  );
 
 describe('ProfileReview: where the filters are', () => {
   beforeEach(() => {
@@ -206,19 +228,79 @@ it('puts them directly above the ordinary participants and below everything else
     ]);
   });
 
-  it('says a staff section was filtered rather than that it is empty', async () => {
-    await renderPage([admin(), moderator(), participant('Alpha', { year: 2 })]);
+  it('keeps the staff sections whole under a participant search, because nothing on them is searched', async () => {
+    await renderPage([admin(), moderator(), participant('Alpha'), participant('Bravo')]);
 
-    search('Alpha');
+    searchParticipants('Alpha');
 
-    // "No admin accounts exist yet" under a search box that has an admin in it is a false claim
-    // about the platform, and it is the exact reading the original note on this screen was
-    // guarding against.
-    expect(screen.getByText('No admin accounts match the current search.')).toBeInTheDocument();
+    // The participant boxes narrow participant lists alone. Ada and Mo keep their accounts --
+    // a participant's name is no reason for either section to lose one -- and neither section
+    // ever claims a search it does not have hid somebody: "No admin accounts exist yet" beside
+    // a visible admin was the reading the original note on this screen was written to prevent,
+    // and a note about a search box that is not there would be the same mistake in reverse.
+    expect(namesIn(groupNamed(ADMINS))).toEqual(['Ada Admin']);
+    expect(namesIn(groupNamed(MODERATORS))).toEqual(['Mo Moderator']);
     expect(
-      screen.getByText('No moderator accounts match the current search.'),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('No admin accounts exist yet.')).not.toBeInTheDocument();
+      screen.queryByText('No admin accounts match the current search.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('No moderator accounts match the current search.'),
+    ).not.toBeInTheDocument();
+
+    // And the box narrowed the list it sits in: the one participant whose name answers it
+    // remains, the other is gone from Participants and from nowhere else.
+    expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(['Alpha']);
+  });
+});
+
+/**
+ * Each participant section answers only its own search box.
+ *
+ * The queue and the Participants list are two views of one population, and each box sits in
+ * the heading it narrows rather than in one toolbar for the page. That placement is
+ * load-bearing: a query typed into the queue is a question about the queue, and a query typed
+ * into Participants is a question about the population below the queue -- letting either one
+ * reach the other list, or a staff section, would make one section's question change another
+ * section's answer.
+ */
+describe('ProfileReview: each participant section searches for itself', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("narrows only the queue when the queue's own box is used, leaving Participants and staff whole", async () => {
+    await renderPage([
+      admin(),
+      participant('Alpha', { removals: 9 }),
+      participant('Bravo', { removals: 9 }),
+      participant('Charlie'),
+    ]);
+
+    searchFlagged('Alpha');
+
+    // The queue narrowed by its own query. Nothing below it moved: the flagged rows the
+    // queue's box did not name are still participants, and a search typed above them is not
+    // their search.
+    expect(namesIn(groupNamed(REPEATED))).toEqual(['Alpha']);
+    expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(
+      expect.arrayContaining(['Alpha', 'Bravo', 'Charlie']),
+    );
+    expect(namesIn(groupNamed(ADMINS))).toEqual(['Ada Admin']);
+  });
+
+  it('narrows only Participants when its own box is used, leaving the queue whole', async () => {
+    await renderPage([
+      participant('Alpha', { removals: 9 }),
+      participant('Bravo', { removals: 9 }),
+      participant('Charlie'),
+    ]);
+
+    searchParticipants('Charlie');
+
+    expect(namesIn(groupNamed(PARTICIPANTS))).toEqual(['Charlie']);
+    // The queue is a work queue and its box was not the one used: rows above the threshold
+    // stay on it whatever a search typed under it says about their names.
+    expect(namesIn(groupNamed(REPEATED))).toEqual(['Alpha', 'Bravo']);
   });
 });
 

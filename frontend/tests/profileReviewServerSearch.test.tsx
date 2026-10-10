@@ -13,8 +13,13 @@ import { ProfileReview } from '@/pages/ProfileReview';
  * (`{users, total, skip, limit}`) the way the paginated endpoint does, and pin the
  * server-driven contract instead:
  *
- * * typing in the search box fires nothing; the Search button (or Enter) submits the
- *   query the database answers, so a half-typed word never costs four reads;
+ * * typing in a section's search box fires nothing; that section's Search button (or Enter)
+ *   submits the query its read is issued with, so a half-typed word never costs four reads
+ *   and no section's question reaches another section's list;
+ * * each participant section searches for itself: the queue's query travels on the flagged
+ *   read alone and the Participants query on the ordinary read alone, while the staff reads
+ *   carry no query at all -- the staff sections have no search box to ask one with, and a
+ *   search submitted in one participant section leaves the other section's page untouched;
  * * the submitted query, the cohort filters and the sort travel as request params, and
  *   the page on screen is displayed as returned -- never narrowed a second time, which
  *   would hide rows the server correctly sent and break the pager totals beside them;
@@ -111,7 +116,7 @@ describe('ProfileReview: server-driven search', () => {
     nextId = 0;
   });
 
-  it('fires nothing while typing; the Search button submits the query the database answers', {
+  it('fires nothing while typing; the Participants box sends its query on the Participants read alone', {
     // Four sequential waited reads: same long-test rationale as its sibling below.
     timeout: 15000,
   }, async () => {
@@ -129,20 +134,132 @@ describe('ProfileReview: server-driven search', () => {
 
     // Four reads for the unfiltered first page, and nothing else while the draft changes.
     expect(api.getAdminUsers).toHaveBeenCalledTimes(4);
-    fireEvent.change(screen.getByPlaceholderText(/Search by name/), { target: { value: 'Alpha' } });
+    fireEvent.change(screen.getByPlaceholderText(/Search participants by name/), {
+      target: { value: 'Alpha' },
+    });
     expect(api.getAdminUsers).toHaveBeenCalledTimes(4);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Search profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search participants' }));
     await screen.findByText(/Showing 1 of 1 profiles/);
 
-    // The submitted query went out on every read, staff included.
+    // The submitted query travelled on the ordinary participant read alone. The staff reads
+    // carry no query -- their sections have no search box, and a participant's name is no
+    // reason for either to lose an account -- and the queue answers its own box, not this one.
     expect(api.getAdminUsers).toHaveBeenCalledTimes(8);
-    for (const params of callsWith().slice(4)) {
-      expect(params.q).toBe('Alpha');
+    const submitted = callsWith().slice(4);
+    const ordinaryRead = submitted.find(
+      (params) => params.account_type === 'users' && params.flagged !== 'flagged',
+    );
+    expect(ordinaryRead?.q).toBe('Alpha');
+    for (const params of submitted) {
+      if (params.account_type === 'admin' || params.account_type === 'moderator') {
+        expect(params.q).toBeUndefined();
+      }
+      if (params.flagged === 'flagged') expect(params.q).toBeUndefined();
     }
     expect(namesIn(groupNamed('Participants'))).toEqual(['Alpha']);
     // The badge names the filtered group, not the page: one match, singular.
     expect(within(groupNamed('Participants')).getByText('1 account')).toBeInTheDocument();
+  });
+
+  it('sends the queue search on the flagged read alone, leaving Participants as its own question', async () => {
+    const flaggedRow = participant('Flagged', {
+      report_history: {
+        confession: { reports: 8, removals: 7 },
+        love_note: { reports: 0, removals: 0 },
+        message: { reports: 0, removals: 0 },
+      },
+    });
+    const normal = participant('Normal');
+    api.getAdminUsers.mockImplementation(async (params: Record<string, unknown> = {}) => {
+      if (params.account_type === 'admin' || params.account_type === 'moderator') {
+        return emptyPage();
+      }
+      if (params.flagged === 'flagged') {
+        return params.q === 'Flagged' ? pageOf([flaggedRow], 1) : emptyPage();
+      }
+      return pageOf([flaggedRow, normal], 2);
+    });
+    await renderPage();
+    await screen.findAllByRole('button', { name: 'Edit profile for Normal' });
+
+    // The queue starts empty under this answer; typing into its box is still only a draft.
+    expect(api.getAdminUsers).toHaveBeenCalledTimes(4);
+    fireEvent.change(screen.getByPlaceholderText(/Search flagged participants by name/), {
+      target: { value: 'Flagged' },
+    });
+    expect(api.getAdminUsers).toHaveBeenCalledTimes(4);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search flagged participants' }));
+    await within(groupNamed('Participants with more than 5 removals')).findByRole('button', {
+      name: 'Edit profile for Flagged',
+    });
+
+    // The queue narrowed by its own query...
+    expect(api.getAdminUsers).toHaveBeenCalledTimes(8);
+    const submitted = callsWith().slice(4);
+    expect(submitted.find((params) => params.flagged === 'flagged')?.q).toBe('Flagged');
+    expect(namesIn(groupNamed('Participants with more than 5 removals'))).toEqual(['Flagged']);
+
+    // ...and the list below it did not move: the ordinary read carried no query of the
+    // queue's, so a row the queue's box has never heard of stays in the population, and no
+    // staff read was issued a query at all.
+    const ordinaryRead = submitted.find(
+      (params) => params.account_type === 'users' && params.flagged !== 'flagged',
+    );
+    expect(ordinaryRead?.q).toBeUndefined();
+    for (const params of submitted) {
+      if (params.account_type === 'admin' || params.account_type === 'moderator') {
+        expect(params.q).toBeUndefined();
+      }
+    }
+    expect(namesIn(groupNamed('Participants'))).toEqual(['Flagged', 'Normal']);
+  });
+
+  it("keeps the queue's page when the Participants box is submitted", {
+    // Fifty-one rows on the queue's first page: same budget rationale as the sibling above.
+    timeout: 15000,
+  }, async () => {
+    const firstPage = Array.from({ length: 51 }, (_, index) => participant(`P${index}`));
+    const lastOne = participant('P51');
+    const alpha = participant('Alpha');
+    api.getAdminUsers.mockImplementation(async (params: Record<string, unknown> = {}) => {
+      if (params.account_type === 'admin' || params.account_type === 'moderator') {
+        return emptyPage();
+      }
+      if (params.flagged === 'flagged') {
+        return params.skip === 51 ? pageOf([lastOne], 52, 51) : pageOf(firstPage, 52);
+      }
+      return params.q === 'Alpha'
+        ? pageOf([alpha], 1)
+        : pageOf([alpha, participant('Bravo')], 2);
+    });
+    await renderPage();
+    await screen.findByText(/Page 1 of 2/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next flagged page' }));
+    await screen.findByText(/Page 2 of 2/);
+
+    // A search submitted in Participants is that section's question: it re-reads its own
+    // first page and leaves the queue exactly where the operator put it.
+    fireEvent.change(screen.getByPlaceholderText(/Search participants by name/), {
+      target: { value: 'Alpha' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search participants' }));
+    await screen.findByText(/Showing 1 of 1 profiles/);
+
+    const submitted = callsWith().slice(-4);
+    const flaggedRead = submitted.find((params) => params.flagged === 'flagged');
+    expect(flaggedRead?.skip).toBe(51);
+    const ordinaryRead = submitted.find(
+      (params) => params.account_type === 'users' && params.flagged !== 'flagged',
+    );
+    expect(ordinaryRead?.skip).toBe(0);
+    expect(ordinaryRead?.q).toBe('Alpha');
+
+    // Still on the queue's second page, holding the row that page holds.
+    expect(screen.getByText(/Page 2 of 2/)).toBeInTheDocument();
+    expect(namesIn(groupNamed('Participants with more than 5 removals'))).toEqual(['P51']);
   });
 
   it('sends the cohort filters to the database and pages the filtered question', async () => {
