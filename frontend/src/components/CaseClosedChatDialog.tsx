@@ -248,7 +248,11 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
                 disabled={!canSend || sending}
               />
               <Button type="submit" size="sm" disabled={!draft.trim() || !canSend || sending}>
-                <Send className="h-3 w-3" /> Send
+                {sending ? (
+                  <><Loader2 className="h-3 w-3 animate-spin" /> Sending…</>
+                ) : (
+                  <><Send className="h-3 w-3" /> Send</>
+                )}
               </Button>
               <Button type="button" variant="ghost" size="sm" onClick={() => void load()}>
                 <RefreshCw className="h-3 w-3" />

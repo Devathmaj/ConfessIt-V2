@@ -16,7 +16,8 @@ import {
   Palette,
   Mail,
   AlertCircle,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { updateUserProfile, uploadProfilePicture } from '../services/api';
@@ -59,6 +60,12 @@ export const ProfilePage = () => {
   
   // State for UI elements
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  /**
+   * True while a picture is being uploaded. The request decodes, moderates and stores the
+   * image, so it is slow enough to be clicked twice -- and a second click would spend the
+   * one picture change the cooldown allows on a duplicate.
+   */
+  const [isUploadingPicture, setIsUploadingPicture] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // A 422 naming a content-policy violation is the server refusing the image
@@ -147,16 +154,21 @@ export const ProfilePage = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Type, size and decodability are checked before anything is uploaded: the
-    // `accept` attribute below is a picker hint the browser lets any file past,
-    // and the server is the real gate. A refusal here saves the upload, not the rule.
-    const problem = await validateImageFile(file);
-    if (problem) {
-      toast.error(problem);
-      return;
-    }
+    // One upload at a time. The button is disabled while this runs; the guard is the
+    // backstop for the picker, which can fire again before the first request settles.
+    if (isUploadingPicture) return;
 
+    setIsUploadingPicture(true);
     try {
+      // Type, size and decodability are checked before anything is uploaded: the
+      // `accept` attribute below is a picker hint the browser lets any file past,
+      // and the server is the real gate. A refusal here saves the upload, not the rule.
+      const problem = await validateImageFile(file);
+      if (problem) {
+        toast.error(problem);
+        return;
+      }
+
       await uploadProfilePicture(file);
       toast.success('Profile picture updated successfully! 📸');
       if(token) {
@@ -188,6 +200,8 @@ export const ProfilePage = () => {
         }
       }
       console.error(error);
+    } finally {
+      setIsUploadingPicture(false);
     }
   };
 
@@ -272,14 +286,18 @@ export const ProfilePage = () => {
                         size="icon" 
                         className="absolute bottom-0 right-0 rounded-full"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={pictureChangeBlocked}
+                        disabled={pictureChangeBlocked || isUploadingPicture}
                         aria-label={
-                            pictureChangeBlocked
-                                ? 'Profile picture cannot be changed right now'
-                                : 'Change profile picture'
+                            isUploadingPicture
+                                ? 'Uploading profile picture'
+                                : pictureChangeBlocked
+                                    ? 'Profile picture cannot be changed right now'
+                                    : 'Change profile picture'
                         }
                     >
-                        <Upload className="w-5 h-5" />
+                        {isUploadingPicture
+                            ? <Loader2 className="w-5 h-5 animate-spin" />
+                            : <Upload className="w-5 h-5" />}
                     </Button>
                     <Input 
                         type="file" 

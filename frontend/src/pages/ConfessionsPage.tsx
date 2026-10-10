@@ -25,6 +25,7 @@ import {
   ThumbsDown,
   Flag,
   Edit,
+  Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getConfessions, getConfessionComments, createConfession, getConfessionCooldown, reactToConfession, createComment, likeComment, dislikeComment, reportComment, reportConfession, updateConfession, searchConfessions } from '../services/api';
@@ -33,6 +34,7 @@ import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
+import { describeApiError } from '@/lib/apiError';
 import {
   formatCooldownRemaining,
   readCooldownRejection,
@@ -196,6 +198,12 @@ export const ConfessionsPage = () => {
   const [isAnonymous, setIsAnonymous] = useState(true);
   const [allowComments, setAllowComments] = useState(true);
   const [isPostDialogOpen, setIsPostDialogOpen] = useState(false);
+  /**
+   * True while a share is in flight. Content moderation and embedding run inside the
+   * request, so the round-trip is slow enough to be double-clicked -- and a second click
+   * would spend a second two-hour cooldown window on a duplicate post.
+   */
+  const [isSubmittingConfession, setIsSubmittingConfession] = useState(false);
   const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const { user, isAuthenticated } = useAuth();
 
@@ -266,6 +274,8 @@ export const ConfessionsPage = () => {
 
   const [selectedConfession, setSelectedConfession] = useState<Confession | null>(null);
   const [newComment, setNewComment] = useState('');
+  /** True while a comment is in flight (content moderation runs inside the request). */
+  const [isPostingComment, setIsPostingComment] = useState(false);
   
   const [isReportConfirmOpen, setIsReportConfirmOpen] = useState(false);
   const [isReportReasonOpen, setIsReportReasonOpen] = useState(false);
@@ -579,7 +589,11 @@ export const ConfessionsPage = () => {
       toast.error("You must be logged in to comment.");
       return;
     }
-    
+    // A second click while the first request is open would post the reply twice; the
+    // server's moderation round-trip is what makes the window wide enough to hit.
+    if (isPostingComment) return;
+
+    setIsPostingComment(true);
     try {
       const newCommentData = await createComment(confessionId, newComment);
 
@@ -645,6 +659,8 @@ export const ConfessionsPage = () => {
       } else {
         toast.error("Failed to post comment. Please try again.");
       }
+    } finally {
+      setIsPostingComment(false);
     }
   };
 
@@ -788,7 +804,12 @@ export const ConfessionsPage = () => {
       toast.error(cooldown?.message ?? 'You can post one confession every 2 hours.');
       return;
     }
+    // One click, one confession. A second click while the first request is open would
+    // spend a second cooldown window on a duplicate post; without the finally reset below
+    // it would also leave the button dead after a failure.
+    if (isSubmittingConfession) return;
 
+    setIsSubmittingConfession(true);
     try {
       const confessionData = {
         body: newConfession,
@@ -851,6 +872,8 @@ export const ConfessionsPage = () => {
       } else {
         toast.error('Failed to share confession. Please try again.');
       }
+    } finally {
+      setIsSubmittingConfession(false);
     }
   };
 
@@ -898,7 +921,7 @@ export const ConfessionsPage = () => {
 
       toast.success("Comment reported successfully.");
     } catch (error) {
-      toast.error("Failed to report comment. You may have already reported it.");
+      toast.error(describeApiError(error, "Failed to report comment. You may have already reported it."));
     } finally {
       setIsReportReasonOpen(false);
       setReportReason("");
@@ -934,7 +957,7 @@ export const ConfessionsPage = () => {
 
           toast.success("Confession reported successfully.");
       } catch (error) {
-          toast.error("Failed to report confession. You may have already reported it.");
+          toast.error(describeApiError(error, "Failed to report confession. You may have already reported it."));
       } finally {
           setIsConfessionReportReasonOpen(false);
           setReportReason("");
@@ -983,11 +1006,14 @@ export const ConfessionsPage = () => {
     }
   };
 
+  // Filling the icon is only legible for the heart; the laugh, eye, and
+  // heartbreak outlines become solid blobs when filled, so keep their shape
+  // and let the selected button highlight carry the reaction state.
   const reactionTypes = [
-    { type: 'heart', icon: Heart, countKey: 'heart_count' },
-    { type: 'haha', icon: Laugh, countKey: 'haha_count' },
-    { type: 'whoa', icon: Eye, countKey: 'whoa_count' },
-    { type: 'heartbreak', icon: HeartCrack, countKey: 'heartbreak_count' },
+    { type: 'heart', icon: Heart, countKey: 'heart_count', fillsWhenSelected: true },
+    { type: 'haha', icon: Laugh, countKey: 'haha_count', fillsWhenSelected: false },
+    { type: 'whoa', icon: Eye, countKey: 'whoa_count', fillsWhenSelected: false },
+    { type: 'heartbreak', icon: HeartCrack, countKey: 'heartbreak_count', fillsWhenSelected: false },
   ] as const;
 
   /**
@@ -1197,11 +1223,20 @@ export const ConfessionsPage = () => {
               <DialogFooter>
                 <Button
                   onClick={handleSubmitConfession}
-                  disabled={isOnCooldown}
+                  disabled={isOnCooldown || isSubmittingConfession}
                   className="btn-romantic w-full"
                 >
-                  <Send className="w-4 h-4 mr-2" />
-                  {isOnCooldown ? 'Waiting for your next confession' : 'Share Confession'}
+                  {isSubmittingConfession ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Sharing…
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      {isOnCooldown ? 'Waiting for your next confession' : 'Share Confession'}
+                    </>
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -1227,6 +1262,9 @@ export const ConfessionsPage = () => {
           }
           const confession = row.confession;
           const hasReportedConfession = user && hasReportedByMe(confession, user.id);
+          // Reporting your own post is refused by the server, so the flag is not offered on
+          // it at all; the edit control above is the only action an author gets.
+          const isOwnConfession = !!user && user.id === confession.author_id;
           return (
             <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300 min-w-0 overflow-hidden" style={{ animationDelay: `${index * 0.1}s` }}>
               <CardHeader>
@@ -1259,19 +1297,21 @@ export const ConfessionsPage = () => {
                         <Edit className="h-4 w-4" />
                         </Button>
                     )}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className={`h-8 w-8 rounded-full transition-colors ${
-                        hasReportedConfession
-                          ? 'bg-yellow-500 text-white hover:bg-yellow-600'
-                          : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
-                      }`}
-                      onClick={() => !hasReportedConfession && handleReportConfessionClick(confession)}
-                      disabled={hasReportedConfession}
-                    >
-                      <Flag className="h-4 w-4" />
-                    </Button>
+                    {!isOwnConfession && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className={`h-8 w-8 rounded-full transition-colors ${
+                          hasReportedConfession
+                            ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                            : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                        onClick={() => !hasReportedConfession && handleReportConfessionClick(confession)}
+                        disabled={hasReportedConfession}
+                      >
+                        <Flag className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -1314,7 +1354,7 @@ export const ConfessionsPage = () => {
                           onClick={() => handleReaction(confession.id, reaction.type)}
                           className={`transition-colors ${isSelected ? 'btn-romantic' : 'hover:bg-romantic/10'}`}
                         >
-                          <Icon className={`w-4 h-4 mr-1.5 ${isSelected ? 'fill-current' : ''}`} />
+                          <Icon className={`w-4 h-4 mr-1.5 ${isSelected && reaction.fillsWhenSelected ? 'fill-current' : ''}`} />
                           {confession[reaction.countKey]}
                         </Button>
                       );
@@ -1402,6 +1442,9 @@ export const ConfessionsPage = () => {
                 {selectedConfession.comments.length > 0 ? (
                   selectedConfession.comments.map(comment => {
                     const hasReported = user && hasReportedByMe(comment, user.id);
+                    // As with confessions, the server refuses a self-report, so the flag is
+                    // not offered on a comment written by the viewer.
+                    const isOwnComment = !!user && user.id === comment.user_info.id;
                     return (
                     <div key={comment.id} className="text-sm p-3 bg-muted/50 rounded-lg shadow-sm">
                       <div className="flex items-center gap-2">
@@ -1438,19 +1481,21 @@ export const ConfessionsPage = () => {
                                   <ThumbsDown className="h-4 w-4" />
                               </Button>
                               <span className="text-xs font-medium">{comment.dislike_count}</span>
-                               <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className={`h-7 w-7 rounded-full transition-colors ${
-                                  hasReported
-                                  ? 'bg-yellow-500 text-white hover:bg-yellow-600' 
-                                  : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
-                                }`} 
-                                onClick={() => !hasReported && handleReportClick(comment)}
-                                disabled={hasReported}
-                              >
-                                  <Flag className="h-4 w-4" />
-                              </Button>
+                               {!isOwnComment && (
+                                 <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className={`h-7 w-7 rounded-full transition-colors ${
+                                    hasReported
+                                    ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                                    : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                  }`}
+                                  onClick={() => !hasReported && handleReportClick(comment)}
+                                  disabled={hasReported}
+                                >
+                                    <Flag className="h-4 w-4" />
+                                </Button>
+                               )}
                           </div>
                       </div>
                     </div>
@@ -1491,8 +1536,14 @@ export const ConfessionsPage = () => {
                         className="flex-grow bg-background border-romantic/30 focus:border-romantic"
                         rows={2}
                         />
-                        <Button onClick={() => handlePostComment(selectedConfession.id)} className="btn-romantic" size="icon" aria-label="Send comment">
-                        <Send className="w-4 h-4" />
+                        <Button
+                          onClick={() => handlePostComment(selectedConfession.id)}
+                          className="btn-romantic"
+                          size="icon"
+                          aria-label="Send comment"
+                          disabled={isPostingComment}
+                        >
+                          {isPostingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                         </Button>
                     </div>
                 ) : (

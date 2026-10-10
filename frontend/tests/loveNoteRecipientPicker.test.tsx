@@ -220,4 +220,37 @@ describe('LoveNotesPage: recipient picker', () => {
     await screen.findByText('Sheila Same');
     expect(screen.getByText('Harvey Other')).toBeInTheDocument();
   });
+
+  it('shows the send button busy while the note is processed, and one click sends one note', async () => {
+    candidates = [candidate('c1', 'Person 01', 'male')];
+    await openPicker();
+    await screen.findByText('Person 01');
+    fireEvent.click(screen.getByText('Person 01'));
+
+    // jsdom has no real canvas; the export is stubbed so the send path can be reached.
+    const toDataURL = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
+      .mockReturnValue('data:image/png;base64,AAAA');
+
+    let rejectSend!: (reason: unknown) => void;
+    api.sendLoveNote.mockImplementation(
+      () => new Promise((_resolve, reject) => { rejectSend = reject; }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /confirm & send note/i }));
+
+    // Busy: the label is replaced, and the disabled button swallows a second click.
+    const busy = await screen.findByRole('button', { name: /sending/i });
+    expect(busy).toBeDisabled();
+    fireEvent.click(busy);
+    expect(api.sendLoveNote).toHaveBeenCalledTimes(1);
+
+    // A failure restores the button so the note can be retried.
+    rejectSend(new Error('boom'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /confirm & send note/i })).toBeEnabled(),
+    );
+
+    toDataURL.mockRestore();
+  });
 });

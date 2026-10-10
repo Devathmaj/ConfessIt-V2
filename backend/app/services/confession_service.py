@@ -1328,9 +1328,18 @@ class ConfessionService:
         user_id = str(user.id)
         with self.sessions() as session:
             comment = session.get(ConfessionCommentRecord, str(comment_id))
+        if not comment:
+            return None
+        # Nobody reports their own writing, whatever state it is in: a self-report has nothing
+        # for a moderator to rule on. Checked before the removed-content guard so the answer is
+        # the same for a comment that has since been taken down, and answered with its own
+        # detail rather than the duplicate failure below, so the client can say what happened.
+        if str(comment.user_id) == user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot report your own comment.")
         # Removed content cannot be reported: there is nothing left for a moderator to rule
         # on, and a report against it would sit in the queue forever.
-        if not comment or comment.removed_at is not None:
+        if comment.removed_at is not None:
             return None
 
         with self.sessions() as session:
@@ -1390,8 +1399,15 @@ class ConfessionService:
         user_id = str(user.id)
         with self.sessions() as session:
             confession = session.get(ConfessionRecord, str(confession_id))
+        if not confession:
+            return None
+        # Nobody reports their own post either -- see report_comment for why the check sits
+        # before the removed-content guard and carries its own detail.
+        if str(confession.author_id) == user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot report your own confession.")
         # Removed content cannot be reported -- see report_comment.
-        if not confession or confession.removed_at is not None:
+        if confession.removed_at is not None:
             return None
 
         with self.sessions() as session:

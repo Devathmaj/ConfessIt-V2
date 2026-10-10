@@ -176,6 +176,34 @@ describe('CaseClosedGamePage', () => {
     expect(investigate).not.toHaveBeenCalled();
   });
 
+  it('shows the send button busy until the server accepts the turn', async () => {
+    getState.mockResolvedValue(baseState());
+    let resolveSend!: (value: unknown) => void;
+    sendChat.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
+    renderPage();
+    await screen.findByText('Detective thread');
+    fireEvent.change(await screen.findByPlaceholderText(/Discuss leads/), { target: { value: 'On it' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^send$/i }));
+
+    // Busy while moderation runs: the label is replaced, and a second click is swallowed.
+    const busy = await screen.findByRole('button', { name: /sending/i });
+    expect(busy).toBeDisabled();
+    fireEvent.click(busy);
+    expect(sendChat).toHaveBeenCalledTimes(1);
+
+    resolveSend({
+      id: 'm2', game_id: 'g1', session_id: 's1', sender_user_id: 'a', body: 'On it',
+      created_at: new Date().toISOString(), is_read: false,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 2, participant_count: 1, conversation_remaining: 398, participant_remaining: 199, can_send: true, limit_reached: null },
+    });
+    await screen.findByText('On it');
+    // Once the turn lands the composer is free again (the empty draft keeps the button
+    // disabled on its own, so a fresh draft is what shows the busy state has cleared).
+    fireEvent.change(screen.getByPlaceholderText(/Discuss leads/), { target: { value: 'Next lead' } });
+    expect(screen.getByRole('button', { name: /^send$/i })).toBeEnabled();
+  });
+
   it('offers a report action on a received turn and files it through the Case Closed endpoint', async () => {
     getState.mockResolvedValue(baseState());
     reportCC.mockResolvedValue({ id: 'r1' });

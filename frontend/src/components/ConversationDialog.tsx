@@ -645,6 +645,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
   const handleSendMessage = async () => {
     if (!messageText.trim() || !conversationData) return;
+    // One send per click: the composer is disabled while this runs, and this guard
+    // closes the window between the click and the disabled re-render.
+    if (sending) return;
     if (!conversationData.conversation.id) {
       toast.error('Messaging not initialized');
       return;

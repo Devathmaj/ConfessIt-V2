@@ -56,6 +56,20 @@ const confession = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** A comment on a confession, with its author's identity on the payload. */
+const comment = (over: Record<string, unknown> = {}) => ({
+  id: 'm1',
+  user_info: { id: 'someone-else', name: 'Grace' },
+  body: 'a reply',
+  created_at: '2026-01-01T11:00:00Z',
+  like_count: 0,
+  dislike_count: 0,
+  user_reaction: null,
+  report_count: 0,
+  reported_by: [],
+  ...over,
+});
+
 /**
  * A signed-out visitor, which is what makes the feed's reaction and report affordances worth
  * testing: nothing on the card belongs to the author, so nothing on it should be swallowed by
@@ -274,5 +288,59 @@ fireEvent.click(flag);
     fireEvent.click(bodyButton(body));
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Reporting is for other people's writing.
+ *
+ * A self-report has nothing for a moderator to rule on and would let someone move the
+ * counters on their own account, so the server refuses it -- and the flag is not offered
+ * on content the viewer wrote, on the post or on their comments. Everyone else's content
+ * keeps the flag exactly as before.
+ */
+describe('who can be reported', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('offers no report flag on a confession the viewer wrote, only the edit control', async () => {
+    const body = 'my own words';
+    await renderFeed([confession({ body, author_id: 'me' })], { signedIn: true });
+
+    const card = cardFor(body);
+    // The flag carries no accessible name of its own, so it is found structurally, the same
+    // way the click tests above find it.
+    expect(card.querySelector('.lucide-flag')).toBeNull();
+    // The viewer's own action on their post is edit, which must still be there.
+    expect(card.querySelector('.lucide-edit')).not.toBeNull();
+  });
+
+  it('offers no report flag on a comment the viewer wrote, and keeps it on everyone else\'s', async () => {
+    const body = 'a discussed post';
+    await renderFeed(
+      [
+        confession({
+          body,
+          author_id: 'someone-else',
+          comment_count: 2,
+          comments: [
+            comment({ id: 'm-mine', body: 'my own reply', user_info: { id: 'me', name: 'Me' } }),
+            comment({ id: 'm-theirs', body: 'their reply' }),
+          ],
+        }),
+      ],
+      { signedIn: true }
+    );
+
+    // The comment-count button is the way into the thread; reaction counts are all zero, so
+    // "2" names only it.
+    fireEvent.click(within(cardFor(body)).getByRole('button', { name: '2' }));
+    const dialog = await screen.findByRole('dialog');
+
+    // Each row is the body paragraph's parent.
+    const ownRow = within(dialog).getByText('my own reply').closest('div') as HTMLElement;
+    const theirRow = within(dialog).getByText('their reply').closest('div') as HTMLElement;
+    expect(ownRow.querySelector('.lucide-flag')).toBeNull();
+    expect(theirRow.querySelector('.lucide-flag')).not.toBeNull();
   });
 });

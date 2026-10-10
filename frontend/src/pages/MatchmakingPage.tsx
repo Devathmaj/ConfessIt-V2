@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Send,
   Clock,
+  Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Navigation } from '@/components/Navigation';
@@ -532,6 +533,8 @@ export const MatchmakingPage = () => {
 
   const [showConfirmationDialog, setShowConfirmationDialog] = useState(false);
   const [showRareMatchDialog, setShowRareMatchDialog] = useState(false);
+  /** True while a message request is in flight, so the button cannot be double-fired. */
+  const [isRequesting, setIsRequesting] = useState(false);
 
   // The periodic sweep and the callbacks below run against the newest render's values, but
   // they are created once and must not restart when those change. A ref is what keeps the
@@ -648,6 +651,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         console.log("match_id is missing from:", matchedProfile);
         return;
     }
+    // One request per click: the button is disabled while this runs, and the guard
+    // keeps a second fire from re-requesting while the first is still open.
+    if (isRequesting) return;
+    setIsRequesting(true);
     try {
         console.log("Sending message request with match_id:", matchedProfile.match_id);
         await requestConversation(matchedProfile.match_id);
@@ -656,6 +663,8 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         await refreshConversationStatus(); // Refresh to get updated status
     } catch (error: any) {
         toast.error(describeApiError(error, "Failed to send message request."));
+    } finally {
+        setIsRequesting(false);
     }
   };
 
@@ -1027,8 +1036,16 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
                     onClick={handleSendMessageRequest}
                     className="btn-romantic"
                     size="lg"
+                    disabled={isRequesting}
                   >
-                    Send Message Request
+                    {isRequesting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Sending Request…
+                      </>
+                    ) : (
+                      'Send Message Request'
+                    )}
                   </Button>
                   {expiresAt && (
                     <div className="text-sm text-muted-foreground">

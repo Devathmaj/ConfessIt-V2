@@ -107,4 +107,28 @@ describe('ProfilePage: picture violation', () => {
     await waitFor(() => expect(fetchAndSetUser).toHaveBeenCalledWith('token-1'));
     expect(screen.queryByText('Profile picture rejected')).not.toBeInTheDocument();
   });
+
+  it('shows the upload control busy while the picture is processed, and one pick is one upload', async () => {
+    let resolveUpload!: (value: unknown) => void;
+    api.uploadProfilePicture.mockImplementation(
+      () => new Promise((resolve) => { resolveUpload = resolve; }),
+    );
+    renderProfile();
+
+    pickFile(document.body);
+
+    // The control that opens the picker is busy and disabled while the server has the image.
+    const busy = await screen.findByRole('button', { name: /uploading profile picture/i });
+    expect(busy).toBeDisabled();
+    expect(api.uploadProfilePicture).toHaveBeenCalledTimes(1);
+
+    // A second pick while the first is in flight starts nothing: one change window, one upload.
+    pickFile(document.body);
+    expect(api.uploadProfilePicture).toHaveBeenCalledTimes(1);
+
+    resolveUpload({ profile_picture_url: 'https://cdn.example/new.png', message: 'ok' });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /change profile picture/i })).toBeEnabled(),
+    );
+  });
 });
