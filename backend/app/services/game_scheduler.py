@@ -24,6 +24,12 @@ Per game, per run, under one transaction-scoped advisory lock:
    questions through ``trivia_service.release_due_questions`` -- at most one
    activation per run, ending the live question in the same transaction --
    so one background path serves every game and no second scheduler exists.
+ * Plot Twist and Case Closed delegate to ``ai_game_automation.ensure_cycle``:
+   the boundary closes the expired session exactly as here, but the new
+   session is *generated* by the asynchronous AI pipeline instead of being
+   opened inline. The scheduler only enqueues one idempotent cycle per
+   boundary; a later worker publishes the validated content and opens the
+   session.
 
  The partial unique index on each game table (one active-or-pending row) is the
  backstop behind the lock: a run racing an admin Update past the lock still
@@ -92,47 +98,6 @@ def _current_row(session, model):
 def _end_row(row, now: datetime) -> None:
     row.status = "ended"
     row.ended_at = now
-
-
-def _finalize_case_closed_safely(db: Database, game_id: str) -> None:
-    """Reveal one closed Case Closed event, logging rather than raising.
-
-    Finalizing is what scores every session and makes the solution -- and
-    who the culprit was -- visible. A failure here must never stop the
-    period rollover; the stranded scan retries whatever this call misses.
-    """
-    import logging
-
-    try:
-        from . import case_closed_gameplay
-
-        case_closed_gameplay.finalize_event(db, game_id)
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "Case Closed finalization failed for event %s", game_id
-        )
-
-
-def _finalize_stranded_case_closed(db: Database) -> None:
-    """Finish Case Closed events that ended without ever revealing the case.
-
-    An event that died between ending and finalizing would otherwise keep
-    its solution hidden -- and every participant un-told -- forever. The
-    scan runs inside the case-closed lock, so two scheduler passes can
-    never race the same reveal.
-    """
-    with db.sessions() as session:
-        stranded = [
-            str(game_id)
-            for (game_id,) in session.execute(
-                select(CaseClosedGameRecord.id).where(
-                    CaseClosedGameRecord.status == "ended",
-                    CaseClosedGameRecord.finalized.is_(False),
-                )
-            ).all()
-        ]
-    for game_id in stranded:
-        _finalize_case_closed_safely(db, game_id)
 
 
 def _snapshot_league_opportunity(session, game_id: str, outcome: dict) -> None:
@@ -449,101 +414,20 @@ def ensure_single_game(
     delegates to its own release entry point instead of the period logic
     below. The delegation keeps one background path -- this function, called
     by boot and by the run-resets trigger -- serving every game.
+
+    Plot Twist and Case Closed delegate to the AI automation for the same
+    reason: their new content is generated asynchronously, so the boundary
+    closes the expired session and enqueues one idempotent generation cycle
+    instead of opening a session inline.
     """
     if game_id == "trivia-drop":
         from . import trivia_service
 
         return trivia_service.release_due_questions(db, _now_utc(now))
-    if game_id == "case-closed":
-        # Case Closed now plays: pin the newest published package like
-        # Plot Twist. With no published package there is nothing to open.
-        # Per-couple sessions are created lazily on entering.
-        moment = _now_utc(now)
-        today = moment.date()
-        try:
-            with db.sessions.begin() as session:
-                session.execute(
-                    text("SELECT pg_advisory_xact_lock(:key)"),
-                    {"key": game_lock_key(game_id)},
-                )
-                # Events that ended without their reveal (a crash between
-                # ending and finalizing) still owe every participant the
-                # culprit; finish them inside the lock before the rollover
-                # below decides what today's event is.
-                _finalize_stranded_case_closed(db)
-                config = get_config(session, game_id)
-                if config.is_hidden:
-                    return {"game_id": game_id, "action": "skipped_hidden"}
-                cadence = config.reset_cadence
-                current = _current_row(session, CaseClosedGameRecord)
-                if current is not None and not game_periods.is_reset_due(
-                    current.period_end_date, today
-                ):
-                    return {
-                        "game_id": game_id,
-                        "action": "current",
-                        "session_id": str(current.id),
-                    }
-                if current is not None:
-                    # Closing the case is what reveals the solution: every
-                    # session is scored, correctness becomes visible and the
-                    # participants are told who the culprit was. Ending the
-                    # row without this would hide the solution forever.
-                    _finalize_case_closed_safely(db, str(current.id))
-                    _end_row(current, moment)
-                start, end = game_periods.period_for_start(today, cadence)
-                from ..db_models import CaseClosedPackageRecord
+    if game_id in ("plot-twist", "case-closed"):
+        from . import ai_game_automation
 
-                published = session.scalar(
-                    select(CaseClosedPackageRecord)
-                    .where(CaseClosedPackageRecord.status == "published")
-                    .order_by(CaseClosedPackageRecord.published_at.desc())
-                    .limit(1)
-                )
-                if published is None:
-                    # Keep the ended row ended; no playable event to open.
-                    return {"game_id": game_id, "action": "coming_soon"}
-                import uuid as _uuid_mod
-
-                pkg = dict(published.package or {})
-                scoring = pkg.get("time_scoring_config") or {}
-                opened = CaseClosedGameRecord(
-                    game_date=start,
-                    status="active",
-                    period_start_date=start,
-                    period_end_date=end,
-                    case_package_id=str(published.id),
-                    seed=_uuid_mod.uuid4().hex,
-                    scoring_half_life_seconds=int(scoring.get("half_life_seconds") or 43200),
-                    scoring_max_points=int(scoring.get("max_points") or 100),
-                    started_at=moment,
-                    created_by="scheduler",
-                )
-                session.add(opened)
-                session.flush()
-                outcome = {
-                    "game_id": game_id,
-                    "action": "created",
-                    "session_id": str(opened.id),
-                    "status": opened.status,
-                    "case_package_id": str(published.id),
-                    "period_start": start.isoformat(),
-                    "period_end": end.isoformat(),
-                }
-                _snapshot_league_opportunity(session, game_id, outcome)
-                return outcome
-        except IntegrityError as exc:
-            from psycopg.errors import UniqueViolation
-
-            if not isinstance(exc.orig, UniqueViolation):
-                raise
-            with db.sessions() as session:
-                winner = _current_row(session, CaseClosedGameRecord)
-                return {
-                    "game_id": game_id,
-                    "action": "current",
-                    "session_id": str(winner.id) if winner is not None else None,
-                }
+        return ai_game_automation.ensure_cycle(db, game_id, now)
     moment = _now_utc(now)
     today = moment.date()
     model = _GAME_MODELS[game_id]
@@ -769,46 +653,6 @@ def _open_period(
             "action": "created",
             "session_id": str(opened.id),
             "status": opened.status,
-            "period_start": start.isoformat(),
-            "period_end": end.isoformat(),
-        }
-    if game_id == "plot-twist":
-        # Plot Twist: a new global period pinning the newest published story
-        # package. Couples play that pinned version for the whole period.
-        # (Publishing also rotates the event immediately onto the new package;
-        # this boundary path only matters at cadence rollover.) Per-couple
-        # sessions are created lazily on entering, so nothing rolls over.
-        # With no published package there is nothing playable to open.
-        from ..db_models import PlotTwistPackageRecord
-
-        published = session.scalar(
-            select(PlotTwistPackageRecord)
-            .where(PlotTwistPackageRecord.status == "published")
-            .order_by(PlotTwistPackageRecord.published_at.desc())
-            .limit(1)
-        )
-        if published is None:
-            return {"game_id": game_id, "action": "coming_soon"}
-        import uuid as _uuid_mod
-
-        opened = PlotTwistGameRecord(
-            game_date=start,
-            status="active",
-            period_start_date=start,
-            period_end_date=end,
-            story_package_id=str(published.id),
-            seed=_uuid_mod.uuid4().hex,
-            started_at=moment,
-            created_by="scheduler",
-        )
-        session.add(opened)
-        session.flush()
-        return {
-            "game_id": game_id,
-            "action": "created",
-            "session_id": str(opened.id),
-            "status": opened.status,
-            "story_package_id": str(published.id),
             "period_start": start.isoformat(),
             "period_end": end.isoformat(),
         }

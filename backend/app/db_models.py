@@ -2428,6 +2428,10 @@ class GameConfigRecord(Base):
             # ``PostgresClient._superseded_constraints``.
             name="ck_game_configs_grid_size_known_15",
         ),
+        CheckConstraint(
+            "difficulty IS NULL OR difficulty IN ('easy', 'medium', 'hard')",
+            name="ck_game_configs_difficulty_known",
+        ),
     )
 
     game_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -2443,6 +2447,13 @@ class GameConfigRecord(Base):
     # it for any other game id, and defaulted to 12 on first read of the
     # two-key-escape row so the game is playable before any admin opens it.
     grid_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The difficulty the automated generation pipeline uses for the next
+    # Plot Twist / Case Closed cycle. NULL for every other game (and for the
+    # two AI games until an administrator picks one, where the scheduler
+    # falls back to ``medium``). Snapshot into the cycle's generation job at
+    # enqueue time, so a change between sessions applies from the next cycle
+    # and never rewrites content already being generated.
+    difficulty: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
@@ -3363,3 +3374,94 @@ def _is_account_id(value: Optional[str]) -> bool:
         return True
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+class GameGenerationJobRecord(Base):
+    """One scheduled AI generation cycle for Plot Twist or Case Closed.
+
+    The scheduler never generates content inline: at a cycle boundary (or at
+    boot / the manual run-resets trigger) it writes one row here and returns.
+    A background worker claims at most one job at a time under a single
+    advisory lock shared by both games, runs the existing blueprint ->
+    approve -> package -> validate pipeline, and only opens the playable
+    session when the validated package is published -- all in one transaction
+    together with the job's own terminal update, so a crash can never leave a
+    published session without its job or a completed job without its session.
+
+    ``cycle_start_date``/``cycle_end_date`` are the calendar window the cycle
+    was scheduled for. They are fixed at enqueue time, so re-running the
+    scheduler for the same day finds the same job (the unique key) instead of
+    starting a second one, and generation that runs long never shifts the
+    game's configured frequency. ``difficulty`` is likewise a snapshot: the
+    admin's pick at enqueue time, not whatever it is when a worker runs.
+
+    ``status`` is the lifecycle: ``queued`` -> ``running`` -> (``published`` |
+    ``failed`` | ``cancelled``), with ``retry_wait`` between bounded attempts.
+    """
+    __tablename__ = "game_generation_jobs"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    cycle_start_date: Mapped[date] = mapped_column(Date, index=True)
+    cycle_end_date: Mapped[date] = mapped_column(Date, index=True)
+    difficulty: Mapped[str] = mapped_column(String(16), default="medium", server_default=text("'medium'"))
+    status: Mapped[str] = mapped_column(
+        String(16), default="queued", server_default=text("'queued'"), index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, server_default=text("3"))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Which worker claimed the job. Diagnostic only; empty when unclaimed.
+    worker_id: Mapped[str] = mapped_column(String(128), default="", server_default=text("''"))
+    blueprint_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), nullable=True)
+    package_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), default="scheduler", server_default=text("'scheduler'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # One cycle per game per start date, enforced in the schema: a second
+        # scheduler run for the same boundary races this key and loses, so a
+        # duplicate generation cycle can never exist.
+        UniqueConstraint("game_id", "cycle_start_date", name="uq_generation_job_game_cycle"),
+        Index("ix_generation_jobs_status_requested", "status", "requested_at"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'retry_wait', 'published', 'failed', 'cancelled')",
+            name="ck_game_generation_jobs_status_known",
+        ),
+    )
+
+
+class GameSessionRevocationRecord(Base):
+    """One admin revocation of an AI-game session, kept as an audit trail.
+
+    Revoking ends the live session through the existing ``ended`` state and
+    suppresses replacement generation until ``revoked_until`` -- the revoked
+    session's own period end, or the cancelled cycle's boundary when there was
+    no live session. The scheduler consults only whether any row for the game
+    carries a ``revoked_until`` later than today, so a revocation expires by
+    the calendar exactly like every other boundary in the games system; the
+    rows themselves are never deleted, so history can show what was revoked
+    and when. ``session_id`` is NULL when the revocation cancelled a queued or
+    running generation cycle that had not opened a session yet.
+    """
+    __tablename__ = "game_session_revocations"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    game_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), nullable=True)
+    revoked_until: Mapped[date] = mapped_column(Date, index=True)
+    revoked_by: Mapped[str] = mapped_column(String(USER_REGNO_MAX), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_game_revocations_game_until", "game_id", "revoked_until"),
+    )

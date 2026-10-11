@@ -7,9 +7,11 @@ import { AdminCaseClosedConfig } from '@/components/AdminCaseClosedConfig';
  * The Case Closed console: its own page under /admin/games/manage,
  * mirroring the Reaction Time editor.
  *
- * All Case Closed configuration lives here -- availability and the reset
- * cadence. The manage overview only links here with title, short description
- * and an Open Editor option.
+ * Cases are generated and published automatically on the configured
+ * schedule; the console configures difficulty and frequency, inspects the
+ * current case, pages session history and revokes the live event. The manage
+ * overview only links here with title, short description and an Open Editor
+ * option.
  */
 export const AdminCaseClosedManage = () => {
   return (
@@ -24,8 +26,9 @@ export const AdminCaseClosedManage = () => {
         </NavLink>
         <h1 className="text-3xl font-semibold">Case Closed</h1>
         <p className="text-sm text-muted-foreground">
-          A couple game — gameplay lands soon. Availability rolls through the
-          same hidden/disabled switches as every other title.
+          A cooperative mystery for couples. New cases publish automatically on
+          the configured frequency; configure the difficulty, inspect the
+          current case, or revoke it.
         </p>
       </header>
 

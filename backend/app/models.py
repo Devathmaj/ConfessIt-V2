@@ -1519,6 +1519,10 @@ class WordleGuessResponse(WordleParticipation):
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
+# The difficulty vocabulary the automated AI pipeline reads for Plot Twist and
+# Case Closed. It mirrors ``limits.PLOT_TWIST_DIFFICULTIES``; the service layer
+# re-validates server-side, so this literal only shapes the API contract.
+GameDifficulty = Literal["easy", "medium", "hard"]
 GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop", "two-key-escape", "plot-twist", "case-closed"]
 
 
@@ -1534,6 +1538,9 @@ class GameConfig(BaseModel):
     # that game's own knob, not a second content mode, and no other screen
     # may read or write it.
     grid_size: Optional[int] = None
+    # The difficulty the automated generation pipeline uses for the next
+    # Plot Twist / Case Closed cycle. None for every other game.
+    difficulty: Optional[GameDifficulty] = None
 
 
 class GameConfigUpdate(BaseModel):
@@ -1546,6 +1553,7 @@ class GameConfigUpdate(BaseModel):
     content_mode: Optional[GameContentMode] = None
     reset_cadence: Optional[GameResetCadence] = None
     grid_size: Optional[int] = None
+    difficulty: Optional[GameDifficulty] = None
 
 
 class FeaturedGame(BaseModel):

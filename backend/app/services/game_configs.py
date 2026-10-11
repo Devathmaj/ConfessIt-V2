@@ -159,6 +159,7 @@ def _as_dict(row: GameConfigRecord) -> dict:
         "content_mode": row.content_mode,
         "reset_cadence": row.reset_cadence,
         "grid_size": row.grid_size,
+        "difficulty": row.difficulty,
     }
 
 
@@ -187,6 +188,7 @@ def update_config(
     content_mode: Optional[str] = None,
     reset_cadence: Optional[str] = None,
     grid_size: Optional[int] = None,
+    difficulty: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> dict:
     """Patch one game's configuration, refusing values outside the vocabularies.
@@ -198,6 +200,11 @@ def update_config(
     the rest (the old rhythm no longer exists, so old dates can never align
     again). See :func:`game_scheduler.reanchor_for_cadence_change`. All other
     cadence changes simply take effect at the next boundary.
+
+    ``difficulty`` belongs to the two AI games alone (Plot Twist and Case
+    Closed) and is read by the automated generation pipeline when it enqueues
+    a cycle; a change therefore applies from the next session, never to
+    content already being generated.
     """
     validate_game_id(game_id)
     if content_mode is not None and content_mode not in GAME_CONTENT_MODES:
@@ -261,6 +268,20 @@ def update_config(
                 detail=f"Unknown grid size {grid_size!r}. "
                 f"Expected one of {', '.join(str(size) for size in TWO_KEY_ESCAPE_GRID_SIZES)}.",
             )
+    if difficulty is not None:
+        from ..limits import AI_GAME_IDS, PLOT_TWIST_DIFFICULTIES
+
+        if game_id not in AI_GAME_IDS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only Plot Twist and Case Closed have a difficulty.",
+            )
+        if difficulty not in PLOT_TWIST_DIFFICULTIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown difficulty {difficulty!r}. "
+                f"Expected one of {', '.join(PLOT_TWIST_DIFFICULTIES)}.",
+            )
     with db.sessions.begin() as session:
         row = get_config(session, game_id)
         previous_cadence = row.reset_cadence
@@ -274,6 +295,8 @@ def update_config(
             row.reset_cadence = reset_cadence
         if grid_size is not None:
             row.grid_size = grid_size
+        if difficulty is not None:
+            row.difficulty = difficulty
         # A legacy row predating the column reads the default rather than
         # NULL, so the game is playable before any admin opens its settings.
         if game_id == "two-key-escape" and row.grid_size is None:

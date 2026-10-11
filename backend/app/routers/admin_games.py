@@ -59,9 +59,10 @@ def update_game_config(
 ) -> GameConfig:
     """Patch one game's availability, content mode or reset cadence.
 
-    Enabled/hidden, the Wordle/Anagram content mode and each game's own reset
-    cadence are set here. Values outside the vocabularies are refused; the
-    questionnaire accepts no content mode at all.
+    Enabled/hidden, the Wordle/Anagram content mode, each game's own reset
+    cadence and the two AI games' difficulty are set here. Values outside the
+    vocabularies are refused; the questionnaire accepts no content mode at all,
+    and only Plot Twist and Case Closed accept a difficulty.
     """
     return GameConfig(
         **game_configs.update_config(
@@ -72,6 +73,7 @@ def update_game_config(
             content_mode=payload.content_mode,
             reset_cadence=payload.reset_cadence,
             grid_size=payload.grid_size,
+            difficulty=payload.difficulty,
         )
     )
 

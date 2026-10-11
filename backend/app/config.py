@@ -422,6 +422,22 @@ class Settings(BaseSettings):
             )
         return text
 
+    # --- Automated AI session generation (Plot Twist / Case Closed) ---
+    #
+    # The two AI games enqueue a generation cycle from the existing 00:01 UTC
+    # scheduler; these knobs configure only the in-process background worker
+    # that drains that queue. The worker is idempotent and safe on every
+    # process: jobs are claimed in Postgres with SKIP LOCKED and the shared
+    # pipeline advisory lock serialises generation across games, workers and
+    # replicas, so running it in an extra uvicorn worker costs one polling
+    # query per interval, never a second concurrent generation.
+    AI_GENERATION_WORKER_ENABLED: bool = True
+    # How often an idle worker checks the queue (seconds).
+    AI_GENERATION_POLL_SECONDS: int = Field(default=30, ge=5, le=3600)
+    # How long a worker waits to acquire the shared generation lock before
+    # yielding its pass; the job stays queued and the next pass retries.
+    AI_GENERATION_LOCK_WAIT_SECONDS: int = Field(default=120, ge=1, le=1800)
+
     # --- Semantic search embeddings (Azure) ---
     #
     # Confession semantic search uses a single Azure-hosted embedding model.

@@ -74,6 +74,13 @@ from app.services.redis_service import redis_service
 # explicitly (see test_auth_csrf).
 settings.ENABLE_DEBUG_ENDPOINTS = False
 
+# The AI generation worker is a background thread that starts with the app's
+# lifespan. Tests drive ``ai_game_automation.process_due_jobs`` directly --
+# deterministically, with mocked providers -- so the thread must never run
+# against the test database behind a test's back. Tests that exercise the
+# startup hook itself re-enable the flag locally.
+settings.AI_GENERATION_WORKER_ENABLED = False
+
 # The host allowlist is read per request: Starlette's TestClient answers as
 # "testserver", which can never resolve publicly and is not a production name, so the
 # suite admits it here rather than baking a test-only hostname into the default.

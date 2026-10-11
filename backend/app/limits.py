@@ -587,6 +587,50 @@ CASE_CLOSED_DEFAULT_HALF_LIFE_SECONDS = 43200
 CASE_CLOSED_DEFAULT_MAX_POINTS = 100
 CASE_CLOSED_SESSION_LOCK_KEY = 7_250_004
 
+# Automated AI session generation (Plot Twist and Case Closed). Both games
+# ride the existing 00:01 UTC scheduler, but their sessions come from an
+# asynchronous pipeline: the scheduler only *enqueues* a generation cycle,
+# and a background worker claims one job at a time, runs Stage A -> approve
+# -> Stage B -> validate -> publish, and only then opens the playable
+# session. The constants below bound the queue without introducing a second
+# scheduler: one job per game per cycle (the unique key), bounded worker
+# attempts with backoff, and a single advisory lock that serialises the
+# protected generation pipeline across both games and every worker process.
+AI_GAME_IDS: tuple[str, ...] = ("plot-twist", "case-closed")
+# The lifecycle states a generation job may carry. ``queued`` waits for a
+# worker, ``running`` is claimed and holds the pipeline lock, ``retry_wait``
+# waits out a backoff before another attempt, and the three terminal states
+# are ``published`` (the session opened), ``failed`` (attempts exhausted) and
+# ``cancelled`` (revoked, hidden, or superseded before publishing).
+AI_GENERATION_JOB_STATUSES: tuple[str, ...] = (
+    "queued",
+    "running",
+    "retry_wait",
+    "published",
+    "failed",
+    "cancelled",
+)
+# One shared advisory-lock key, deliberately a single value for both games:
+# only one protected generation workflow may run at a time across the whole
+# deployment, so a simultaneous Plot Twist + Case Closed due tick queues.
+AI_GENERATION_LOCK_KEY = 7_250_005
+# Attempts one queued cycle may spend inside the worker before the job is
+# parked as failed. A crash mid-run is reclaimed as a fresh attempt after
+# ``AI_GENERATION_STALE_SECONDS``; the cap keeps a broken provider from
+# retrying forever, and the next scheduled cycle starts clean.
+AI_GENERATION_MAX_ATTEMPTS = 3
+# How long a claimed job may sit without a worker touching it before another
+# worker treats it as abandoned (crashed process) and reclaims it.
+AI_GENERATION_STALE_SECONDS = 1800
+# Wait between worker attempts on the same cycle (seconds), multiplied by the
+# attempt number so backoff grows: a provider blip recovers quickly, a real
+# outage stops hammering it.
+AI_GENERATION_RETRY_BACKOFF_SECONDS = 120
+# Session-history pages behind the two admin consoles. Same convention as
+# every other history read: a hard ceiling a single request can never exceed.
+AI_GENERATION_HISTORY_MAX_LIMIT = 100
+AI_GENERATION_HISTORY_DEFAULT_LIMIT = 50
+
 
 # How old an open timing segment may be before it is treated as dead rather than played.
 #

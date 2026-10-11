@@ -2062,16 +2062,219 @@ export const publishPlotTwistPackage = async (
   return response.data;
 };
 
-export const getCurrentAdminPlotTwistSession = async (): Promise<{
+// --- Automated AI session generation (Plot Twist / Case Closed) ---
+//
+// Both games generate their sessions automatically on their configured
+// cadence: the scheduler enqueues one cycle at the boundary and a background
+// worker runs the blueprint -> approve -> package -> validate -> publish
+// pipeline. The console therefore only reads the published session, pages its
+// history and can revoke; the blueprint/package calls above remain the
+// pipeline's own recovery surface and are no longer part of the admin flow.
+
+/** The lifecycle state of one automated generation cycle. */
+export type AiGenerationStatus =
+  | 'queued'
+  | 'running'
+  | 'retry_wait'
+  | 'published'
+  | 'failed'
+  | 'cancelled';
+
+/** The latest generation cycle for an AI game, as the console reports it. */
+export interface AiGenerationState {
   id: string;
+  game_id: string;
+  cycle_start_date: string | null;
+  cycle_end_date: string | null;
+  difficulty: string;
+  status: AiGenerationStatus;
+  attempt: number;
+  max_attempts: number;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  next_attempt_at: string | null;
+  blueprint_id: string | null;
+  package_id: string | null;
+  error_code: string | null;
+  last_error: string | null;
+  created_by: string;
+}
+
+/** One session row in an AI game's backend-paginated history, newest first. */
+export interface AiSessionHistoryEntry {
+  id: string;
+  status: string;
   period_start_date: string | null;
   period_end_date: string | null;
-  story_package_id: string | null;
-  status: string;
-}> => {
+  package_id: string | null;
+  title: string | null;
+  /** True when an administrator revoked this session rather than it expiring. */
+  revoked: boolean;
+  created_by: string;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  /** Case Closed only: whether the culprit was revealed and everyone scored. */
+  finalized?: boolean;
+}
+
+export interface AiSessionHistoryPage {
+  sessions: AiSessionHistoryEntry[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+/** One story choice inside a published Plot Twist scene. */
+export interface PlotTwistSessionChoice {
+  id: string;
+  text: string;
+  consequence_text?: string | null;
+  next_scene_id?: string | null;
+  reward_tier?: string | null;
+}
+
+/** One scene of the published Plot Twist story, as the console renders it. */
+export interface PlotTwistSessionScene {
+  id: string;
+  type: string;
+  title: string;
+  narrative_text: string;
+  actor: string;
+  slot?: string;
+  choices: PlotTwistSessionChoice[];
+  is_terminal: boolean;
+  ending_id?: string | null;
+}
+
+export interface PlotTwistSessionEnding {
+  id: string;
+  type: string;
+  title: string;
+  narrative: string;
+  success?: boolean;
+  reward_tier?: string | null;
+}
+
+export interface PlotTwistSessionPackage {
+  title?: string;
+  summary?: string;
+  opening_scene_id?: string;
+  scenes?: PlotTwistSessionScene[];
+  endings?: PlotTwistSessionEnding[];
+}
+
+export interface PlotTwistSessionOverview {
+  game_id: string;
+  session: {
+    id: string;
+    status: string;
+    period_start_date: string | null;
+    period_end_date: string | null;
+    package_id: string | null;
+    title: string | null;
+    package: PlotTwistSessionPackage;
+    created_by: string;
+    started_at: string | null;
+    ended_at: string | null;
+    created_at: string;
+  } | null;
+  generation: AiGenerationState | null;
+}
+
+/** One suspect of the published Case Closed scenario. */
+export interface CaseClosedSessionSuspect {
+  id: string;
+  name: string;
+  background: string;
+  relationship: string;
+}
+
+/** One investigable lead of the published Case Closed scenario. */
+export interface CaseClosedSessionLead {
+  id: string;
+  title: string;
+  description: string;
+  discovery_text: string;
+  next_lead_ids: string[];
+  suspect_ids?: string[];
+}
+
+export interface CaseClosedSessionPackage {
+  title?: string;
+  opening_narrative?: string;
+  suspects?: CaseClosedSessionSuspect[];
+  evidence?: Array<{ id: string; title: string; description: string; kind?: string }>;
+  lead_nodes?: CaseClosedSessionLead[];
+  solution?: { culprit_id?: string; motive?: string };
+  solution_reveal?: {
+    title?: string;
+    narrative?: string;
+    why_others_ruled_out?: string;
+  };
+  time_scoring_config?: { half_life_seconds?: number; max_points?: number };
+}
+
+export interface CaseClosedSessionOverview {
+  game_id: string;
+  session: {
+    id: string;
+    status: string;
+    period_start_date: string | null;
+    period_end_date: string | null;
+    package_id: string | null;
+    title: string | null;
+    package: CaseClosedSessionPackage;
+    created_by: string;
+    started_at: string | null;
+    ended_at: string | null;
+    created_at: string;
+    finalized: boolean;
+    finalized_at: string | null;
+    scoring_half_life_seconds?: number;
+    scoring_max_points?: number;
+  } | null;
+  generation: AiGenerationState | null;
+}
+
+export interface AiSessionRevocation {
+  game_id: string;
+  action: 'revoked' | 'none';
+  session_id: string | null;
+  revoked_until: string | null;
+}
+
+/** The current Plot Twist session's published content plus generation state. */
+export const getPlotTwistSessionOverview = async (): Promise<PlotTwistSessionOverview> => {
   const response = await axios.get(`${API_URL}/admin/plot-twist/session`, {
     headers: getAuthHeaders(),
   });
+  return response.data;
+};
+
+/** One backend page of Plot Twist session history, newest first. */
+export const getPlotTwistSessionHistory = async (params?: {
+  skip?: number;
+  limit?: number;
+}): Promise<AiSessionHistoryPage> => {
+  const response = await axios.get(`${API_URL}/admin/plot-twist/sessions`, {
+    headers: getAuthHeaders(),
+    params: {
+      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+    },
+  });
+  return response.data;
+};
+
+/** End the live Plot Twist session (or cancel its generation) without replacing it. */
+export const revokePlotTwistSession = async (): Promise<AiSessionRevocation> => {
+  const response = await axios.post(
+    `${API_URL}/admin/plot-twist/session/revoke`,
+    {},
+    { headers: getAuthHeaders() }
+  );
   return response.data;
 };
 
@@ -2288,6 +2491,39 @@ export const publishCaseClosedPackage = async (packageId: string): Promise<CaseC
   return response.data;
 };
 
+/** The current Case Closed session's published content plus generation state. */
+export const getCaseClosedSessionOverview = async (): Promise<CaseClosedSessionOverview> => {
+  const response = await axios.get(`${API_URL}/admin/case-closed/session`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+/** One backend page of Case Closed session history, newest first. */
+export const getCaseClosedSessionHistory = async (params?: {
+  skip?: number;
+  limit?: number;
+}): Promise<AiSessionHistoryPage> => {
+  const response = await axios.get(`${API_URL}/admin/case-closed/sessions`, {
+    headers: getAuthHeaders(),
+    params: {
+      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+    },
+  });
+  return response.data;
+};
+
+/** End the live Case Closed event (or cancel its generation) without replacing it. */
+export const revokeCaseClosedSession = async (): Promise<AiSessionRevocation> => {
+  const response = await axios.post(
+    `${API_URL}/admin/case-closed/session/revoke`,
+    {},
+    { headers: getAuthHeaders() }
+  );
+  return response.data;
+};
+
 // --- Case Closed detective thread (per-couple chat inside the game) ---
 
 export interface CaseClosedThread {
@@ -2402,6 +2638,8 @@ export interface GameConfig {
     reset_cadence: 'daily' | 'every_2_days' | 'every_3_days' | 'every_5_days' | 'weekly';
     /** The Two-Key Escape maze edge length. Null for every other game. */
     grid_size: number | null;
+    /** The difficulty the automated pipeline uses for the next Plot Twist / Case Closed cycle. */
+    difficulty: 'easy' | 'medium' | 'hard' | null;
 }
 
 /** Every game's configuration. */
@@ -2412,10 +2650,15 @@ export const getGameConfigs = async (): Promise<GameConfig[]> => {
     return response.data;
 };
 
-/** Patch one game's availability, content mode, reset cadence or grid size. */
+/** Patch one game's availability, content mode, reset cadence, grid size or difficulty. */
 export const updateGameConfig = async (
     gameId: string,
-    payload: Partial<Pick<GameConfig, 'enabled' | 'is_hidden' | 'content_mode' | 'reset_cadence' | 'grid_size'>>
+    payload: Partial<
+        Pick<
+            GameConfig,
+            'enabled' | 'is_hidden' | 'content_mode' | 'reset_cadence' | 'grid_size' | 'difficulty'
+        >
+    >
 ): Promise<GameConfig> => {
     const response = await axios.put(`${API_URL}/admin/games/config/${gameId}`, payload, {
         headers: getAuthHeaders(),

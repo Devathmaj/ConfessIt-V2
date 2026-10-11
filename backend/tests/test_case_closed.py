@@ -793,7 +793,14 @@ def test_finalization_notifies_every_participant_of_the_culprit(db, http, player
 
 
 def test_scheduler_rollover_finishes_the_case_and_notifies(db, http, players):
-    """The next day's run closes the event: reveal, scores, notices, new event."""
+    """The boundary tick closes the event (reveal, scores, notices) and queues the next case.
+
+    The replacement session is generated asynchronously now: the same pass
+    must still reveal the closed case, but it opens the next event only after
+    the worker publishes a validated case package -- so the tick's outcome is
+    a queued generation cycle, not a new active event.
+    """
+    from app.db_models import GameGenerationJobRecord
     from app.services import game_scheduler
 
     gid, pid = seed_event(db)
@@ -808,7 +815,7 @@ def test_scheduler_rollover_finishes_the_case_and_notifies(db, http, players):
     outcome = game_scheduler.ensure_single_game(
         db, "case-closed", datetime.combine(tomorrow, time(0, 1), tzinfo=UTC)
     )
-    assert outcome["action"] == "created"
+    assert outcome["action"] == "generation_queued"
 
     with db.sessions() as session:
         closed = session.get(CaseClosedGameRecord, gid)
@@ -816,7 +823,10 @@ def test_scheduler_rollover_finishes_the_case_and_notifies(db, http, players):
         opened = session.scalar(
             select(CaseClosedGameRecord).where(CaseClosedGameRecord.status == "active")
         )
-        assert opened is not None and str(opened.id) != gid
+        # No session exists until the generated package is published.
+        assert opened is None
+        job = session.scalar(select(GameGenerationJobRecord))
+        assert job is not None and job.status == "queued" and job.game_id == "case-closed"
         notices = session.scalars(
             select(NotificationRecord).where(
                 NotificationRecord.recipient_regno.in_(["cc_player_a", "cc_player_b"])

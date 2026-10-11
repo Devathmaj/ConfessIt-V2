@@ -340,6 +340,7 @@ const gameConfig = (
   content_mode: contentMode,
   reset_cadence: 'daily',
   grid_size: null,
+  difficulty: null,
 });
 
 describe('AdminGamesDashboard: the front page', () => {

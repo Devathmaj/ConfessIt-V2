@@ -270,6 +270,11 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# The process-local handle for the automated AI session generation worker,
+# started on startup when ``AI_GENERATION_WORKER_ENABLED`` is set. One per
+# process; the queue itself lives in Postgres, so extra processes only poll.
+_ai_generation_worker = None
+
 # ----------------------
 # Startup Event
 # ----------------------
@@ -344,6 +349,23 @@ async def on_startup():
     except Exception as exc:
         logger.warning("Game session boot ensure skipped: %s", exc)
 
+    # Drain the AI generation queue: Plot Twist and Case Closed sessions are
+    # generated asynchronously after the scheduler enqueues a cycle, and this
+    # in-process worker is what publishes them (and retries provider
+    # failures). Safe on every process: the shared Postgres advisory lock and
+    # the SKIP LOCKED claim serialise generation across games, threads and
+    # replicas. Best-effort like the boot ensure above.
+    global _ai_generation_worker
+    if settings.AI_GENERATION_WORKER_ENABLED:
+        try:
+            from .services.ai_game_automation import GenerationWorker
+
+            _ai_generation_worker = GenerationWorker(postgres)
+            _ai_generation_worker.start()
+            logger.info("AI generation worker started.")
+        except Exception as exc:
+            logger.warning("AI generation worker not started: %s", exc)
+
     # Initialize matchmaking slots: fetch all classes and create initial slot
     from .services.matchmaking_slot_service import init_matchmaking_slot_service
     init_result = init_matchmaking_slot_service(postgres)
@@ -362,6 +384,12 @@ def on_shutdown():
     # Hand the pool's connections back so a reload or restart does not leak them until
     # Postgres itself times them out. Redis pool is closed explicitly for the same
     # reason: PubSub connections otherwise linger past shutdown.
+    global _ai_generation_worker
+    if _ai_generation_worker is not None:
+        # Best-effort stop: a pass mid-provider-call keeps the lock until its
+        # process dies, and the stale-job reclaim picks the cycle up again.
+        _ai_generation_worker.stop()
+        _ai_generation_worker = None
     close_postgres_client()
     try:
         redis_service.close()

@@ -1,10 +1,11 @@
 """Session-history lists are strictly paginated on the database itself.
 
-The four history reads behind the games manage screens -- Wordle, Anagram and
-Connections sessions plus Trivia Drop questions -- used to return every row in one
-response. A season of daily sessions is hundreds of rows, each carrying its puzzle,
-options or words, so one unbounded read grows heavier the longer the game runs. These
-tests pin the replacement contract on each of the four:
+The history reads behind the games manage screens -- Wordle, Anagram and
+Connections sessions, Trivia Drop questions, and the Plot Twist / Case Closed
+session histories -- used to return every row in one response. A season of
+daily sessions is hundreds of rows, each carrying its puzzle, options or words,
+so one unbounded read grows heavier the longer the game runs. These
+tests pin the replacement contract on each:
 
 * every read answers an envelope (``games`` or ``questions`` beside ``total``, ``skip``
   and ``limit``) and never a bare list;
@@ -21,7 +22,9 @@ from uuid import uuid4
 
 from app.db_models import (
     AnagramGameRecord,
+    CaseClosedGameRecord,
     ConnectionsGameRecord,
+    PlotTwistGameRecord,
     TriviaDropQuestionRecord,
     WordleGameRecord,
 )
@@ -74,12 +77,30 @@ def seed_trivia(db, count, *, status="ended"):
     )
 
 
+def seed_plot_twist(db, count):
+    return seed_sessions(
+        db, PlotTwistGameRecord, count,
+        game_date=date(2026, 1, 1), status="ended", created_by="scheduler",
+    )
+
+
+def seed_case_closed(db, count):
+    return seed_sessions(
+        db, CaseClosedGameRecord, count,
+        game_date=date(2026, 1, 1), status="ended", created_by="scheduler",
+    )
+
+
 PAGES = {
     # endpoint, envelope key
     "/admin/wordle": "games",
     "/admin/anagram": "games",
     "/admin/connections": "games",
     "/admin/trivia-drop": "questions",
+    # The two AI games page their session history through the same envelope;
+    # the scheduler generates their sessions, so the console only reads them.
+    "/admin/plot-twist/sessions": "sessions",
+    "/admin/case-closed/sessions": "sessions",
 }
 
 
@@ -88,6 +109,8 @@ def test_history_lists_answer_page_envelopes_not_bare_lists(db, admin_client):
     seed_anagram(db, 1)
     seed_connections(db, 1)
     seed_trivia(db, 1)
+    seed_plot_twist(db, 1)
+    seed_case_closed(db, 1)
 
     for path, key in PAGES.items():
         response = admin_client.get(path)
@@ -102,6 +125,8 @@ def test_history_lists_answer_page_envelopes_not_bare_lists(db, admin_client):
 
 def test_history_limits_are_clamped(db, admin_client):
     seed_wordle(db, 1)
+    seed_plot_twist(db, 1)
+    seed_case_closed(db, 1)
     for path in PAGES:
         response = admin_client.get(path, params={"limit": 1000})
         assert response.status_code == 422, path
@@ -112,6 +137,8 @@ def test_skip_and_limit_walk_newest_first_without_holding_everything(db, admin_c
     seed_anagram(db, 5)
     seed_connections(db, 5)
     seed_trivia(db, 5)
+    seed_plot_twist(db, 5)
+    seed_case_closed(db, 5)
 
     for path, key in PAGES.items():
         first = admin_client.get(path, params={"skip": 0, "limit": 2}).json()

@@ -6,9 +6,10 @@ import { AdminPlotTwistConfig } from '@/components/AdminPlotTwistConfig';
 /**
  * The Plot Twist console: its own page under /admin/games/manage.
  *
- * Story generation, review, validation and publication all live here --
- * availability, the reset cadence and the current session alongside them.
- * The manage overview only links here with title, short description and an
+ * Sessions are generated and published automatically on the configured
+ * schedule; the console configures difficulty and frequency, inspects the
+ * current story, pages session history and revokes the live session. The
+ * manage overview only links here with title, short description and an
  * Open Editor option.
  */
 export const AdminPlotTwistManage = () => {
@@ -25,8 +26,9 @@ export const AdminPlotTwistManage = () => {
         <h1 className="text-3xl font-semibold">Plot Twist</h1>
         <p className="text-sm text-muted-foreground">
           A branching story couples write together — generated before play,
-          executed deterministically. Configure the event, generate and review
-          stories, then publish a validated version.
+          executed deterministically. Sessions publish automatically on the
+          configured frequency; configure the difficulty, inspect the current
+          story, or revoke it.
         </p>
       </header>
 

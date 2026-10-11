@@ -34,6 +34,75 @@ LLM_BASE_URL="https://<resource>.services.ai.azure.com/openai/v1"
 LLM_API_KEY="<key>"
 ```
 
+### Automated sessions (Plot Twist and Case Closed)
+
+Both AI games generate and publish their sessions unattended on the existing
+00:01 UTC scheduler: no admin runs blueprint -> approve -> package -> publish
+any more, and runtime gameplay still never calls a model.
+
+- The boundary tick is a checkpoint, not a generation deadline. For each AI
+  game the scheduler finalizes the expired session the way it always did
+  (Case Closed reveals the culprit, scores everyone and notifies both
+  partners), then enqueues exactly one generation cycle per
+  `(game_id, cycle_start_date)` and returns. The playable session opens only
+  after the worker publishes a validated package, which may happen minutes
+  after the tick.
+- Queue and worker: `game_generation_jobs` (status
+  `queued | running | retry_wait | published | failed | cancelled`, unique on
+  `(game_id, cycle_start_date)`) is claimed with `FOR UPDATE SKIP LOCKED` plus
+  a stale-running reclaim, so duplicate delivery and a crashed worker are both
+  safe. The API process runs `GenerationWorker`
+  (`backend/app/services/ai_game_automation.py`) on
+  `AI_GENERATION_WORKER_ENABLED` (default true; `false` parks the queue and
+  lets a run-resets pass or a test drive `process_due_jobs` directly).
+- Serialization: the two games never generate concurrently, on one process or
+  many -- every claim runs inside one shared Postgres advisory lock
+  (`AI_GENERATION_LOCK_KEY`, a bounded wait of `AI_GENERATION_LOCK_WAIT_SECONDS`,
+  default 120) rather than any in-memory flag, so multiple workers and
+  replicas queue behind each other and failures always release it.
+- Publication is one transaction under the game's lifecycle lock: it re-checks
+  the job, the game's hidden switch and any active revocation, re-validates the
+  stored package, ends the live session (finalizing Case Closed first), opens
+  the new session for `period_for_start(today, cadence)`, snapshots the league
+  opportunity and marks the job published. Re-running it converges on the same
+  outcome -- no duplicate sessions.
+- Failures retry with backoff (`AI_GENERATION_RETRY_BACKOFF_SECONDS`) up to
+  `AI_GENERATION_MAX_ATTEMPTS` (3), then park as `failed` with the provider
+  error recorded on the job and shown in the console; the next cycle starts
+  clean. A failure never blocks the other game or later cycles.
+- Difficulty is stored per game on `game_configs.difficulty`
+  (`easy | medium | hard`, null-ready for every other game) and snapshotted
+  into the job when the cycle is enqueued, so a mid-flight change applies from
+  the next session, never to content already being generated. The frequency
+  picker is the existing reset cadence
+  (`daily | every_2_days | every_3_days | every_5_days | weekly`).
+- Revoke ("Revoke session" in the console) is distinct from hide and disable:
+  it ends the live session -- or cancels an in-flight generation -- immediately,
+  opens no replacement, and records an audit marker
+  (`game_session_revocations`) that suppresses the same cycle. The next session
+  appears only at the next eligible scheduled cycle, repeated revokes are safe
+  no-ops, and a stale job can never publish after a revoke or a hide.
+- Admin console: each game page offers difficulty, frequency
+  (enable/hide/revoke carried by the shared controls), an inspector for the
+  currently published content (scenes/choices/endings for Plot Twist,
+  opening/suspects/leads/solution for Case Closed), the latest generation
+  status or last error on an empty screen, and a backend-paginated session
+  history (`GET /admin/{plot-twist|case-closed}/sessions?skip=&limit=`, same
+  envelope as every other games history read). The old blueprint/package
+  routes remain as the pipeline's internal recovery surface but are absent
+  from the UI. `GET /admin/{game}/session` answers
+  `{session, generation}` -- a 200 with `session: null` rather than a 404.
+- Schema converges at boot like the rest of the repo (no Alembic):
+  `game_generation_jobs`, `game_session_revocations` and
+  `game_configs.difficulty` are created by `PostgresClient.initialize()`.
+- Tests: `backend/tests/test_ai_game_automation.py` (25 tests: one cycle per
+  boundary, unattended lifecycle for both games, cross-worker serialization
+  with a contended advisory lock, provider failure/retry/park, stale-job
+  reclaim, revoke during generation, hide mid-pipeline, difficulty snapshots,
+  paginated admin reads). Run:
+  `docker compose exec backend python -m pytest tests/test_ai_game_automation.py -q`.
+  Frontend: `npm test -- --run tests/adminPlotTwist.test.tsx tests/adminCaseClosed.test.tsx`.
+
 ### Hybrid search (keyword + semantic, confessions, pgvector + Azure text-embedding-3-small)
 
 One search box runs both signals: keyword matches first, similar-in-meaning
