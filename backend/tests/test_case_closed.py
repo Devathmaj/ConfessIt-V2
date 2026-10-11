@@ -986,3 +986,129 @@ def test_detective_thread_isolation_and_quotas(db, http, players):
             )
         ).all()
         assert all(str(r.session_id) == thread["session_id"] for r in rows)
+
+
+def test_detective_thread_closes_when_an_accusation_is_confirmed(db, http, players):
+    """One-sided confirmation ends the thread for both, before the lock lands."""
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca, cb = client_for(http, players["a"]), client_for(http, players["b"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    assert cb.post("/games/case-closed/start").status_code == 200
+
+    # Open while the accusation is open: both the thread and the transcript say so.
+    assert ca.post("/games/case-closed/messages", json={"body": "still deciding"}).status_code == 201
+    thread = ca.get("/games/case-closed/messages/thread").json()
+    assert thread["chat_open"] is True and thread["closed_reason"] is None
+    page = cb.get("/games/case-closed/messages").json()
+    assert page["chat_open"] is True and page["closed_reason"] is None
+
+    # Alice confirms alone; the lock has not landed, yet the thread is over for both.
+    ra = ca.post("/games/case-closed/accusation/confirm", json={"suspect_id": "s1"})
+    assert ra.status_code == 200 and ra.json()["accusation"]["locked_suspect_id"] is None
+    refused = cb.post("/games/case-closed/messages", json={"body": "wait, hear me out"})
+    assert refused.status_code == 409
+    assert "accusation was confirmed" in refused.json()["detail"]
+    assert ca.post("/games/case-closed/messages", json={"body": "one more thought"}).status_code == 409
+
+    # The transcript stays readable, closed state included.
+    page = cb.get("/games/case-closed/messages").json()
+    assert page["total"] == 1 and page["messages"][0]["body"] == "still deciding"
+    assert page["chat_open"] is False
+    assert page["closed_reason"] == "The detective thread closed when an accusation was confirmed"
+    assert cb.get("/games/case-closed/messages/thread").json()["chat_open"] is False
+
+    # A closed thread is refused before moderation: no Content Safety call is spent.
+    with patch("app.services.content_safety_service.moderate_content") as moderation:
+        assert cb.post("/games/case-closed/messages", json={"body": "never moderated"}).status_code == 409
+        moderation.assert_not_called()
+
+
+def test_detective_thread_closes_when_the_case_ends(db, http, players):
+    """The end of the case stops new turns but never the transcript."""
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    assert ca.post("/games/case-closed/messages", json={"body": "before the close"}).status_code == 201
+    thread = ca.get("/games/case-closed/messages/thread").json()
+
+    with db.sessions.begin() as session:
+        row = session.get(CaseClosedSessionRecord, thread["session_id"])
+        assert row is not None
+        row.status = "completed"
+        row.finalized = True
+
+    refused = ca.post("/games/case-closed/messages", json={"body": "after the close"})
+    assert refused.status_code == 409
+    assert "case ended" in refused.json()["detail"]
+    page = ca.get("/games/case-closed/messages").json()
+    assert page["total"] == 1 and page["messages"][0]["body"] == "before the close"
+    assert page["chat_open"] is False
+    assert page["closed_reason"] == "The detective thread closed when the case ended"
+
+
+def _access_token_for(http, db, regno):
+    """A real bearer token for a seeded participant, through the real login flow.
+
+    The websocket route authenticates with ``verify_token_service`` (no
+    ``Depends``), so exercising it needs an actual access token bound to an
+    actual login session; the dependency override the REST tests use never
+    reaches that path.
+    """
+    from app.create_token import create_and_store_magic_token
+    from app.db_models import find_account_in_table
+
+    with db.sessions() as session:
+        found = find_account_in_table(session, AccountType.USERS.value, regno)
+    assert found is not None, f"no users account with regno {regno!r}"
+    resolved_type, row = found
+
+    class _Request:
+        client = type("C", (), {"host": "127.0.0.1"})()
+        headers = {"user-agent": "Case Closed WS test"}
+
+    magic, _ = create_and_store_magic_token(db, str(row.id), resolved_type, _Request())
+    # A fresh client pinned to a loopback address: a magic link binds to the
+    # network that redeems it, and the shared test client has no parseable one.
+    browser = TestClient(app, client=("127.0.0.1", 51234))
+    response = browser.get(f"/auth/login/magic/verify?token={magic}")
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
+
+
+def test_detective_websocket_cannot_outlive_the_thread(db, http, players):
+    """The live socket dies with the thread, and a closed thread refuses new ones.
+
+    The ping is the request that keeps any socket alive, so it is also where a
+    mid-connection lock must be noticed: otherwise a partner's confirmation
+    would leave the other detective's socket lingering until they happened to
+    navigate away.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    token = _access_token_for(http, db, "cc_player_a")
+    ws_url = f"/games/case-closed/ws?token={token}"
+
+    with http.websocket_connect(ws_url) as ws:
+        hello = ws.receive_json()
+        assert hello["type"] == "connected"
+        ws.send_text("ping")
+        assert ws.receive_text() == "pong"
+
+        # Alice confirms while the socket is live: the next ping ends it.
+        confirmed = ca.post("/games/case-closed/accusation/confirm", json={"suspect_id": "s1"})
+        assert confirmed.status_code == 200
+        ws.send_text("ping")
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
+
+    # Closed thread: the handshake is refused outright, so nothing persistent
+    # can be established again after the lock.
+    with pytest.raises(WebSocketDisconnect):
+        with http.websocket_connect(ws_url) as ws:
+            ws.receive_json()

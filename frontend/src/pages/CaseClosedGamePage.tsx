@@ -129,6 +129,19 @@ export const CaseClosedGamePage = () => {
 
   const locked = state.accusation.locked_suspect_id !== null;
 
+  // The detective thread is session-aware and short-lived: it is live only
+  // while the accusation is open. The first confirmation from either detective
+  // ends it (these two strings mirror the backend's `THREAD_CLOSED_*` reasons),
+  // and so does the case ending. The dialog uses this to close its composer
+  // and drop the live socket the moment the lock lands, whether that lock was
+  // the caller's own confirmation or the partner's (each 15s state poll).
+  const threadClosedReason =
+    locked || state.accusation.my_confirmed || state.accusation.partner_confirmed
+      ? 'The detective thread closed when an accusation was confirmed'
+      : state.finalized || state.stage !== 'investigating'
+        ? 'The detective thread closed when the case ended'
+        : null;
+
   return (
     <div className="flex flex-col gap-4">
       <GamesPageHeader eyebrow="Couple game" title={state.case_title ?? 'Case Closed'} description={state.opening_narrative ?? ''} />
@@ -194,7 +207,11 @@ export const CaseClosedGamePage = () => {
         </CardContent>
       </Card>
 
-      <CaseClosedChatDialog sessionId={state.session_id} />
+      <CaseClosedChatDialog
+        sessionId={state.session_id}
+        chatOpen={threadClosedReason === null}
+        closedReason={threadClosedReason}
+      />
 
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Scale className="h-4 w-4" /> Final accusation</CardTitle>

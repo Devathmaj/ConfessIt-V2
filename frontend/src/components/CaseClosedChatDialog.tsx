@@ -51,9 +51,24 @@ import {
 
 const PAGE_SIZE = 50;
 
-export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }) => {
+export const CaseClosedChatDialog = ({
+  sessionId,
+  chatOpen = true,
+  closedReason = null,
+}: {
+  sessionId: string | null;
+  /**
+   * The game state's view of the thread: false the moment either detective
+   * confirms, so the composer and the live socket end together without waiting
+   * for a transcript reload.
+   */
+  chatOpen?: boolean;
+  /** Why the thread is closed, from the caller's game state. */
+  closedReason?: string | null;
+}) => {
   const { token, user } = useAuth();
   const [messages, setMessages] = useState<CaseClosedChatMessage[]>([]);
+  const [threadReport, setThreadReport] = useState<{ open: boolean; reason: string | null } | null>(null);
   const [total, setTotal] = useState(0);
   const [quota, setQuota] = useState<CaseClosedMessageQuota | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,6 +83,15 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const subscribedRef = useRef(false);
 
+  // Both gates must agree the thread is open; either can close it alone. The
+  // page knows about the lock first (its confirmation response lands there),
+  // the server knows about everything (case end, event rollover, a racing
+  // lock), and the reason shown prefers the server's word when it has one.
+  const threadOpen = chatOpen && (threadReport?.open ?? true);
+  const closedNote = threadOpen
+    ? null
+    : threadReport?.reason ?? closedReason ?? 'The detective thread is closed';
+
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, []);
@@ -79,6 +103,9 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
         const page = await getCaseClosedMessages(PAGE_SIZE, before);
         setQuota(page.quota ?? emptyCaseClosedQuota());
         setTotal(page.total);
+        // The server's word is the backstop: if a partner locked between the
+        // caller's state polls, this transcript read still closes the thread.
+        setThreadReport({ open: page.chat_open, reason: page.closed_reason });
         setMessages((prev) => {
           if (!before) return page.messages;
           const known = new Set(prev.map((m) => m.id));
@@ -99,7 +126,11 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
   }, [sessionId, load]);
 
   useEffect(() => {
-    if (!sessionId || !token || subscribedRef.current) return;
+    // The socket exists only while the thread does: closing the chat (or the
+    // case ending) re-runs this effect and the cleanup below drops the
+    // connection, so nothing persistent survives the lock. The server refuses
+    // the handshake outright when the thread is already closed.
+    if (!sessionId || !token || !threadOpen || subscribedRef.current) return;
     subscribedRef.current = true;
     let offMessage: (() => void) | null = null;
     let offError: (() => void) | null = null;
@@ -128,7 +159,7 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
       subscribedRef.current = false;
       setConnected(false);
     };
-  }, [sessionId, token, user?.id, scrollToBottom]);
+  }, [sessionId, token, threadOpen, user?.id, scrollToBottom]);
 
   useEffect(() => {
     scrollToBottom();
@@ -146,11 +177,14 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
         <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <MessagesSquare className="h-4 w-4" /> Detective thread
-          <Badge variant={connected ? 'default' : 'secondary'}>{connected ? 'live' : 'polling'}</Badge>
+          <Badge variant={!threadOpen ? 'outline' : connected ? 'default' : 'secondary'}>
+            {!threadOpen ? 'closed' : connected ? 'live' : 'polling'}
+          </Badge>
           {caseClosedQuotaLabel(quota) && <Badge variant="outline">{caseClosedQuotaLabel(quota)}</Badge>}
         </CardTitle>
         <CardDescription>
-          Private to your pair for this case (400 per thread, 200 each). Chatting never costs an investigation action.
+          Private to your pair for this case (400 per thread, 200 each). Chatting never costs an
+          investigation action, and the thread closes the moment either of you confirms the accusation.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -202,62 +236,71 @@ export const CaseClosedChatDialog = ({ sessionId }: { sessionId: string | null }
               <div ref={bottomRef} />
             </div>
             {notice && <div className="text-xs text-destructive">{notice}</div>}
-            <form
-              className="flex gap-2"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const body = draft.trim();
-                if (!body || sending || !canSend) return;
-                setSending(true);
-                try {
-                  const sent = await sendCaseClosedMessage(body);
-                  setQuota(sent.quota);
-                  setMessages((prev) => {
-                    if (prev.some((m) => m.id === sent.id)) return prev;
-                    return [...prev, { ...sent, is_sender: true }];
-                  });
-                  setTotal((t) => t + 1);
-                  setDraft('');
-                  scrollToBottom();
-                } catch (error) {
-                  if ((error as { response?: { status?: number } }).response?.status === 422) {
-                    // The turn was removed, but the attempt was spent: the
-                    // server stored it and counted it, so move the counter now
-                    // rather than wait for the next read.
-                    setQuota((q) => caseClosedQuotaAfterRemovedMessage(q));
-                    setViolationDialog({
-                      open: true,
-                      message: describeApiError(
-                        error,
-                        'Your message was removed because it violated our content policies.'
-                      ),
+            {threadOpen ? (
+              <form
+                className="flex gap-2"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const body = draft.trim();
+                  if (!body || sending || !canSend) return;
+                  setSending(true);
+                  try {
+                    const sent = await sendCaseClosedMessage(body);
+                    setQuota(sent.quota);
+                    setMessages((prev) => {
+                      if (prev.some((m) => m.id === sent.id)) return prev;
+                      return [...prev, { ...sent, is_sender: true }];
                     });
-                    return;
+                    setTotal((t) => t + 1);
+                    setDraft('');
+                    scrollToBottom();
+                  } catch (error) {
+                    if ((error as { response?: { status?: number } }).response?.status === 422) {
+                      // The turn was removed, but the attempt was spent: the
+                      // server stored it and counted it, so move the counter now
+                      // rather than wait for the next read.
+                      setQuota((q) => caseClosedQuotaAfterRemovedMessage(q));
+                      setViolationDialog({
+                        open: true,
+                        message: describeApiError(
+                          error,
+                          'Your message was removed because it violated our content policies.'
+                        ),
+                      });
+                      return;
+                    }
+                    toast.error(describeApiError(error, 'Could not send the message.'));
+                  } finally {
+                    setSending(false);
                   }
-                  toast.error(describeApiError(error, 'Could not send the message.'));
-                } finally {
-                  setSending(false);
-                }
-              }}
-            >
-              <Input
-                placeholder="Discuss leads, alibis, who investigates next…"
-                value={draft}
-                maxLength={MESSAGE_BODY_MAX}
-                onChange={(e) => setDraft(e.target.value)}
-                disabled={!canSend || sending}
-              />
-              <Button type="submit" size="sm" disabled={!draft.trim() || !canSend || sending}>
-                {sending ? (
-                  <><Loader2 className="h-3 w-3 animate-spin" /> Sending…</>
-                ) : (
-                  <><Send className="h-3 w-3" /> Send</>
-                )}
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => void load()}>
-                <RefreshCw className="h-3 w-3" />
-              </Button>
-            </form>
+                }}
+              >
+                <Input
+                  placeholder="Discuss leads, alibis, who investigates next…"
+                  value={draft}
+                  maxLength={MESSAGE_BODY_MAX}
+                  onChange={(e) => setDraft(e.target.value)}
+                  disabled={!canSend || sending}
+                />
+                <Button type="submit" size="sm" disabled={!draft.trim() || !canSend || sending}>
+                  {sending ? (
+                    <><Loader2 className="h-3 w-3 animate-spin" /> Sending…</>
+                  ) : (
+                    <><Send className="h-3 w-3" /> Send</>
+                  )}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => void load()}>
+                  <RefreshCw className="h-3 w-3" />
+                </Button>
+              </form>
+            ) : (
+              <div className="rounded-xl border bg-muted/40 px-3 py-3">
+                <div className="text-sm font-medium">Detective thread closed</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {closedNote} — earlier messages stay above to reread.
+                </div>
+              </div>
+            )}
           </>
         )}
       </CardContent>

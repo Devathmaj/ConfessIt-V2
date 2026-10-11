@@ -36,6 +36,10 @@ vi.mock('sonner', () => ({
 }));
 
 const api = await import('@/services/api');
+const client = (await import('@/lib/caseClosedMessaging')).caseClosedMessagingClient as unknown as {
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+};
 const getState = api.getCaseClosedState as ReturnType<typeof vi.fn>;
 const investigate = api.investigateCaseClosedLead as ReturnType<typeof vi.fn>;
 const propose = api.proposeCaseClosedAccusation as ReturnType<typeof vi.fn>;
@@ -47,7 +51,7 @@ const reportCC = api.reportCaseClosedMessage as ReturnType<typeof vi.fn>;
 
 type AuthValue = ContextType<typeof AuthContext>;
 const authValue = (): AuthValue =>
-  ({ user: { id: 'a', name: 'Alice', regno: 'T1', email: 'a@x.com', gender: 'female' }, isAuthenticated: true, isLoading: false }) as unknown as AuthValue;
+  ({ token: 'tok', user: { id: 'a', name: 'Alice', regno: 'T1', email: 'a@x.com', gender: 'female' }, isAuthenticated: true, isLoading: false }) as unknown as AuthValue;
 
 const baseState = (over: Partial<CaseClosedState> = {}): CaseClosedState => ({
   stage: 'investigating',
@@ -75,6 +79,7 @@ describe('CaseClosedGamePage', () => {
     getMessages.mockResolvedValue({
       game_id: 'g1', session_id: 's1', messages: [], count: 0, total: 0,
       quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 0, participant_count: 0, conversation_remaining: 400, participant_remaining: 200, can_send: true, limit_reached: null },
+      chat_open: true, closed_reason: null,
     });
   });
 
@@ -168,6 +173,7 @@ describe('CaseClosedGamePage', () => {
       messages: [{ id: 'm1', game_id: 'g1', session_id: 's1', sender_user_id: 'b', body: 'Check the key log', created_at: new Date().toISOString(), is_read: true }],
       count: 1, total: 1,
       quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 1, participant_count: 0, conversation_remaining: 399, participant_remaining: 200, can_send: true, limit_reached: null },
+      chat_open: true, closed_reason: null,
     });
     renderPage();
     expect(await screen.findByText('Detective thread')).toBeTruthy();
@@ -227,6 +233,7 @@ describe('CaseClosedGamePage', () => {
       messages: [{ id: 'm1', game_id: 'g1', session_id: 's1', sender_user_id: 'b', body: 'That alibi is a lie', created_at: new Date().toISOString(), is_read: true }],
       count: 1, total: 1,
       quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 1, participant_count: 0, conversation_remaining: 399, participant_remaining: 200, can_send: true, limit_reached: null },
+      chat_open: true, closed_reason: null,
     });
     renderPage();
     await screen.findByText('That alibi is a lie');
@@ -238,5 +245,74 @@ describe('CaseClosedGamePage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /report message/i }));
 
     await waitFor(() => expect(reportCC).toHaveBeenCalledWith('m1', 'harassment'));
+  });
+
+  it('closes the thread and drops the live socket the moment an accusation is confirmed', async () => {
+    getState.mockResolvedValue(baseState());
+    confirmFn.mockResolvedValue(baseState({
+      stage: 'accusation_locked',
+      accusation: { my_proposal: 's1', partner_proposal: 's1', my_confirmed: 's1', partner_confirmed: 's1', locked_suspect_id: 's1', locked_at: new Date().toISOString() },
+    }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+    await screen.findByText('Detective thread');
+    expect(client.connect).toHaveBeenCalled();
+
+    const alexButtons = await screen.findAllByText('Alex');
+    fireEvent.click(alexButtons.find((el) => el.tagName === 'BUTTON') ?? alexButtons[0]);
+    fireEvent.click(screen.getByText(/Confirm \(irreversible\)/));
+    await waitFor(() => expect(confirmFn).toHaveBeenCalledWith('s1'));
+
+    // The confirming detective's own thread ends immediately: the composer is
+    // replaced by the closing notice and the socket is torn down.
+    expect(await screen.findByText('Detective thread closed')).toBeTruthy();
+    expect(screen.getByText(/accusation was confirmed/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/Discuss leads/)).toBeNull();
+    await waitFor(() => expect(client.disconnect).toHaveBeenCalled());
+    confirmSpy.mockRestore();
+  });
+
+  it('opens a case whose confirmation already passed as a closed, socket-free thread', async () => {
+    // The partner confirmed first: the pair has not agreed, but the thread is
+    // closed for both detectives (the rule is one-sided on purpose).
+    getState.mockResolvedValue(baseState({
+      accusation: { my_proposal: 's2', partner_proposal: 's1', my_confirmed: 's2', partner_confirmed: 's1', locked_suspect_id: null, locked_at: null },
+    }));
+    renderPage();
+    await screen.findByText('Detective thread');
+
+    expect(screen.getByText('Detective thread closed')).toBeTruthy();
+    expect(screen.getByText(/accusation was confirmed/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/Discuss leads/)).toBeNull();
+    expect(client.connect).not.toHaveBeenCalled();
+  });
+
+  it('shuts the thread when the case ends without an accusation', async () => {
+    getState.mockResolvedValue(baseState({ stage: 'completed', finalized: true }));
+    renderPage();
+    await screen.findByText('Detective thread');
+
+    expect(screen.getByText('Detective thread closed')).toBeTruthy();
+    expect(screen.getByText(/case ended/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/Discuss leads/)).toBeNull();
+    expect(client.connect).not.toHaveBeenCalled();
+  });
+
+  it('trusts the transcript read when the server reports a closed thread', async () => {
+    getState.mockResolvedValue(baseState());
+    getMessages.mockResolvedValue({
+      game_id: 'g1', session_id: 's1', messages: [], count: 0, total: 0,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 0, participant_count: 0, conversation_remaining: 400, participant_remaining: 200, can_send: true, limit_reached: null },
+      chat_open: false,
+      closed_reason: 'The detective thread closed when the case ended',
+    });
+    renderPage();
+    await screen.findByText('Detective thread closed');
+
+    // The page state still read "investigating"; the server's word alone ends
+    // the connection rather than leaving a socket open on a finished thread.
+    expect(screen.getByText(/case ended/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/Discuss leads/)).toBeNull();
+    await waitFor(() => expect(client.disconnect).toHaveBeenCalled());
   });
 });

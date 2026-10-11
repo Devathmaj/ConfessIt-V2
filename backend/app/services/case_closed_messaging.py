@@ -16,6 +16,11 @@ reusing its tables or its allowances:
 - Realtime rides the same ``redis_service`` pub/sub infrastructure on a
   distinct channel namespace (``case-closed:{session_id}``), so matchmaking
   threads and detective threads never cross.
+- The thread is session-aware and short-lived by design: the first accusation
+  confirmation from either detective ends it (the case ending does too), and
+  the websocket handshake, the send path and the live ping re-check all read
+  the same ``thread_state``. The transcript stays readable after closure --
+  there is simply no live connection to keep and no new turn to send.
 
 Sending never consumes an investigation action. Reading never marks the game
 as started: the timer still starts only on the first successful investigation.
@@ -60,10 +65,36 @@ MESSAGE_LIMIT_CONVERSATION_DETAIL = (
     f"This detective thread has reached its limit of {CASE_CLOSED_CONVERSATION_MESSAGE_MAX} messages"
 )
 
+# The thread lives exactly as long as the accusation is open. The first
+# confirmation from either detective ends it -- even before both sides agree --
+# because the decision has been made and further lobbying would be out of place.
+# The end of the case ends it too. Reads stay open either way: the transcript is
+# the pair's record, only new turns stop.
+THREAD_CLOSED_ACCUSATION_DETAIL = "The detective thread closed when an accusation was confirmed"
+THREAD_CLOSED_CASE_DETAIL = "The detective thread closed when the case ended"
+
 
 def channel_for_session(session_id: str) -> str:
     """Redis namespace for one couple's detective thread (same infra, own channel)."""
     return f"case-closed:{session_id}"
+
+
+def thread_state(row: CaseClosedSessionRecord) -> Dict[str, Any]:
+    """Whether the thread still accepts turns, and the reason it stopped.
+
+    Confirmation wins the reason race on purpose: a locked pair whose case has
+    also rolled over describes the lock, which is what ended the thread from
+    the detectives' point of view.
+    """
+    if (
+        row.locked_culprit_id is not None
+        or row.confirmed_a is not None
+        or row.confirmed_b is not None
+    ):
+        return {"chat_open": False, "closed_reason": THREAD_CLOSED_ACCUSATION_DETAIL}
+    if row.finalized or row.status != "investigating":
+        return {"chat_open": False, "closed_reason": THREAD_CLOSED_CASE_DETAIL}
+    return {"chat_open": True, "closed_reason": None}
 
 
 def _resolve_thread(session, user_id: str) -> tuple[CaseClosedGameRecord, CaseClosedSessionRecord]:
@@ -101,8 +132,25 @@ def _resolve_thread(session, user_id: str) -> tuple[CaseClosedGameRecord, CaseCl
     return game, row
 
 
+def thread_closed_reason(db: Database, user) -> Optional[str]:
+    """Why the caller's thread takes no new turns, or None while it is open.
+
+    Cheap pre-flight for the send path: refusing here keeps a closed thread from
+    spending a Content Safety round trip on a turn that can never be stored. The
+    authoritative check still runs inside the send transaction's row lock.
+    """
+    with db.sessions() as session:
+        _, row = _resolve_thread(session, str(user.id))
+        return thread_state(row)["closed_reason"]
+
+
 def get_thread(db: Database, user) -> Dict[str, Any]:
-    """The caller's detective thread identity (game + session + partner)."""
+    """The caller's detective thread identity (game + session + partner).
+
+    Carries the thread's open/closed state as well, so both the transcript read
+    (which the dialog renders from) and the websocket handshake can tell a live
+    thread from a finished one without re-deriving it.
+    """
     with db.sessions() as session:
         game, row = _resolve_thread(session, str(user.id))
         partner_id = str(row.user_b_id) if str(row.user_a_id) == str(user.id) else str(row.user_a_id)
@@ -113,6 +161,7 @@ def get_thread(db: Database, user) -> Dict[str, Any]:
             "partner": {"id": partner_id, "name": partner.name if partner is not None else "Partner"},
             "conversation_limit": CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
             "participant_limit": CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX,
+            **thread_state(row),
         }
 
 
@@ -191,6 +240,13 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
     if len(text) > MESSAGE_BODY_MAX:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message is too long.")
 
+    # The thread is over once either detective has confirmed (or the case has
+    # ended). Refuse before moderation so a closed thread never spends a safety
+    # call; the transaction below re-checks under the row lock.
+    closed_reason = thread_closed_reason(db, user)
+    if closed_reason is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=closed_reason)
+
     # Central moderation, before persistence: a flagged turn must never reach
     # the recipient, and a provider failure must abort before any row exists.
     # Imported locally (like the matchmaking path) so tests can patch the module
@@ -228,6 +284,9 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
                 select(CaseClosedSessionRecord).where(CaseClosedSessionRecord.id == str(row.id)).with_for_update()
             )
             assert locked is not None
+            state = thread_state(locked)
+            if not state["chat_open"]:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=state["closed_reason"])
             quota = _quota(_usage(session, str(row.id), str(user.id)))
             refusal = _refusal(quota)
             if refusal is not None:

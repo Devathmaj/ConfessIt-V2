@@ -2296,6 +2296,9 @@ export interface CaseClosedThread {
   partner: { id: string; name: string };
   conversation_limit: number;
   participant_limit: number;
+  /** False once either detective confirmed the accusation or the case ended. */
+  chat_open: boolean;
+  closed_reason: string | null;
 }
 
 export interface CaseClosedChatMessage {
@@ -2327,6 +2330,14 @@ export interface CaseClosedTranscript {
   count: number;
   total: number;
   quota: CaseClosedMessageQuota;
+  /**
+   * Whether the thread still accepts turns. False the moment either detective
+   * confirmed the accusation (or the case ended): the dialog closes its
+   * composer and drops the live socket; the transcript stays readable.
+   */
+  chat_open: boolean;
+  /** Why the thread takes no new turns, when it is closed. */
+  closed_reason: string | null;
 }
 
 export interface CaseClosedSentMessage extends CaseClosedChatMessage {

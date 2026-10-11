@@ -206,6 +206,10 @@ def get_result(
 # Same transport as matchmaking chat (REST send + Redis pub/sub WS), own
 # scope (the couple's Case Closed session) and own quotas (400 per thread,
 # 200 per detective). Messaging never consumes an investigation action.
+# The thread lives only while the accusation is open: the first confirmation
+# from either detective (or the end of the case) closes it for writes, refuses
+# new socket handshakes, and is re-checked on every live socket ping so no
+# connection outlives the thread. The transcript stays readable.
 
 
 @router.get("/messages/thread")
@@ -224,7 +228,12 @@ def get_thread_messages(
     limit: int = Query(CASE_CLOSED_CONVERSATION_MESSAGE_MAX, ge=1, le=CASE_CLOSED_CONVERSATION_MESSAGE_MAX),
     before: Optional[str] = Query(None, description="Message id anchoring the older page."),
 ) -> dict:
-    """One thread window, oldest first with the newest last, plus quota."""
+    """One thread window, oldest first with the newest last, plus quota.
+
+    The open/closed state travels with the transcript so the dialog can render
+    the closed composer from the authoritative source, not only from the
+    caller's game-state poll.
+    """
     thread = case_closed_messaging.get_thread(db, user)
     page = case_closed_messaging.get_messages(db, user, limit=limit, before=before)
     return {
@@ -234,6 +243,8 @@ def get_thread_messages(
         "count": len(page["messages"]),
         "total": page["total"],
         "quota": case_closed_messaging.conversation_quota(db, user),
+        "chat_open": thread["chat_open"],
+        "closed_reason": thread["closed_reason"],
     }
 
 
@@ -291,6 +302,21 @@ def _ws_handshake_allowed(ip: str) -> bool:
     return count <= WS_HANDSHAKE_LIMIT_PER_MINUTE
 
 
+def _thread_still_open(db: Database, user) -> bool:
+    """Whether a live socket's thread still accepts turns.
+
+    Re-checked on every ping (30s cadence, same request that keeps the socket
+    alive) so a connection cannot outlive the thread just because the client
+    has not noticed: the first confirmation, the case ending, or the event
+    rolling over all close it. Any resolution failure counts as closed --
+    there is nothing left to listen for, and REST stays the source of truth.
+    """
+    try:
+        return bool(case_closed_messaging.get_thread(db, user)["chat_open"])
+    except Exception:
+        return False
+
+
 @router.websocket("/ws")
 async def thread_websocket(
     websocket: WebSocket,
@@ -343,6 +369,13 @@ async def thread_websocket(
         return
     except Exception as exc:
         logger.error("Case Closed WS thread lookup failed: %s", exc)
+        await websocket.close(code=WS_CLOSE_FORBIDDEN)
+        return
+
+    if not thread["chat_open"]:
+        # The thread is over: no handshake, so nothing persistent can be left
+        # behind after the lock. 4003 is a no-retry code on the client.
+        logger.info("Case Closed WS refused: thread closed for session %s", thread["session_id"])
         await websocket.close(code=WS_CLOSE_FORBIDDEN)
         return
 
@@ -399,6 +432,10 @@ async def thread_websocket(
                     close_code = WS_CLOSE_IDLE
                     break
                 if data == "ping":
+                    if not _thread_still_open(db, user):
+                        logger.info("Case Closed WS closing: thread ended mid-connection")
+                        close_code = WS_CLOSE_FORBIDDEN
+                        break
                     await websocket.send_text("pong")
         except WebSocketDisconnect:
             close_code = 1000
