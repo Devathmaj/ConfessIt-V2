@@ -179,8 +179,18 @@ def _check_state_change(
             )
 
 
-def validate_blueprint(data: dict) -> ValidationReport:
-    """Validate a Stage A blueprint: schema plus structural sanity."""
+def validate_blueprint(
+    data: dict,
+    decision_count: Optional[int] = None,
+    interchangeable_count: Optional[int] = None,
+) -> ValidationReport:
+    """Validate a Stage A blueprint: schema plus structural sanity.
+
+    The optional budgets enforce the generation config's scale: a blueprint
+    whose main path or slot list dwarfs the configured decision count forces
+    Stage B to render far more scenes than the package ceiling allows (that
+    is how a 24-beat main path became a 29-scene package).
+    """
     errors: list[ValidationMessage] = []
     try:
         blueprint = BlueprintDef.model_validate(data)
@@ -193,6 +203,26 @@ def validate_blueprint(data: dict) -> ValidationReport:
         _err(errors, "blueprint_title", "Blueprint title must not be blank.")
     if not blueprint.main_path:
         _err(errors, "blueprint_main_path", "Blueprint must name its main narrative path.")
+    if decision_count is not None and len(blueprint.main_path) > decision_count + 2:
+        _err(
+            errors,
+            "blueprint_main_path_budget",
+            f"Main path lists {len(blueprint.main_path)} beats; the configured "
+            f"budget is {decision_count} decision points, so at most "
+            f"{decision_count + 2} beats fit (each beat becomes one core scene; "
+            "merge adjacent beats instead of adding scenes).",
+        )
+    if (
+        interchangeable_count is not None
+        and len(blueprint.slots) > interchangeable_count + 2
+    ):
+        _err(
+            errors,
+            "blueprint_slot_budget",
+            f"Blueprint declares {len(blueprint.slots)} slots; the configured "
+            f"budget is {interchangeable_count} side encounters plus core, so "
+            f"at most {interchangeable_count + 2} slots fit.",
+        )
     if not blueprint.endings:
         _err(errors, "blueprint_endings", "Blueprint must define at least one ending.")
     ending_ids = [ending.id for ending in blueprint.endings]
@@ -202,6 +232,26 @@ def validate_blueprint(data: dict) -> ValidationReport:
     if len(set(var_names)) != len(var_names):
         _err(errors, "blueprint_var_ids", "Blueprint state variable names must be unique.")
     return ValidationReport(ok=not errors, errors=errors)
+
+
+def _stranded_scene_ids(by_scene: dict, reachable: set[str]) -> list[str]:
+    """Scenes no traversal can enter, module selection included.
+
+    A non-core slot is entered through module selection: a transition naming
+    any scene of the slot resolves to the couple's selected alternative, so
+    an alternative is playable whenever one of its slot-mates is reachable.
+    Slot safety (no same-slot chaining) is enforced separately.
+    """
+    reachable_slots = {(by_scene[sid].slot or "core") for sid in reachable}
+    return [
+        sid
+        for sid in by_scene
+        if sid not in reachable
+        and (
+            (by_scene[sid].slot or "core") == "core"
+            or (by_scene[sid].slot or "core") not in reachable_slots
+        )
+    ]
 
 
 def validate_package(
@@ -533,12 +583,14 @@ def validate_package(
             for choice in current.choices:
                 if choice.next_scene_id in by_scene and choice.next_scene_id not in reachable:
                     queue.append(choice.next_scene_id)
-        unreachable = [sid for sid in by_scene if sid not in reachable]
-        if unreachable:
+        stranded = _stranded_scene_ids(by_scene, reachable)
+        for scene_id in stranded:
             _err(
                 errors,
                 "unreachable_scenes",
-                f"Scenes unreachable from the opening: {sorted(unreachable)}.",
+                f"Scene {scene_id!r} is unreachable from the opening; point an "
+                "existing choice at it (or at its slot) so the story can enter it.",
+                scene_id,
             )
         # Every reachable ending must be reachable; equivalently, at least one
         # terminal scene must be reachable.
@@ -718,8 +770,11 @@ def _check_livelock(
             _err(
                 errors,
                 "possible_livelock",
-                f"Blind walk revisits scene {current_id!r} without terminating; "
-                "check that loops can exit.",
+                f"Following only first choices from the opening loops at "
+                f"{current_id!r}: that walk never reaches a terminal. The "
+                "engine follows each scene's first choice when checking a run "
+                "can finish, so reorder the choices (advancing one first) or "
+                "retarget the first choice out of the loop.",
                 current_id,
             )
             return

@@ -11,9 +11,13 @@ Covers prompt.md Section 9:
 - Mystery consistency: unique culprit, timeline order, solution support,
   no culprit leak via ids/ordering, reachable evidence for solution,
   branch depth.
+- Board completeness: no sequence of investigations inside the couple's
+  budget can reveal every reachable clue -- some clues must always stay
+  hidden, whatever choices the partners make.
 """
 
 from collections import deque
+from functools import lru_cache
 from typing import Any, Optional
 
 from pydantic import BaseModel, ValidationError
@@ -181,6 +185,65 @@ def _longest_path_from(by_lead: dict[str, Any], roots: list[str]) -> int:
         return best
 
     return max((depth(r, set()) for r in roots if r in by_lead), default=0)
+
+
+_BOARD_SEARCH_STATE_CAP = 200_000
+
+
+class _BoardSearchExceeded(Exception):
+    """Internal signal: the exact full-board coverage search grew too large."""
+
+
+def _min_investigations_for_full_board(reveal: dict[str, frozenset[str]]) -> Optional[int]:
+    """Least number of leads whose revealed evidence covers every reachable clue.
+
+    Gameplay charges one action per newly investigated lead and each lead
+    reveals its evidence once for the couple, so this is the smallest possible
+    cost of a complete evidence board (real paths and prerequisites can only
+    cost more). Instances are tiny (at most CASE_CLOSED_MAX_LEADS leads), so an
+    exact memoised branch-and-bound over bitmasks is cheap; ``None`` means the
+    search hit an internal cap and the guarantee could not be verified.
+    """
+    index: dict[str, int] = {}
+    masks: set[int] = set()
+    for ids in reveal.values():
+        mask = 0
+        for eid in ids:
+            mask |= 1 << index.setdefault(eid, len(index))
+        if mask:
+            masks.add(mask)
+    if not masks:
+        return 0
+    full = (1 << len(index)) - 1
+    covering: list[list[int]] = [[] for _ in index]
+    for mask in masks:
+        for bit in range(len(index)):
+            if mask & (1 << bit):
+                covering[bit].append(mask)
+    states = 0
+
+    @lru_cache(maxsize=None)
+    def solve(covered: int) -> int:
+        nonlocal states
+        states += 1
+        if states > _BOARD_SEARCH_STATE_CAP:
+            raise _BoardSearchExceeded
+        if covered == full:
+            return 0
+        # Branch on the uncovered clue with the fewest candidate leads: any
+        # cover has to include one of them.
+        options: Optional[list[int]] = None
+        for bit, candidate in enumerate(covering):
+            if not covered & (1 << bit) and (options is None or len(candidate) < len(options)):
+                options = candidate
+                if len(options) == 1:
+                    break
+        return 1 + min(solve(covered | mask) for mask in options)
+
+    try:
+        return solve(0)
+    except _BoardSearchExceeded:
+        return None
 
 
 def validate_package(
@@ -449,6 +512,39 @@ def validate_package(
                 f"Solution requires evidence {eid!r} never revealed by any "
                 "reachable lead.",
             )
+
+    # --- board completeness: some clues must never be shown ----------------
+    # Each partner can charge one investigation per action (2 x budget in
+    # total) and a charged lead reveals its evidence once for the couple, so a
+    # package whose reachable clues are covered by that many leads lets a run
+    # collect the whole board. Enforce the opposite: every possible sequence
+    # of choices must leave at least one reachable clue hidden.
+    reveal = {
+        lid: frozenset(eid for eid in by_lead[lid].revealed_evidence_ids if eid in ev_set)
+        for lid in reachable
+    }
+    total_actions = 2 * pkg.investigation_budget_per_partner
+    needed = _min_investigations_for_full_board(
+        {lid: ids for lid, ids in reveal.items() if ids}
+    )
+    if needed is None:
+        _err(
+            errors,
+            "evidence_board_unverifiable",
+            "Could not prove the evidence board always stays incomplete: clue "
+            "overlap is too tangled to analyse. Give clues more exclusive "
+            "reveal leads.",
+        )
+    elif needed > 0 and needed <= total_actions:
+        _err(
+            errors,
+            "evidence_board_completable",
+            f"As few as {needed} investigations reveal every reachable clue, "
+            f"inside the couple's {total_actions} actions: at least one clue "
+            "must stay hidden for every sequence of choices. Spread evidence "
+            "across more leads (give clues their own reveal leads) so a full "
+            "sweep always costs more than the budget.",
+        )
 
     # --- culprit must not leak via ids/ordering ----------------------------
     culprit = sol.culprit_id.strip().lower()

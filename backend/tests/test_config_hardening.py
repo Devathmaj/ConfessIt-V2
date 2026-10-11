@@ -116,6 +116,22 @@ def test_concurrency_ceiling_must_be_positive(monkeypatch, tmp_path):
         _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=0)
     assert _settings(monkeypatch, tmp_path, MAX_CONCURRENCY=1).MAX_CONCURRENCY == 1
 
+
+def test_llm_provider_defaults_to_groq_and_is_normalized(monkeypatch, tmp_path):
+    """LLM_PROVIDER is trimmed and lowercased before validation; unset (or
+    blank) keeps the provider the application shipped with."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert _settings(monkeypatch, tmp_path).LLM_PROVIDER == "groq"
+    assert _settings(monkeypatch, tmp_path, LLM_PROVIDER="").LLM_PROVIDER == "groq"
+    assert _settings(monkeypatch, tmp_path, LLM_PROVIDER=" Foundry ").LLM_PROVIDER == "foundry"
+    assert _settings(monkeypatch, tmp_path, LLM_PROVIDER="GROQ").LLM_PROVIDER == "groq"
+
+
+def test_llm_provider_rejects_unknown_values(monkeypatch, tmp_path):
+    with pytest.raises(ValidationError):
+        _settings(monkeypatch, tmp_path, LLM_PROVIDER="watson")
+
+
 def test_cloud_transport_gate_ignores_local_runs(monkeypatch):
     """Plaintext transports stay legal off CLOUD: local dev is the posture they describe."""
     from app.config import settings, validate_transport_security

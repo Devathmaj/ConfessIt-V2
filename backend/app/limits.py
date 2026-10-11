@@ -507,8 +507,23 @@ PLOT_TWIST_DEFAULT_MAX_DECISIONS = 24
 # solo story with an audience, not a two-sided one.
 PLOT_TWIST_SHARED_SCENE_FRACTION = 0.5
 PLOT_TWIST_MAX_INTERCHANGEABLE_PER_SLOT = 6
-PLOT_TWIST_MAX_REPAIR_ATTEMPTS = 3
+# Repair rounds. Scene patches are cheap (a handful of scenes per request)
+# while whole-package regenerations are the expensive step, so the cap leaves
+# room for both: a live run chained five patches to take a package from 34
+# errors to 5, and another converged on its eighth round; a regeneration that
+# would add errors is discarded rather than erasing that progress.
+PLOT_TWIST_MAX_REPAIR_ATTEMPTS = 10
 PLOT_TWIST_MAX_BATCH_SCENES = 8
+# Scene-local repairs: how many implicated scenes one patch request may carry.
+# Repairs used to regenerate the whole package, which could fix one scene and
+# regress another; a patch touches only the scenes the errors name (plus their
+# direct successors), so it cannot drift elsewhere.
+PLOT_TWIST_MAX_PATCH_SCENES = 6
+# Consecutive whole-package regenerations that came back worse than the draft
+# already in hand. Once this many are discarded in a row, more rolls are not
+# finding a better structure and the loop ends on the best draft it reached
+# instead of spending the remaining rounds on hopeless requests.
+PLOT_TWIST_MAX_STUCK_REGENERATIONS = 3
 # Reward tiers map an ending to league base points. The engine caps the final
 # base at 100 however the tiers combine, so AI values can never bypass it.
 PLOT_TWIST_REWARD_TIERS: dict[str, int] = {
@@ -520,8 +535,11 @@ PLOT_TWIST_REWARD_TIERS: dict[str, int] = {
 PLOT_TWIST_TREASURE_BONUS_EACH = 5
 PLOT_TWIST_TREASURE_BONUS_MAX = 15
 # Generation transport: per-request timeout and overall attempt caps so a
-# stalled provider fails visibly instead of hanging an admin request.
-PLOT_TWIST_LLM_TIMEOUT_SECONDS = 120
+# stalled provider fails visibly instead of hanging an admin request. The
+# timeout leaves room for the largest legitimate package answer (about 20k
+# tokens of JSON at the deployment's observed decode speed, plus hidden
+# reasoning); a cut-off answer is retried inside the attempt cap either way.
+PLOT_TWIST_LLM_TIMEOUT_SECONDS = 150
 PLOT_TWIST_SESSION_LOCK_KEY = 7_250_003
 
 # Case Closed. Cooperative mystery game: one immutable published case per

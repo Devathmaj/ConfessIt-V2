@@ -390,16 +390,37 @@ class Settings(BaseSettings):
 
     # --- LLM ---
     #
-    # Story-generation provider configuration (Plot Twist pre-publication
-    # generation only; gameplay never touches the provider). ``LLM_PROVIDER``
-    # selects the SDK: ``groq`` for Groq's own SDK (Strict Structured
-    # Outputs), ``openai`` for any OpenAI-compatible surface such as
-    # Microsoft Foundry, ``auto`` (the default) picks Groq when the base URL
-    # names it. Switching providers is configuration, never a code change.
-    LLM_PROVIDER: str = "auto"
+    # Story-generation provider configuration (Plot Twist and Case Closed
+    # pre-publication generation only; gameplay never touches the provider).
+    # ``LLM_PROVIDER`` selects the SDK: ``groq`` (the default, the provider
+    # the application shipped with) for Groq's own SDK (Strict Structured
+    # Outputs), ``foundry`` for Microsoft Foundry through the official
+    # OpenAI Python SDK. The legacy spellings ``openai`` (the same path as
+    # foundry) and ``auto`` (Groq when the base URL names it, else the
+    # OpenAI-compatible client) keep old deployments working. Switching
+    # providers is configuration, never a code change.
+    LLM_PROVIDER: str = "groq"
     LLM_API_KEY: str | None = None
     LLM_BASE_URL: str | None = None
     LLM_MODEL: str | None = None
+
+    @field_validator("LLM_PROVIDER", mode="before")
+    @classmethod
+    def _normalize_llm_provider(cls, value: Any) -> str:
+        """Trim, lowercase and admit only the known provider spellings.
+
+        Unset (or blank) means Groq, the provider the application shipped
+        with; anything unrecognised is a configuration error the operator
+        sees at boot rather than a mid-generation surprise.
+        """
+        text = str(value or "").strip().lower() or "groq"
+        if text not in ("groq", "foundry", "openai", "auto"):
+            raise ValueError(
+                f"LLM_PROVIDER must be 'groq' or 'foundry' "
+                f"(got {value!r}); 'openai' and 'auto' remain accepted as "
+                "legacy spellings."
+            )
+        return text
 
     # --- Semantic search embeddings (Azure) ---
     #

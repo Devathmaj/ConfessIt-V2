@@ -141,14 +141,14 @@ def valid_blueprint(**over):
 
 def _leads():
     return [
-        {"id": "lead-a", "title": "Security footage", "description": "Who entered?", "discovery_text": "Entry at 6:18pm.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-d", "lead-i"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
-        {"id": "lead-b", "title": "Key register", "description": "Who had keys?", "discovery_text": "Spare key used.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-e", "lead-j"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
-        {"id": "lead-c", "title": "Statements", "description": "Alibis?", "discovery_text": "Stories disagree.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-f"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
+        {"id": "lead-a", "title": "Security footage", "description": "Who entered?", "discovery_text": "Entry at 6:18pm.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-d", "lead-i", "lead-p1"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
+        {"id": "lead-b", "title": "Key register", "description": "Who had keys?", "discovery_text": "Spare key used.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-e", "lead-j", "lead-p2"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
+        {"id": "lead-c", "title": "Statements", "description": "Alibis?", "discovery_text": "Stories disagree.", "revealed_evidence_ids": ["e1"], "next_lead_ids": ["lead-f", "lead-p3", "lead-p4"], "required_evidence_ids": [], "suspect_ids": [], "depth": 0},
         {"id": "lead-d", "title": "Identify figure", "description": "Who is it?", "discovery_text": "Figure matches Alex.", "revealed_evidence_ids": ["e2"], "next_lead_ids": ["lead-g"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 1},
         {"id": "lead-e", "title": "Spare key log", "description": "Key log", "discovery_text": "Log shows spare signed out.", "revealed_evidence_ids": ["e2"], "next_lead_ids": ["lead-h"], "required_evidence_ids": [], "suspect_ids": [], "depth": 1},
         {"id": "lead-f", "title": "Alibi check", "description": "Check alibis", "discovery_text": "Alex alibi weak.", "revealed_evidence_ids": ["e2"], "next_lead_ids": ["lead-g"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 1},
-        {"id": "lead-g", "title": "Timestamp vs alibi", "description": "Compare", "discovery_text": "6:18 breaks Alex alibi.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-k"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
-        {"id": "lead-h", "title": "Second camera", "description": "Hallway cam", "discovery_text": "Alex in hallway.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-k"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
+        {"id": "lead-g", "title": "Timestamp vs alibi", "description": "Compare", "discovery_text": "6:18 breaks Alex alibi.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-k", "lead-p5"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
+        {"id": "lead-h", "title": "Second camera", "description": "Hallway cam", "discovery_text": "Alex in hallway.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-k", "lead-p6"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
         {"id": "lead-i", "title": "Costume fibers", "description": "Fibers", "discovery_text": "Fibers in Alex locker.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-l"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
         {"id": "lead-j", "title": "Motive talk", "description": "Prank motive", "discovery_text": "Alex joked about delay.", "revealed_evidence_ids": ["e3"], "next_lead_ids": ["lead-l"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 2},
         {"id": "lead-k", "title": "Locker search", "description": "Search", "discovery_text": "Ticket stub in costume.", "revealed_evidence_ids": ["e4"], "next_lead_ids": ["lead-n"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 3},
@@ -156,6 +156,14 @@ def _leads():
         {"id": "lead-m", "title": "Confession note", "description": "Note", "discovery_text": "Note in Alex hand.", "revealed_evidence_ids": ["e4"], "next_lead_ids": ["lead-o"], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 4},
         {"id": "lead-n", "title": "Confront", "description": "Confront Alex", "discovery_text": "Alex admits prank.", "revealed_evidence_ids": ["e5"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": ["s1"], "depth": 4},
         {"id": "lead-o", "title": "Rule out Blake", "description": "Blake alibi", "discovery_text": "Blake on stage.", "revealed_evidence_ids": ["e5"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": ["s2"], "depth": 5},
+        # Exclusive-clue leads: each reveals one clue no other lead can, so a
+        # full sweep always costs more investigations than the couple has.
+        {"id": "lead-p1", "title": "Storeroom sweep", "description": "Search the storeroom", "discovery_text": "Nothing staged on the shelves.", "revealed_evidence_ids": ["e6"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 1},
+        {"id": "lead-p2", "title": "Prop list", "description": "Check props", "discovery_text": "Prop list has one gap.", "revealed_evidence_ids": ["e7"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 1},
+        {"id": "lead-p3", "title": "Crew roll call", "description": "Who signed in?", "discovery_text": "A signature is backdated.", "revealed_evidence_ids": ["e8"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 1},
+        {"id": "lead-p4", "title": "Budget sheet", "description": "Money trail", "discovery_text": "A cash advance went unaccounted.", "revealed_evidence_ids": ["e9"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 1},
+        {"id": "lead-p5", "title": "Cleaner interview", "description": "Night shift", "discovery_text": "The cleaner heard a door.", "revealed_evidence_ids": ["e10"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 3},
+        {"id": "lead-p6", "title": "Recycling bin", "description": "Bin search", "discovery_text": "A torn sticker turned up.", "revealed_evidence_ids": ["e11"], "next_lead_ids": [], "required_evidence_ids": [], "suspect_ids": [], "depth": 3},
     ]
 
 
@@ -184,6 +192,12 @@ def valid_package(**over):
             {"id": "e3", "title": "Alibi break", "description": "Alex alibi fails", "suspect_ids": ["s1"], "timeline_ids": [], "kind": "contradicts_statement", "related_evidence_ids": []},
             {"id": "e4", "title": "Locker", "description": "Fibers", "suspect_ids": ["s1"], "timeline_ids": [], "kind": "supports_theory", "related_evidence_ids": []},
             {"id": "e5", "title": "Confession", "description": "Admits", "suspect_ids": ["s1"], "timeline_ids": [], "kind": "establishes_fact", "related_evidence_ids": []},
+            {"id": "e6", "title": "Storeroom dust", "description": "Shelf never moved", "suspect_ids": [], "timeline_ids": [], "kind": "misleading", "related_evidence_ids": []},
+            {"id": "e7", "title": "Prop ledger", "description": "Ledger gap", "suspect_ids": [], "timeline_ids": [], "kind": "supports_theory", "related_evidence_ids": []},
+            {"id": "e8", "title": "Sign-in sheet", "description": "Backdated entry", "suspect_ids": [], "timeline_ids": [], "kind": "contradicts_statement", "related_evidence_ids": []},
+            {"id": "e9", "title": "Cash advance", "description": "Advance unaccounted", "suspect_ids": [], "timeline_ids": [], "kind": "supports_theory", "related_evidence_ids": []},
+            {"id": "e10", "title": "Hall noise", "description": "Door heard late", "suspect_ids": [], "timeline_ids": [], "kind": "establishes_fact", "related_evidence_ids": []},
+            {"id": "e11", "title": "Torn sticker", "description": "Sticker from costume", "suspect_ids": [], "timeline_ids": [], "kind": "supports_theory", "related_evidence_ids": []},
         ],
         "lead_nodes": _leads(),
         "solution": {
@@ -297,8 +311,8 @@ def test_unreachable_rejected():
          "revealed_evidence_ids": [], "next_lead_ids": [], "required_evidence_ids": [],
          "suspect_ids": [], "depth": 4}
     ]
-    # 15 nodes still, but one unreachable
-    assert len(pkg["lead_nodes"]) == 15
+    # 21 nodes still, but one unreachable
+    assert len(pkg["lead_nodes"]) == 21
     rep = validate_package(pkg)
     assert not rep.ok and any(e.code == "unreachable_leads" for e in rep.errors)
 
@@ -334,9 +348,79 @@ def test_timeline_order_and_budget():
 
 def test_solution_unreachable_evidence():
     pkg = valid_package()
-    pkg["solution"]["required_evidence_ids"] = ["e9"]
+    pkg["solution"]["required_evidence_ids"] = ["e-ghost"]
     rep = validate_package(pkg)
     assert not rep.ok
+
+
+def test_full_evidence_board_must_stay_impossible():
+    """No sequence of choices may ever unlock every clue into shared evidence."""
+    # Baseline fixture: collecting every reachable clue costs 11 investigations
+    # (five shared-branch leads plus six exclusive clues) while the couple only
+    # has 10 actions, so at least one clue always stays hidden.
+    assert validate_package(valid_package()).ok
+
+    # A lead flooding the board with every clue makes it completable.
+    flooded = valid_package()
+    flooded["lead_nodes"][0]["revealed_evidence_ids"] = [e["id"] for e in flooded["evidence"]]
+    rep = validate_package(flooded)
+    assert not rep.ok and any(e.code == "evidence_board_completable" for e in rep.errors)
+
+    # A budget generous enough to afford the full sweep is rejected too.
+    generous = valid_package()
+    generous["investigation_budget_per_partner"] = 10  # 20 actions afford 11 investigations
+    rep = validate_package(generous)
+    assert not rep.ok and any(e.code == "evidence_board_completable" for e in rep.errors)
+
+    # A clue no lead ever reveals can never be shown at all; it needs no room
+    # inside the budget and quietly satisfies the same guarantee.
+    inert = valid_package()
+    inert["evidence"] = inert["evidence"] + [
+        {"id": "e-inert", "title": "Red herring", "description": "Never surfaces",
+         "suspect_ids": [], "timeline_ids": [], "kind": "misleading", "related_evidence_ids": []},
+    ]
+    assert validate_package(inert).ok
+
+
+def test_strict_provider_schemas_satisfy_foundry_shape_rules():
+    """Every object node spells out `properties` and forbids extras.
+
+    Foundry's strict validator refuses an object without a `properties` key:
+    it reports the parent's `required` entry for it as an "extra required
+    key", which silently demoted the whole package schema to the JSON-object
+    fallback -- where the model returned `facts` as bare strings and every
+    repair failed local validation. The free-form `authoring_metadata` field
+    is the node that produced it, so it must be an explicitly empty object.
+    """
+    from app.services.case_closed_schemas import (
+        blueprint_json_schema,
+        package_json_schema,
+    )
+
+    def check(node, path):
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                check(item, f"{path}[{index}]")
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object" or "properties" in node:
+            assert isinstance(node.get("properties"), dict), path
+            assert node.get("additionalProperties") is False, path
+            assert sorted(node.get("required") or []) == sorted(node["properties"]), path
+        for key, value in node.items():
+            if isinstance(value, (dict, list)):
+                check(value, f"{path}.{key}")
+
+    package = package_json_schema()
+    assert package["properties"]["authoring_metadata"] == {
+        "additionalProperties": False,
+        "title": "Authoring Metadata",
+        "type": "object",
+        "properties": {},
+    }
+    for name, schema in (("blueprint", blueprint_json_schema()), ("package", package)):
+        check(schema, name)
 
 
 # --- AI integration (mocked shared client) ---------------------------------
@@ -347,6 +431,43 @@ def test_stage_a_uses_shared_client(db, players):
     with patch("app.services.llm_client.generate_structured_json", return_value=(valid_blueprint(), {"strict_schema": True})) as mocked:
         payload, report = case_closed_generation.generate_blueprint_content(cfg)
         assert mocked.called and report.ok and payload["culprit_id"] == "s1"
+
+
+def test_case_closed_stages_run_through_foundry_provider(monkeypatch):
+    """Both stages of the real pipeline with only the Foundry SDK call mocked:
+    prompts, validation and repair bounds stay live, and every call routes
+    through the configured provider with the configured model."""
+    from app.services import llm_client
+
+    seen: list = []
+    payloads = iter((valid_blueprint(), valid_package()))
+
+    def fake_foundry(config, system, user, json_schema, schema_name, operation_id, timeout_s, max_tokens):
+        seen.append((llm_client.select_provider(config), config.model, schema_name))
+        return dict(next(payloads)), False
+
+    monkeypatch.setattr(llm_client, "_generate_via_foundry", fake_foundry)
+    config = llm_client.LLMConfig(
+        base_url="https://confessit-model.services.ai.azure.com/openai/v1",
+        model="gpt-5-mini", provider="foundry", api_key="test-key",
+    )
+    generation_config = CaseClosedGenerationConfig()
+
+    blueprint, report = case_closed_generation.generate_blueprint_content(
+        generation_config, llm_config=config
+    )
+    assert report.ok
+    package, report = case_closed_generation.generate_package_content(
+        blueprint, generation_config, llm_config=config
+    )
+    assert report.ok
+    assert [name for _, _, name in seen] == ["case_closed_blueprint", "case_closed_package"]
+    assert all(
+        provider == "foundry" and model == "gpt-5-mini"
+        for provider, model, _ in seen
+    )
+    assert package["lead_nodes"] and package["solution"]["culprit_id"]
+    assert any(lead.get("next_lead_ids") for lead in package["lead_nodes"])
 
 
 def test_stage_b_repair_bounded(db):
@@ -387,6 +508,37 @@ def test_invalid_package_cannot_publish(db):
 
     with pytest.raises(fastapi.HTTPException):
         case_closed_generation.publish_package(db, pid)
+
+
+def test_generated_package_publishes_after_publish_revalidation(db, monkeypatch):
+    """A generated package (carrying the server-assigned version) survives
+    publish-time re-validation: generation stamped `version` into the stored
+    payload, so the package model must declare it or every publish answers
+    422 with 'Extra inputs are not permitted'."""
+    from app.services import case_closed_generation as generation
+    from app.services.case_closed_schemas import CaseClosedGenerationConfig
+
+    with db.sessions.begin() as session:
+        brow = CaseClosedBlueprintRecord(
+            title="Mascot", difficulty="medium",
+            config=CaseClosedGenerationConfig().model_dump(),
+            blueprint=valid_blueprint(), status="approved",
+            validation_errors=[], created_by="admin",
+        )
+        session.add(brow)
+        session.flush()
+        bp_id = str(brow.id)
+
+    with patch(
+        "app.services.llm_client.generate_structured_json",
+        return_value=(valid_package(), {"strict_schema": True}),
+    ):
+        generated = generation.generate_package(db, bp_id, created_by="admin")
+    assert generated["status"] == "ready_for_review"
+    assert generated["package"].get("version") == generated["version"] == 1
+
+    published = generation.publish_package(db, generated["id"])
+    assert published["status"] == "published"
 
 
 def test_admin_errors_sanitized(db, players):

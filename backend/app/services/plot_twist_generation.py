@@ -27,7 +27,9 @@ from ..db_models import PlotTwistBlueprintRecord, PlotTwistGameRecord, PlotTwist
 from ..limits import (
     PLOT_TWIST_ENDING_TYPES,
     PLOT_TWIST_MAX_BATCH_SCENES,
+    PLOT_TWIST_MAX_PATCH_SCENES,
     PLOT_TWIST_MAX_REPAIR_ATTEMPTS,
+    PLOT_TWIST_MAX_STUCK_REGENERATIONS,
     PLOT_TWIST_SESSION_LOCK_KEY,
 )
 from ..postgres import Database
@@ -106,6 +108,12 @@ def _stage_a_user(config: GenerationConfig) -> str:
         f"Decision points wanted: {config.decision_count}.",
         f"Interchangeable encounters wanted: {config.interchangeable_count}.",
         f"Maximum scenes: {config.max_scenes}.",
+        f"Main path: about {config.decision_count} beats and never more than "
+        f"{config.decision_count + 2} -- each beat becomes one core scene in the "
+        "playable package, so merge story moments into beats instead of listing "
+        "them all.",
+        f"Slots: core plus about {config.interchangeable_count} side slots, and "
+        f"never more than {config.interchangeable_count + 2} in total.",
     ]
     if config.theme:
         lines.append(f"Theme: {config.theme}.")
@@ -140,15 +148,28 @@ def _stage_b_system() -> str:
         "vivid 2-4 sentence narrative_text grounded in the blueprint (no "
         "filler, no reuse), type, actor, slot, tags, choices with safe state "
         "changes over declared variables only (flag values are short strings, "
-        "never numbers/booleans), valid next_scene_id targets. Terminals carry "
+        "never numbers/booleans), valid next_scene_id targets. Integer "
+        "variables take set/increment/decrement with numeric values; flag "
+        "variables take only add_flag/remove_flag with short string tokens "
+        "(never set/increment on a flag -- the turn flag flips with "
+        "remove_flag then add_flag). Terminals carry "
         "ending_id and no choices. Never invent variables, tags, endings, tiers. "
         "Slots: opening, terminals and main-path scenes are slot core; side "
-        "slots hold alternatives for one moment, never sequential beats. "
+        "slots hold alternatives for one moment, never sequential beats, and "
+        "interchangeable scenes of one slot must never lead to each other. "
+        "Tags: requires_tags must be satisfied by another scene's "
+        "provides_tags -- never require a tag nothing provides. "
         "Turns alternate participant_one/participant_two along every path "
-        "(never same twice); either/joint rarely. Loops must offer an exit to "
-        "an ending. Branching is the top rejection reason: multi-choice scenes "
-        "must use DIFFERENT next_scene_id targets, never unanimous convergence; "
-        "choices are tradeoffs (trust vs secrets/safety vs treasure), never polar "
+        "(never same twice): a participant_two scene's choices must lead to "
+        "participant_one scenes and vice versa; either/joint rarely. Loops "
+        "must offer an exit to an ending, and each scene's FIRST choice must "
+        "keep advancing toward an ending -- the engine walks first choices to "
+        "check a run can finish, so put looping or risky options after the "
+        "advancing one. Branching is the top rejection "
+        "reason: multi-choice scenes must use DIFFERENT next_scene_id targets, "
+        "never unanimous convergence, and never insert detour or variant "
+        "scenes whose choices all funnel into one successor; choices are "
+        "tradeoffs (trust vs secrets/safety vs treasure), never polar "
         "good-vs-bad to the same scene. Each choice needs distinct specific "
         "consequence_text. State changes differ per choice and gate endings; "
         "initial_state covers every variable; each ending fits a play style."
@@ -163,11 +184,15 @@ def _stage_b_user(blueprint: dict, config: GenerationConfig) -> str:
         f"(story_id: {blueprint.get('title', 'plot-twist-story')}).\n\n"
         f"BLUEPRINT:\n{_json.dumps(blueprint)}\n\n"
         f"Difficulty: {config.difficulty}. "
-        f"Aim for about {config.decision_count} decisions and "
-        f"{config.interchangeable_count} side encounters within "
-        f"{config.max_scenes} scenes (opening core, core path core, side slots "
-        "one moment each). Self-check: distinct targets per scene, no polar "
-        "same-target pair, unique titles, complete initial_state, string flag "
+        f"Render about {config.decision_count} core decision scenes and "
+        f"{config.interchangeable_count} side encounters, and keep the whole "
+        f"package to at most {config.max_scenes} scenes in total (opening, core, "
+        "sides, terminals and alternates counted together; the schema enforces "
+        "the cap). The blueprint's main path is a guide, not a scene list: merge "
+        "or drop listed beats instead of creating one scene per beat. "
+        "Self-check: distinct targets per scene, no polar "
+        "same-target pair, no single-successor detour nodes, alternating "
+        "actors per edge, unique titles, complete initial_state, string flag "
         "values, distinct reachable endings."
     )
 
@@ -193,7 +218,11 @@ def _minimized_blueprint(blueprint: dict) -> dict:
             for var in (blueprint.get("state_vars") or [])
         ],
         "slots": [
-            {"name": slot.get("name"), "accepts_tags": slot.get("accepts_tags")}
+            {
+                "name": slot.get("name"),
+                "accepts_tags": slot.get("accepts_tags"),
+                "provides_tags": slot.get("provides_tags"),
+            }
             for slot in (blueprint.get("slots") or [])
         ],
         "endings": [
@@ -313,7 +342,11 @@ def generate_blueprint(
         _mark_blueprint_failed(db, blueprint_id_str, exc)
         raise _as_http(exc)
 
-    report = plot_twist_validation.validate_blueprint(payload)
+    budgets = {
+        "decision_count": config.decision_count,
+        "interchangeable_count": config.interchangeable_count,
+    }
+    report = plot_twist_validation.validate_blueprint(payload, **budgets)
     attempts = 0
     while not report.ok and attempts < PLOT_TWIST_MAX_REPAIR_ATTEMPTS:
         attempts += 1
@@ -334,7 +367,7 @@ def generate_blueprint(
         except Exception as exc:
             _mark_blueprint_failed(db, blueprint_id_str, exc)
             raise _as_http(exc)
-        report = plot_twist_validation.validate_blueprint(payload)
+        report = plot_twist_validation.validate_blueprint(payload, **budgets)
 
     with db.sessions.begin() as session:
         row = session.get(PlotTwistBlueprintRecord, blueprint_id_str)
@@ -442,6 +475,126 @@ def latest_published_package(db: Database) -> Optional[dict]:
         return _package_view(row) if row is not None else None
 
 
+def _patch_targets(payload: dict, errors: list) -> list[str]:
+    """Scene ids implicated by validation errors, plus their direct targets.
+
+    Actor hand-offs and convergence live on edges, so a culprit scene is
+    patched together with the scenes its choices lead to. Errors without a
+    scene (scene count, initial state) are not patchable and fall back to a
+    full regeneration.
+    """
+    by_id = {str(scene.get("id")): scene for scene in payload.get("scenes") or []}
+    targets: list[str] = []
+    for error in errors:
+        scene_id = str(getattr(error, "scene_id", None) or "")
+        if scene_id in by_id and scene_id not in targets:
+            targets.append(scene_id)
+    expanded = list(targets)
+    for scene_id in targets:
+        for choice in by_id[scene_id].get("choices") or []:
+            successor = str(choice.get("next_scene_id") or "")
+            if successor in by_id and successor not in expanded:
+                expanded.append(successor)
+    return expanded[:PLOT_TWIST_MAX_PATCH_SCENES]
+
+
+def _scene_fix_user(
+    blueprint: dict, scene_map: str, selected: list[dict], errors: list[dict]
+) -> str:
+    import json as _json
+
+    return (
+        "A generated Plot Twist package failed validation. Correct the listed "
+        "scenes and return one JSON object with `slot` and the corrected full "
+        "scene objects in `scenes`. You may also return any other existing "
+        "scene you had to change (e.g. to wire an unreachable scene in or "
+        "provide a missing tag); scenes you do not return stay unchanged.\n\n"
+        "Rules: turns alternate along every edge -- a participant_one choice "
+        "must lead to a participant_two scene and vice versa, never the same "
+        "participant twice in a row; a scene's choices must lead to DIFFERENT "
+        "existing scenes; interchangeable scenes of one slot must never lead "
+        "into each other; a scene may require only tags that some scene's "
+        "provides_tags supplies (add the tag to a listed scene's provides_tags "
+        "when needed, or drop the requirement); flag variables take only "
+        "add_flag/remove_flag with short string tokens; terminals carry "
+        "ending_id and no choices; every non-terminal scene keeps 1-3 choices; "
+        "every scene must be reachable from the opening -- when a scene is "
+        "unreachable, retarget or add a choice in another existing scene so "
+        "the story can enter it. Keep each scene's id and slot, and keep "
+        "choices targeting ids from the scene list.\n\n"
+        f"BLUEPRINT (essentials):\n{_json.dumps(_minimized_blueprint(blueprint))}\n\n"
+        f"ALL SCENES (id | actor | slot | terminal | choice targets):\n{scene_map}\n\n"
+        f"SCENES TO CORRECT:\n{_json.dumps(selected)}\n\n"
+        f"VALIDATION ERRORS TO RESOLVE:\n{_json.dumps(errors)}"
+    )
+
+
+def _patch_scenes(
+    payload: dict,
+    blueprint: dict,
+    target_ids: list[str],
+    errors: list[dict],
+    llm_config=None,
+) -> Optional[dict]:
+    """Regenerate only the implicated scenes and splice them back in.
+
+    Repairs used to regenerate every scene, which fixed one error and could
+    regress another. A patch leaves every untouched scene byte-identical;
+    ``None`` means the request failed and the caller should fall back to a
+    full regeneration.
+    """
+    from ..limits import PLOT_TWIST_LLM_TIMEOUT_SECONDS
+    from .llm_client import generate_structured_json
+
+    by_id = {str(scene.get("id")): scene for scene in payload.get("scenes") or []}
+    selected = [by_id[scene_id] for scene_id in target_ids if scene_id in by_id]
+    if not selected:
+        return None
+    scene_map = "\n".join(
+        f"{scene.get('id')} | actor={scene.get('actor')} | "
+        f"slot={scene.get('slot') or 'core'} | "
+        f"terminal={bool(scene.get('is_terminal'))} | "
+        f"choices -> {[choice.get('next_scene_id') for choice in (scene.get('choices') or [])]} | "
+        f"req={scene.get('requires_tags') or []} | prov={scene.get('provides_tags') or []}"
+        for scene in payload.get("scenes") or []
+    )
+    relevant = [
+        error for error in errors if str(error.get("scene_id") or "") in set(target_ids)
+    ]
+    try:
+        batch, _meta = generate_structured_json(
+            system=_stage_b_system(),
+            user=_scene_fix_user(blueprint, scene_map, selected, relevant or errors[:12]),
+            json_schema=scene_batch_json_schema(),
+            schema_name="plot_twist_scene_fix",
+            operation="package-scene-fix",
+            timeout_s=PLOT_TWIST_LLM_TIMEOUT_SECONDS,
+            max_tokens=14000,
+            config=llm_config,
+        )
+    except Exception:
+        return None
+    replacements = {
+        str(scene.get("id")): scene
+        for scene in (batch.get("scenes") or [])
+        if isinstance(scene, dict) and str(scene.get("id")) in by_id
+    }
+    if not replacements:
+        return None
+    patched: list[dict] = []
+    for scene in payload.get("scenes") or []:
+        replacement = replacements.get(str(scene.get("id")))
+        if replacement is None:
+            patched.append(scene)
+            continue
+        replacement["id"] = scene.get("id")
+        replacement["slot"] = scene.get("slot") or "core"
+        patched.append(replacement)
+    candidate = dict(payload)
+    candidate["scenes"] = patched
+    return candidate
+
+
 def generate_package(
     db: Database, blueprint_id: str, created_by: str, llm_config=None
 ) -> dict:
@@ -452,7 +605,7 @@ def generate_package(
     scenes, and each batch validates against the same contracts.
     """
     from ..limits import PLOT_TWIST_LLM_TIMEOUT_SECONDS
-    from .llm_client import generate_structured_json
+    from .llm_client import LLMError, generate_structured_json
 
     with db.sessions() as session:
         blueprint_row = session.get(PlotTwistBlueprintRecord, blueprint_id)
@@ -472,19 +625,30 @@ def generate_package(
                 detail=f"Stored generation config is invalid: {exc}",
             ) from exc
 
+    package_call = dict(
+        system=_stage_b_system(),
+        user=_stage_b_user(blueprint, config),
+        json_schema=package_json_schema(blueprint, max_scenes=config.max_scenes),
+        schema_name="plot_twist_package",
+        operation="package",
+        timeout_s=PLOT_TWIST_LLM_TIMEOUT_SECONDS,
+        max_tokens=20000,
+        config=llm_config,
+    )
     try:
-        payload, _meta = generate_structured_json(
-            system=_stage_b_system(),
-            user=_stage_b_user(blueprint, config),
-            json_schema=package_json_schema(),
-            schema_name="plot_twist_package",
-            operation="package",
-            timeout_s=PLOT_TWIST_LLM_TIMEOUT_SECONDS,
-            max_tokens=16000,
-            config=llm_config,
-        )
+        payload, _meta = generate_structured_json(**package_call)
     except Exception as exc:
-        raise _as_http(exc)
+        if not (isinstance(exc, LLMError) and exc.code == "truncated"):
+            raise _as_http(exc)
+        # A cut-off answer is a stochastic overrun (hidden reasoning plus a
+        # long package), not a broken contract: retry once against the cap.
+        logger.warning(
+            "Plot Twist package answer was cut off by the output-token budget; retrying once."
+        )
+        try:
+            payload, _meta = generate_structured_json(**package_call)
+        except Exception as retry_exc:
+            raise _as_http(retry_exc)
 
     # Identity is assigned server-side, never trusted from the model: a
     # drifted blueprint_ref would detach the package from its contract.
@@ -506,8 +670,44 @@ def generate_package(
         payload, blueprint=blueprint, max_scenes=config.max_scenes
     )
     attempts = 0
+    force_full = False
+    stuck = 0
     while not report.ok and attempts < PLOT_TWIST_MAX_REPAIR_ATTEMPTS:
         attempts += 1
+        progressed = False
+        if not force_full:
+            targets = _patch_targets(payload, report.errors)
+            if targets:
+                candidate = _patch_scenes(
+                    payload,
+                    blueprint,
+                    targets,
+                    [err.model_dump() for err in report.errors],
+                    llm_config=llm_config,
+                )
+                if candidate is not None:
+                    candidate_report = plot_twist_validation.validate_package(
+                        candidate, blueprint=blueprint, max_scenes=config.max_scenes
+                    )
+                    if len(candidate_report.errors) < len(report.errors):
+                        logger.info(
+                            "Plot Twist patch fixed %s of %s validation errors.",
+                            len(report.errors) - len(candidate_report.errors),
+                            len(report.errors),
+                        )
+                        payload, report = candidate, candidate_report
+                        progressed = True
+                        stuck = 0
+                    else:
+                        force_full = True
+                else:
+                    force_full = True
+        if report.ok:
+            break
+        if progressed:
+            continue
+        # Whole-package regeneration: what remains is structural (scene count,
+        # initial state) or the patch stopped helping.
         try:
             repaired, _meta = generate_structured_json(
                 system=_stage_b_system(),
@@ -519,22 +719,52 @@ def generate_package(
                     "narrative_text, actor, slot, tags and choices.",
                     blueprint=blueprint,
                 ),
-                json_schema=package_json_schema(),
+                json_schema=package_json_schema(blueprint, max_scenes=config.max_scenes),
                 schema_name="plot_twist_package",
                 operation=f"package-repair-{attempts}",
                 timeout_s=PLOT_TWIST_LLM_TIMEOUT_SECONDS,
-                max_tokens=16000,
+                max_tokens=20000,
                 config=llm_config,
             )
+        except LLMError as exc:
+            if exc.code == "truncated":
+                # A cut-off answer is a stochastic overrun, not a broken
+                # contract: spend the attempt on the same repair instead of
+                # failing the whole generation.
+                logger.warning(
+                    "Plot Twist repair %s was cut off by the output-token budget; retrying.",
+                    attempts,
+                )
+                continue
+            raise _as_http(exc)
         except Exception as exc:
             raise _as_http(exc)
         repaired["blueprint_ref"] = blueprint_id
         repaired["difficulty"] = config.difficulty
         repaired.setdefault("story_id", payload.get("story_id"))
-        payload = repaired
-        report = plot_twist_validation.validate_package(
-            payload, blueprint=blueprint, max_scenes=config.max_scenes
+        repaired_report = plot_twist_validation.validate_package(
+            repaired, blueprint=blueprint, max_scenes=config.max_scenes
         )
+        if len(repaired_report.errors) <= len(report.errors):
+            payload, report = repaired, repaired_report
+            stuck = 0
+        else:
+            # A regeneration that adds errors must not erase progress the
+            # patches already made; keep the better draft as the working state.
+            stuck += 1
+            logger.info(
+                "Plot Twist regeneration produced %s validation errors against "
+                "%s; keeping the better draft.",
+                len(repaired_report.errors),
+                len(report.errors),
+            )
+            if stuck >= PLOT_TWIST_MAX_STUCK_REGENERATIONS:
+                logger.info(
+                    "Plot Twist regeneration is not finding a better structure; "
+                    "ending the loop on the best draft."
+                )
+                break
+        force_full = False
 
     with db.sessions.begin() as session:
         version = _next_package_version(session, blueprint_id)
@@ -589,10 +819,12 @@ def _append_interchangeable_batches(
             timeout_s=PLOT_TWIST_LLM_TIMEOUT_SECONDS,
             config=llm_config,
         )
-        for scene in batch.get("scenes") or []:
+        ceiling = config.max_scenes or 40
+        room = max(0, ceiling - len(existing))
+        for scene in (batch.get("scenes") or [])[:room]:
             scene.setdefault("slot", slot)
             existing.append(scene)
-        if len(existing) >= (config.max_scenes or 40):
+        if len(existing) >= ceiling:
             break
     payload["scenes"] = existing
 
@@ -929,7 +1161,8 @@ def simulate_path(package: dict, choice_ids: list[str]) -> dict:
                       "next_scene_id": choice.get("next_scene_id")})
         current_id = choice.get("next_scene_id")
     scene = scenes.get(current_id, {})
-    ending = endings.get(scene.get("ending_id") or {})
-    return {"steps": steps, "ending_id": scene.get("ending_id"),
-            "ending_title": ending.get("title"), "final_state": state,
+    ending_id = scene.get("ending_id")
+    ending = endings.get(ending_id or "")
+    return {"steps": steps, "ending_id": ending_id,
+            "ending_title": (ending or {}).get("title"), "final_state": state,
             "treasures": treasures, "valid": True, "error": None}

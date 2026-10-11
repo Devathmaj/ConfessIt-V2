@@ -288,6 +288,21 @@ def pair(db, http, players):
 # --- validation ---------------------------------------------------------------
 
 
+def test_simulate_path_handles_partial_walks():
+    """The admin preview may walk a path that stops before an ending; that is
+    a valid partial path, not a crash on the missing ending id."""
+    from app.services.plot_twist_generation import simulate_path
+
+    partial = simulate_path(story_package(), ["c_loading"])
+    assert partial["valid"] is True
+    assert partial["ending_id"] is None
+    assert partial["steps"][-1]["next_scene_id"] == "s_dock"
+    # A full walk still reports its ending.
+    full = simulate_path(story_package(), ["c_loading", "c_careful"])
+    assert full["valid"] is True
+    assert full["ending_id"] == "e_escape"
+
+
 def test_valid_branching_package_passes():
     report = validate_package(story_package())
     assert report.ok, [e.message for e in report.errors]
@@ -331,7 +346,8 @@ def test_unreachable_scene_is_rejected():
     })
     report = validate_package(package)
     assert not report.ok
-    assert any(e.code == "unreachable_scenes" for e in report.errors)
+    stranded = [e for e in report.errors if e.code == "unreachable_scenes"]
+    assert [e.scene_id for e in stranded] == ["s_lost"]  # per-scene: patchable
 
 
 def test_unsatisfiable_tags_are_rejected():
@@ -403,6 +419,43 @@ def test_blueprint_requires_endings_and_unique_vars():
     assert validate_blueprint(BLUEPRINT).ok
 
 
+def test_blueprint_scale_budgets_are_enforced():
+    """A blueprint whose main path or slot list dwarfs the configured decision
+    count is refused: it would force Stage B far past the scene ceiling (a
+    24-beat main path became a 29-scene package)."""
+    long_path = dict(BLUEPRINT, main_path=[f"beat-{index}" for index in range(20)])
+    assert validate_blueprint(long_path).ok  # budgets are opt-in
+    report = validate_blueprint(long_path, decision_count=8, interchangeable_count=4)
+    assert {error.code for error in report.errors} == {"blueprint_main_path_budget"}
+    within = dict(BLUEPRINT, main_path=[f"beat-{index}" for index in range(10)])
+    assert validate_blueprint(within, decision_count=8, interchangeable_count=4).ok
+    many_slots = dict(
+        BLUEPRINT,
+        slots=[dict(BLUEPRINT["slots"][0], name=f"side-{index}") for index in range(10)],
+    )
+    report = validate_blueprint(many_slots, decision_count=8, interchangeable_count=4)
+    assert {error.code for error in report.errors} == {"blueprint_slot_budget"}
+
+
+def test_unreachable_alternatives_are_playable_through_module_selection():
+    """Interchangeable scenes are entered through module selection: a
+    transition into any scene of a slot resolves to the couple's alternative,
+    so slot-mates of a reachable scene are not stranded; only scenes in
+    unreached slots (or lost in core) are."""
+    from types import SimpleNamespace
+
+    from app.services.plot_twist_validation import _stranded_scene_ids
+
+    by_scene = {
+        "open": SimpleNamespace(slot="core"),
+        "side-a": SimpleNamespace(slot="side"),
+        "side-b": SimpleNamespace(slot="side"),
+        "orphan": SimpleNamespace(slot="core"),
+        "lonely": SimpleNamespace(slot="other"),
+    }
+    assert _stranded_scene_ids(by_scene, {"open", "side-a"}) == ["orphan", "lonely"]
+
+
 # --- AI pipeline (mocked: no network, no credentials) --------------------------
 
 
@@ -458,6 +511,234 @@ def test_blueprint_generation_exhaustion_marks_failed(db, monkeypatch):
     assert result["validation_errors"]
 
 
+def test_truncated_initial_package_answer_retries_once(db, monkeypatch):
+    """A package answer cut off by the output-token budget is a stochastic
+    overrun: the initial call retries once instead of failing the request."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="Locked In", difficulty="medium",
+            config=GenerationConfig().model_dump(),
+            blueprint=BLUEPRINT, status="approved",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    calls = {"n": 0}
+
+    def fake_generate(**kwargs):
+        if kwargs.get("schema_name") != "plot_twist_package":
+            return {"scenes": []}, {"strict_schema": True}
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise llm_client.LLMError(
+                "The model's answer was cut off by the output-token budget.",
+                code="truncated",
+            )
+        return story_package(), {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    result = plot_twist_generation.generate_package(db, bp_id, created_by="adminuser")
+    assert result["status"] == "ready_for_review"
+    assert calls["n"] == 2
+
+
+def test_truncated_package_repair_retries_within_the_cap(db, monkeypatch):
+    """A cut-off repair answer spends the next attempt on the same repair
+    instead of failing the whole generation with a 502."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="Locked In", difficulty="medium",
+            config=GenerationConfig().model_dump(),
+            blueprint=BLUEPRINT, status="approved",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    calls = {"n": 0}
+
+    def fake_generate(**kwargs):
+        if kwargs.get("schema_name") != "plot_twist_package":
+            return {"scenes": []}, {"strict_schema": True}
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # An opening scene that does not exist forces one repair.
+            return dict(story_package(), opening_scene_id="missing"), {"strict_schema": True}
+        if calls["n"] == 2:
+            raise llm_client.LLMError(
+                "The model's answer was cut off by the output-token budget.",
+                code="truncated",
+            )
+        return story_package(), {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    result = plot_twist_generation.generate_package(db, bp_id, created_by="adminuser")
+    assert result["status"] == "ready_for_review"
+    assert calls["n"] == 3
+
+
+def _package_with_wrong_actor():
+    """``s_open`` (participant_one) leading into a participant_one ``s_dock``
+    breaks alternation with exactly one scene-local error."""
+    package = story_package()
+    for scene in package["scenes"]:
+        if scene["id"] == "s_dock":
+            scene["actor"] = "participant_one"
+    return package
+
+
+def test_package_repair_patches_scenes_before_regenerating(db, monkeypatch):
+    """Scene-local errors are fixed by a small patch request carrying only the
+    implicated scenes -- not by regenerating the whole package."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="Locked In", difficulty="medium",
+            config=GenerationConfig().model_dump(),
+            blueprint=BLUEPRINT, status="approved",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    calls = {"package": 0, "fix": 0}
+
+    def fake_generate(**kwargs):
+        name = kwargs.get("schema_name")
+        if name == "plot_twist_package":
+            calls["package"] += 1
+            return _package_with_wrong_actor(), {"strict_schema": True}
+        if name == "plot_twist_scene_fix":
+            calls["fix"] += 1
+            return {"slot": "core", "scenes": story_package()["scenes"]}, {"strict_schema": True}
+        return {"scenes": []}, {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    result = plot_twist_generation.generate_package(db, bp_id, created_by="adminuser")
+    assert result["status"] == "ready_for_review"
+    assert calls == {"package": 1, "fix": 1}
+
+
+def test_package_repair_falls_back_to_full_regeneration(db, monkeypatch):
+    """When a patch cannot reduce the error count, the loop still regenerates
+    the whole package rather than looping on patches forever."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="Locked In", difficulty="medium",
+            config=GenerationConfig().model_dump(),
+            blueprint=BLUEPRINT, status="approved",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    calls = {"package": 0, "fix": 0}
+
+    def fake_generate(**kwargs):
+        name = kwargs.get("schema_name")
+        if name == "plot_twist_package":
+            calls["package"] += 1
+            if calls["package"] == 1:
+                return _package_with_wrong_actor(), {"strict_schema": True}
+            return story_package(), {"strict_schema": True}
+        if name == "plot_twist_scene_fix":
+            calls["fix"] += 1
+            # No improvement: the same broken scenes come straight back.
+            return (
+                {"slot": "core", "scenes": _package_with_wrong_actor()["scenes"]},
+                {"strict_schema": True},
+            )
+        return {"scenes": []}, {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    result = plot_twist_generation.generate_package(db, bp_id, created_by="adminuser")
+    assert result["status"] == "ready_for_review"
+    assert calls == {"package": 2, "fix": 1}
+
+
+def test_worse_regeneration_keeps_the_better_draft(db, monkeypatch):
+    """A whole-package regeneration that adds errors is discarded: the stored
+    package stays the best the loop reached, not whatever the last roll
+    produced (the live run that ended at 14 errors after touching 5)."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="Locked In", difficulty="medium",
+            config=GenerationConfig().model_dump(),
+            blueprint=BLUEPRINT, status="approved",
+            validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    def worse():
+        package = _package_with_wrong_actor()
+        for scene in package["scenes"]:
+            if scene["id"] == "s_alarm":
+                scene["actor"] = "participant_one"  # a second broken handoff
+        return package
+
+    calls = {"package": 0, "fix": 0}
+
+    def fake_generate(**kwargs):
+        name = kwargs.get("schema_name")
+        if name == "plot_twist_package":
+            calls["package"] += 1
+            if calls["package"] == 1:
+                return _package_with_wrong_actor(), {"strict_schema": True}
+            return worse(), {"strict_schema": True}
+        if name == "plot_twist_scene_fix":
+            calls["fix"] += 1
+            # The patch cannot improve anything.
+            return (
+                {"slot": "core", "scenes": _package_with_wrong_actor()["scenes"]},
+                {"strict_schema": True},
+            )
+        return {"scenes": []}, {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    result = plot_twist_generation.generate_package(db, bp_id, created_by="adminuser")
+    assert result["status"] == "validation_failed"
+    assert len(result["validation_errors"]) == 1  # the better draft, not the worse one
+    assert calls["package"] >= 2
+
+
+def test_interchangeable_batches_respect_the_scene_ceiling(monkeypatch):
+    """A batch append stops at the scene ceiling instead of overshooting it
+    with a whole batch."""
+    from app.services import llm_client
+    from app.services.plot_twist_generation import _append_interchangeable_batches
+
+    def fake_generate(**kwargs):
+        return {
+            "slot": "side",
+            "scenes": [{"id": f"side-{index}", "slot": "side"} for index in range(8)],
+        }, {"strict_schema": True}
+
+    monkeypatch.setattr(llm_client, "generate_structured_json", fake_generate)
+    payload = {"scenes": [{"id": "core-1", "slot": "core"}]}
+    blueprint = {"slots": [{"name": "side", "accepts_tags": []}]}
+    config = GenerationConfig(max_scenes=5, interchangeable_count=4)
+    _append_interchangeable_batches(payload, blueprint, config)
+    assert [scene["id"] for scene in payload["scenes"]] == [
+        "core-1", "side-0", "side-1", "side-2", "side-3",
+    ]
+
+
 def test_provider_failure_is_admin_safe_and_unpublished(db, monkeypatch):
     from app.services import llm_client
 
@@ -492,10 +773,380 @@ def test_provider_selection_is_config_only():
     assert select_provider(LLMConfig(base_url="https://x.openai.azure.com/openai/v1", model="d", provider="auto")) == "openai"
     assert select_provider(LLMConfig(base_url="https://api.groq.com/openai/v1", model="m", provider="openai")) == "openai"
     assert select_provider(LLMConfig(base_url="https://other/v1", model="m", provider="groq")) == "groq"
+    # The documented spellings: foundry is the OpenAI-compatible path, and
+    # the value is trimmed and lowercased before validation. An unset
+    # provider is Groq, the provider the application shipped with.
+    assert select_provider(LLMConfig(base_url="https://other/v1", model="m", provider="foundry")) == "foundry"
+    assert select_provider(LLMConfig(base_url="https://other/v1", model="m", provider="  FOUNDry ")) == "foundry"
+    assert select_provider(LLMConfig(base_url="https://other/v1", model="m")) == "groq"
     import pytest as _pytest
 
     with _pytest.raises(Exception):
         select_provider(LLMConfig(base_url="https://x/v1", model="m", provider="watson"))
+
+
+def test_foundry_request_uses_openai_sdk_with_normalized_endpoint(monkeypatch):
+    """foundry talks through the OpenAI SDK with the deployment name, a base
+    URL stripped of any method path copied from the portal, and the token
+    budget passed as max_completion_tokens (what reasoning models accept)."""
+    import sys
+    from types import SimpleNamespace
+
+    from app.services import llm_client
+
+    calls: dict = {}
+
+    class _Message:
+        content = '{"ok": true}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            calls["client_kwargs"] = kwargs
+
+        chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    config = llm_client.LLMConfig(
+        base_url="https://confessit-model.services.ai.azure.com/openai/v1/responses",
+        model="gpt-5-mini",
+        provider="foundry",
+        api_key="test-key",
+    )
+    payload, used_fallback = llm_client._generate_via_foundry(
+        config, "system", "user", {"type": "object"}, "test_schema",
+        "op-1", 30, 2048,
+    )
+    assert payload == {"ok": True}
+    assert used_fallback is False
+    assert calls["client_kwargs"] == {
+        "base_url": "https://confessit-model.services.ai.azure.com/openai/v1",
+        "api_key": "test-key",
+    }
+    assert calls["model"] == "gpt-5-mini"
+    assert calls["max_completion_tokens"] == 2048
+    assert calls["response_format"]["json_schema"]["name"] == "test_schema"
+    assert calls["response_format"]["json_schema"]["strict"] is True
+    # Reasoning deployments get the fixed low effort: hidden reasoning counts
+    # against max_completion_tokens and once consumed a whole 16k budget.
+    assert calls["reasoning_effort"] == "low"
+
+
+def test_foundry_fallback_prompt_carries_the_schema(monkeypatch):
+    """Without provider-enforced strict mode the schema still travels in the
+    prompt; otherwise the model invents field names (live failure: state_vars
+    came back as id/var_type/bounds instead of name/kind/min_value/max_value)."""
+    import sys
+    from types import SimpleNamespace
+
+    from app.services import llm_client
+
+    calls: list = []
+
+    class _Message:
+        content = '{"ok": true}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs["response_format"]["type"] == "json_schema":
+                raise Exception(
+                    "Invalid schema for response_format: schema must have a 'type' key."
+                )
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    config = llm_client.LLMConfig(
+        base_url="https://r.services.ai.azure.com/openai/v1",
+        model="gpt-5-mini",
+        provider="foundry",
+        api_key="test-key",
+    )
+    schema = {
+        "type": "object",
+        "properties": {"state_vars": {"type": "array", "items": {"type": "object"}}},
+        "required": ["state_vars"],
+    }
+    payload, used_fallback = llm_client._generate_via_foundry(
+        config, "system prompt", "user prompt", schema, "plot_twist_blueprint",
+        "op-fallback", 30, 2048,
+    )
+    assert payload == {"ok": True}
+    assert used_fallback is True
+    assert len(calls) == 2  # strict refused, JSON-object fallback used
+    fallback_user = calls[1]["messages"][1]["content"]
+    assert "user prompt" in fallback_user
+    assert '"state_vars"' in fallback_user
+    assert calls[1]["response_format"] == {"type": "json_object"}
+
+
+def test_groq_fallback_prompt_carries_the_schema(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from app.services import llm_client
+
+    calls: list = []
+
+    class _Message:
+        content = '{"ok": true}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs["response_format"]["type"] == "json_schema":
+                raise Exception("response_format json_schema is not supported.")
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Groq:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "groq", SimpleNamespace(Groq=_Groq))
+    config = llm_client.LLMConfig(
+        base_url="https://api.groq.com/openai/v1",
+        model="qwen/qwen3.8-27b",
+        provider="groq",
+        api_key="test-key",
+    )
+    schema = {
+        "type": "object",
+        "properties": {"state_vars": {"type": "array", "items": {"type": "object"}}},
+        "required": ["state_vars"],
+    }
+    payload, used_fallback = llm_client._generate_via_groq(
+        config, "system prompt", "user prompt", schema, "plot_twist_blueprint",
+        "op-fallback", 30, 2048,
+    )
+    assert payload == {"ok": True}
+    assert used_fallback is True
+    assert len(calls) == 2  # strict refused, JSON-object fallback used
+    fallback_user = calls[1]["messages"][1]["content"]
+    assert "user prompt" in fallback_user
+    assert '"state_vars"' in fallback_user
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert calls[1]["reasoning_effort"] == "default"  # sampling survives the fallback
+
+
+def test_foundry_reasoning_effort_only_for_reasoning_deployments():
+    from app.services.llm_client import _foundry_sampling_params
+
+    assert _foundry_sampling_params("gpt-5-mini") == {"reasoning_effort": "low"}
+    assert _foundry_sampling_params("GPT-5.1") == {"reasoning_effort": "low"}
+    assert _foundry_sampling_params("o1") == {"reasoning_effort": "low"}
+    assert _foundry_sampling_params("o3-mini") == {"reasoning_effort": "low"}
+    # Non-reasoning and custom deployments reject the parameter.
+    assert _foundry_sampling_params("gpt-4o-mini") == {}
+    assert _foundry_sampling_params("my-custom-deployment") == {}
+    assert _foundry_sampling_params("oasis-embed") == {}
+    assert _foundry_sampling_params(None) == {}
+
+
+def test_truncated_model_answer_names_the_token_budget_not_json():
+    """A reasoning model that burns the whole output budget returns empty or
+    partial content with finish_reason='length'; the admin must be told about
+    the budget, not about invalid JSON."""
+    from types import SimpleNamespace
+
+    import pytest as _pytest
+
+    from app.services import llm_client
+
+    truncated = SimpleNamespace(
+        finish_reason="length", message=SimpleNamespace(content="")
+    )
+    with _pytest.raises(llm_client.LLMError) as caught:
+        llm_client._parse_completion(truncated)
+    assert caught.value.code == "truncated"
+    assert "cut off" in caught.value.detail
+    # Complete JSON that merely reports the length limit is still accepted.
+    complete = SimpleNamespace(
+        finish_reason="length", message=SimpleNamespace(content='{"ok": true}')
+    )
+    assert llm_client._parse_completion(complete) == {"ok": True}
+
+
+def test_foundry_base_url_normalization_keeps_custom_endpoints():
+    from app.services.llm_client import _foundry_base_url
+
+    for suffix in ("/responses", "/chat/completions", "/responses/", ""):
+        assert (
+            _foundry_base_url(f"https://r.services.ai.azure.com/openai/v1{suffix}")
+            == "https://r.services.ai.azure.com/openai/v1"
+        )
+    # A custom proxy prefix is kept whole; nothing else is rewritten.
+    assert _foundry_base_url("https://gw.example.com/llm-proxy/") == "https://gw.example.com/llm-proxy"
+
+
+def test_provider_switch_routes_and_passes_the_configured_model(monkeypatch):
+    """Changing LLM_PROVIDER changes the path taken; the configured model is
+    what the selected provider receives. No code change is involved."""
+    from app.services import llm_client
+
+    seen: list = []
+
+    def fake_groq(config, *args, **kwargs):
+        seen.append((llm_client.select_provider(config), config.model))
+        return {"ok": True}, False
+
+    def fake_foundry(config, *args, **kwargs):
+        seen.append((llm_client.select_provider(config), config.model))
+        return {"ok": True}, True
+
+    monkeypatch.setattr(llm_client, "_generate_via_groq", fake_groq)
+    monkeypatch.setattr(llm_client, "_generate_via_foundry", fake_foundry)
+    common = dict(
+        system="s", user="u", json_schema={"type": "object"},
+        schema_name="x", operation="op",
+    )
+
+    _, meta = llm_client.generate_structured_json(
+        config=llm_client.LLMConfig(
+            base_url="https://api.groq.com/openai/v1",
+            model="openai/gpt-oss-120b", provider="groq", api_key="k",
+        ),
+        **common,
+    )
+    assert seen[-1] == ("groq", "openai/gpt-oss-120b")
+    assert meta["provider"] == "groq" and meta["model"] == "openai/gpt-oss-120b"
+    assert meta["strict_schema"] is True
+
+    _, meta = llm_client.generate_structured_json(
+        config=llm_client.LLMConfig(
+            base_url="https://r.services.ai.azure.com/openai/v1",
+            model="gpt-5-mini", provider="foundry", api_key="k",
+        ),
+        **common,
+    )
+    assert seen[-1] == ("foundry", "gpt-5-mini")
+    assert meta["provider"] == "foundry" and meta["model"] == "gpt-5-mini"
+    assert meta["strict_schema"] is False
+
+
+def test_foundry_missing_configuration_errors_without_groq_fallback(monkeypatch):
+    """A foundry selection with an incomplete endpoint/key/model reports a
+    clear configuration error; it must never reroute to Groq."""
+    from app.services import llm_client
+
+    def boom(*args, **kwargs):
+        raise AssertionError("must not fall back to another provider")
+
+    monkeypatch.setattr(llm_client, "_generate_via_groq", boom)
+    monkeypatch.setattr(llm_client, "_generate_via_foundry", boom)
+    common = dict(
+        system="s", user="u", json_schema={"type": "object"},
+        schema_name="x", operation="op",
+    )
+    for config in (
+        llm_client.LLMConfig(base_url=None, model="gpt-5-mini", provider="foundry", api_key="k"),
+        llm_client.LLMConfig(base_url="https://r.services.ai.azure.com/openai/v1", model=None, provider="foundry", api_key="k"),
+        llm_client.LLMConfig(base_url="https://r.services.ai.azure.com/openai/v1", model="gpt-5-mini", provider="foundry", api_key=None),
+    ):
+        with pytest.raises(llm_client.LLMError) as excinfo:
+            llm_client.generate_structured_json(config=config, **common)
+        assert excinfo.value.code == "missing_config"
+        assert excinfo.value.detail
+
+
+def test_unsupported_provider_is_a_clear_configuration_error():
+    import pytest as _pytest
+
+    from app.services import llm_client
+
+    with _pytest.raises(llm_client.LLMError) as excinfo:
+        llm_client.generate_structured_json(
+            system="s", user="u", json_schema={"type": "object"},
+            schema_name="x", operation="op",
+            config=llm_client.LLMConfig(
+                base_url="https://x/v1", model="m", provider="watson", api_key="k",
+            ),
+        )
+    assert "LLM_PROVIDER" in excinfo.value.detail
+    assert "watson" in excinfo.value.detail
+
+
+def test_plot_twist_generation_runs_through_foundry_provider(db, monkeypatch):
+    """The real blueprint/approval/package pipeline, with only the Foundry SDK
+    call mocked: prompts, repair bounds and validation all stay live."""
+    from app.services import llm_client
+
+    with db.sessions.begin() as session:
+        row = PlotTwistBlueprintRecord(
+            title="T", difficulty="medium", config=GenerationConfig().model_dump(),
+            blueprint={}, status="draft", validation_errors=[], created_by="adminuser",
+        )
+        session.add(row)
+        session.flush()
+        bp_id = str(row.id)
+
+    calls: list = []
+
+    def fake_foundry(config, system, user, json_schema, schema_name, operation_id, timeout_s, max_tokens):
+        calls.append((llm_client.select_provider(config), config.model, schema_name))
+        if schema_name == "plot_twist_blueprint":
+            return dict(BLUEPRINT), False
+        if schema_name == "plot_twist_package":
+            return dict(story_package()), False
+        return {"scenes": []}, False
+
+    monkeypatch.setattr(llm_client, "_generate_via_foundry", fake_foundry)
+    config = llm_client.LLMConfig(
+        base_url="https://confessit-model.services.ai.azure.com/openai/v1",
+        model="gpt-5-mini", provider="foundry", api_key="test-key",
+    )
+
+    blueprint = plot_twist_generation.generate_blueprint(db, bp_id, llm_config=config)
+    assert blueprint["status"] == "ready_for_review"
+    approved = plot_twist_generation.approve_blueprint(db, bp_id)
+    assert approved["status"] == "approved"
+    package = plot_twist_generation.generate_package(
+        db, bp_id, created_by="adminuser", llm_config=config
+    )
+    assert package["status"] == "ready_for_review"
+    scenes = package["package"]["scenes"]
+    assert any(scene.get("choices") for scene in scenes)
+    assert package["package"]["endings"]
+    assert calls and all(provider == "foundry" for provider, _, _ in calls)
+    assert all(model == "gpt-5-mini" for _, model, _ in calls)
 
 
 def test_groq_sampling_params_follow_model():
@@ -569,6 +1220,8 @@ def test_groq_qwen_create_uses_qwen_decoding_params(monkeypatch):
 
 
 def test_strict_schema_transform_satisfies_strict_mode():
+    """Every node carries a type, objects are closed and fully required, and
+    the free-form maps strict mode cannot express are gone or replaced."""
     from app.services.plot_twist_schemas import (
         package_json_schema,
         scene_batch_json_schema,
@@ -576,27 +1229,85 @@ def test_strict_schema_transform_satisfies_strict_mode():
     )
 
     def check(node):
-        if isinstance(node, list):
-            for item in node:
-                check(item)
-            return
-        if not isinstance(node, dict):
-            return
-        for choice in node.get("anyOf") or []:
-            assert not (isinstance(choice, dict) and choice.get("type") == "null"), node
+        assert isinstance(node, dict), node
+        assert (
+            {"type", "anyOf", "oneOf", "$ref", "enum", "const"} & set(node)
+        ), f"typeless node: {node}"
+        # Free-form maps (additionalProperties true / a schema) break strict mode.
+        assert node.get("additionalProperties") is not True, node
+        assert not isinstance(node.get("additionalProperties"), dict), node
+        for branch in node.get("anyOf") or []:
+            check(branch)
+        if isinstance(node.get("items"), dict):
+            check(node["items"])
         properties = node.get("properties")
         if isinstance(properties, dict):
-            assert set(node.get("required") or []) >= set(properties), node
+            assert set(node.get("required") or []) == set(properties), node
+            assert node.get("additionalProperties") is False, node
             for value in properties.values():
                 check(value)
-        if node.get("type") == "object" or "properties" in node:
+        if node.get("type") == "object":
             assert node.get("additionalProperties") is False, node
-        for value in node.values():
-            if isinstance(value, (dict, list)):
-                check(value)
+        for value in (node.get("$defs") or {}).values():
+            check(value)
 
     for schema_fn in (blueprint_json_schema, package_json_schema, scene_batch_json_schema):
         check(schema_fn())
+    check(
+        package_json_schema(
+            {
+                "state_vars": [
+                    {"name": "trust", "kind": "int", "min_value": 0, "max_value": 10},
+                    {"name": "discoveries", "kind": "flag"},
+                ]
+            }
+        )
+    )
+
+
+def test_package_schema_injects_blueprint_state_vars():
+    """``initial_state`` is a free-form map strict mode cannot express, so the
+    blueprint's variables are injected as an explicit typed object (with the
+    declared integer bounds); the provider then enforces coverage itself."""
+    from app.services.plot_twist_schemas import package_json_schema
+
+    schema = package_json_schema(
+        {
+            "state_vars": [
+                {"name": "trust", "kind": "int", "min_value": 0, "max_value": 10},
+                {"name": "discoveries", "kind": "flag"},
+            ]
+        }
+    )
+    init = schema["properties"]["initial_state"]
+    assert init["type"] == "object"
+    assert init["additionalProperties"] is False
+    assert set(init["required"]) == {"trust", "discoveries"}
+    assert init["properties"]["trust"] == {"type": "integer", "minimum": 0, "maximum": 10}
+    assert init["properties"]["discoveries"] == {"type": "array", "items": {"type": "string"}}
+    assert "initial_state" in schema["required"]
+    # Without a blueprint the map cannot be expressed and is omitted.
+    assert "initial_state" not in package_json_schema()["properties"]
+
+
+def test_package_schema_caps_the_scene_count():
+    """``max_scenes`` becomes ``maxItems`` at the provider, so an oversized
+    package cannot be emitted at all; the model must merge beats instead."""
+    from app.services.plot_twist_schemas import package_json_schema
+
+    schema = package_json_schema(max_scenes=7)
+    assert schema["properties"]["scenes"]["maxItems"] == 7
+    assert "maxItems" not in package_json_schema()["properties"]["scenes"]
+
+
+def test_optional_fields_stay_nullable_in_strict_schemas():
+    """Nullability survives: collapsing it forced placeholder values such as
+    ``ending_id: ""`` in live output."""
+    from app.services.plot_twist_schemas import package_json_schema
+
+    schema = package_json_schema()
+    ending_id = schema["$defs"]["SceneDef"]["properties"]["ending_id"]
+    assert {"type": "null"} in ending_id.get("anyOf") or []
 
 
 def test_rate_limit_detection_covers_groq_tpm_refusals():

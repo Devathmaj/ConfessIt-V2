@@ -120,8 +120,14 @@ def _stage_b_system() -> str:
         "titles, descriptions, kind (establishes_fact/contradicts_statement/"
         "supports_theory/misleading). Solution names the blueprint culprit, with "
         "motive, deduction chain referencing existing facts/evidence, and "
-        "required evidence reachable from the graph. Never invent facts that "
-        "contradict the blueprint; never expose the culprit via ids or ordering."
+        "required evidence reachable from the graph. Keep "
+        "investigation_budget_per_partner at 5: the couple gets five actions "
+        "each. The complete evidence board must never be attainable -- spread "
+        "revealed evidence so no ten investigations collect every reachable "
+        "clue; give many clues their own single reveal lead so some clue stays "
+        "hidden whatever sequence of choices the couple follows. Never invent "
+        "facts that contradict the blueprint; never expose the culprit via ids "
+        "or ordering."
     )
 
 
@@ -136,7 +142,9 @@ def _stage_b_user(blueprint: dict, config: CaseClosedGenerationConfig) -> str:
         "(3 initial depth-0 leads, longest path at least 5 levels, up to 3 "
         "follow-ups per lead, shared convergent nodes). Self-check: valid refs, "
         "no cycles, all nodes reachable, depth consistent, solution evidence "
-        "reachable, culprit matches blueprint."
+        "reachable, culprit matches blueprint, and the full evidence board "
+        "unattainable within ten investigations (spread exclusive clues "
+        "instead of clustering them)."
     )
 
 

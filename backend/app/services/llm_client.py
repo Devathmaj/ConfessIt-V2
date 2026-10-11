@@ -3,12 +3,19 @@
 One module owns every provider-specific setting so story-generation logic
 never does. Configuration comes from the environment only::
 
-    LLM_PROVIDER  groq | openai | auto (default). ``auto`` picks the Groq SDK
-                  when LLM_BASE_URL names Groq, else the OpenAI-compatible
-                  client (Microsoft Foundry and other OpenAI-style surfaces).
+    LLM_PROVIDER  groq (default) | foundry. ``groq`` is Groq's own SDK
+                  (Strict Structured Outputs); ``foundry`` is Microsoft
+                  Foundry through the official OpenAI Python SDK. The legacy
+                  spellings ``openai`` (the same path as foundry) and ``auto``
+                  (Groq when the base URL names it, else the
+                  OpenAI-compatible client) keep old deployments working.
     LLM_BASE_URL  e.g. https://api.groq.com/openai/v1 (Groq, OpenAI-compatible)
+                  or https://<resource>.services.ai.azure.com/openai/v1
+                  (Microsoft Foundry; a trailing /responses or
+                  /chat/completions on a stored endpoint is normalised away)
     LLM_API_KEY   the provider secret; never logged, never sent to clients
-    LLM_MODEL     e.g. openai/gpt-oss-120b (Groq) or a Foundry deployment name
+    LLM_MODEL     e.g. openai/gpt-oss-120b (Groq) or the Foundry *deployment*
+                  name (initial development: gpt-5-mini)
 
 Switching providers is configuration, never a code change: both providers
 implement the same ``generate_structured_json`` contract, and story logic
@@ -23,14 +30,19 @@ Provider-specific differences that require configuration changes (not code):
   (and Qwen chat models generally), which take ``temperature=0.6``,
   ``top_p=0.95`` and ``reasoning_effort="default"``. Set ``LLM_MODEL`` to
   the Groq model id (initial development: ``openai/gpt-oss-120b``).
-* Microsoft Foundry serves an OpenAI-compatible chat-completions surface,
-  but the base URL is deployment-specific
-  (``https://<resource>.openai.azure.com/openai/v1`` or the Foundry
-  project endpoint) and ``LLM_MODEL`` must be the *deployment name*, not
-  the underlying model id. Some Foundry deployments do not support strict
-  JSON Schema mode; the client then falls back to plain JSON-object mode
-  and validates locally, recording the fallback. Verify structured-output
-  support for the chosen deployment and api-version.
+* Microsoft Foundry serves an OpenAI-compatible chat-completions surface
+  (``https://<resource>.services.ai.azure.com/openai/v1`` or the older
+  ``https://<resource>.openai.azure.com/openai/v1``), and ``LLM_MODEL``
+  must be the *deployment name*, not the underlying model id. The OpenAI
+  SDK appends the route itself, so an endpoint copy that already names one
+  (``.../openai/v1/responses``) is trimmed back to the base. Some Foundry
+  deployments do not support strict JSON Schema mode; the client then
+  falls back to plain JSON-object mode and validates locally, recording
+  the fallback. The fallback prompt carries the full JSON Schema (the
+  provider no longer enforces it), and reasoning deployments (gpt-5 /
+  o-series names) run at low reasoning effort so hidden reasoning cannot
+  consume the whole output budget. Verify structured-output support for
+  the chosen deployment.
 
 Structured Outputs are requested with a strict JSON Schema whenever the
 provider accepts one. Every payload is still validated locally with
@@ -73,6 +85,26 @@ def _groq_sampling_params(model: Optional[str]) -> dict[str, Any]:
         return {"temperature": 0.6, "top_p": 0.95, "reasoning_effort": "default"}
     return {"reasoning_effort": _GROQ_REASONING_EFFORT}
 
+
+# Reasoning effort for Foundry deployments whose names say reasoning model.
+# Hidden reasoning counts against max_completion_tokens: one live gpt-5-mini
+# story-package run spent the whole 16k budget thinking and returned empty
+# content, so a fixed low effort keeps room for the JSON document. The
+# parameter only travels for reasoning deployments; others reject it.
+_FOUNDRY_REASONING_EFFORT = "low"
+
+
+def _foundry_sampling_params(model: Optional[str]) -> dict[str, Any]:
+    """Decoding params for one Foundry deployment (see the constant above)."""
+    name = (model or "").strip().lower()
+    if name.startswith("gpt-5"):
+        return {"reasoning_effort": _FOUNDRY_REASONING_EFFORT}
+    if name.startswith(("o1", "o3", "o4")) and (
+        len(name) == 2 or not name[2].isalnum()
+    ):
+        return {"reasoning_effort": _FOUNDRY_REASONING_EFFORT}
+    return {}
+
 # Strict-mode attempts per request. Content mismatches (the model emitting
 # JSON that fails the enforced schema) are stochastic: the same prompt
 # usually succeeds on retry, so they are retried rather than failed. Only
@@ -97,7 +129,7 @@ class LLMError(Exception):
 class LLMConfig:
     base_url: Optional[str]
     model: Optional[str]
-    provider: str = "auto"
+    provider: str = "groq"
     # The key travels only into the SDK client; it is never logged or stored.
     api_key: Optional[str] = None
 
@@ -108,19 +140,26 @@ def config_from_settings(settings: Any) -> LLMConfig:
         base_url=getattr(settings, "LLM_BASE_URL", None),
         api_key=getattr(settings, "LLM_API_KEY", None),
         model=getattr(settings, "LLM_MODEL", None),
-        provider=(getattr(settings, "LLM_PROVIDER", None) or "auto"),
+        provider=(getattr(settings, "LLM_PROVIDER", None) or "groq"),
     )
 
 
 def select_provider(config: LLMConfig) -> str:
-    """Which SDK talks to the configured surface: ``groq`` or ``openai``."""
-    requested = (config.provider or "auto").strip().lower()
-    if requested in ("groq", "openai"):
+    """Which SDK talks to the configured surface: ``groq`` or ``foundry``.
+
+    The value is trimmed and lowercased before validation. ``openai`` is a
+    legacy spelling of the foundry path (the OpenAI SDK), and ``auto`` keeps
+    even older deployments working: it picks Groq when ``LLM_BASE_URL``
+    names Groq, else the OpenAI-compatible client. An unset provider is
+    Groq -- the provider the application shipped with.
+    """
+    requested = (config.provider or "groq").strip().lower()
+    if requested in ("groq", "foundry", "openai"):
         return requested
     if requested != "auto":
         raise LLMError(
-            f"Unknown LLM_PROVIDER {config.provider!r}: expected 'groq', "
-            "'openai' or 'auto'.",
+            f"Unknown LLM_PROVIDER {config.provider!r}: expected 'groq' or "
+            "'foundry'.",
             code="missing_config",
         )
     if config.base_url and "groq" in config.base_url.lower():
@@ -190,6 +229,10 @@ def generate_structured_json(
 
         config = config_from_settings(settings)
     operation_id = f"{operation}-{int(time.time() * 1000) % 1_000_000_000}"
+    # The provider is resolved before the credential checks so an
+    # unsupported LLM_PROVIDER is reported as such, never masked by an
+    # unrelated missing-config error.
+    provider = select_provider(config)
     if not config.base_url or not config.model:
         raise LLMError(
             "Story generation is not configured: LLM_BASE_URL and LLM_MODEL "
@@ -201,7 +244,6 @@ def generate_structured_json(
             "Story generation is not configured: LLM_API_KEY is missing.",
             code="missing_config",
         )
-    provider = select_provider(config)
     logger.info(
         "Plot Twist generation started",
         extra={"operation_id": operation_id, "operation": operation, "provider": provider},
@@ -221,7 +263,7 @@ def generate_structured_json(
                     timeout_s, max_tokens,
                 )
             else:
-                payload, used_fallback = _generate_via_openai(
+                payload, used_fallback = _generate_via_foundry(
                     config, system, user, json_schema, schema_name, operation_id,
                     timeout_s, max_tokens,
                 )
@@ -254,6 +296,32 @@ def _strict_format(schema_name: str, json_schema: dict) -> dict[str, Any]:
     }
 
 
+def _fallback_messages(system: str, user: str, json_schema: dict) -> list[dict[str, Any]]:
+    """Messages for the JSON-object fallback.
+
+    No provider-enforced schema applies here, so the model must still see the
+    contract or it invents its own field names (a live Plot Twist run returned
+    ``state_vars`` entries shaped ``id``/``var_type``/``bounds`` instead of the
+    real ``name``/``kind``/``min_value``/``max_value``). The schema travels in
+    the prompt: exact names and nesting, every ``required`` property present,
+    nothing extra.
+    """
+    return [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": (
+                user
+                + "\n\nReturn your answer as a JSON object matching this JSON "
+                "Schema exactly (same field names and nesting; include every "
+                "property named in `required`; add nothing it does not "
+                "define):\n"
+                + json.dumps(json_schema, separators=(",", ":"))
+            ),
+        },
+    ]
+
+
 def _parse_json_content(content: Any) -> dict:
     try:
         payload = json.loads(content or "")
@@ -268,6 +336,27 @@ def _parse_json_content(content: Any) -> dict:
             code="malformed",
         )
     return payload
+
+
+def _parse_completion(choice: Any) -> dict:
+    """Parse one chat choice; name truncation instead of blaming JSON.
+
+    Reasoning models count hidden reasoning against the output budget, so an
+    exhausted budget comes back as empty or partial content with
+    ``finish_reason='length'`` -- a budget problem, not a syntax one.
+    """
+    content = getattr(getattr(choice, "message", None), "content", None)
+    try:
+        return _parse_json_content(content)
+    except LLMError:
+        if getattr(choice, "finish_reason", None) == "length":
+            raise LLMError(
+                "The model's answer was cut off by the output-token budget "
+                "before it finished (hidden reasoning counts against it). "
+                "Retry the operation.",
+                code="truncated",
+            ) from None
+        raise
 
 
 def _generate_via_groq(
@@ -311,7 +400,7 @@ def _generate_via_groq(
                 timeout=timeout_s,
                 **sampling,  # type: ignore[arg-type]
             )
-            return _parse_json_content(response.choices[0].message.content), False
+            return _parse_completion(response.choices[0]), False
         except LLMError:
             raise
         except Exception as strict_exc:
@@ -329,11 +418,9 @@ def _generate_via_groq(
         extra={"operation_id": operation_id},
     )
     # Plain JSON-object mode. Groq requires the word "json" in the messages
-    # for this mode, so it is appended rather than assumed.
-    fallback_messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user + "\n\nReturn your answer as a JSON object."},
-    ]
+    # for this mode, so it is appended rather than assumed; the schema itself
+    # travels in the prompt because the provider no longer enforces it.
+    fallback_messages = _fallback_messages(system, user, json_schema)
     try:
         response = client.chat.completions.create(
             model=config.model,
@@ -345,10 +432,27 @@ def _generate_via_groq(
         )
     except Exception as exc:
         raise _classify_provider_error(exc) from exc
-    return _parse_json_content(response.choices[0].message.content), True
+    return _parse_completion(response.choices[0]), True
 
 
-def _generate_via_openai(
+def _foundry_base_url(base_url: Optional[str]) -> str:
+    """The OpenAI SDK base URL for the configured Foundry endpoint.
+
+    The SDK appends the route itself (``/chat/completions``), so an endpoint
+    copied from the Foundry portal that already names one --
+    ``.../openai/v1/responses`` or ``.../openai/v1/chat/completions`` -- is
+    trimmed back to the OpenAI-compatible root; without that the request
+    path would be doubled (a 404 at the provider). Anything else is kept
+    verbatim so custom proxies and gateways are untouched.
+    """
+    url = (base_url or "").strip().rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if url.lower().endswith(suffix):
+            return url[: -len(suffix)].rstrip("/")
+    return url
+
+
+def _generate_via_foundry(
     config: LLMConfig,
     system: str,
     user: str,
@@ -358,7 +462,7 @@ def _generate_via_openai(
     timeout_s: int,
     max_tokens: int,
 ) -> tuple[dict, bool]:
-    """Strict Structured Outputs through any OpenAI-compatible surface."""
+    """Strict Structured Outputs through Microsoft Foundry (OpenAI SDK)."""
     try:
         from openai import OpenAI
     except ImportError as exc:
@@ -367,7 +471,16 @@ def _generate_via_openai(
             code="unsupported_schema",
         ) from exc
 
-    client = OpenAI(base_url=config.base_url, api_key=config.api_key)
+    base_url = _foundry_base_url(config.base_url)
+    if not base_url.lower().startswith(("https://", "http://")):
+        raise LLMError(
+            "LLM_BASE_URL must be an http(s) URL for the foundry provider, "
+            "e.g. https://<resource>.services.ai.azure.com/openai/v1.",
+            code="missing_config",
+        )
+    # The key travels only into the SDK client; it is never logged or stored.
+    client = OpenAI(base_url=base_url, api_key=config.api_key)
+    sampling = _foundry_sampling_params(config.model)
     base_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -379,9 +492,13 @@ def _generate_via_openai(
                 messages=base_messages,  # type: ignore[arg-type]
                 response_format=_strict_format(schema_name, json_schema),  # type: ignore[arg-type]
                 timeout=timeout_s,
-                max_tokens=max_tokens,
+                # Reasoning models (gpt-5-mini and the o-series) reject
+                # max_tokens and require max_completion_tokens; the latter is
+                # accepted across the OpenAI-compatible surfaces.
+                max_completion_tokens=max_tokens,
+                **sampling,  # type: ignore[arg-type]
             )
-            return _parse_json_content(response.choices[0].message.content), False
+            return _parse_completion(response.choices[0]), False
         except LLMError:
             raise
         except Exception as strict_exc:
@@ -398,21 +515,20 @@ def _generate_via_openai(
         "Plot Twist strict schema unavailable, using JSON-object fallback",
         extra={"operation_id": operation_id},
     )
-    fallback_messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user + "\n\nReturn your answer as a JSON object."},
-    ]
+    # The provider no longer enforces the schema, so the prompt carries it.
+    fallback_messages = _fallback_messages(system, user, json_schema)
     try:
         response = client.chat.completions.create(
             model=config.model,
             messages=fallback_messages,  # type: ignore[arg-type]
             response_format={"type": "json_object"},  # type: ignore[arg-type]
             timeout=timeout_s,
-            max_tokens=max_tokens,
+            max_completion_tokens=max_tokens,
+            **sampling,  # type: ignore[arg-type]
         )
     except Exception as exc:
         raise _classify_provider_error(exc) from exc
-    return _parse_json_content(response.choices[0].message.content), True
+    return _parse_completion(response.choices[0]), True
 
 
 def _retry_after_seconds(exc: Exception) -> Optional[float]:

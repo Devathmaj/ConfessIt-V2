@@ -30,10 +30,11 @@ isodate==0.7.2
 # azure-core/isodate pins above and adds only azure-common as a transitive
 # dependency, so no existing pin is moved.
 azure-ai-textanalytics==5.4.0
-# Plot Twist story generation talks to the configured provider through one of
-# these SDKs: Groq's own SDK when LLM_PROVIDER is groq (Strict Structured
-# Outputs), the OpenAI SDK for OpenAI-compatible surfaces such as Microsoft
-# Foundry. Gameplay never touches either. Pinned like the rest of the tree.
+# Plot Twist and Case Closed story generation talk to the configured provider
+# through one of these SDKs: Groq's own SDK when LLM_PROVIDER=groq (Strict
+# Structured Outputs), the official OpenAI SDK when LLM_PROVIDER=foundry
+# (Microsoft Foundry's OpenAI-compatible v1 surface). Gameplay never touches
+# either. Pinned like the rest of the tree.
 openai==1.99.5
 groq==1.7.0
 # websockets removed: never imported -- WebSockets are served by Starlette/FastAPI

@@ -217,30 +217,86 @@ class SceneBatchDef(BaseModel):
     )
 
 
-def _strict_node(node: Any) -> Any:
-    """Rewrite one schema node for strict Structured Outputs.
+_ANY_BRANCHES: list[dict] = [
+    {"type": "string"},
+    {"type": "integer"},
+    {"type": "boolean"},
+    {"type": "array", "items": {"type": "string"}},
+    {"type": "null"},
+]
 
-    Strict mode requires ``required`` to name every property, and refuses
-    ``anyOf`` optionality: ``Optional[X]`` (``anyOf: [X, null]``) collapses
-    to ``X``. Local Pydantic validation still enforces the real models
-    afterwards, so this only tightens what the provider is asked to emit.
+
+def _has_type(node: dict) -> bool:
+    return bool({"type", "anyOf", "oneOf", "$ref", "enum", "const"} & set(node))
+
+
+def _is_free_form_map(node: dict) -> bool:
+    """A ``dict[str, X]`` field: strict mode cannot express it.
+
+    Provider strict schema only accepts ``additionalProperties: false`` with
+    named properties, so free-form maps are dropped from provider schemas;
+    the matching Pydantic field keeps its ``{}`` default locally.
+    """
+    return (
+        node.get("type") == "object"
+        and not isinstance(node.get("properties"), dict)
+        and node.get("additionalProperties") is not False
+    )
+
+
+def _strict_node(node: Any) -> Any:
+    """Rewrite one schema node for the provider's strict Structured Outputs.
+
+    Probed live against the deployment:
+    - every schema node needs a ``type`` (or equivalent), so typeless ``Any``
+      nodes become an explicit union of scalars, string lists and null;
+    - ``anyOf`` with a ``null`` branch is accepted, so optional fields stay
+      nullable instead of collapsing to non-null (the old collapse made the
+      model invent placeholders like ``ending_id: ""``);
+    - every object declares ``required`` for all of its properties and
+      forbids extras;
+    - free-form maps have no strict form and return ``None`` so containers
+      can drop them.
     """
     if isinstance(node, list):
         return [_strict_node(item) for item in node]
     if not isinstance(node, dict):
         return node
-    choices = node.get("anyOf")
-    if isinstance(choices, list):
-        non_null = [c for c in choices if not (isinstance(c, dict) and c.get("type") == "null")]
-        if len(non_null) == len(choices) - 1 and len(non_null) == 1:
-            return _strict_node(non_null[0])
-    out = {
-        key: (_strict_node(value) if isinstance(value, (dict, list)) else value)
-        for key, value in node.items()
-    }
+    if _is_free_form_map(node):
+        return None
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if key in ("properties", "$defs") and isinstance(value, dict):
+            container: dict[str, Any] = {}
+            for name, sub in value.items():
+                item = _strict_node(sub)
+                if item is not None:
+                    container[name] = item
+            out[key] = container
+        elif key == "anyOf" and isinstance(value, list):
+            branches: list[dict] = []
+            for branch in value:
+                item = _strict_node(branch)
+                if item is None or not _has_type(item):
+                    branches.extend(dict(extra) for extra in _ANY_BRANCHES)
+                else:
+                    branches.append(item)
+            unique: list[dict] = []
+            for branch in branches:
+                if branch not in unique:
+                    unique.append(branch)
+            out[key] = unique
+        elif isinstance(value, (dict, list)):
+            item = _strict_node(value)
+            out[key] = {} if item is None else item
+        else:
+            out[key] = value
+    if not _has_type(out):
+        return {"anyOf": [dict(extra) for extra in _ANY_BRANCHES]}
     if isinstance(out.get("properties"), dict):
         out["required"] = sorted(out["properties"].keys())
-    if out.get("type") == "object" or "properties" in out:
+        out["additionalProperties"] = False
+    elif out.get("type") == "object":
         out["additionalProperties"] = False
     return out
 
@@ -257,9 +313,50 @@ def blueprint_json_schema() -> dict:
     return strict_schema_for(BlueprintDef)
 
 
-def package_json_schema() -> dict:
-    """The strict JSON Schema sent to the provider for Stage B."""
-    return strict_schema_for(StoryPackageDef)
+def package_json_schema(
+    blueprint: Optional[dict] = None, max_scenes: Optional[int] = None
+) -> dict:
+    """The strict JSON Schema sent to the provider for Stage B.
+
+    ``initial_state`` is a free-form map, which strict mode cannot express.
+    When the approved blueprint is supplied its variables are injected as an
+    explicit typed object instead -- integer bounds included -- so the
+    provider enforces coverage and ranges; without one the field is omitted
+    (local validation still fills defaults).
+
+    ``max_scenes`` caps the ``scenes`` array at the provider (``maxItems``),
+    so an oversized package is structurally impossible to emit and the model
+    must merge beats instead of inventing scenes.
+    """
+    schema = strict_schema_for(StoryPackageDef)
+    if max_scenes:
+        scenes = schema.get("properties", {}).get("scenes")
+        if isinstance(scenes, dict):
+            scenes["maxItems"] = int(max_scenes)
+    if blueprint:
+        properties: dict[str, Any] = {}
+        for var in blueprint.get("state_vars") or []:
+            name = var.get("name")
+            if not name:
+                continue
+            if var.get("kind") == "flag":
+                properties[name] = {"type": "array", "items": {"type": "string"}}
+            else:
+                node: dict[str, Any] = {"type": "integer"}
+                if var.get("min_value") is not None:
+                    node["minimum"] = var["min_value"]
+                if var.get("max_value") is not None:
+                    node["maximum"] = var["max_value"]
+                properties[name] = node
+        if properties:
+            schema["properties"]["initial_state"] = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": properties,
+                "required": sorted(properties),
+            }
+            schema["required"] = sorted(set(schema.get("required") or []) | {"initial_state"})
+    return schema
 
 
 def scene_batch_json_schema() -> dict:
