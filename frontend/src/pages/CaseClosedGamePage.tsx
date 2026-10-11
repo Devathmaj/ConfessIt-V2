@@ -82,6 +82,10 @@ export const CaseClosedGamePage = () => {
     }
   };
 
+  // Suspect ids are machine keys; players should only ever read names.
+  const nameForSuspect = (id: string | null | undefined) =>
+    (id ? state?.suspects.find((suspect) => suspect.id === id)?.name : null) ?? id ?? '—';
+
   if (loading || state === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -227,10 +231,15 @@ export const CaseClosedGamePage = () => {
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><Trophy className="h-4 w-4" /> Solution reveal</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-2">
-            <div className="font-medium">{result.solution_title} (culprit: {result.culprit_id})</div>
+            <div className="font-medium">The culprit was {nameForSuspect(result.culprit_id)}.</div>
+            {result.solution_title && <div className="text-sm font-medium">{result.solution_title}</div>}
             <div className="text-sm">{result.solution_narrative}</div>
             <div className="text-sm italic">{result.why_others_ruled_out}</div>
-            <div className="text-sm">Your accusation: {result.locked_suspect_id} · {result.correct ? 'Correct' : 'Incorrect'} · {result.score} pts · {formatElapsed(result.elapsed_seconds)}</div>
+            <div className="text-sm">
+              {result.locked_suspect_id
+                ? `Your accusation: ${nameForSuspect(result.locked_suspect_id)} · ${result.correct ? 'Correct' : 'Incorrect'} · ${result.score} pts · ${formatElapsed(result.elapsed_seconds)}`
+                : 'No accusation was locked before the case closed.'}
+            </div>
           </CardContent>
         </Card>
       )}

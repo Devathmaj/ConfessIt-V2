@@ -22,12 +22,15 @@ Rules enforced here (prompt.md Sections 3-6, 11):
   concurrency; retries replay stored results instead of double-charging.
 """
 
+import logging
 from datetime import datetime, timezone, date, time
 from typing import Any, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select, text, func
 from sqlalchemy.exc import IntegrityError
+
+logger = logging.getLogger(__name__)
 
 from ..db_models import (
     CaseClosedEvidenceRecord,
@@ -782,7 +785,15 @@ def get_result(db: Database, user) -> dict:
 
 
 def finalize_event(db: Database, game_id: str) -> dict:
-    """Idempotent event finalization: correctness + time-decay scoring + reveal."""
+    """Idempotent event finalization: correctness + time-decay scoring + reveal.
+
+    The call that closes the event also tells every participant who the
+    culprit was. The notices go out only after the reveal itself has
+    committed, and the idempotent re-entry sends none, so a retry can never
+    announce a solution the game has not recorded twice.
+    """
+    recipients: list[str] = []
+    package: dict = {}
     with db.sessions.begin() as session:
         game = session.get(CaseClosedGameRecord, game_id)
         if game is None:
@@ -795,7 +806,15 @@ def finalize_event(db: Database, game_id: str) -> dict:
         rows = session.scalars(
             select(CaseClosedSessionRecord).where(CaseClosedSessionRecord.case_closed_game_id == game.id).with_for_update()
         ).all()
+        seen: set[str] = set()
         for row in rows:
+            # Every session's members hear the reveal, locked or not: the
+            # notification names who did it and nothing about the reader.
+            for member in (row.user_a_id, row.user_b_id):
+                member_id = str(member) if member else ""
+                if member_id and member_id not in seen:
+                    seen.add(member_id)
+                    recipients.append(member_id)
             if row.finalized:
                 continue
             if row.locked_culprit_id is not None and culprit:
@@ -819,4 +838,60 @@ def finalize_event(db: Database, game_id: str) -> dict:
         game.status = "ended"
         game.ended_at = _now()
         session.flush()
-        return {"game_id": str(game.id), "finalized": True, "sessions": len(rows)}
+        sessions_count = len(rows)
+    # The reveal is committed, so the notices cannot announce a solution the
+    # game still has not recorded; the send itself is best effort.
+    _notify_culprit_reveal(db, recipients, package)
+    return {"game_id": str(game_id), "finalized": True, "sessions": sessions_count}
+
+
+def _notify_culprit_reveal(
+    db: Database, recipient_ids: list[str], package: dict
+) -> None:
+    """Tell every participant who the culprit was, best effort.
+
+    The notice names the culprit (and the reveal's title) and nothing about
+    the reader -- not their accusation, not whether it was right, not their
+    score; those live behind the game's own screen. When the package cannot
+    name the culprit there is nothing honest to send, so nothing is sent. A
+    failed write is logged, never raised: the reveal is already committed
+    and the inbox is not the result.
+    """
+    if not recipient_ids:
+        return
+    solution = package.get("solution") or {}
+    culprit_id = str(solution.get("culprit_id") or "")
+    suspects = {
+        str(suspect.get("id")): suspect for suspect in package.get("suspects") or []
+    }
+    culprit_name = str((suspects.get(culprit_id) or {}).get("name") or culprit_id).strip()
+    if not culprit_name:
+        return
+    reveal_title = str((package.get("solution_reveal") or {}).get("title") or "").strip()
+    # 120 and 500 are the notification columns; a long suspect name is
+    # clipped rather than allowed to fail the insert.
+    heading = f"Case Closed: the culprit was {culprit_name}"[:120]
+    body = (
+        f"{reveal_title} — open Case Closed to read the full reveal."
+        if reveal_title
+        else "Open Case Closed to read the full reveal."
+    )[:500]
+
+    from .notification_service import create_notification_service
+
+    with db.sessions() as session:
+        regnos = [
+            str(regno)
+            for (regno,) in session.execute(
+                select(UserRecord.regno).where(UserRecord.id.in_(recipient_ids))
+            ).all()
+        ]
+    for regno in regnos:
+        try:
+            create_notification_service(
+                recipient_regno=regno, heading=heading, body=body, db=db
+            )
+        except Exception:
+            logger.warning(
+                "Failed to queue the Case Closed reveal notification for %s", regno
+            )

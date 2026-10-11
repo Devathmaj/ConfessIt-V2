@@ -146,6 +146,21 @@ describe('CaseClosedGamePage', () => {
     expect(screen.queryByText(/Solution reveal/)).toBeNull();
   });
 
+  it('reveals the culprit and the accusation by name once the event finalizes', async () => {
+    getState.mockResolvedValue(baseState({ stage: 'completed', finalized: true }));
+    getResult.mockResolvedValue({
+      locked_suspect_id: 's2', correct: false, score: 0, elapsed_seconds: 60,
+      finalized: true, culprit_id: 's1', solution_title: 'Alex did it',
+      solution_narrative: 'The key log proves it.', why_others_ruled_out: 'Blake was on stage.',
+    });
+    renderPage();
+
+    expect(await screen.findByText(/the culprit was Alex/i)).toBeTruthy();
+    expect(screen.getByText(/alex did it/i)).toBeTruthy();
+    expect(screen.getByText(/your accusation: Blake/i)).toBeTruthy();
+    expect(screen.getByText(/incorrect · 0 pts/i)).toBeTruthy();
+  });
+
   it('embeds the detective thread with 400/200 quotas inside the game window', async () => {
     getState.mockResolvedValue(baseState());
     getMessages.mockResolvedValue({

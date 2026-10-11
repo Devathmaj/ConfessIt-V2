@@ -7,7 +7,7 @@ scoring, idempotent finalization, and no LLM at runtime.
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, time, timezone
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +24,7 @@ from app.db_models import (
     CaseClosedSessionRecord,
     CoupleGameRecord,
     FeaturedGameRecord,
+    NotificationRecord,
 )
 from app.main import app
 from app.models import UserDetails
@@ -760,6 +761,95 @@ def test_scoring_and_finalization(db, http, players):
     ca = client_for(http, players["a"])
     got = ca.get("/games/case-closed/result").json()
     assert got["finalized"] is True and got["culprit_id"] == "s1" and got["correct"] is True
+
+
+def test_finalization_notifies_every_participant_of_the_culprit(db, http, players):
+    """The reveal reaches both partners by name, once, and says nothing else.
+
+    The notification is the one channel that outlives the event; it carries
+    the culprit without leaking raw suspect ids or the reader's own verdict
+    -- those stay behind the game's reveal screen.
+    """
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    _lock_couple_for(db, http, players, "s1")
+    case_closed_gameplay.finalize_event(db, gid)
+    case_closed_gameplay.finalize_event(db, gid)  # idempotent: no second notice
+
+    with db.sessions() as session:
+        notices = session.scalars(
+            select(NotificationRecord).where(
+                NotificationRecord.recipient_regno.in_(["cc_player_a", "cc_player_b"])
+            )
+        ).all()
+    assert len(notices) == 2  # one per partner, and the retry sent nothing
+    assert {notice.recipient_regno for notice in notices} == {"cc_player_a", "cc_player_b"}
+    for notice in notices:
+        blob = f"{notice.heading} {notice.body}"
+        assert "Alex" in notice.heading  # the culprit, by name
+        assert "s1" not in blob and "s2" not in blob  # never a raw suspect id
+        assert "correct" not in blob.lower() and "score" not in blob.lower()
+        assert notice.target_kind is None and notice.target_id is None
+
+
+def test_scheduler_rollover_finishes_the_case_and_notifies(db, http, players):
+    """The next day's run closes the event: reveal, scores, notices, new event."""
+    from app.services import game_scheduler
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    _lock_couple_for(db, http, players, "s1")
+    with db.sessions.begin() as session:
+        game = session.get(CaseClosedGameRecord, gid)
+        assert game is not None
+        game.period_end_date = datetime.now(UTC).date()  # the boundary has arrived
+
+    tomorrow = datetime.now(UTC).date() + timedelta(days=1)
+    outcome = game_scheduler.ensure_single_game(
+        db, "case-closed", datetime.combine(tomorrow, time(0, 1), tzinfo=UTC)
+    )
+    assert outcome["action"] == "created"
+
+    with db.sessions() as session:
+        closed = session.get(CaseClosedGameRecord, gid)
+        assert closed is not None and closed.finalized and closed.status == "ended"
+        opened = session.scalar(
+            select(CaseClosedGameRecord).where(CaseClosedGameRecord.status == "active")
+        )
+        assert opened is not None and str(opened.id) != gid
+        notices = session.scalars(
+            select(NotificationRecord).where(
+                NotificationRecord.recipient_regno.in_(["cc_player_a", "cc_player_b"])
+            )
+        ).all()
+    assert len(notices) == 2
+    assert all("Alex" in notice.heading for notice in notices)
+
+
+def test_scheduler_finishes_an_event_that_ended_without_its_reveal(db, http, players):
+    """A crash between ending and finalizing cannot hide the culprit forever."""
+    from app.services import game_scheduler
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    _lock_couple_for(db, http, players, "s1")
+    with db.sessions.begin() as session:
+        game = session.get(CaseClosedGameRecord, gid)
+        assert game is not None
+        game.status = "ended"  # ended, but the reveal never ran
+
+    game_scheduler.ensure_single_game(db, "case-closed", datetime.now(UTC))
+
+    with db.sessions() as session:
+        repaired = session.get(CaseClosedGameRecord, gid)
+        assert repaired is not None and repaired.finalized
+        notices = session.scalars(
+            select(NotificationRecord).where(
+                NotificationRecord.recipient_regno.in_(["cc_player_a", "cc_player_b"])
+            )
+        ).all()
+    assert len(notices) == 2
+    assert all("Alex" in notice.heading for notice in notices)
 
 
 def test_wrong_and_incomplete_zero(db, http, players):

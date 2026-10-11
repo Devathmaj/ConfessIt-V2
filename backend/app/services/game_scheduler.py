@@ -94,6 +94,47 @@ def _end_row(row, now: datetime) -> None:
     row.ended_at = now
 
 
+def _finalize_case_closed_safely(db: Database, game_id: str) -> None:
+    """Reveal one closed Case Closed event, logging rather than raising.
+
+    Finalizing is what scores every session and makes the solution -- and
+    who the culprit was -- visible. A failure here must never stop the
+    period rollover; the stranded scan retries whatever this call misses.
+    """
+    import logging
+
+    try:
+        from . import case_closed_gameplay
+
+        case_closed_gameplay.finalize_event(db, game_id)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Case Closed finalization failed for event %s", game_id
+        )
+
+
+def _finalize_stranded_case_closed(db: Database) -> None:
+    """Finish Case Closed events that ended without ever revealing the case.
+
+    An event that died between ending and finalizing would otherwise keep
+    its solution hidden -- and every participant un-told -- forever. The
+    scan runs inside the case-closed lock, so two scheduler passes can
+    never race the same reveal.
+    """
+    with db.sessions() as session:
+        stranded = [
+            str(game_id)
+            for (game_id,) in session.execute(
+                select(CaseClosedGameRecord.id).where(
+                    CaseClosedGameRecord.status == "ended",
+                    CaseClosedGameRecord.finalized.is_(False),
+                )
+            ).all()
+        ]
+    for game_id in stranded:
+        _finalize_case_closed_safely(db, game_id)
+
+
 def _snapshot_league_opportunity(session, game_id: str, outcome: dict) -> None:
     """Snapshot a freshly opened session's league opportunity, same transaction.
 
@@ -425,6 +466,11 @@ def ensure_single_game(
                     text("SELECT pg_advisory_xact_lock(:key)"),
                     {"key": game_lock_key(game_id)},
                 )
+                # Events that ended without their reveal (a crash between
+                # ending and finalizing) still owe every participant the
+                # culprit; finish them inside the lock before the rollover
+                # below decides what today's event is.
+                _finalize_stranded_case_closed(db)
                 config = get_config(session, game_id)
                 if config.is_hidden:
                     return {"game_id": game_id, "action": "skipped_hidden"}
@@ -439,6 +485,11 @@ def ensure_single_game(
                         "session_id": str(current.id),
                     }
                 if current is not None:
+                    # Closing the case is what reveals the solution: every
+                    # session is scored, correctness becomes visible and the
+                    # participants are told who the culprit was. Ending the
+                    # row without this would hide the solution forever.
+                    _finalize_case_closed_safely(db, str(current.id))
                     _end_row(current, moment)
                 start, end = game_periods.period_for_start(today, cadence)
                 from ..db_models import CaseClosedPackageRecord

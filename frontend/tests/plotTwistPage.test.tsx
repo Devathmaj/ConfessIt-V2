@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ContextType } from 'react';
 
@@ -137,6 +137,7 @@ const renderGame = (gender: 'male' | 'female' | 'other' = 'male') =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.sessionStorage.clear();
   vi.mocked(getPlotTwistState).mockResolvedValue(baseState());
   vi.mocked(getPlotTwistPartners).mockResolvedValue(partnerPage([]));
   vi.mocked(getPartnerCohorts).mockResolvedValue([]);
@@ -276,9 +277,81 @@ describe('completed stories', () => {
     );
     renderGame();
 
-    expect(await screen.findByText('Great Escape')).toBeInTheDocument();
-    expect(screen.getByText('You made it out together.')).toBeInTheDocument();
+    // The reveal pops up on completion and the page card keeps the same
+    // facts underneath, so both are asserted: they must never disagree.
+    expect(await screen.findAllByText('Great Escape')).not.toHaveLength(0);
+    expect(screen.getAllByText('You made it out together.')).not.toHaveLength(0);
     expect(screen.getByText(/sneak out through the loading area/i)).toBeInTheDocument();
     expect(screen.getByText(/couples leaderboard/i)).toBeInTheDocument();
+  });
+});
+
+describe('the ending reveal', () => {
+  const settled = (overrides: Partial<NonNullable<PlotTwistState['result']>> = {}) =>
+    baseState({
+      stage: 'completed',
+      session_id: 'session-popup',
+      partner: { id: 'id-b', name: 'Sam' },
+      decisions_made: 1,
+      history: [
+        {
+          seq: 1,
+          scene_id: 's_open',
+          scene_title: 'Locked In',
+          actor_user_id: 'player-a',
+          actor_name: 'Alex',
+          choice_id: 'c_loading',
+          choice_text: 'Sneak out through the loading area.',
+          consequence_text: 'You slip backstage.',
+          created_at: '2026-10-09T00:00:00Z',
+        },
+      ],
+      result: {
+        ending_id: 'e_fail',
+        ending_type: 'failure',
+        ending_title: 'Cornered',
+        narrative: 'The hall goes quiet.',
+        success: false,
+        treasures: ['c_loading'],
+        decisions_made: 1,
+        completed_at: '2026-10-09T00:05:00Z',
+        ...overrides,
+      },
+    });
+
+  it('tells a failed run its outcome, its treasure and what the treasure was', async () => {
+    vi.mocked(getPlotTwistState).mockResolvedValue(settled());
+    renderGame();
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/didn.t make it/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/1 treasure/i)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/sneak out through the loading area/i),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /keep the story/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('celebrates a passed run, and the memo keeps it closed on a later visit', async () => {
+    vi.mocked(getPlotTwistState).mockResolvedValue(
+      settled({ ending_type: 'escape', ending_title: 'Great Escape', success: true, treasures: [] }),
+    );
+    const first = renderGame();
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/you made it/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/treasure/i)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /keep the story/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // Re-entering the completed story in the same browser session keeps the
+    // memo: the card still carries the result, the popup stays dismissed.
+    first.unmount();
+    renderGame();
+    await waitFor(() => expect(screen.getAllByText('Great Escape').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
