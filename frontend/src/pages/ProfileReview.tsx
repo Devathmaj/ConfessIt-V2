@@ -7,6 +7,14 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -34,10 +42,17 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
-import { createAdminUser, getAdminUsers, setAdminUserBlocked, updateAdminUser } from '@/services/api';
+import {
+  bulkUploadAdminUsers,
+  createAdminUser,
+  getAdminUsers,
+  setAdminUserBlocked,
+  updateAdminUser,
+} from '@/services/api';
 import type { AdminUserCreatePayload } from '@/services/api';
 import {
   Crown,
+  Download,
   Mail,
   Pencil,
   Plus,
@@ -46,6 +61,7 @@ import {
   ShieldCheck,
   ShieldHalf,
   ShieldX,
+  Upload,
   User,
   Users,
 } from 'lucide-react';
@@ -68,7 +84,20 @@ import {
   USER_YEAR_OPTIONS,
 } from '@/lib/accountFields';
 import type { UserGender, UserYear } from '@/lib/accountFields';
-import { ADMIN_DEPARTMENT_MAX, ADMIN_NAME_MAX, ADMIN_REGNO_MAX } from '@/lib/limits';
+import {
+  ADMIN_BULK_UPLOAD_MAX_BYTES,
+  ADMIN_BULK_UPLOAD_MAX_ROWS,
+  ADMIN_DEPARTMENT_MAX,
+  ADMIN_NAME_MAX,
+  ADMIN_REGNO_MAX,
+} from '@/lib/limits';
+import {
+  BULK_UPLOAD_PREVIEW_MAX_COLUMNS,
+  BULK_UPLOAD_PREVIEW_PAGE_SIZE,
+  downloadBulkUploadSample,
+  parseBulkUploadPreview,
+  type BulkUploadPreview,
+} from '@/lib/bulkUploadPreview';
 
 /**
  * The three kinds of content a participant can be reported for. A confession and a comment on
@@ -598,6 +627,15 @@ interface ProfileSection {
    */
   create?: { label: string; accountType: AccountType };
   /**
+   * Present only on the Participants section.
+   *
+   * Bulk onboarding is participants-only by construction: the file format has no account
+   * type column, so offering the same button beside Admins or Moderators would promise a
+   * capability the endpoint does not have. The label sits next to Create participant,
+   * because both controls provision the same kind of account.
+   */
+  bulkUpload?: { label: string };
+  /**
    * Present only on the two participant sections, which are server pages rather than whole
    * lists: the screen holds one page of each, and the rest stays in the database until the
    * operator asks for it.
@@ -958,6 +996,38 @@ export const ProfileReview = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateUserForm>(() => buildDefaultCreateForm('users'));
   const [creating, setCreating] = useState(false);
+  /**
+   * Bulk participant upload. The server applies the whole file or none of it, so this
+   * dialog has one file input and one action rather than a row-by-row progress list.
+   * `bulkUploadError` is rendered in the dialog rather than only toasted: a refusal lists
+   * row numbers and field names that the operator needs to read and fix.
+   */
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [bulkUploadFile, setBulkUploadFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkUploadError, setBulkUploadError] = useState<string | null>(null);
+  /**
+   * The browser-side preview of the selected file.
+   *
+   * This is deliberately separate from the upload request: it is parsed locally, never sent
+   * to the server, and is not a validation result. It gives the operator a chance to notice
+   * a wrong column or a mis-exported sheet before pressing Upload. `bulkPreviewRequest`
+   * invalidates an in-flight parse when another file is chosen or the dialog closes, so an
+   * older file's rows can never replace the current file's preview.
+   */
+  const [bulkPreview, setBulkPreview] = useState<BulkUploadPreview | null>(null);
+  const [bulkPreviewLoading, setBulkPreviewLoading] = useState(false);
+  const [bulkPreviewError, setBulkPreviewError] = useState<string | null>(null);
+  const [bulkPreviewPage, setBulkPreviewPage] = useState(0);
+  const bulkPreviewRequest = useRef(0);
+  /**
+   * Bumped after a successful upload to make the read effect run again.
+   *
+   * A participant upload changes both participant sections and their server totals, so the
+   * page refetches rather than trying to splice rows into the current page -- the new rows
+   * may not belong on this page under the active sort or filters.
+   */
+  const [reloadToken, setReloadToken] = useState(0);
 
   /**
    * Submit one section's draft search box as the query that section's read is issued with.
@@ -1097,7 +1167,7 @@ export const ProfileReview = () => {
     return () => {
       cancelled = true;
     };
-  }, [flaggedQuery, ordinaryQuery, yearFilter, departmentFilter, sortOption, page, flaggedPage]);
+  }, [flaggedQuery, ordinaryQuery, yearFilter, departmentFilter, sortOption, page, flaggedPage, reloadToken]);
 
   /**
    * The years and departments the cards can be filtered to, accumulated across every page
@@ -1347,6 +1417,7 @@ export const ProfileReview = () => {
         badgeVariant: 'outline',
         accounts: sortProfiles(ordinary, sortOption),
         create: { label: 'Create participant', accountType: 'users' },
+        bulkUpload: { label: 'Bulk upload participants' },
         search: {
           value: ordinarySearch,
           onValueChange: setOrdinarySearch,
@@ -1757,6 +1828,115 @@ export const ProfileReview = () => {
     }
   };
 
+  /** Drop the selected file and everything derived from it, invalidating any in-flight parse. */
+  const clearBulkUploadSelection = () => {
+    bulkPreviewRequest.current += 1;
+    setBulkUploadFile(null);
+    setBulkUploadError(null);
+    setBulkPreview(null);
+    setBulkPreviewError(null);
+    setBulkPreviewLoading(false);
+    setBulkPreviewPage(0);
+  };
+
+  const openBulkUploadDialog = () => {
+    clearBulkUploadSelection();
+    setBulkUploadOpen(true);
+  };
+
+  const resetBulkUploadDialog = () => {
+    clearBulkUploadSelection();
+    setBulkUploadOpen(false);
+    setBulkUploading(false);
+  };
+
+  /**
+   * Read the selected file locally for a preview.
+   *
+   * This never calls the API. A row-by-row server preview would mean parsing and validating
+   * the same potentially large workbook twice, once for the preview and once for the actual
+   * upload, so the file is read in this tab instead. The preview is explicitly not a
+   * validation result: Upload still sends the file to the endpoint, which is the only
+   * authority on what gets written.
+   */
+  const handleBulkFileChange = async (file: File | null) => {
+    const requestId = bulkPreviewRequest.current + 1;
+    bulkPreviewRequest.current = requestId;
+    setBulkUploadFile(file);
+    setBulkUploadError(null);
+    setBulkPreview(null);
+    setBulkPreviewError(null);
+    setBulkPreviewPage(0);
+
+    if (!file) {
+      setBulkPreviewLoading(false);
+      return;
+    }
+
+    setBulkPreviewLoading(true);
+    try {
+      const preview = await parseBulkUploadPreview(file);
+      if (bulkPreviewRequest.current !== requestId) return;
+      setBulkPreview(preview);
+    } catch (error) {
+      if (bulkPreviewRequest.current !== requestId) return;
+      console.error('Failed to preview participant file', error);
+      setBulkPreviewError(
+        error instanceof Error
+          ? error.message
+          : 'Preview unavailable for this file. You can still upload it.',
+      );
+    } finally {
+      if (bulkPreviewRequest.current === requestId) setBulkPreviewLoading(false);
+    }
+  };
+
+  const bulkPreviewPageCount = Math.max(
+    1,
+    Math.ceil((bulkPreview?.rows.length ?? 0) / BULK_UPLOAD_PREVIEW_PAGE_SIZE),
+  );
+  // Derive rather than trust the stored page: a preview is replaced when a different file is
+  // selected, and a page that existed for the old row count must not slice past the new one.
+  const safeBulkPreviewPage = Math.min(bulkPreviewPage, bulkPreviewPageCount - 1);
+  const bulkPreviewRows =
+    bulkPreview?.rows.slice(
+      safeBulkPreviewPage * BULK_UPLOAD_PREVIEW_PAGE_SIZE,
+      (safeBulkPreviewPage + 1) * BULK_UPLOAD_PREVIEW_PAGE_SIZE,
+    ) ?? [];
+  const bulkUploadFileTooLarge =
+    bulkUploadFile !== null && bulkUploadFile.size > ADMIN_BULK_UPLOAD_MAX_BYTES;
+
+  const handleBulkUpload = async () => {
+    if (!bulkUploadFile) {
+      setBulkUploadError('Choose a .csv or .xlsx file first.');
+      return;
+    }
+    try {
+      setBulkUploading(true);
+      setBulkUploadError(null);
+      const result = await bulkUploadAdminUsers(bulkUploadFile);
+      toast.success(
+        `${result.created} participant${result.created === 1 ? '' : 's'} uploaded. ` +
+          `${result.remaining_slots} account slot${result.remaining_slots === 1 ? '' : 's'} remaining.`,
+      );
+      resetBulkUploadDialog();
+      // The new participants belong on whichever page the active sort puts them, and the
+      // section totals moved, so start the participant reads from their first page again.
+      setPage(0);
+      setFlaggedPage(0);
+      setReloadToken((value) => value + 1);
+    } catch (error) {
+      console.error('Failed to bulk upload participants', error);
+      // Kept in the dialog rather than a toast: the server's refusal can name up to 25 rows
+      // and fields, and an operator needs to read all of it while fixing the file.
+      setBulkUploadError(
+        describeApiError(error, 'Unable to upload this participant file.'),
+      );
+    } finally {
+      setBulkUploading(false);
+    }
+  };
+
   /**
    * One section: its heading, its count, the button that creates into it, and its grid of cards.
    *
@@ -1774,6 +1954,7 @@ export const ProfileReview = () => {
     // Staff sections are unpaginated and arrive whole, so for them the two coincide.
     const accountTotal = section.pagination ? section.pagination.total : accountCount;
     const create = section.create;
+    const bulkUpload = section.bulkUpload;
     return (
       <section aria-labelledby={`profile-section-${section.id}`}>
         <Card>
@@ -1800,6 +1981,12 @@ export const ProfileReview = () => {
                   >
                     <Plus className="mr-2 h-4 w-4" />
                     {create.label}
+                  </Button>
+                )}
+                {bulkUpload && (
+                  <Button size="sm" variant="outline" onClick={openBulkUploadDialog}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    {bulkUpload.label}
                   </Button>
                 )}
               </div>
@@ -2517,6 +2704,257 @@ export const ProfileReview = () => {
               {creating
                 ? 'Creating...'
                 : `Create ${ACCOUNT_TYPE_LABELS[createForm.account_type].toLowerCase()} account`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={bulkUploadOpen}
+        onOpenChange={(open) => {
+          if (!open) resetBulkUploadDialog();
+          else setBulkUploadOpen(true);
+        }}
+      >
+        <DialogContent
+          className="max-h-[90vh] max-w-4xl overflow-y-auto"
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle>Bulk upload participants</DialogTitle>
+            <DialogDescription>
+              Add up to {ADMIN_BULK_UPLOAD_MAX_ROWS} participant accounts from one .csv or
+              .xlsx file. The whole file is applied at once or not at all. Choose a file to
+              preview it here before uploading.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-2">
+            <div className="grid gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="bulk-upload-file">CSV or XLSX file</Label>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={downloadBulkUploadSample}
+                >
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Download sample CSV
+                </Button>
+              </div>
+              <Input
+                id="bulk-upload-file"
+                type="file"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                disabled={bulkUploading}
+                onChange={(event) => {
+                  void handleBulkFileChange(event.target.files?.[0] ?? null);
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                The sample contains the six expected columns and two example rows.
+              </p>
+            </div>
+
+            {bulkPreviewLoading && (
+              <p role="status" className="text-xs text-muted-foreground">
+                Reading preview…
+              </p>
+            )}
+
+            {bulkPreviewError && (
+              <p
+                role="status"
+                className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200"
+              >
+                {bulkPreviewError}
+              </p>
+            )}
+
+            {bulkPreview && (
+              <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Preview</p>
+                  <p className="text-xs text-muted-foreground">
+                    {bulkPreview.truncated
+                      ? `More than ${ADMIN_BULK_UPLOAD_MAX_ROWS} data rows`
+                      : `${bulkPreview.rows.length} data row${
+                          bulkPreview.rows.length === 1 ? '' : 's'
+                        }`}
+                  </p>
+                </div>
+
+                {bulkPreview.headers.length === 0 ? (
+                  <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                    No headings or data were found in this file.
+                  </p>
+                ) : bulkPreview.rows.length === 0 ? (
+                  <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                    The file has headings but no participant rows.
+                  </p>
+                ) : (
+                  <>
+                    <div className="max-h-80 overflow-auto rounded-md border bg-background">
+                      <Table className="text-xs" aria-label="Participant file preview">
+                        <TableHeader className="sticky top-0 z-10 bg-background">
+                          <TableRow>
+                            {bulkPreview.headers.map((heading, index) => (
+                              <TableHead
+                                key={`${heading}-${index}`}
+                                scope="col"
+                                className="h-9 px-2 py-1 text-xs"
+                              >
+                                <span className="block max-w-[12rem] truncate" title={heading}>
+                                  {heading}
+                                </span>
+                              </TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {bulkPreviewRows.map((previewRow, rowIndex) => (
+                            <TableRow key={`${safeBulkPreviewPage}-${rowIndex}`}>
+                              {previewRow.map((cell, cellIndex) => (
+                                <TableCell
+                                  key={`${rowIndex}-${cellIndex}`}
+                                  className="px-2 py-1 align-top text-xs"
+                                >
+                                  <span
+                                    className="block max-w-[12rem] truncate"
+                                    title={cell || undefined}
+                                  >
+                                    {cell}
+                                  </span>
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    {bulkPreviewPageCount > 1 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setBulkPreviewPage(0)}
+                            disabled={safeBulkPreviewPage === 0}
+                          >
+                            First
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setBulkPreviewPage(Math.max(0, safeBulkPreviewPage - 1))
+                            }
+                            disabled={safeBulkPreviewPage === 0}
+                          >
+                            Previous
+                          </Button>
+                        </div>
+                        <p
+                          aria-live="polite"
+                          className="text-xs text-muted-foreground"
+                        >
+                          Page {safeBulkPreviewPage + 1} of {bulkPreviewPageCount}
+                        </p>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setBulkPreviewPage(
+                                Math.min(bulkPreviewPageCount - 1, safeBulkPreviewPage + 1),
+                              )
+                            }
+                            disabled={safeBulkPreviewPage >= bulkPreviewPageCount - 1}
+                          >
+                            Next
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setBulkPreviewPage(bulkPreviewPageCount - 1)}
+                            disabled={safeBulkPreviewPage >= bulkPreviewPageCount - 1}
+                          >
+                            Last
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {bulkPreview.truncated && (
+                  <p className="text-xs text-muted-foreground">
+                    The preview stops at the first {ADMIN_BULK_UPLOAD_MAX_ROWS} data rows. The
+                    server refuses a file with more than that rather than importing part of it.
+                  </p>
+                )}
+                {bulkPreview.columnsTruncated && (
+                  <p className="text-xs text-muted-foreground">
+                    Only the first {BULK_UPLOAD_PREVIEW_MAX_COLUMNS} columns are shown. The
+                    server refuses a file with extra columns.
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  This preview is read in your browser and is not a validation result. The
+                  server checks every row again when you press Upload.
+                </p>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">Expected columns</p>
+              <p className="mt-1">
+                The first row must contain registration number, email, full name, gender,
+                year and department. Headings may be in any order and are case-insensitive.
+                For XLSX files, the first worksheet is read.
+              </p>
+              <p className="mt-2">
+                Gender must be male, female or other; year must be between 1 and 12;
+                department is capped at {ADMIN_DEPARTMENT_MAX} characters; names and
+                registration numbers use the same limits as the create form. The upload is
+                refused if it would exceed the participant account limit or the
+                department/division limit.
+              </p>
+              <p className="mt-2">
+                Files are checked before anything is written: unknown or duplicate columns,
+                duplicate participants, formulas, macros, external links and rows over the
+                limit cancel the entire upload.
+              </p>
+            </div>
+
+            {bulkUploadError && (
+              <p role="alert" className="whitespace-pre-wrap text-sm text-destructive">
+                {bulkUploadError}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={resetBulkUploadDialog}
+              disabled={bulkUploading}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkUpload}
+              disabled={bulkUploading || bulkUploadFile === null || bulkUploadFileTooLarge}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              {bulkUploading ? 'Uploading...' : 'Upload participants'}
             </Button>
           </DialogFooter>
         </DialogContent>

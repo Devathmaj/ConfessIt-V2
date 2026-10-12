@@ -63,6 +63,18 @@ def _cached_count(key: tuple, compute) -> int:
     return total
 
 
+def invalidate_admin_user_count_cache() -> None:
+    """Drop cached account-page totals after a write that changes the users table.
+
+    The cache is deliberately seconds-stale for paging, but a write the operator just made
+    is not a page turn: a bulk upload that reports twenty created accounts followed by a
+    list that still says zero is a screen contradicting itself. Clearing the whole small
+    cache rather than only the participant keys keeps this correct for every filter shape
+    without teaching this module about the upload's semantics.
+    """
+    _count_cache.clear()
+
+
 def _clamp_skip(skip: int) -> int:
     """Clamp OFFSET input, refusing deep skips that are a DoS vector."""
     from fastapi import HTTPException as _HTTPException

@@ -117,6 +117,23 @@ USER_REGNO_MAX = 100
 # field and a matchmaking grouping, not a filter anything is required to match against.
 USER_DEPARTMENT_MAX = 80
 
+# Bulk participant onboarding (``POST /admin/users/bulk-upload``).
+#
+# The row ceiling is deliberately a fixed application limit rather than a function of
+# ``MAX_USER_COUNT``. The account cap is how many people may *exist*; this is how much one
+# request may parse and validate, so a deployment with a large participant ceiling still
+# cannot turn a single upload into an unbounded parse/transaction. A file with more rows is
+# refused whole -- it is never truncated to the first 1000, because a partial import is a
+# file whose operator has no way to tell which half landed.
+#
+# The byte ceiling bounds what is read before parsing. It is comfortably above a 1000-row
+# CSV or a normal XLSX workbook, so ordinary files are judged on their content rather than
+# their size. The ASGI request-body middleware still applies to the whole multipart body
+# first; this ceiling is the upload parser's own, and it is what makes the limit explicit
+# for callers even when the deployment raises the global body cap.
+BULK_UPLOAD_MAX_ROWS = 1000
+BULK_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+
 # How many distinct departments/divisions may exist at once, counted as distinct
 # (case-insensitive) ``users.department`` values.
 #

@@ -84,6 +84,9 @@ SAMPLE_ROUTES = [
 ("PATCH", "/admin/confessions/reports/{report_id}"),
     ("GET", "/admin/users"),
     ("POST", "/admin/users"),
+    # Bulk onboarding writes participants only. It carries the same ``users:create`` gate
+    # as the single-create route, so the moderator/admin split is identical.
+    ("POST", "/admin/users/bulk-upload"),
     ("PUT", "/admin/users/{user_id}/block"),
     ("PUT", "/admin/users/{user_id}"),
     # ``PUT /admin/users/{user_id}/picture`` used to be here. It was the admin's way to set an

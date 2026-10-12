@@ -1086,6 +1086,38 @@ export const updateAdminUser = async (userId: string, payload: AdminUserUpdatePa
 };
 
 /**
+ * The result of one all-or-nothing participant upload.
+ *
+ * `created` is how many rows were written; there is no partial result by construction.
+ * `total_users`, `max_user_count` and `remaining_slots` are included so the screen can say
+ * what the upload did to the account ceiling without a second statistics read.
+ */
+export interface AdminBulkUploadResult {
+    created: number;
+    total_users: number;
+    max_user_count: number;
+    remaining_slots: number;
+}
+
+/**
+ * Upload a CSV or XLSX file of participant accounts.
+ *
+ * Participants only: the server's file format has no account-type column and this helper
+ * sends none. The entire file is validated and applied in one transaction, so a rejection
+ * means nothing was written rather than "some rows failed". The request is multipart, and
+ * the browser's boundary is left for Axios to set; setting `Content-Type` manually here
+ * would omit it and make the server unable to parse the form.
+ */
+export const bulkUploadAdminUsers = async (file: File): Promise<AdminBulkUploadResult> => {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await axios.post(`${API_URL}/admin/users/bulk-upload`, form, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
+/**
  * One configured Wordle puzzle, as `GET /admin/wordle` returns it.
  *
  * `answer` is present deliberately: this is the administrator's own configuration screen, and

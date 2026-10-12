@@ -12,6 +12,14 @@ pytest-asyncio==1.4.0
 httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
+# Admin bulk participant onboarding reads .xlsx workbooks (POST /admin/users/bulk-upload).
+# openpyxl is the parser; defusedxml is installed alongside it because openpyxl only enables
+# its hardened XML parser when that package is present. Without it, a crafted workbook can
+# reach the standard library's XML parser with entity-expansion payloads. Both are bounded by
+# the endpoint's ZIP-container checks (size, entry count, compression ratio, forbidden parts)
+# before openpyxl sees the bytes.
+openpyxl==3.1.2
+defusedxml==0.7.1
 redis==8.1.0
 # Azure AI Content Safety (Batch 1: confessions; central dispatcher in
 # app/services/content_safety_service.py). Official SDK per

@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func, or_, select, text, update
 
 from ..postgres import new_id, is_valid_id
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Body
 from ..postgres import Database
 
 from ..dependencies import get_db
@@ -548,6 +548,51 @@ def create_user(
         session.flush()
         created_doc = _account_row_payload(account_type.value, user)
     return serialize_user_doc(created_doc)
+
+
+@router.post(
+    "/users/bulk-upload",
+    response_model=Dict[str, Any],
+    status_code=status.HTTP_201_CREATED,
+)
+async def bulk_upload_users(
+    file: UploadFile = File(
+        ...,
+        description=(
+            "A .csv or .xlsx file whose first row names registration number, email, full "
+            "name, gender, year and department. At most 1000 participant rows. The upload "
+            "is all-or-nothing."
+        ),
+    ),
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.USERS_CREATE)),
+) -> Dict[str, Any]:
+    """Create many participant accounts from one CSV or XLSX file.
+
+    Participants only: there is no ``account_type`` column and no account-type parameter,
+    so this route cannot be used to mint an admin or a moderator. Staff accounts are created
+    one at a time through ``POST /admin/users``, where an operator has to name the table
+    deliberately.
+
+    The file is parsed and validated in full before a transaction is opened. Inside the
+    transaction the users-table advisory lock is taken, the current participant count is read
+    and the upload is refused whole if adding every row would exceed ``MAX_USER_COUNT``.
+    That ordering matters: the check happens *before* the first insert, so a file that would
+    cross the ceiling never leaves a partial intake behind. The same all-or-nothing rule
+    applies to duplicate registration numbers or emails, invalid rows and the
+    ``MAX_DEPARTMENTS`` ceiling.
+
+    The hard ceiling of 1000 rows is an application limit independent of
+    ``MAX_USER_COUNT``: a deployment licensed for ten thousand participants still cannot
+    make one request parse an unbounded file. Over-long files are refused, never truncated.
+    """
+    # Imported here rather than at module scope so the spreadsheet parser is loaded only by
+    # the endpoint that needs it -- the rest of the admin surface has no reason to pay for
+    # openpyxl on every process start.
+    from ..services.bulk_user_service import create_participants_bulk, read_bulk_upload
+
+    rows = await read_bulk_upload(file)
+    return create_participants_bulk(db, rows)
 
 
 @router.put("/users/{user_id}/block")

@@ -79,6 +79,26 @@ export const ADMIN_REGNO_MAX = 100;
 export const ADMIN_DEPARTMENT_MAX = 80;
 
 /**
+ * The most participant rows one bulk-upload file may contain.
+ *
+ * Mirrors `BULK_UPLOAD_MAX_ROWS` in `backend/app/limits.py`. It is independent of the
+ * account ceiling (`MAX_USER_COUNT`): an operator on a large deployment still splits an
+ * intake into files of at most this many rows. The server refuses an over-long file whole
+ * rather than truncating it, so the screen states the bound before a file is chosen.
+ */
+export const ADMIN_BULK_UPLOAD_MAX_ROWS = 1000;
+
+/**
+ * The largest bulk-upload file the browser will preview.
+ *
+ * Mirrors `BULK_UPLOAD_MAX_BYTES` in `backend/app/limits.py`. The preview is intentionally
+ * local and best-effort, but it should not read a file the server would refuse anyway -- both
+ * for the operator's time and because a compressed workbook can expand far beyond its size.
+ * The server remains the authority on the upload itself.
+ */
+export const ADMIN_BULK_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
  * How many messages one conversation holds, and how many of them one person may send.
  *
  * A cap on the conversation is a cap on its transcript, not on anybody's typing: the read

@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
   uploadAdminUserPicture: vi.fn(),
+  bulkUploadAdminUsers: vi.fn(),
 }));
 
 const toast = vi.hoisted(() => ({

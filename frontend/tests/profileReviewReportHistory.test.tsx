@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   setAdminUserBlocked: vi.fn(),
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
+  bulkUploadAdminUsers: vi.fn(),
 }));
 
 vi.mock('@/services/api', () => api);
