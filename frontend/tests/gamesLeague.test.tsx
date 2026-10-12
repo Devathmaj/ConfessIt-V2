@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthContext, type User } from '@/contexts/AuthContext';
+import { lastCompletedDayAnchor, todayAnchor } from '@/lib/gamesLeaderboard';
 import { GamesDashboardPage } from '@/pages/GamesDashboardPage';
 import { GamesLeaderboardPage } from '@/pages/GamesLeaderboardPage';
 import {
@@ -143,6 +144,42 @@ describe('GamesLeaderboardPage: the server-backed board', () => {
     expect(screen.getByText('#1')).toBeInTheDocument();
     expect(getIndividualLeaderboard).toHaveBeenCalledWith(
       expect.objectContaining({ period: 'weekly', skip: 0 }),
+    );
+  });
+
+  it('opens daily boards on the last completed day', async () => {
+    renderLeaderboard();
+    await screen.findByText('Ada');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Daily' }));
+
+    await waitFor(() =>
+      expect(getIndividualLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ period: 'daily', anchor: lastCompletedDayAnchor() }),
+      ),
+    );
+    expect(getMyLeagueStanding).toHaveBeenCalledWith(
+      'individual',
+      expect.objectContaining({ period: 'daily', anchor: lastCompletedDayAnchor() }),
+    );
+  });
+
+  it('keeps each period on its own anchor when switching back', async () => {
+    renderLeaderboard();
+    await screen.findByText('Ada');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Daily' }));
+    await waitFor(() =>
+      expect(getIndividualLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ period: 'daily', anchor: lastCompletedDayAnchor() }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Weekly' }));
+    await waitFor(() =>
+      expect(getIndividualLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ period: 'weekly', anchor: todayAnchor() }),
+      ),
     );
   });
 

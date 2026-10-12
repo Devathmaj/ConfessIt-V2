@@ -2666,6 +2666,39 @@ export const updateGameConfig = async (
     return response.data;
 };
 
+/** One game's finished-round counts over the console's three windows. */
+export interface GamePlayTotals {
+    game_id: string;
+    plays_today: number;
+    plays_this_week: number;
+    plays_all_time: number;
+}
+
+/** Live play telemetry across every game, for the games console overview. */
+export interface GameStatsSummary {
+    server_date: string;
+    plays_today: number;
+    plays_this_week: number;
+    plays_all_time: number;
+    players_today: number;
+    players_this_week: number;
+    games: GamePlayTotals[];
+}
+
+/**
+ * The console's play figures, read from the games' native participation
+ * tables rather than the league ledger, so a round played today appears
+ * immediately instead of waiting for its event to finalize. The same
+ * collectors answer `GET /games/summary` for a player, so both dashboards
+ * agree on what counts as a finished round.
+ */
+export const getAdminGameStats = async (): Promise<GameStatsSummary> => {
+    const response = await axios.get(`${API_URL}/admin/games/stats`, {
+        headers: getAuthHeaders(),
+    });
+    return response.data;
+};
+
 /** One featured date: which game holds the spotlight on which UTC day. */
 export interface FeaturedGame {
     id: string;

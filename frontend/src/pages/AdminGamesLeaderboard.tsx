@@ -19,6 +19,7 @@ import {
   LEAGUE_PERIODS,
   entryDisplayName,
   gamesForCompetition,
+  lastCompletedDayAnchor,
   todayAnchor,
   type LeagueCompetitionType,
   type LeagueCoupleEntry,
@@ -57,7 +58,16 @@ export const AdminGamesLeaderboard = () => {
   const [competition, setCompetition] = useState<LeagueCompetitionType>('individual');
   const [period, setPeriod] = useState<LeaguePeriod>('weekly');
   const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
-  const [anchor, setAnchor] = useState<string>(todayAnchor());
+  // Daily opens on the last completed day: a session's awards only exist after
+  // the next UTC reset. Weekly and monthly open on the current period, and each
+  // period keeps its own anchor so switching never drags a boundary day across.
+  const [anchors, setAnchors] = useState<Record<LeaguePeriod, string>>(() => ({
+    daily: lastCompletedDayAnchor(),
+    weekly: todayAnchor(),
+    monthly: todayAnchor(),
+    all_time: todayAnchor(),
+  }));
+  const anchor = anchors[period];
   const [entries, setEntries] = useState<BoardEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [opportunityCount, setOpportunityCount] = useState<number | null>(null);
@@ -204,7 +214,9 @@ export const AdminGamesLeaderboard = () => {
               value={anchor}
               max={todayAnchor()}
               onChange={(event) => {
-                if (event.target.value) setAnchor(event.target.value);
+                if (event.target.value) {
+                  setAnchors((current) => ({ ...current, [period]: event.target.value }));
+                }
               }}
               className="w-44"
             />

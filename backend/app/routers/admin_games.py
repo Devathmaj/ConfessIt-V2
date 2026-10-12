@@ -17,6 +17,7 @@ from ..models import (
     GameConfig,
     GameConfigUpdate,
     GameRecordHighlights,
+    GameStatsSummary,
     LeagueCoupleBoard,
     LeagueFinalizeRequest,
     LeagueIndividualBoard,
@@ -29,6 +30,7 @@ from ..services import (
     league_boards,
     league_finalization,
     league_game_boards,
+    player_stats,
 )
 from ..services.authorization import require_capability
 from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
@@ -177,6 +179,21 @@ def clear_featured_game(
     """Remove the featured pick for one UTC date; a day with none is a 404."""
     featured_games.clear_featured(db, game_date)
     return None
+
+
+@router.get("/games/stats", response_model=GameStatsSummary)
+def game_stats(
+    db: Database = Depends(get_db),
+    _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
+) -> GameStatsSummary:
+    """Live play telemetry across every game, for the console overview.
+
+    Read from the games' native participation tables, not the league ledger,
+    so a round played today appears immediately instead of waiting for its
+    event to finalize. The same collectors answer ``GET /games/summary`` for
+    a player, so both screens agree on what counts as a finished round.
+    """
+    return GameStatsSummary(**player_stats.build_games_stats(db))
 
 
 @router.post("/games/run-resets")

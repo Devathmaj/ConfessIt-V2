@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   ALL_GAMES_FILTER,
@@ -7,6 +7,7 @@ import {
   entryDisplayName,
   gameCompetitionType,
   gamesForCompetition,
+  lastCompletedDayAnchor,
   todayAnchor,
 } from '@/lib/gamesLeaderboard';
 
@@ -85,5 +86,19 @@ describe('gamesLeaderboard: the competition vocabulary', () => {
 
   it('anchors boards to a UTC calendar day', () => {
     expect(todayAnchor()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('opens daily boards on the last completed UTC day', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-08T23:30:00Z'));
+      expect(todayAnchor()).toBe('2026-10-08');
+      expect(lastCompletedDayAnchor()).toBe('2026-10-07');
+
+      vi.setSystemTime(new Date('2026-01-01T00:10:00Z'));
+      expect(lastCompletedDayAnchor()).toBe('2025-12-31');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

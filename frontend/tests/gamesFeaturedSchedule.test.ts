@@ -23,8 +23,8 @@ import {
 import {
   formatActivityTime,
   gamesAnalytics,
-  seedGamesActivity,
 } from '@/lib/adminGamesAnalytics';
+import type { GameConfig, GameStatsSummary } from '@/services/api';
 
 /**
  * The configuration layer under the whole section, as plain data.
@@ -236,9 +236,36 @@ describe('gamesConfig: a configuration nobody has touched', () => {
 });
 
 describe('adminGamesAnalytics: the numbers the overview reports', () => {
-  it('counts the catalogue from the configuration with empty play figures', () => {
-    const config = initialGamesConfig(AT_NOON);
-    const analytics = gamesAnalytics(config);
+  /** One server config row, live unless the test says otherwise. */
+  const serverConfig = (
+    gameId: string,
+    overrides: Partial<GameConfig> = {},
+  ): GameConfig => ({
+    game_id: gameId,
+    enabled: true,
+    is_hidden: false,
+    content_mode: null,
+    reset_cadence: 'daily',
+    grid_size: null,
+    difficulty: null,
+    ...overrides,
+  });
+
+  const liveConfigs = (): GameConfig[] =>
+    AVAILABLE_GAMES.map((game) => serverConfig(game.id));
+
+  const noPlay = (): GameStatsSummary => ({
+    server_date: '2026-10-08',
+    plays_today: 0,
+    plays_this_week: 0,
+    plays_all_time: 0,
+    players_today: 0,
+    players_this_week: 0,
+    games: [],
+  });
+
+  it('counts the catalogue from the server configuration with empty play figures', () => {
+    const analytics = gamesAnalytics(liveConfigs(), noPlay());
 
     expect(analytics.totalGames).toBe(AVAILABLE_GAMES.length);
     expect(analytics.enabledGames).toBe(AVAILABLE_GAMES.length);
@@ -249,35 +276,72 @@ describe('adminGamesAnalytics: the numbers the overview reports', () => {
     expect(analytics.playersToday).toBe(0);
     expect(analytics.playersThisWeek).toBe(0);
 
-    // No telemetry means no top games and no type play.
     expect(analytics.topGames).toEqual([]);
     expect(analytics.typeBreakdown).toHaveLength(2);
     expect(analytics.typeBreakdown.every((entry) => entry.playsWeek === 0)).toBe(true);
   });
 
-  it('follows the availability switch rather than the size of the catalogue', () => {
-    const config = initialGamesConfig(AT_NOON);
-    const oneOff = {
-      ...config,
-      availability: { ...config.availability, 'wordle': false },
-    };
+  it('follows the server switches -- disabled and hidden are both not live', () => {
+    const configs = liveConfigs().map((config) => {
+      if (config.game_id === 'wordle') return { ...config, enabled: false };
+      if (config.game_id === 'anagram') return { ...config, is_hidden: true };
+      return config;
+    });
 
-    const analytics = gamesAnalytics(oneOff);
-    expect(analytics.enabledGames).toBe(AVAILABLE_GAMES.length - 1);
-    expect(analytics.disabledGames).toBe(1);
+    const analytics = gamesAnalytics(configs, noPlay());
+    expect(analytics.enabledGames).toBe(AVAILABLE_GAMES.length - 2);
+    expect(analytics.disabledGames).toBe(2);
   });
 
-  it('seeds an activity log that is newest first and true to today’s pick', () => {
-    const now = AT_NOON.getTime();
-    const config = initialGamesConfig(new Date(now));
-    const entries = seedGamesActivity(config, now);
+  it('reads the week from the server and derives top games and type shares', () => {
+    const stats: GameStatsSummary = {
+      server_date: '2026-10-08',
+      plays_today: 3,
+      plays_this_week: 10,
+      plays_all_time: 25,
+      players_today: 2,
+      players_this_week: 4,
+      games: [
+        { game_id: 'wordle', plays_today: 2, plays_this_week: 6, plays_all_time: 12 },
+        {
+          game_id: 'couple-questionnaire',
+          plays_today: 1,
+          plays_this_week: 4,
+          plays_all_time: 13,
+        },
+      ],
+    };
 
-    expect(entries).toHaveLength(1);
-    expect([...entries].sort((a, b) => b.at - a.at)).toEqual(entries);
+    const analytics = gamesAnalytics(liveConfigs(), stats);
 
-    const featured = resolveFeaturedGame(config, new Date(now))!;
-    expect(entries[0].id).toBe('seed-featured');
-    expect(entries[0].message).toBe(`${featured.game.name} set as today's featured game`);
+    expect(analytics.playersToday).toBe(2);
+    expect(analytics.playersThisWeek).toBe(4);
+    expect(analytics.playsToday).toBe(3);
+    expect(analytics.playsThisWeek).toBe(10);
+    expect(analytics.playsAllTime).toBe(25);
+
+    // Most played first, sharing the week's total; unplayed titles absent.
+    expect(
+      analytics.topGames.map((entry) => [entry.game.id, entry.playsWeek, entry.share]),
+    ).toEqual([
+      ['wordle', 6, 60],
+      ['couple-questionnaire', 4, 40],
+    ]);
+
+    expect(analytics.typeBreakdown).toEqual([
+      { type: 'single', label: 'Single', gameCount: 5, playsWeek: 6, share: 60 },
+      { type: 'couple', label: 'Couple', gameCount: 4, playsWeek: 4, share: 40 },
+    ]);
+    expect(analytics.activeGameTypes).toBe(2);
+  });
+
+  it('keeps availability when the telemetry request has not answered', () => {
+    const analytics = gamesAnalytics(liveConfigs(), null);
+
+    expect(analytics.enabledGames).toBe(AVAILABLE_GAMES.length);
+    // The page renders its own loading/error copy for these, never "0 played".
+    expect(analytics.playsToday).toBe(0);
+    expect(analytics.topGames).toEqual([]);
   });
 
   it('ages an entry the way the overview reads it', () => {

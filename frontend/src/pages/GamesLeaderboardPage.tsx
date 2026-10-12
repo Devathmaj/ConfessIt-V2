@@ -21,6 +21,7 @@ import {
   LEAGUE_PERIODS,
   entryDisplayName,
   gamesForCompetition,
+  lastCompletedDayAnchor,
   todayAnchor,
   type LeagueCompetitionType,
   type LeagueCoupleEntry,
@@ -112,7 +113,17 @@ export const GamesLeaderboardPage = () => {
   const [competition, setCompetition] = useState<LeagueCompetitionType>('individual');
   const [period, setPeriod] = useState<LeaguePeriod>('weekly');
   const [gameId, setGameId] = useState<string>(ALL_GAMES_FILTER);
-  const [anchor, setAnchor] = useState<string>(todayAnchor());
+  // Each period keeps its own anchor: daily opens on the last completed day
+  // because a session's awards only exist after the next UTC reset, while
+  // weekly and monthly open on the current one. Switching periods therefore
+  // never drags a boundary day into the new scope.
+  const [anchors, setAnchors] = useState<Record<LeaguePeriod, string>>(() => ({
+    daily: lastCompletedDayAnchor(),
+    weekly: todayAnchor(),
+    monthly: todayAnchor(),
+    all_time: todayAnchor(),
+  }));
+  const anchor = anchors[period];
   const [entries, setEntries] = useState<BoardEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [opportunityCount, setOpportunityCount] = useState<number | null>(null);
@@ -283,7 +294,9 @@ export const GamesLeaderboardPage = () => {
               value={anchor}
               max={todayAnchor()}
               onChange={(event) => {
-                if (event.target.value) setAnchor(event.target.value);
+                if (event.target.value) {
+                  setAnchors((current) => ({ ...current, [period]: event.target.value }));
+                }
               }}
               aria-label={
                 period === 'daily'

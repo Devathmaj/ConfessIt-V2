@@ -60,6 +60,7 @@ ADMIN_READ_ROUTES = [
     "/admin/couple",
     "/admin/reaction-time",
     "/admin/games/config",
+    "/admin/games/stats",
     "/admin/featured",
 ]
 

@@ -26,10 +26,9 @@ import {
   withoutFeaturedGame,
   type FeaturedDateKey,
 } from '@/lib/gamesFeaturedSchedule';
-import {
-  seedGamesActivity,
-  type GamesActivityEntry,
-  type GamesActivityKind,
+import type {
+  GamesActivityEntry,
+  GamesActivityKind,
 } from '@/lib/adminGamesAnalytics';
 
 /**
@@ -61,7 +60,7 @@ interface FeaturedSlot {
 
 interface GamesConfigContextValue {
   config: GamesConfigState;
-  /** Newest first. Seeded on load, appended to by every admin action. */
+  /** Newest first. Starts empty; real admin actions append to it. */
   activity: GamesActivityEntry[];
   /** Today's spotlight, honouring the schedule and eligibility. */
   featured: ResolvedFeaturedGame | null;
@@ -107,7 +106,7 @@ const defaultGamesConfigValue = (): GamesConfigContextValue => {
     const config = initialGamesConfig();
     defaultContext = {
       config,
-      activity: seedGamesActivity(config),
+      activity: [],
       featured: resolveFeaturedGame(config),
       eligibleGames: [],
       isEnabled: (gameId) => isGameEnabled(config, gameId),
@@ -130,9 +129,7 @@ const defaultGamesConfigValue = (): GamesConfigContextValue => {
 
 export const GamesConfigProvider = ({ children }: { children: ReactNode }) => {
   const [config, setConfig] = useState<GamesConfigState>(() => initialGamesConfig());
-  const [activity, setActivity] = useState<GamesActivityEntry[]>(() =>
-    seedGamesActivity(initialGamesConfig()),
-  );
+  const [activity, setActivity] = useState<GamesActivityEntry[]>([]);
   const [anagramLeftMidGame, setAnagramLeftMidGame] = useState(false);
 
   // Ids only have to be unique within the log, and a counter is stable across re-renders

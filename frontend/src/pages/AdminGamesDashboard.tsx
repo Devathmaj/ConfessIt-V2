@@ -20,8 +20,14 @@ import {
 } from '@/lib/gameCategoryBoards';
 import {
   getAdminGameRecords,
+  getAdminGameStats,
   getAdminIndividualLeaderboard,
+  getFeaturedGames,
+  getGameConfigs,
+  type FeaturedGame,
+  type GameConfig,
   type GameRecordHighlight,
+  type GameStatsSummary,
   type LeagueIndividualEntry,
 } from '@/services/api';
 import { featuredDateLongLabel } from '@/lib/gamesFeaturedSchedule';
@@ -37,17 +43,32 @@ const ACTIVITY_LABELS: Record<GamesActivityKind, string> = {
   system: 'System',
 };
 
+type LoadState = 'loading' | 'ready' | 'error';
+
+/** Today as UTC `YYYY-MM-DD`: the calendar the spotlight and the stats use. */
+const todayIso = (): string => new Date().toISOString().slice(0, 10);
+
 /**
  * The section's front page: availability, today's spotlight, this week's play and a way into
  * the two screens that do the actual work.
  *
- * Catalogue counts come from the live configuration. Play-derived figures
- * stay empty until telemetry exists on the backend.
+ * Every figure is the server's: availability from the per-game configuration the manage
+ * screens edit, the spotlight from the featured schedule, and play counts from the same
+ * finished-round collectors behind a player's own summary. The local catalogue rotation is
+ * deliberately absent -- naming a game the server never featured is a mock, and showing zero
+ * while play exists is worse than showing that the request has not answered yet.
  */
 export const AdminGamesDashboard = () => {
-  const { config, activity, featured, isEnabled } = useGamesConfig();
+  const { activity } = useGamesConfig();
 
-  const analytics = useMemo(() => gamesAnalytics(config), [config]);
+  // Availability, today's pin and play telemetry are three independent server
+  // reads; each keeps its own state so one failure cannot blank the others.
+  const [configs, setConfigs] = useState<GameConfig[] | null>(null);
+  const [configsState, setConfigsState] = useState<LoadState>('loading');
+  const [stats, setStats] = useState<GameStatsSummary | null>(null);
+  const [statsState, setStatsState] = useState<LoadState>('loading');
+  const [featured, setFeatured] = useState<FeaturedGame | null>(null);
+  const [featuredState, setFeaturedState] = useState<LoadState>('loading');
 
   // The weekly individual board, top of the list only: enough to tell
   // whether play is happening and who is leading.
@@ -56,6 +77,48 @@ export const AdminGamesDashboard = () => {
   // overview shows the expanded rankings' headline figures without opening
   // every board. Null while the request is in flight.
   const [records, setRecords] = useState<GameRecordHighlight[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getGameConfigs()
+      .then((rows) => {
+        if (cancelled) return;
+        setConfigs(rows);
+        setConfigsState('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setConfigs(null);
+        setConfigsState('error');
+      });
+    getAdminGameStats()
+      .then((rows) => {
+        if (cancelled) return;
+        setStats(rows);
+        setStatsState('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStats(null);
+        setStatsState('error');
+      });
+    const today = todayIso();
+    getFeaturedGames()
+      .then((rows) => {
+        if (cancelled) return;
+        setFeatured(rows.find((row) => row.game_date === today) ?? null);
+        setFeaturedState('ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFeatured(null);
+        setFeaturedState('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     getAdminIndividualLeaderboard({ period: 'weekly', limit: 5 })
@@ -77,7 +140,28 @@ export const AdminGamesDashboard = () => {
     };
   }, []);
 
-  const FeaturedIcon = featured?.game.icon;
+  const analytics = useMemo(
+    () => (configs ? gamesAnalytics(configs, stats) : null),
+    [configs, stats],
+  );
+
+  // Every title players cannot see or open: hidden ones are absent from the
+  // selection entirely, disabled ones are listed as temporarily unavailable.
+  const unavailableGames = useMemo(() => {
+    if (!configs) return [];
+    const configById = new Map(configs.map((entry) => [entry.game_id, entry]));
+    return AVAILABLE_GAMES.flatMap((game) => {
+      const config = configById.get(game.id);
+      if (!config) return [];
+      if (config.is_hidden) return [{ game, label: 'Hidden' }];
+      if (!config.enabled) return [{ game, label: 'Off' }];
+      return [];
+    });
+  }, [configs]);
+
+  const statsReady = statsState === 'ready' && stats !== null;
+  const featuredGame = featured ? getGameById(featured.game_id) : undefined;
+  const FeaturedIcon = featuredGame?.icon;
 
   return (
     <div className="flex flex-col gap-6">
@@ -104,33 +188,57 @@ export const AdminGamesDashboard = () => {
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Games live"
-          value={`${analytics.enabledGames}/${analytics.totalGames}`}
+          value={analytics ? `${analytics.enabledGames}/${analytics.totalGames}` : '—'}
           hint={
-            analytics.disabledGames > 0
-              ? `${analytics.disabledGames} switched off`
-              : 'Every title switched on'
+            configsState === 'loading'
+              ? 'Loading game configuration…'
+              : configsState === 'error'
+                ? 'Availability is unavailable'
+                : analytics && analytics.disabledGames > 0
+                  ? `${analytics.disabledGames} not live`
+                  : 'Every title switched on'
           }
           icon={Gamepad2}
           accent="bg-gradient-romantic"
         />
         <StatCard
           label="Players today"
-          value={analytics.playersToday.toLocaleString()}
-          hint={`${analytics.playersThisWeek.toLocaleString()} this week`}
+          value={statsReady ? stats.players_today.toLocaleString() : '—'}
+          hint={
+            statsState === 'loading'
+              ? 'Loading play activity…'
+              : statsState === 'error'
+                ? 'Play stats are unavailable'
+                : `${stats.players_this_week.toLocaleString()} this week`
+          }
           icon={Users}
           accent="bg-gradient-love"
         />
         <StatCard
           label="Plays today"
-          value={analytics.playsToday.toLocaleString()}
-          hint={`${analytics.playsThisWeek.toLocaleString()} this week`}
+          value={statsReady ? stats.plays_today.toLocaleString() : '—'}
+          hint={
+            statsState === 'loading'
+              ? 'Loading play activity…'
+              : statsState === 'error'
+                ? 'Play stats are unavailable'
+                : `${stats.plays_this_week.toLocaleString()} this week`
+          }
           icon={Activity}
           accent="bg-gradient-romantic"
         />
         <StatCard
           label="Plays all time"
-          value={analytics.playsAllTime.toLocaleString()}
-          hint={`${analytics.activeGameTypes} game types in play`}
+          value={statsReady ? stats.plays_all_time.toLocaleString() : '—'}
+          hint={
+            statsState === 'loading'
+              ? 'Loading play activity…'
+              : statsState === 'error'
+                ? 'Play stats are unavailable'
+                : analytics
+                  ? `${analytics.activeGameTypes} game types in play`
+                  : 'Loading game configuration…'
+          }
           icon={Star}
           accent="bg-gradient-love"
         />
@@ -142,13 +250,21 @@ export const AdminGamesDashboard = () => {
             <CardHeader>
               <CardTitle className="text-xl">Most played this week</CardTitle>
               <CardDescription>
-                Titles ranked by sessions started, as a share of the week's play.
+                Titles ranked by finished rounds, as a share of the week's play.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {analytics.topGames.length === 0 ? (
+              {statsState === 'loading' ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
-                  No sessions recorded this week yet.
+                  Loading this week's play…
+                </p>
+              ) : statsState === 'error' ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  Play activity is unavailable right now.
+                </p>
+              ) : !analytics || analytics.topGames.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  No finished rounds this week yet.
                 </p>
               ) : (
                 analytics.topGames.map(({ game, playsWeek, share }) => {
@@ -215,30 +331,46 @@ export const AdminGamesDashboard = () => {
               <CardDescription>What the player-facing spotlight is showing.</CardDescription>
             </CardHeader>
             <CardContent>
-              {featured && FeaturedIcon ? (
+              {featuredState === 'loading' ? (
+                <p className="text-sm text-muted-foreground">Checking today's spotlight…</p>
+              ) : featuredState === 'error' ? (
+                <>
+                  <p className="text-sm font-semibold">The spotlight could not be loaded</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Refresh the page to try again.
+                  </p>
+                </>
+              ) : featured && featuredGame ? (
                 <div className="flex items-center gap-3">
                   <span
-                    className={cn('shrink-0 rounded-xl p-2.5 text-white', featured.game.accent)}
+                    className={cn(
+                      'shrink-0 rounded-xl p-2.5 text-white',
+                      featuredGame.accent,
+                    )}
                   >
-                    <FeaturedIcon className="h-5 w-5" />
+                    {FeaturedIcon ? (
+                      <FeaturedIcon className="h-5 w-5" />
+                    ) : (
+                      <Star className="h-5 w-5" />
+                    )}
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{featured.game.name}</p>
+                    <p className="truncate text-sm font-semibold">{featuredGame.name}</p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {featuredDateLongLabel(featured.dateKey)}
+                      {featuredDateLongLabel(featured.game_date)}
                     </p>
                   </div>
-                  <Badge
-                    variant={featured.explicit ? 'default' : 'secondary'}
-                    className="ml-auto shrink-0"
-                  >
-                    {featured.explicit ? 'Pinned' : 'Rotation'}
+                  <Badge variant="default" className="ml-auto shrink-0">
+                    Pinned
                   </Badge>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">
-                  Nothing can take the spotlight while every title is switched off.
-                </p>
+                <>
+                  <p className="text-sm font-semibold">No featured game today</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Nothing is pinned for today, so the player-facing spotlight is empty.
+                  </p>
+                </>
               )}
               <Button asChild variant="outline" size="sm" className="mt-4 w-full">
                 <NavLink to="/admin/games/manage">
@@ -255,17 +387,29 @@ export const AdminGamesDashboard = () => {
               <CardDescription>This week's play split across the two types.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {analytics.typeBreakdown.map((entry) => (
-                <div key={entry.type}>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-sm font-semibold">{entry.label}</p>
-                    <p className="text-xs tabular-nums text-muted-foreground">
-                      {entry.share}% · {entry.gameCount} {entry.gameCount === 1 ? 'game' : 'games'}
-                    </p>
+              {statsState === 'loading' ? (
+                <p className="text-sm text-muted-foreground">Loading this week's play…</p>
+              ) : statsState === 'error' ? (
+                <p className="text-sm text-muted-foreground">
+                  Play activity is unavailable right now.
+                </p>
+              ) : !analytics || analytics.playsThisWeek === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No finished rounds this week yet.
+                </p>
+              ) : (
+                analytics.typeBreakdown.map((entry) => (
+                  <div key={entry.type}>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="text-sm font-semibold">{entry.label}</p>
+                      <p className="text-xs tabular-nums text-muted-foreground">
+                        {entry.share}% · {entry.gameCount} {entry.gameCount === 1 ? 'game' : 'games'}
+                      </p>
+                    </div>
+                    <Progress value={entry.share} className="mt-1.5 h-1.5" />
                   </div>
-                  <Progress value={entry.share} className="mt-1.5 h-1.5" />
-                </div>
-              ))}
+                ))
+              )}
             </CardContent>
           </Card>
 
@@ -273,21 +417,27 @@ export const AdminGamesDashboard = () => {
             <CardHeader>
               <CardTitle className="text-xl">Availability</CardTitle>
               <CardDescription>
-                {analytics.disabledGames > 0
-                  ? `Hidden from players right now: ${analytics.disabledGames}.`
-                  : 'Every title is visible to players.'}
+                {configsState === 'ready' && unavailableGames.length > 0
+                  ? `Not live for players right now: ${unavailableGames.length}.`
+                  : 'What players can see and open right now.'}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {analytics.disabledGames === 0 ? (
+              {configsState === 'loading' ? (
+                <p className="text-sm text-muted-foreground">Loading availability…</p>
+              ) : configsState === 'error' ? (
                 <p className="text-sm text-muted-foreground">
-                  Nothing has been switched off in this configuration.
+                  Availability is unavailable right now.
+                </p>
+              ) : unavailableGames.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Nothing is switched off or hidden.
                 </p>
               ) : (
-                AVAILABLE_GAMES.filter((game) => !isEnabled(game.id)).map((game) => (
+                unavailableGames.map(({ game, label }) => (
                   <div key={game.id} className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium">{game.name}</span>
-                    <Badge variant="outline">Off</Badge>
+                    <Badge variant="outline">{label}</Badge>
                   </div>
                 ))
               )}

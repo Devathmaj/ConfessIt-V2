@@ -1,41 +1,19 @@
 /**
- * Games analytics for the admin dashboard: the numbers behind the section.
+ * Games analytics for the admin overview: the numbers behind the section.
  *
- * Catalogue-derived counts (how many games, how many are on) are computed
- * from the live configuration, so they cannot disagree with what the manage
- * screen shows. Engagement counts are zero until play telemetry exists on
- * the backend -- the dashboard renders empty states rather than mock
- * figures.
+ * Availability comes from the server's per-game configuration -- the same
+ * rows the manage screens edit -- and play figures from the server's
+ * finished-round telemetry, built by the same collectors the player
+ * dashboard reads. Nothing here invents a number: a request that has not
+ * answered is the page's loading state, never a zero.
  *
  * The activity log holds entries appended by real admin actions in the
- * context, plus one seeded row describing today's resolved pick.
+ * context. It is deliberately session-local and starts empty: a fabricated
+ * "featured" line would name a pick the server never made.
  */
 
+import type { GameConfig, GameStatsSummary } from '@/services/api';
 import { AVAILABLE_GAMES, type GameDefinition, type GameTypeId, gameTypeLabel } from './gamesCatalog';
-import {
-  isGameEnabled,
-  resolveFeaturedGame,
-  type GamesConfigState,
-} from './gamesConfig';
-
-/** Play totals for one title. All zero until play telemetry exists. */
-export interface GamePlayTotals {
-  gameId: string;
-  playsToday: number;
-  playsWeek: number;
-  playsAllTime: number;
-}
-
-const MOCK_PLAYS: Record<string, Omit<GamePlayTotals, 'gameId'>> = {};
-
-/** Players, not sessions. Zero until telemetry exists. */
-export const MOCK_PLAYERS_TODAY = 0;
-export const MOCK_PLAYERS_THIS_WEEK = 0;
-
-const playTotalsFor = (game: GameDefinition): GamePlayTotals => ({
-  gameId: game.id,
-  ...(MOCK_PLAYS[game.id] ?? { playsToday: 0, playsWeek: 0, playsAllTime: 0 }),
-});
 
 export interface TopGame {
   game: GameDefinition;
@@ -91,38 +69,56 @@ const percentOf = (part: number, whole: number): number =>
   whole === 0 ? 0 : Math.round((part / whole) * 100);
 
 /**
- * Every figure the dashboard shows, computed from the live configuration.
- * Play-derived lists stay empty until telemetry exists.
+ * Every figure the overview shows, from the server's configuration and play
+ * telemetry. Counts are joined to the catalogue by game id, so the dashboard
+ * can never report a title players cannot open. ``stats`` is null while the
+ * telemetry request is in flight or has failed; availability is still
+ * answered from the configuration then, and play fields read zero only for
+ * that transitional state -- the page shows the request's own loading/error
+ * copy instead of presenting the zeros as fact.
  */
-export const gamesAnalytics = (config: GamesConfigState): GamesAnalytics => {
-  const totals = AVAILABLE_GAMES.map((game) => ({ game, totals: playTotalsFor(game) }));
+export const gamesAnalytics = (
+  configs: readonly GameConfig[],
+  stats: GameStatsSummary | null,
+): GamesAnalytics => {
+  const configById = new Map(configs.map((config) => [config.game_id, config]));
+  // A game with no config row reads as its server default: live until an
+  // administrator says otherwise.
+  const enabledGames = AVAILABLE_GAMES.filter((game) => {
+    const config = configById.get(game.id);
+    return config === undefined || (config.enabled && !config.is_hidden);
+  }).length;
 
-  const playsToday = totals.reduce((sum, entry) => sum + entry.totals.playsToday, 0);
-  const playsThisWeek = totals.reduce((sum, entry) => sum + entry.totals.playsWeek, 0);
-  const playsAllTime = totals.reduce((sum, entry) => sum + entry.totals.playsAllTime, 0);
+  const weekPlays = stats?.plays_this_week ?? 0;
+  const totalsByGame = new Map(
+    stats?.games.map((totals) => [totals.game_id, totals]) ?? [],
+  );
+  const playsWeekFor = (game: GameDefinition): number =>
+    totalsByGame.get(game.id)?.plays_this_week ?? 0;
 
-  const enabledGames = AVAILABLE_GAMES.filter((game) => isGameEnabled(config, game.id)).length;
-
-  const topGames: TopGame[] = totals
-    .filter((entry) => entry.totals.playsWeek > 0)
-    .sort((a, b) => b.totals.playsWeek - a.totals.playsWeek)
+  const topGames: TopGame[] = AVAILABLE_GAMES.map((game) => ({
+    game,
+    playsWeek: playsWeekFor(game),
+  }))
+    .filter((entry) => entry.playsWeek > 0)
+    .sort((a, b) => b.playsWeek - a.playsWeek)
     .slice(0, 5)
     .map((entry) => ({
       game: entry.game,
-      playsWeek: entry.totals.playsWeek,
-      share: percentOf(entry.totals.playsWeek, playsThisWeek),
+      playsWeek: entry.playsWeek,
+      share: percentOf(entry.playsWeek, weekPlays),
     }));
 
   const typeBreakdown: GameTypeBreakdown[] = (['single', 'couple'] as GameTypeId[])
     .map((type) => {
-      const inType = totals.filter((entry) => entry.game.type === type);
-      const playsWeek = inType.reduce((sum, entry) => sum + entry.totals.playsWeek, 0);
+      const inType = AVAILABLE_GAMES.filter((game) => game.type === type);
+      const playsWeek = inType.reduce((sum, game) => sum + playsWeekFor(game), 0);
       return {
         type,
         label: gameTypeLabel(type),
         gameCount: inType.length,
         playsWeek,
-        share: percentOf(playsWeek, playsThisWeek),
+        share: percentOf(playsWeek, weekPlays),
       };
     })
     .filter((entry) => entry.gameCount > 0);
@@ -132,43 +128,15 @@ export const gamesAnalytics = (config: GamesConfigState): GamesAnalytics => {
     enabledGames,
     disabledGames: AVAILABLE_GAMES.length - enabledGames,
     comingSoonGames: AVAILABLE_GAMES.filter((game) => game.status !== 'available').length,
-    playersToday: MOCK_PLAYERS_TODAY,
-    playersThisWeek: MOCK_PLAYERS_THIS_WEEK,
-    playsToday,
-    playsThisWeek,
-    playsAllTime,
+    playersToday: stats?.players_today ?? 0,
+    playersThisWeek: stats?.players_this_week ?? 0,
+    playsToday: stats?.plays_today ?? 0,
+    playsThisWeek: weekPlays,
+    playsAllTime: stats?.plays_all_time ?? 0,
     topGames,
     typeBreakdown,
     activeGameTypes: typeBreakdown.filter((entry) => entry.playsWeek > 0).length,
   };
-};
-
-/** Today's headline pick, for the dashboard tile. Null when nothing is eligible at all. */
-export const featuredSnapshot = (config: GamesConfigState) => resolveFeaturedGame(config);
-
-/**
- * The activity log as the dashboard first sees it: today's resolved pick,
- * when there is one. Real admin actions prepend their own entries through
- * the context.
- */
-export const seedGamesActivity = (config: GamesConfigState, now: number = Date.now()): GamesActivityEntry[] => {
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-
-  const featured = resolveFeaturedGame(config, new Date(now));
-  const entries: GamesActivityEntry[] = [];
-
-  if (featured) {
-    entries.push({
-      id: 'seed-featured',
-      at: todayStart.getTime() + 60_000,
-      kind: 'featured',
-      message: `${featured.game.name} set as today's featured game`,
-      gameId: featured?.game.id,
-    });
-  }
-
-  return entries.sort((a, b) => b.at - a.at);
 };
 
 /** "just now" / "12m ago" / "3h ago" / "2d ago", falling back to a date past that. */

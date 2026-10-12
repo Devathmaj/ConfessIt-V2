@@ -29,7 +29,7 @@ export interface LeaguePeriodOption {
 }
 
 export const LEAGUE_PERIODS: LeaguePeriodOption[] = [
-  { id: 'daily', label: 'Daily', hint: 'One UTC day' },
+  { id: 'daily', label: 'Daily', hint: 'Latest completed UTC day' },
   { id: 'weekly', label: 'Weekly', hint: 'Monday to Sunday, UTC' },
   { id: 'monthly', label: 'Monthly', hint: 'One UTC month' },
   { id: 'all_time', label: 'All time', hint: 'Accumulated weekly scores' },
@@ -69,3 +69,16 @@ export const entryDisplayName = (
 
 /** Today as UTC `YYYY-MM-DD`, the only calendar the boards speak. */
 export const todayAnchor = (): string => new Date().toISOString().slice(0, 10);
+
+/**
+ * Yesterday as UTC `YYYY-MM-DD`: the newest day a daily board can score.
+ *
+ * A session's awards are written when it closes, at the reset boundary that
+ * starts the next day. A daily board anchored to today is therefore empty by
+ * construction, so the UI opens daily boards on the last completed day.
+ */
+export const lastCompletedDayAnchor = (): string => {
+  const day = new Date();
+  day.setUTCDate(day.getUTCDate() - 1);
+  return day.toISOString().slice(0, 10);
+};

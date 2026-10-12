@@ -187,15 +187,20 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/leaderboards/individual"),
     ("GET", "/admin/leaderboards/couples"),
     ("GET", "/admin/leaderboards/games/{game_id}"),
+    ("GET", "/admin/leaderboards/games/{game_id}/categories"),
+    ("GET", "/admin/leaderboards/games/{game_id}/boards/{category}"),
+    ("GET", "/admin/leaderboards/records"),
     ("POST", "/admin/leaderboards/finalize"),
     ("POST", "/admin/leaderboards/reprocess"),
-    # Game configuration, the featured spotlight, and the manual reset trigger.
-    # Configuration owns per-game availability and cadence, the featured
+    # Game configuration, live play telemetry, the featured spotlight, and the
+    # manual reset trigger. Configuration owns per-game availability and cadence,
+    # ``stats`` aggregates finished rounds for the console overview, the featured
     # schedule pins at most one game per UTC date without touching sessions,
     # and ``run-resets`` is what a 00:01 UTC cron calls. All gated on
     # ``games:manage`` like the per-game routers.
     ("GET", "/admin/games/config"),
     ("PUT", "/admin/games/config/{game_id}"),
+    ("GET", "/admin/games/stats"),
     ("GET", "/admin/featured"),
     ("POST", "/admin/featured"),
     ("PUT", "/admin/featured"),
@@ -223,6 +228,8 @@ SAMPLE_ROUTES = [
     ("GET", "/admin/case-closed/packages/{package_id}"),
     ("POST", "/admin/case-closed/packages/{package_id}/publish"),
     ("GET", "/admin/case-closed/session"),
+    ("GET", "/admin/case-closed/sessions"),
+    ("POST", "/admin/case-closed/session/revoke"),
     # Plot Twist content studio. Same shape as Case Closed's: blueprint and
     # package authoring, generation, approval and publishing, all gated on
     # ``games:manage``.
@@ -242,6 +249,8 @@ SAMPLE_ROUTES = [
         "/admin/plot-twist/packages/{package_id}/scenes/{scene_id}/regenerate",
     ),
     ("GET", "/admin/plot-twist/session"),
+    ("GET", "/admin/plot-twist/sessions"),
+    ("POST", "/admin/plot-twist/session/revoke"),
 ]
 
 

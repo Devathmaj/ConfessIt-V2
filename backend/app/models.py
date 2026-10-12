@@ -2698,3 +2698,38 @@ class PlayerGameSummary(BaseModel):
     #: Distinct game ids played this week, sorted; the weekly challenge's progress.
     games_this_week: List[str]
     recent_plays: List[PlayerRecentPlay]
+
+
+# --- Games console telemetry ---------------------------------------------------
+#
+# The admin overview's play figures. Composed by the same collectors as the
+# player summary (see services/player_stats.py), so "a finished round" is
+# defined once and the console cannot disagree with a player's own history.
+# Only counts travel: no answers, prompts, words or identities.
+
+
+class GamePlayTotals(BaseModel):
+    """One game's finished-round counts over the console's three windows."""
+
+    game_id: str
+    plays_today: int
+    plays_this_week: int
+    plays_all_time: int
+
+
+class GameStatsSummary(BaseModel):
+    """Live play telemetry across every game, for the games console overview.
+
+    ``players_*`` counts distinct people, not sessions: a couple round is one
+    play but two players. ``games`` carries only titles with at least one
+    finished round, since a game nobody has played contributes nothing to the
+    play panels.
+    """
+
+    server_date: date
+    plays_today: int
+    plays_this_week: int
+    plays_all_time: int
+    players_today: int
+    players_this_week: int
+    games: List[GamePlayTotals]

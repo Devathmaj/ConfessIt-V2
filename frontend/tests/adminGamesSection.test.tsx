@@ -20,7 +20,7 @@ import { GamesFeaturedPage } from '@/pages/GamesFeaturedPage';
 import { GamesSelectPage } from '@/pages/GamesSelectPage';
 import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
-import { initialGamesConfig, resolveFeaturedGame } from '@/lib/gamesConfig';
+import { lastCompletedDayAnchor } from '@/lib/gamesLeaderboard';
 import {
   clearFeaturedGame,
   createAnagramGame,
@@ -39,6 +39,7 @@ import {
   getAdminGameCategories,
   getAdminGameCategoryBoard,
   getAdminGameRecords,
+  getAdminGameStats,
   getCurrentAdminAnagramSession,
   getCurrentAdminCoupleSession,
   getCurrentAdminReactionTimeSession,
@@ -147,6 +148,7 @@ vi.mock('@/services/api', () => ({
   getAdminGameCategories: vi.fn(),
   getAdminGameCategoryBoard: vi.fn(),
   getAdminGameRecords: vi.fn(),
+  getAdminGameStats: vi.fn(),
   getGameLeaderboard: vi.fn(),
   getMyLeagueStanding: vi.fn(),
 }));
@@ -253,9 +255,6 @@ const emptyCoupleBoard = () => ({
   entries: [],
 });
 
-/** The pick today's seeded schedule resolves to -- the same call the provider makes. */
-const seededFeatured = () => resolveFeaturedGame(initialGamesConfig());
-
 beforeEach(() => {
   vi.clearAllMocks();
   // The manage screen fetches sessions, schedules and configuration as it mounts; an empty
@@ -273,6 +272,15 @@ beforeEach(() => {
   vi.mocked(getScheduledAnagramWords).mockResolvedValue([]);
   vi.mocked(getGameConfigs).mockResolvedValue([]);
   vi.mocked(getFeaturedGames).mockResolvedValue([]);
+  vi.mocked(getAdminGameStats).mockResolvedValue({
+    server_date: todayIso(),
+    plays_today: 0,
+    plays_this_week: 0,
+    plays_all_time: 0,
+    players_today: 0,
+    players_this_week: 0,
+    games: [],
+  });
   vi.mocked(getGameSelection).mockResolvedValue({ games: [], featured_game_id: null, server_date: todayIso() });
   vi.mocked(getFeaturedToday).mockResolvedValue({ game_id: null, game_date: null, server_date: todayIso() });
   vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue(emptyIndividualBoard());
@@ -292,6 +300,18 @@ beforeEach(() => {
 
 /** The day the server would default to, which is what the date field starts on. */
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** One stat tile by its label, so its value and hint can be asserted in place. */
+const statCard = (label: string) =>
+  screen.getByText(label).closest('[data-slot="card"]') as HTMLElement;
+
+/** One dashboard card by its heading, for scoped assertions. */
+const dashboardCard = (heading: string) => {
+  const title = screen.getByRole('heading', { name: heading });
+  const card = title.closest('[data-slot="card"]');
+  if (!card) throw new Error(`The ${heading} card could not be found.`);
+  return card as HTMLElement;
+};
 
 /**
  * One puzzle console on its own editor page, found by its card heading.
@@ -344,32 +364,104 @@ const gameConfig = (
 });
 
 describe('AdminGamesDashboard: the front page', () => {
-  it('reports the catalogue, the spotlight and the week from the shared configuration', () => {
+  it('reports availability, the spotlight and play figures from the server', async () => {
+    // One game switched off, one pinned for today: the overview reports the
+    // server's answers, not the catalogue's local rotation or a mock zero.
+    vi.mocked(getGameConfigs).mockResolvedValue(
+      AVAILABLE_GAMES.map((game) =>
+        gameConfig(
+          game.id,
+          game.id === 'wordle' || game.id === 'anagram' ? 'manual' : null,
+        ),
+      ).map((config) =>
+        config.game_id === 'case-closed' ? { ...config, enabled: false } : config,
+      ),
+    );
+    vi.mocked(getFeaturedGames).mockResolvedValue([
+      {
+        id: 'featured-today',
+        game_date: todayIso(),
+        game_id: 'anagram',
+        created_by: 'TEST001',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    vi.mocked(getAdminGameStats).mockResolvedValue({
+      server_date: todayIso(),
+      plays_today: 4,
+      plays_this_week: 6,
+      plays_all_time: 11,
+      players_today: 3,
+      players_this_week: 4,
+      games: [
+        { game_id: 'wordle', plays_today: 3, plays_this_week: 4, plays_all_time: 7 },
+        { game_id: 'anagram', plays_today: 1, plays_this_week: 2, plays_all_time: 4 },
+      ],
+    });
+
     renderSection('/admin/games');
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByText('Games live')).toBeInTheDocument();
-    expect(
-      screen.getByText(`${AVAILABLE_GAMES.length}/${AVAILABLE_GAMES.length}`),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Every title switched on')).toBeInTheDocument();
     expect(screen.getByText('Leaderboard snapshot')).toBeInTheDocument();
     expect(screen.getByText('Single vs Couple')).toBeInTheDocument();
 
-    // The spotlight tile names the pick the schedule actually resolves to, and says whether it
-    // was pinned or rotated -- not a pick of the page's own.
-    const featured = seededFeatured()!;
-    expect(screen.getAllByText(featured.game.name).length).toBeGreaterThan(0);
-    expect(screen.getByText(featured.explicit ? 'Pinned' : 'Rotation')).toBeInTheDocument();
+    // Availability is the server's configuration: one title is not live.
+    const gamesLive = statCard('Games live');
+    await waitFor(() =>
+      expect(
+        within(gamesLive).getByText(`${AVAILABLE_GAMES.length - 1}/${AVAILABLE_GAMES.length}`),
+      ).toBeInTheDocument(),
+    );
+    expect(within(gamesLive).getByText('1 not live')).toBeInTheDocument();
+    const availability = dashboardCard('Availability');
+    expect(within(availability).getByText('Case Closed')).toBeInTheDocument();
+    expect(within(availability).getByText('Off')).toBeInTheDocument();
 
-    // The seeded activity the dashboard opens with names today's pick.
+    // Play figures are the server's finished-round counts, not placeholder zeros.
+    await waitFor(() =>
+      expect(within(statCard('Players today')).getByText('3')).toBeInTheDocument(),
+    );
+    expect(within(statCard('Players today')).getByText('4 this week')).toBeInTheDocument();
+    const playsToday = statCard('Plays today');
+    expect(within(playsToday).getByText('4')).toBeInTheDocument();
+    expect(within(playsToday).getByText('6 this week')).toBeInTheDocument();
+    expect(within(statCard('Plays all time')).getByText('11')).toBeInTheDocument();
+
+    // Most played derives from the same per-game week counts.
+    const mostPlayed = dashboardCard('Most played this week');
+    expect(within(mostPlayed).getByText('Wordle')).toBeInTheDocument();
+    expect(within(mostPlayed).getByText('4 plays · 67%')).toBeInTheDocument();
+    expect(within(mostPlayed).getByText('Anagram')).toBeInTheDocument();
+    expect(within(mostPlayed).getByText('2 plays · 33%')).toBeInTheDocument();
+
+    // The spotlight is the server's pin, not the catalogue's day rotation.
+    const featured = dashboardCard('Featured today');
+    expect(within(featured).getByText('Anagram')).toBeInTheDocument();
+    expect(within(featured).getByText('Pinned')).toBeInTheDocument();
+
+    // The log starts empty: no fabricated "featured" line the server never made.
     expect(
-      screen.getByText(`${featured.game.name} set as today's featured game`),
+      screen.getByText('No activity yet. Featured picks and admin actions appear here.'),
     ).toBeInTheDocument();
-    // Play-derived figures are empty until events close and score.
+    // Play-derived figures are empty until league events close and score.
     expect(
       screen.getByText('No standings yet. Events appear here once they close and score.'),
     ).toBeInTheDocument();
+  });
+
+  it('says so when the server has no spotlight or telemetry yet', async () => {
+    renderSection('/admin/games');
+
+    const featured = dashboardCard('Featured today');
+    expect(await within(featured).findByText('No featured game today')).toBeInTheDocument();
+    expect(
+      within(featured).getByText(/player-facing spotlight is empty/),
+    ).toBeInTheDocument();
+    // Both play panels state the empty week rather than a mock percentage.
+    expect(
+      (await screen.findAllByText('No finished rounds this week yet.')).length,
+    ).toBeGreaterThan(0);
   });
 
   it('shows the weekly leaders once the league board answers', async () => {
@@ -836,6 +928,19 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
     expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
       expect.objectContaining({ period: 'weekly', skip: 0 }),
     );
+  });
+
+  it('opens daily boards on the last completed day', async () => {
+    renderSection('/admin/games/leaderboard');
+    await screen.findByText('No standings match these filters.');
+
+    await chooseOption(0, 'Daily');
+
+    await waitFor(() => {
+      expect(getAdminIndividualLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ period: 'daily', anchor: lastCompletedDayAnchor() }),
+      );
+    });
   });
 
   it('switches to the couples board and narrows to a couple title', async () => {
