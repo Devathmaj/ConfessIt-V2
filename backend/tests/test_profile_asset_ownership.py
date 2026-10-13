@@ -21,6 +21,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException, UploadFile
 
+from app.logger import log_identity_hash
 from app.services import account_picture_service, profile_service
 from app.services.storage_service import storage_service
 
@@ -146,9 +147,12 @@ def test_refusal_is_logged_for_audit(caplog):
     refusals = [r for r in caplog.records if "Refused profile asset delete" in r.getMessage()]
     assert len(refusals) == 1
     message = refusals[0].getMessage()
-    # The audit line has to name both sides, or it is not actionable after the fact.
-    assert OWNER in message
-    assert OTHER in message
+    # The audit line still names both sides, but as stable peppered tags: an
+    # operator can correlate the refusal without the retained log holding regnos.
+    assert OWNER not in message
+    assert OTHER not in message
+    assert f"regno_hash={log_identity_hash(OWNER)}" in message
+    assert f"regno_hash:{log_identity_hash(OTHER)}" in message
 
 
 def test_an_upstream_delete_failure_never_reaches_the_caller(monkeypatch, caplog):

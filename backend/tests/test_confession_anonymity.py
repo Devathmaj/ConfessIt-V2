@@ -1,4 +1,4 @@
-"""An anonymous confession is anonymous to staff too.
+"""An anonymous confession is anonymous to staff and participants alike.
 
 The review screen is the one place a moderator could previously learn who wrote a post that
 every other user sees as unattributed, which makes the ``anonymous`` flag a promise the
@@ -7,18 +7,26 @@ confession comes back with no sender, to an admin and to a moderator alike, whil
 else the reviewer acts on -- body, timestamps, reports, comments, engagement -- is unchanged,
 and a confession that was never anonymous still names its author.
 
-The stronger assertion is on the raw response body rather than on the parsed sender fields. A
-redaction that only blanks ``sender.name`` still leaks through ``sender.regno``, a comment, or
-any future field, and the substring check fails on all of those at once.
+The participant-facing half below is the same promise on the public feed, search and the
+react/report responses. Those payloads carry no real author id, name, regno or email for an
+anonymous post; only a fixed placeholder and a server-computed ``is_mine`` flag. The stronger
+assertion is on the raw response body rather than on the parsed sender fields. A redaction
+that only blanks ``user_info.name`` still leaks through ``author_id``, a comment, or any
+future field, and the substring check fails on all of those at once.
 """
 
 import json
 from datetime import datetime, timezone
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.config import settings
 from app.db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
+from app.main import app
 from app.services.admin_service import get_all_confessions_data
+from app.services.auth_service import get_current_user
 
 REACTIONS = {"heart": [], "haha": [], "whoa": [], "heartbreak": []}
 
@@ -107,6 +115,39 @@ def find(items, confession_id):
 
 
 @pytest.fixture
+def anonymous_client():
+    """A client with the auth override removed, to read the public feed and search."""
+    override = app.dependency_overrides.pop(get_current_user, None)
+    try:
+        yield TestClient(app, follow_redirects=False)
+    finally:
+        if override is not None:
+            app.dependency_overrides[get_current_user] = override
+
+
+def user_id_for(db, regno: str) -> str:
+    with db.sessions() as session:
+        return str(session.scalar(select(UserRecord.id).where(UserRecord.regno == regno)))
+
+
+def assert_anonymous_author_absent(response_text: str, author_id: str) -> None:
+    """No real identity for the author anywhere in the raw JSON, in any field."""
+    assert author_id not in response_text
+    assert "Ghost Writer" not in response_text
+    assert "ghostwriter" not in response_text
+    assert "ghostwriter@test.com" not in response_text
+
+
+def assert_anonymous_user_info(item) -> None:
+    assert item["author_id"] is None
+    assert item["user_info"] == {
+        "id": "anonymous",
+        "name": "Anonymous",
+        "profile_picture_url": None,
+    }
+
+
+@pytest.fixture
 def anonymous_post(db):
     """One anonymous confession, with a comment on it and a report against it."""
     author_id = make_user(db, "ghostwriter", "Ghost Writer")
@@ -115,6 +156,125 @@ def anonymous_post(db):
     make_comment(db, confession_id, commenter_id)
     make_report(db, confession_id, commenter_id, "On Looker")
     return confession_id
+
+
+@pytest.mark.parametrize("client_fixture", ["client", "anonymous_client"])
+def test_the_participant_feed_withholds_an_anonymous_author(
+    db, anonymous_post, request, client_fixture
+):
+    author_id = user_id_for(db, "ghostwriter")
+    commenter_id = user_id_for(db, "onlooker")
+    client = request.getfixturevalue(client_fixture)
+
+    response = client.get("/confessions")
+    assert response.status_code == 200, response.text
+    item = find(response.json()["confessions"], anonymous_post)
+
+    assert_anonymous_user_info(item)
+    assert item["is_mine"] is False
+    assert_anonymous_author_absent(response.text, author_id)
+    # A commenter is a different population from the author and is intentionally named.
+    assert item["comments"][0]["user_info"] == {
+        "id": commenter_id,
+        "name": "On Looker",
+        "profile_picture_url": None,
+    }
+
+
+@pytest.mark.parametrize("client_fixture", ["client", "anonymous_client"])
+def test_search_withholds_an_anonymous_author(
+    db, anonymous_post, request, client_fixture, monkeypatch
+):
+    monkeypatch.setattr(settings, "EMBEDDING_SEARCH_ENABLED", False)
+    author_id = user_id_for(db, "ghostwriter")
+    client = request.getfixturevalue(client_fixture)
+
+    response = client.post("/confessions/search", json={"query": "confession"})
+    assert response.status_code == 200, response.text
+    item = find(response.json()["keyword"]["items"], anonymous_post)
+
+    assert_anonymous_user_info(item)
+    assert_anonymous_author_absent(response.text, author_id)
+
+
+@pytest.mark.parametrize(
+    "action,payload",
+    [
+        ("react", {"reaction": "heart"}),
+        ("report", {"reason": "harmful content"}),
+    ],
+)
+def test_the_react_and_report_responses_withhold_an_anonymous_author(
+    db, anonymous_post, _confession_author_client, action, payload
+):
+    author_id = user_id_for(db, "ghostwriter")
+
+    response = _confession_author_client.post(
+        f"/confessions/{anonymous_post}/{action}", json=payload
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()
+
+    assert_anonymous_user_info(item)
+    assert_anonymous_author_absent(response.text, author_id)
+
+
+def test_the_author_recognises_their_own_anonymous_post_without_an_author_id(
+    db, _confession_author_client
+):
+    author_id = "33333333-3333-3333-3333-333333333333"
+    anonymous_id = make_confession(db, author_id, anonymous=True, body="my anonymous post")
+    public_id = make_confession(db, author_id, anonymous=False, body="my public post")
+
+    response = _confession_author_client.get("/confessions")
+    assert response.status_code == 200, response.text
+    items = response.json()["confessions"]
+
+    anonymous_item = find(items, anonymous_id)
+    assert anonymous_item["is_mine"] is True
+    assert_anonymous_user_info(anonymous_item)
+
+    # Ownership is still observable on a public post, where naming the author is the point.
+    public_item = find(items, public_id)
+    assert public_item["is_mine"] is True
+    assert public_item["author_id"] == author_id
+    assert public_item["user_info"]["name"] == "Author"
+
+
+def test_the_author_can_still_update_their_own_anonymous_post(db, _confession_author_client):
+    """Stripping author_id must not break the ownership check an edit depends on."""
+    author_id = "33333333-3333-3333-3333-333333333333"
+    confession_id = make_confession(
+        db, author_id, anonymous=True, body="ready to be public"
+    )
+
+    response = _confession_author_client.put(
+        f"/confessions/{confession_id}", json={"anonymous": False}
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()
+
+    assert item["anonymous"] is False
+    assert item["author_id"] == author_id
+    assert item["is_mine"] is True
+    assert item["user_info"]["name"] == "Author"
+
+
+def test_a_public_post_still_names_its_author_to_participants(db, client):
+    author_id = make_user(db, "openbook", "Open Book")
+    commenter_id = make_user(db, "commenter", "Comment Writer")
+    confession_id = make_confession(db, author_id, anonymous=False, body="a public post")
+    make_comment(db, confession_id, commenter_id)
+
+    item = find(client.get("/confessions").json()["confessions"], confession_id)
+
+    assert item["author_id"] == author_id
+    assert item["user_info"] == {
+        "id": author_id,
+        "name": "Open Book",
+        "profile_picture_url": None,
+    }
+    assert item["comments"][0]["user_info"]["name"] == "Comment Writer"
 
 
 def test_an_anonymous_confession_withholds_its_sender_from_staff(db, anonymous_post):

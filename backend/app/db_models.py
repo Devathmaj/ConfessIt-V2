@@ -739,6 +739,36 @@ class LoginTokenRecord(Base):
     refresh_token_replaced_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
 
+class WebSocketTicketRecord(Base):
+    """A one-use, short-lived ticket for opening a live WebSocket.
+
+    The long-lived access token must not travel in the socket URL: Uvicorn logs the
+    accepted handshake path with its query string at INFO, so anything there is written
+    to stdout and can outlive the connection. A ticket is minted over the authenticated
+    HTTP API immediately before connecting, expires in under a minute, and is consumed
+    atomically by the handshake. The raw value is never stored, only its peppered hash,
+    and binding the row to the session id means a ticket cannot outlive logout,
+    supersede, expiry, or a block even if its own deadline has not passed yet.
+    """
+
+    __tablename__ = "websocket_tickets"
+
+    __table_args__ = (
+        CheckConstraint(
+            f"account_type IS NOT NULL AND account_type IN ({_ACCOUNT_TYPE_SQL_LIST})",
+            name="websocket_tickets_account_type_valid",
+        ),
+    )
+
+    ticket_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    account_type: Mapped[str] = mapped_column(String(16), index=True)
+    session_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class LoginRateLimitRecord(Base):
     """One fixed-window counter for the passwordless-login request limits.
 

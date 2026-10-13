@@ -32,7 +32,7 @@ const post = (id: string, body: string) => ({
   anonymous: false,
   comments_enabled: true,
   created_at: '2026-04-11T10:00:00.000Z',
-  author_id: 'u9',
+  is_mine: false,
   user_info: { id: 'u9', name: 'Author' },
   report_count: 0,
   reported_by: [],

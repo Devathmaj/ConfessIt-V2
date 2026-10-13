@@ -75,7 +75,7 @@ settings.DATABASE_POOL_RECYCLE = 3600
 from app.main import app
 from app.accounts import AccountType
 from app.models import AccountDetails, UserDetails
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_user, get_current_user_optional
 from app.services.redis_service import redis_service
 
 # The out-of-band refresh-token body flow is gated behind ENABLE_DEBUG_ENDPOINTS in
@@ -283,10 +283,18 @@ def _confession_author_client(db):
         account_type=AccountType.USERS.value,
     )
     app.dependency_overrides[get_current_user] = lambda: author
+    # Optional-auth routes (the public feed and search) resolve through a different
+    # dependency, so a client presented as a specific author has to be that author there
+    # too -- otherwise ownership flags such as ``is_mine`` are computed for nobody.
+    saved_optional = app.dependency_overrides.get(get_current_user_optional)
+    app.dependency_overrides[get_current_user_optional] = lambda: author
     try:
         yield _attach_client_portal(TestClient(app, follow_redirects=False))
     finally:
         app.dependency_overrides[get_current_user] = override_get_current_user
+        app.dependency_overrides.pop(get_current_user_optional, None)
+        if saved_optional is not None:
+            app.dependency_overrides[get_current_user_optional] = saved_optional
 
 
 @pytest.fixture

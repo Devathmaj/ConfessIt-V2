@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye } from 'lucide-react';
+import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye, Info } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI, getConversationByMatch } from '@/services/api';
 import { messagingClient, sendMessage, fetchMessages, reportMessage, SendMessageError } from '@/lib/messaging';
 import { MESSAGE_BODY_MAX } from '@/lib/limits';
@@ -40,6 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 interface ConversationDialogProps {
   onClose: () => void;
@@ -1034,6 +1035,39 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                     Blocked
                   </Badge>
                 )}
+                {/* The chat retains its guidance without repeating three paragraphs
+                    above the composer. It stays in the header so it is reachable in
+                    every conversation state, including read-only and blocked. */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Privacy and safety"
+                      className="ml-auto inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:text-sm"
+                    >
+                      <Info className="h-3 w-3 sm:h-4 sm:w-4" />
+                      <span>Privacy &amp; safety</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    className="z-[60] w-80 max-w-[calc(100vw-2rem)] text-xs leading-relaxed"
+                  >
+                    <p className="text-sm font-semibold">Privacy &amp; safety</p>
+                    <div className="mt-2 space-y-2 text-muted-foreground">
+                      <p>You can send up to 100 messages in this conversation.</p>
+                      <p>
+                        For your privacy, matchmaking chat messages are automatically deleted 1 day
+                        after this chat ends.
+                      </p>
+                      <p>
+                        Messages are checked against our content policy. If a message breaks it,
+                        that message is reported to admins and moderators &mdash; only that message
+                        is visible to them, never the rest of your conversation history.
+                      </p>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               {/* Block/Unblock Actions. Not offered on a terminated thread: there is nothing left to
@@ -1268,34 +1302,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Retention notice: visible in the chat box on every viewport, including
-                after the sending window closes. It describes the server's rule, not a
-                promise that physical deletion happens at this exact instant. */}
-            <div
-              className="px-2 pt-3 text-center text-xs text-muted-foreground sm:px-4"
-              role="note"
-            >
-              <p>
-                For your privacy, matchmaking chat messages are automatically deleted 1 day
-                after this chat ends.
-              </p>
-            </div>
-
             {/* Message Input */}
-            {canChat && !is_blocked && (
-              <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-xs text-muted-foreground">
-                <p>You can send up to 100 messages in this conversation.</p>
-                {/* What automated moderation does, stated where a sender writes: a
-                    violating message is the only one staff receive, so this is a
-                    privacy promise about the rest of the thread, not a threat. */}
-                <p className="mt-1" role="note">
-                  Messages are checked against our content policy. If a message breaks
-                  it, that message is reported to admins and moderators &mdash; only that
-                  message is visible to them, never the rest of your conversation history.
-                </p>
-              </div>
-            )}
-
             {canChat && !is_blocked && composerOpen && (
               <div className="border-t p-2 sm:p-4">
                 <div className="flex items-center gap-2">

@@ -41,7 +41,7 @@ const confession = (over: Record<string, unknown> = {}) => ({
   recipient_name: 'Sam',
   anonymous: false,
   comments_enabled: true,
-  author_id: 'someone-else',
+  is_mine: false,
   user_info: { id: 'u1', regno: 'CS-1', name: 'Ada', avatar: null },
   created_at: '2026-01-01T10:00:00Z',
   comments: [],
@@ -305,7 +305,7 @@ describe('who can be reported', () => {
 
   it('offers no report flag on a confession the viewer wrote, only the edit control', async () => {
     const body = 'my own words';
-    await renderFeed([confession({ body, author_id: 'me' })], { signedIn: true });
+    await renderFeed([confession({ body, is_mine: true })], { signedIn: true });
 
     const card = cardFor(body);
     // The flag carries no accessible name of its own, so it is found structurally, the same
@@ -321,7 +321,7 @@ describe('who can be reported', () => {
       [
         confession({
           body,
-          author_id: 'someone-else',
+          is_mine: false,
           comment_count: 2,
           comments: [
             comment({ id: 'm-mine', body: 'my own reply', user_info: { id: 'me', name: 'Me' } }),

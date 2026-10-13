@@ -3,8 +3,8 @@
  * Live client for the Case Closed detective thread.
  *
  * Same transport shape as the matchmaking chat (`lib/messaging.ts`): a
- * short-lived token in the query string, 30s pings, 120s idle reap, five
- * backoff reconnects, no-retry on refused handshakes. The only differences
+ * short-lived, single-use ticket in the query string, 30s pings, 120s idle
+ * reap, five backoff reconnects, no-retry on refused handshakes. The only differences
  * are the endpoint and the scope: `/games/case-closed/ws` resolves the
  * caller's couple session server-side, so there is no conversation id in
  * the path and the channel is `case-closed:{session_id}` (distinct
@@ -17,6 +17,7 @@ import {
   CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX,
 } from './limits';
 import { quotaAfterIncomingMessage } from './messageQuota';
+import { requestWebSocketTicket } from './wsTicket';
 import type { CaseClosedMessageQuota } from '@/services/api';
 
 export interface CaseClosedLiveMessage {
@@ -53,16 +54,20 @@ class CaseClosedMessagingClient {
   private reconnectDelay = 1000;
   private pingInterval: number | null = null;
 
-  connect(token: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        resolve();
-        return;
-      }
-      this.disconnect();
-      this.token = token;
-      const wsUrl = `${apiWsBase()}/games/case-closed/ws?token=${token}`;
+  async connect(token: string): Promise<void> {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      return;
+    }
+    this.disconnect();
+    this.token = token;
 
+    // The URL carries a one-use ticket, never the access token: Uvicorn logs the
+    // accepted handshake path with its query string. A reconnect mints a fresh
+    // ticket, so a spent or expired value is never reused.
+    const ticket = await requestWebSocketTicket(token);
+    const wsUrl = `${apiWsBase()}/games/case-closed/ws?ticket=${encodeURIComponent(ticket)}`;
+
+    return new Promise((resolve, reject) => {
       try {
         this.ws = new WebSocket(wsUrl);
 

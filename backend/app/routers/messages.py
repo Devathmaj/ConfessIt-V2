@@ -208,35 +208,64 @@ def _ws_handshake_allowed(ip: str) -> bool:
     return count <= WS_HANDSHAKE_LIMIT_PER_MINUTE
 
 
+async def _socket_account_valid(
+    session_id: str, account_id: str, account_type: str, db: Database
+) -> bool:
+    """Whether an accepted socket's session is still live.
+
+    A WebSocket has no per-request dependency to re-run, so this is the one
+    revalidation seam used both for frames the client sends and for messages
+    about to be forwarded from Redis. Any failure is closed as auth-required;
+    a database error never becomes permission to keep delivering.
+    """
+    from ..services.auth_service import revalidate_websocket_session
+
+    try:
+        return await asyncio.to_thread(
+            revalidate_websocket_session,
+            db,
+            session_id=session_id,
+            account_id=account_id,
+            account_type=account_type,
+        ) is not None
+    except Exception as exc:
+        logger.error("WebSocket auth revalidation failed: %s", exc)
+        return False
+
+
 @router.websocket("/ws/{conversation_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
     conversation_id: str,
     db: Database = Depends(get_db),
-    token: Optional[str] = Query(None)
+    ticket: Optional[str] = Query(None)
 ):
     """Real-time messages for one conversation over Redis pub/sub.
 
-    The access token travels in the query string, kept deliberately: a browser
-    ``WebSocket`` cannot set request headers, and a JWT's dots are illegal in
-    a subprotocol token, so neither alternative survives contact with the one
-    client that matters. What bounds the exposure instead:
+    A browser ``WebSocket`` cannot set request headers, so the credential travels
+    in the query string. It is deliberately *not* the access token: Uvicorn logs the
+    accepted handshake path with its query string at INFO, which would put a
+    30-minute bearer into stdout and every log store it reaches. Instead the client
+    exchanges its access token over the authenticated HTTP API for a single-use
+    ticket that expires in under a minute (``POST /auth/ws-ticket``); even a ticket
+    copied from a log is useless after one handshake or 60 seconds.
 
-    * access tokens live 30 minutes and rotate, and no subscription exists
-      before auth -- a captured URL is a short-lived read of one dialog, and
-      the edge access log drops the query string (see nginx.prod.conf.example)
-      so retained logs never hold it;
-    * nothing is accepted before auth: origin, flood brake, token and
-      entitlement gates all run pre-accept and refuse with a bare close, so an
-      unauthenticated peer can never hold a socket, only fail a handshake;
+    What else bounds exposure:
+
+    * no subscription exists before auth -- a captured URL is a read of one dialog
+      handshake, and the edge access log drops the query string (see
+      nginx.prod.conf.example);
+    * nothing is accepted before auth: origin, flood brake, ticket and entitlement
+      gates all run pre-accept and refuse with a bare close, so an unauthenticated
+      peer can never hold a socket, only fail a handshake;
     * a browser handshake always carries ``Origin``; one outside the CORS
-      allowlist is refused, which keeps a leaked token from being streamed to
-      an attacker's page. Handshakes with no Origin (tests, curl, native
-      clients) are let through -- there is no ambient authority to steal
-      outside a browser, the same contract as the cookie-origin check.
+      allowlist is refused, which keeps a leaked credential from being streamed to
+      an attacker's page. Handshakes with no Origin (tests, curl, native clients)
+      are let through -- there is no ambient authority to steal outside a browser,
+      the same contract as the cookie-origin check.
     """
     # Import here to avoid circular dependency
-    from ..services.auth_service import verify_token_service
+    from ..services.auth_service import consume_websocket_ticket
 
     # --- Pre-accept gates: no socket exists until every one of these passes. ---
     # 1. Origin: a browser-driven handshake naming a foreign origin is refused.
@@ -256,16 +285,24 @@ async def websocket_endpoint(
         await websocket.close(code=WS_CLOSE_HANDSHAKE_FLOODED)
         return
 
-    # 3. Token presence and validity.
-    if not token:
+    # 3. Ticket presence and validity. Consuming it is atomic: a replay after the
+    # first handshake finds no row, and the same transaction re-reads the session
+    # and account so a ticket minted just before a logout cannot still connect.
+    if not ticket:
         await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
         return
     try:
-        user = verify_token_service(token, db)
+        consumed = consume_websocket_ticket(db, ticket)
     except Exception as e:
-        logger.error(f"WebSocket auth failed: {e}")
+        logger.error(f"WebSocket ticket redemption failed: {e}")
         await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
         return
+    if consumed is None:
+        await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
+        return
+    user, session_id = consumed
+    account_id = str(user.id)
+    account_type = user.account_type
 
     # 4. Entitlement: participant, and a dialog worth streaming.
     try:
@@ -348,6 +385,19 @@ async def websocket_endpoint(
                     if message is None:
                         break
 
+                    # The handshake is not a lifetime grant: a revoked, superseded,
+                    # expired, or blocked session must stop receiving immediately,
+                    # even before its next ping. Nothing is forwarded on a failed
+                    # revalidation; the main loop closes the socket on that ping.
+                    if not await _socket_account_valid(
+                        session_id, account_id, account_type, db
+                    ):
+                        logger.info(
+                            "WebSocket auth no longer valid; stopping delivery to %s",
+                            user.regno,
+                        )
+                        return
+
                     try:
                         data = json.loads(message['data'])
                         await websocket.send_json({
@@ -382,6 +432,19 @@ async def websocket_endpoint(
                         f"WebSocket idle timeout: {user.regno} on conversation {conversation_id}"
                     )
                     close_code = WS_CLOSE_IDLE
+                    break
+
+                # Every frame is a chance to notice the session ended: logout,
+                # a newer login, expiry, or an account block. This deliberately
+                # runs for non-ping text too, so a client cannot keep the socket
+                # alive by sending something else.
+                if not await _socket_account_valid(
+                    session_id, account_id, account_type, db
+                ):
+                    logger.info(
+                        f"WebSocket closed: session no longer valid for {user.regno}"
+                    )
+                    close_code = WS_CLOSE_AUTH_REQUIRED
                     break
 
                 # Handle ping

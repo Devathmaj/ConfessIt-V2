@@ -341,6 +341,34 @@ def test_vector_similarity_ordering(db, monkeypatch):
     assert [c.id for c in page["confessions"]] == [str(cats.id), str(cars.id)]
 
 
+# 9b. Participant anonymity survives semantic hydration, not just the feed.
+def test_semantic_search_withholds_an_anonymous_author(db, monkeypatch):
+    author = make_user(db, "semghost")
+    _enable_search(monkeypatch)
+    monkeypatch.setattr(
+        embedding_service, "_call_azure_embedding_api", lambda doc, cfg: _vec(1.0)
+    )
+    service = ConfessionService(db)
+    created = service.create_confession(
+        ConfessionCreate(
+            body="anonymous searchable post", anonymous=True, comments_enabled=True
+        ),
+        author["id"],
+    )
+
+    page = service.search_confessions_semantic("anonymous", limit=10)
+    item = next(c for c in page["confessions"] if c.id == str(created.id))
+
+    assert item.anonymous is True
+    assert item.author_id is None
+    assert item.user_info.id == "anonymous"
+    assert item.user_info.name == "Anonymous"
+    assert item.user_info.profile_picture_url is None
+    dumped = item.model_dump_json()
+    assert author["id"] not in dumped
+    assert "User semghost" not in dumped
+
+
 # 10. Empty / invalid / long queries.
 def test_search_rejects_blank_and_long_queries(db, monkeypatch, client):
     _enable_search(monkeypatch)

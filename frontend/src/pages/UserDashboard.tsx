@@ -38,7 +38,7 @@ interface Confession {
   id: string;
   body: string;
   anonymous: boolean;
-  author_id: string;
+  is_mine: boolean;
   created_at: string;
   comments: any[];
   heart_count: number;

@@ -8,6 +8,7 @@ scoring, idempotent finalization, and no LLM at runtime.
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, time, timezone
+from time import sleep as _sleep
 from unittest.mock import patch
 
 import pytest
@@ -24,17 +25,27 @@ from app.db_models import (
     CaseClosedSessionRecord,
     CoupleGameRecord,
     FeaturedGameRecord,
+    LoginTokenRecord,
     NotificationRecord,
+    UserRecord,
+    find_account_in_table,
 )
 from app.main import app
 from app.models import UserDetails
 from app.services import case_closed_gameplay, case_closed_generation, league_finalization
-from app.services.auth_service import get_current_user
+from app.services.auth_service import (
+    SESSION_STATUS_ACTIVE,
+    access_token_session_id,
+    account_from_row,
+    create_websocket_ticket,
+    get_current_user,
+)
 from app.services.case_closed_schemas import CaseClosedGenerationConfig
 from app.services.case_closed_validation import validate_blueprint, validate_package
 from app.services.league_adapters import competition_type_for
 from app.services.league_global_scoring import global_base_for
 from conftest import override_get_current_user
+from ws_helpers import install_fake_pubsub
 
 UTC = timezone.utc
 
@@ -925,6 +936,11 @@ def test_detective_thread_send_read_quotas(db, http, players):
     assert thread["game_id"] == gid and thread["session_id"]
     assert thread["conversation_limit"] == 400 and thread["participant_limit"] == 200
 
+    # A turn is capped at 100 characters, the same per-message text limit as
+    # matchmaking chat; the 400/200 figures are the separate message allowances.
+    too_long = ca.post("/games/case-closed/messages", json={"body": "x" * 101})
+    assert too_long.status_code == 422
+
     r = ca.post("/games/case-closed/messages", json={"body": "Check the footage at 6:18"})
     assert r.status_code == 201, r.text
     sent = r.json()
@@ -1061,10 +1077,9 @@ def test_detective_thread_closes_when_the_case_ends(db, http, players):
 def _access_token_for(http, db, regno):
     """A real bearer token for a seeded participant, through the real login flow.
 
-    The websocket route authenticates with ``verify_token_service`` (no
-    ``Depends``), so exercising it needs an actual access token bound to an
-    actual login session; the dependency override the REST tests use never
-    reaches that path.
+    The socket handshake redeems a one-use ticket bound to a real login session,
+    so exercising it needs an actual access token to mint that ticket; the
+    dependency override the REST tests use never reaches the socket path.
     """
     from app.create_token import create_and_store_magic_token
     from app.db_models import find_account_in_table
@@ -1087,7 +1102,151 @@ def _access_token_for(http, db, regno):
     return response.json()["access_token"]
 
 
-def test_detective_websocket_cannot_outlive_the_thread(db, http, players):
+def _ws_ticket_for(http, db, regno):
+    """Exchange a real access token for the one-use ticket the socket now uses."""
+    access_token = _access_token_for(http, db, regno)
+    session_id = access_token_session_id(access_token)
+    assert session_id is not None
+    with db.sessions() as session:
+        found = find_account_in_table(session, AccountType.USERS.value, regno)
+        assert found is not None
+        account = account_from_row(found[0], found[1])
+    return create_websocket_ticket(db, account, session_id)["ticket"]
+
+
+def _invalidate_ws_account(db, regno, mode):
+    """End a live account/session the way logout, a new login, or a block does."""
+    with db.sessions.begin() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.regno == regno))
+        assert user is not None
+        if mode == "blocked":
+            user.is_blocked = True
+            return
+        row = session.scalar(
+            select(LoginTokenRecord).where(
+                LoginTokenRecord.account_id == str(user.id),
+                LoginTokenRecord.session_status == SESSION_STATUS_ACTIVE,
+            )
+        )
+        assert row is not None
+        if mode == "superseded":
+            row.session_status = "superseded"
+        elif mode == "revoked":
+            row.session_status = "revoked"
+        elif mode == "expired":
+            row.session_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        else:  # pragma: no cover - guards the parametrization
+            raise AssertionError(f"unknown invalidation mode {mode!r}")
+
+
+def test_detective_websocket_receives_published_turns(db, http, players, monkeypatch):
+    """Positive control: the fake subscription reaches a valid detective socket."""
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    ticket = _ws_ticket_for(http, db, "cc_player_a")
+    pubsub = install_fake_pubsub(monkeypatch)
+
+    with http.websocket_connect(f"/games/case-closed/ws?ticket={ticket}") as ws:
+        hello = ws.receive_json()
+        assert hello["type"] == "connected"
+        pubsub.publish({
+            "id": "live-case-closed-message",
+            "session_id": hello["session_id"],
+            "sender_user_id": players["b"].id,
+            "body": "this one is live",
+        })
+        event = ws.receive_json()
+        assert event["type"] == "message"
+        assert event["data"]["body"] == "this one is live"
+
+
+@pytest.mark.parametrize("mode", ["revoked", "superseded", "expired", "blocked"])
+@pytest.mark.parametrize("frame", ["ping", "not-a-ping"])
+def test_detective_websocket_stops_when_its_session_ends(
+    db, http, players, monkeypatch, mode, frame
+):
+    """No published turn reaches a socket whose session is no longer live."""
+    from starlette.websockets import WebSocketDisconnect
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    ticket = _ws_ticket_for(http, db, "cc_player_a")
+    pubsub = install_fake_pubsub(monkeypatch)
+
+    with http.websocket_connect(f"/games/case-closed/ws?ticket={ticket}") as ws:
+        hello = ws.receive_json()
+        assert hello["type"] == "connected"
+        ws.send_text("ping")
+        assert ws.receive_text() == "pong"
+
+        _invalidate_ws_account(db, "cc_player_a", mode)
+        pubsub.publish({
+            "id": "case-closed-message-after-invalidation",
+            "session_id": hello["session_id"],
+            "sender_user_id": players["b"].id,
+            "body": "must not arrive",
+        })
+        _sleep(0.2)
+
+        ws.send_text(frame)
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_text()
+        assert exc.value.code == 4001
+
+
+def test_detective_thread_check_cannot_be_bypassed_with_non_ping_text(
+    db, http, players, monkeypatch
+):
+    """Any text frame re-checks the thread, not only the literal "ping"."""
+    from starlette.websockets import WebSocketDisconnect
+
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+    ticket = _ws_ticket_for(http, db, "cc_player_a")
+    install_fake_pubsub(monkeypatch)
+
+    with http.websocket_connect(f"/games/case-closed/ws?ticket={ticket}") as ws:
+        assert ws.receive_json()["type"] == "connected"
+        ws.send_text("ping")
+        assert ws.receive_text() == "pong"
+
+        confirmed = ca.post("/games/case-closed/accusation/confirm", json={"suspect_id": "s1"})
+        assert confirmed.status_code == 200
+
+        ws.send_text("still here?")
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_text()
+        assert exc.value.code == 4003
+
+
+def test_a_detective_message_to_a_blocked_partner_is_refused(db, http, players):
+    gid, pid = seed_event(db)
+    make_mutual_pair(http, players)
+    ca = client_for(http, players["a"])
+    assert ca.post("/games/case-closed/start").status_code == 200
+
+    with db.sessions.begin() as session:
+        partner = session.scalar(
+            select(UserRecord).where(UserRecord.regno == "cc_player_b")
+        )
+        assert partner is not None
+        partner.is_blocked = True
+
+    refused = ca.post("/games/case-closed/messages", json={"body": "hello?"})
+    assert refused.status_code == 403
+    assert "not available" in refused.json()["detail"]
+
+    page = ca.get("/games/case-closed/messages").json()
+    assert page["total"] == 0
+
+
+def test_detective_websocket_cannot_outlive_the_thread(db, http, players, monkeypatch):
     """The live socket dies with the thread, and a closed thread refuses new ones.
 
     The ping is the request that keeps any socket alive, so it is also where a
@@ -1101,8 +1260,9 @@ def test_detective_websocket_cannot_outlive_the_thread(db, http, players):
     make_mutual_pair(http, players)
     ca = client_for(http, players["a"])
     assert ca.post("/games/case-closed/start").status_code == 200
-    token = _access_token_for(http, db, "cc_player_a")
-    ws_url = f"/games/case-closed/ws?token={token}"
+    ticket = _ws_ticket_for(http, db, "cc_player_a")
+    ws_url = f"/games/case-closed/ws?ticket={ticket}"
+    install_fake_pubsub(monkeypatch)
 
     with http.websocket_connect(ws_url) as ws:
         hello = ws.receive_json()

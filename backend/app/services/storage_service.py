@@ -50,7 +50,7 @@ from fastapi import HTTPException, UploadFile, status
 from PIL import Image, ImageOps
 
 from ..config import settings
-from ..logger import get_logger
+from ..logger import get_logger, log_identity_hash, redact_log_identifiers
 
 logger = get_logger(__name__)
 
@@ -114,6 +114,30 @@ def _slug_segment(value: str, *, limit: int = 64) -> str:
     """
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-")
     return (cleaned[:limit].strip("-")) or "account"
+
+
+_PROFILE_ID_FOR_LOG_RE = re.compile(
+    rf"({re.escape(PROFILE_FOLDER)}/)([^/]+)(/|$)"
+)
+
+
+def _safe_public_id_for_log(public_id: str) -> str:
+    """A profile public_id with its owner segment hashed; other ids are unchanged.
+
+    Cloudinary's profile layout embeds the regno in the path, so an error line that
+    names the object also names a person. Keeping the opaque asset id and filename
+    makes the line diagnosable, while the owner becomes the same stable tag used for
+    other log lines. The pattern works inside malformed values too: a stale URL or a
+    corrupt id can still contain ``profile_pics/<regno>/`` and must not slip a raw
+    regno into an audit line. Love-note ids contain no regno and are left alone.
+    """
+    return _PROFILE_ID_FOR_LOG_RE.sub(
+        lambda match: (
+            f"{match.group(1)}regno_hash:{log_identity_hash(match.group(2))}"
+            f"{match.group(3)}"
+        ),
+        str(public_id or ""),
+    )
 
 
 class CloudinaryStorageService:
@@ -787,7 +811,11 @@ class CloudinaryStorageService:
                 tags=self._asset_tags(settings.CLOUDINARY_PROFILE_ASSET_TAG),
             )
         except Exception as exc:
-            logger.error("Cloudinary profile upload failed for %s: %s", owner_regno, exc)
+            logger.error(
+                "Cloudinary profile upload failed for regno_hash=%s: %s",
+                log_identity_hash(owner_regno),
+                redact_log_identifiers(exc, owner_regno, public_id),
+            )
             raise HTTPException(
                 status_code=500, detail="Failed to upload profile image"
             ) from exc
@@ -801,9 +829,11 @@ class CloudinaryStorageService:
         access_mode = (result.get("access_mode") or "").lower()
         if result.get("access_control") or access_mode in {"authenticated", "private"}:
             logger.error(
-                "Cloudinary returned a non-public profile upload for %s (access_mode=%s, "
-                "access_control=%s); destroying it",
-                owner_regno, access_mode, result.get("access_control"),
+                "Cloudinary returned a non-public profile upload for regno_hash=%s "
+                "(access_mode=%s, access_control=%s); destroying it",
+                log_identity_hash(owner_regno),
+                access_mode,
+                result.get("access_control"),
             )
             self._destroy(stored_public_id, delivery_type="authenticated")
             raise HTTPException(
@@ -811,7 +841,10 @@ class CloudinaryStorageService:
             )
 
         logger.info(
-            "Stored profile image for %s as %s.%s", owner_regno, stored_public_id, stored_format
+            "Stored profile image for regno_hash=%s as %s.%s",
+            log_identity_hash(owner_regno),
+            _safe_public_id_for_log(stored_public_id),
+            stored_format,
         )
         return {"public_id": stored_public_id, "format": stored_format}
 
@@ -912,7 +945,14 @@ class CloudinaryStorageService:
                 public_id, resource_type="image", type=delivery_type, invalidate=True
             )
         except Exception as exc:
-            logger.error("Cloudinary destroy failed for %s: %s", public_id, exc, exc_info=True)
+            logger.error(
+                "Cloudinary destroy failed for %s: %s",
+                _safe_public_id_for_log(public_id),
+                redact_log_identifiers(
+                    exc, public_id, self.profile_owner_segment(public_id)
+                ),
+                exc_info=True,
+            )
             raise
 
     def delete_profile_asset(self, public_id: Optional[str], *, owner_regno: str) -> bool:
@@ -935,13 +975,14 @@ class CloudinaryStorageService:
         if not owner_regno or not str(owner_regno).strip():
             logger.warning(
                 "Refused profile asset delete: no owning account supplied (public_id=%s)",
-                public_id,
+                _safe_public_id_for_log(public_id),
             )
             return False
         if owner_segment is None or owner_segment != _slug_segment(owner_regno):
             logger.warning(
-                "Refused profile asset delete: %s is not owned by %s",
-                public_id, owner_regno,
+                "Refused profile asset delete: %s is not owned by regno_hash=%s",
+                _safe_public_id_for_log(public_id),
+                log_identity_hash(owner_regno),
             )
             return False
 
@@ -951,13 +992,18 @@ class CloudinaryStorageService:
             )
         except Exception as exc:
             logger.error(
-                "Cloudinary profile delete failed for %s (owner %s): %s",
-                public_id, owner_regno, exc, exc_info=True,
+                "Cloudinary profile delete failed for %s (regno_hash=%s): %s",
+                _safe_public_id_for_log(public_id),
+                log_identity_hash(owner_regno),
+                redact_log_identifiers(exc, public_id, owner_regno),
+                exc_info=True,
             )
             return False
         logger.info(
-            "Deleted profile asset %s for %s (result=%s)",
-            public_id, owner_regno, result.get("result"),
+            "Deleted profile asset %s for regno_hash=%s (result=%s)",
+            _safe_public_id_for_log(public_id),
+            log_identity_hash(owner_regno),
+            result.get("result"),
         )
         return True
 

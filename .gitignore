@@ -60,4 +60,8 @@ mongo_data/
 admin.md
 CODEBASE_KNOWLEDGE.md
 prompt.md
-opencode.jsonc
+opencode.json
+.agents/skills/security-audit
+SECURITY_AUDIT_REPORT.md
+SECURITY_AUDIT_WORKING.md
+skills-lock.json

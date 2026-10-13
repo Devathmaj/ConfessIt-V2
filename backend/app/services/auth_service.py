@@ -9,10 +9,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import OperationalError
-from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, find_account_in_table,
-                         resolve_account)
+from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, WebSocketTicketRecord,
+                         find_account_in_table, resolve_account)
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ..postgres import Database, is_valid_id
@@ -24,7 +24,7 @@ from ..models import AccountDetails, UserDetails
 from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
                         has_capability, is_valid_account_type,
                         normalize_account_type)
-from ..logger import get_console_only_logger, get_logger
+from ..logger import get_console_only_logger, get_logger, log_identity_hash
 from .login_rate_limit import (SCOPE_ACCOUNT, SCOPE_ACCOUNT_LONG, SCOPE_CLIENT,
                                SCOPE_IP, RateLimitVerdict, evaluate_login_rate_limits,
                                resolve_client_id)
@@ -271,6 +271,13 @@ _JWT_REQUIRED_CLAIMS = ("exp", "account_id", "session_id")
 #: mixed the columns up.
 TOKEN_HASH_DOMAIN_MAGIC = "magic"
 TOKEN_HASH_DOMAIN_REFRESH = "refresh"
+TOKEN_HASH_DOMAIN_WEBSOCKET = "websocket"
+
+#: How long a WebSocket ticket may be redeemed. The client mints one immediately
+#: before opening the socket, so this only has to cover a slow handshake; keeping it
+#: under a minute bounds the value of a ticket that leaked into retained logs. The
+#: ticket is single-use and session-bound regardless, so this is the outer bound.
+WEBSOCKET_TICKET_EXPIRE_SECONDS = 60
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -335,6 +342,73 @@ def _session_superseded_exception() -> HTTPException:
         headers={"WWW-Authenticate": _SESSION_SUPERSEDED_WWW_AUTHENTICATE},
     )
 
+def _decode_access_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Decode and signature-check an access JWT, or None if it is unreadable."""
+    if token is None:
+        return None
+    try:
+        return jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=list(_JWT_ALGORITHMS),
+            options={"require": list(_JWT_REQUIRED_CLAIMS)},
+        )
+    except jwt.PyJWTError as exc:
+        logger.error(f"JWT decode error: {exc}")
+        return None
+
+
+def _account_from_session(
+    session,
+    *,
+    session_id: str,
+    account_id: str,
+    account_type: str,
+    require_active_session: bool = True,
+) -> Optional[Any]:
+    """Resolve the account behind one login session, re-reading both rows.
+
+    The bearer-token and WebSocket-ticket paths converge here. Keeping the session and
+    account checks in one function is what makes a ticket no weaker than the access token
+    it replaced: a ticket records the session it was minted from, and this re-runs the same
+    one-live-session, absolute-deadline and blocked-account rules at redemption time.
+    """
+    session_row = session.get(LoginTokenRecord, session_id)
+    if session_row is None:
+        logger.error(f"Session {session_id} does not exist")
+        return None
+    if (
+        str(session_row.account_id) != str(account_id)
+        or normalize_account_type(session_row.account_type) != account_type
+    ):
+        logger.error(f"Session {session_id} belongs to a different account")
+        return None
+    if session_row.session_status == SESSION_STATUS_SUPERSEDED:
+        if not require_active_session:
+            return None
+        logger.warning(
+            f"Session superseded: session {session_id} was replaced by session "
+            f"{session_row.superseded_by}"
+        )
+        raise _session_superseded_exception()
+    if session_row.session_status != SESSION_STATUS_ACTIVE:
+        logger.error(
+            f"Session {session_id} is not active "
+            f"(status={session_row.session_status!r})"
+        )
+        return None
+    if _deadline_passed(session_row.session_expires_at, datetime.now(timezone.utc)):
+        logger.warning(
+            f"Session {session_id} has passed its absolute deadline "
+            f"({session_row.session_expires_at})"
+        )
+        return None
+    row = resolve_account(session, account_type, account_id)
+    if row is None or row.is_blocked:
+        return None
+    return account_from_row(normalize_account_type(account_type), row)
+
+
 def _account_from_bearer_token(
     token: Optional[str],
     db: Database,
@@ -343,41 +417,25 @@ def _account_from_bearer_token(
 ) -> Optional[Any]:
     """Decode an access token and resolve it to a live account, or None.
 
-    Shared by the three entry points so the re-read cannot drift between them. The token
-    carries the account's table and primary key, so the lookup is a primary-key read in one
-    named table -- never a search for the regno, which would be a search for *an* account
-    rather than *this* one once a regno can exist in more than one table.
+    Shared by the request dependencies and the optional-auth feed path so the re-read
+    cannot drift between them. The token carries the account's table and primary key, so
+    the lookup is a primary-key read in one named table -- never a search for the regno,
+    which would be a search for *an* account rather than *this* one once a regno can exist
+    in more than one table.
 
     Nothing about an account's privileges is ever taken from the token. The table decides
     what the caller may do, and it is re-read from the row on every request, so a revoked or
     demoted account is refused on its very next call, and a token minted for one table
     cannot be replayed as another.
 
-    The token also carries the id of the login-token row that became the session. That row
-    is re-read on every request too, which is what enforces one live session per account:
-    a session replaced by a newer login is ``superseded`` in the database, and its token is
-    refused here even though the JWT itself is still valid and unexpired. When
-    ``require_active_session`` is set (the mandatory dependencies), a superseded session is
-    refused with the dedicated 401 so its holder can be told they were signed in elsewhere;
-    the optional dependency treats it as no account at all, like an absent token.
-
-    A token without those claims is rejected rather than resolved by regno. Such a token
-    was minted before the account's table -- or the session it belongs to -- was recorded in
-    it, and honouring it by searching is exactly the ambiguity this design removes; the cost
-    is that sessions issued by an older build end at their next request and their users sign
-    in again.
+    A token without the session claim is rejected rather than resolved by regno. Such a
+    token was minted before the account's table -- or the session it belongs to -- was
+    recorded in it, and honouring it by searching is exactly the ambiguity this design
+    removes; the cost is that sessions issued by an older build end at their next request
+    and their users sign in again.
     """
-    if token is None:
-        return None
-    try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=list(_JWT_ALGORITHMS),
-            options={"require": list(_JWT_REQUIRED_CLAIMS)},
-        )
-    except jwt.PyJWTError as exc:
-        logger.error(f"JWT decode error: {exc}")
+    payload = _decode_access_token(token)
+    if payload is None:
         return None
     account_type = payload.get("account_type")
     account_id = payload.get("account_id")
@@ -389,46 +447,144 @@ def _account_from_bearer_token(
         logger.error("Access token is missing session_id claim")
         return None
     with db.sessions() as session:
-        session_row = session.get(LoginTokenRecord, session_id)
-        if session_row is None:
-            logger.error(f"Access token session {session_id} does not exist")
-            return None
-        if (
-            str(session_row.account_id) != str(account_id)
-            or normalize_account_type(session_row.account_type) != account_type
-        ):
-            logger.error(f"Access token session {session_id} belongs to a different account")
-            return None
-        if session_row.session_status == SESSION_STATUS_SUPERSEDED:
-            if not require_active_session:
-                return None
-            logger.warning(
-                f"Session superseded: session {session_id} was replaced by session "
-                f"{session_row.superseded_by}"
-            )
-            raise _session_superseded_exception()
-        if session_row.session_status != SESSION_STATUS_ACTIVE:
-            logger.error(
-                f"Access token session {session_id} is not active "
-                f"(status={session_row.session_status!r})"
-            )
-            return None
-        if _deadline_passed(session_row.session_expires_at, datetime.now(timezone.utc)):
-            logger.warning(
-                f"Access token session {session_id} has passed its absolute deadline "
-                f"({session_row.session_expires_at})"
-            )
-            return None
-        row = resolve_account(session, account_type, account_id)
-    if row is None or row.is_blocked:
+        return _account_from_session(
+            session,
+            session_id=str(session_id),
+            account_id=str(account_id),
+            account_type=account_type,
+            require_active_session=require_active_session,
+        )
+
+
+def access_token_session_id(token: Optional[str]) -> Optional[str]:
+    """The session id to bind a WebSocket ticket to, from an already-validated token."""
+    payload = _decode_access_token(token)
+    if payload is None:
         return None
-    return account_from_row(normalize_account_type(account_type), row)
+    session_id = payload.get("session_id")
+    if not session_id or not is_valid_id(session_id):
+        return None
+    return str(session_id)
+
+
+def create_websocket_ticket(db: Database, account: Any, session_id: str) -> Dict[str, Any]:
+    """Mint one short-lived, single-use ticket for an authenticated socket.
+
+    The raw value is returned exactly once. Only its domain-separated hash is stored, so a
+    database reader cannot replay it, and the row is bound to both the account and the
+    login session that requested it. Expired rows are swept opportunistically on each mint
+    so the table stays bounded even though every connection mints one.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=WEBSOCKET_TICKET_EXPIRE_SECONDS)
+    raw_ticket = secrets.token_urlsafe(32)
+    raw_account_type = getattr(account, "account_type", None)
+    if not is_valid_account_type(raw_account_type) or not is_valid_id(session_id):
+        raise ValueError("A WebSocket ticket needs a valid account and session")
+    account_type = normalize_account_type(raw_account_type)
+
+    with db.sessions.begin() as session:
+        session.execute(
+            delete(WebSocketTicketRecord).where(WebSocketTicketRecord.expires_at < now)
+        )
+        session.add(
+            WebSocketTicketRecord(
+                ticket_hash=hash_token(raw_ticket, domain=TOKEN_HASH_DOMAIN_WEBSOCKET),
+                account_id=str(account.id),
+                account_type=account_type,
+                session_id=session_id,
+                issued_at=now,
+                expires_at=expires_at,
+            )
+        )
+    return {
+        "ticket": raw_ticket,
+        "expires_at": expires_at.isoformat(),
+        "expires_in": WEBSOCKET_TICKET_EXPIRE_SECONDS,
+    }
+
+
+def consume_websocket_ticket(
+    db: Database, raw_ticket: Optional[str]
+) -> Optional[Tuple[Any, str]]:
+    """Burn a ticket and return ``(account, session_id)``, or None if it is not usable.
+
+    The conditional UPDATE is the single-use gate: two racing handshakes can both read the
+    same row, but only one can set ``consumed_at`` while it is NULL. Session and account
+    state are then re-read in the same transaction, so a ticket minted a moment before a
+    logout, supersede, expiry or block cannot open a socket after it.
+    """
+    if not raw_ticket:
+        return None
+    now = datetime.now(timezone.utc)
+    hashed = hash_token(raw_ticket, domain=TOKEN_HASH_DOMAIN_WEBSOCKET)
+    with db.sessions.begin() as session:
+        consumed = session.execute(
+            update(WebSocketTicketRecord)
+            .where(
+                WebSocketTicketRecord.ticket_hash == hashed,
+                WebSocketTicketRecord.consumed_at.is_(None),
+                WebSocketTicketRecord.expires_at > now,
+            )
+            .values(consumed_at=now)
+            .returning(
+                WebSocketTicketRecord.account_id,
+                WebSocketTicketRecord.account_type,
+                WebSocketTicketRecord.session_id,
+            )
+        ).first()
+        if consumed is None:
+            return None
+        account_id, account_type, session_id = consumed
+        try:
+            account = _account_from_session(
+                session,
+                session_id=str(session_id),
+                account_id=str(account_id),
+                account_type=normalize_account_type(account_type),
+                require_active_session=True,
+            )
+        except HTTPException:
+            account = None
+        if account is None:
+            return None
+        return account, str(session_id)
+
+
+def revalidate_websocket_session(
+    db: Database,
+    *,
+    session_id: str,
+    account_id: str,
+    account_type: str,
+) -> Optional[Any]:
+    """Re-resolve a live socket's session after the handshake.
+
+    A socket is authenticated once, but the session behind it can be revoked, superseded,
+    expired, or its account blocked while the socket is open. Long-lived transports
+    therefore re-run this on every received frame and before forwarding a published message.
+    Any refusal -- including the dedicated superseded-session 401 -- is represented as None
+    so callers close the socket with the auth-required code.
+    """
+    try:
+        with db.sessions() as session:
+            return _account_from_session(
+                session,
+                session_id=session_id,
+                account_id=account_id,
+                account_type=account_type,
+                require_active_session=True,
+            )
+    except HTTPException:
+        return None
 
 
 def verify_token_service(token: str, db: Database) -> AccountDetails:
     """
     Verify JWT token and return account details.
-    Used for WebSocket authentication where Depends() cannot be used.
+
+    Kept for non-WebSocket callers and tests; the live socket endpoints now consume a
+    short-lived ticket instead of placing this bearer in the URL.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -440,6 +596,7 @@ def verify_token_service(token: str, db: Database) -> AccountDetails:
     if account is None:
         raise credentials_exception
     return account
+
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
@@ -478,16 +635,13 @@ def get_current_user_optional(
 # reach a log line: each would turn the log store into a browsable record of who
 # signed in, from where, on every throttled or failed attempt.
 def _log_identity_hash(value: str) -> str:
-    """A stable, non-reversible 8-hex-char tag for a regno or client id.
+    """Backwards-compatible name for the shared log identifier hash.
 
-    Keyed with SECRET_KEY (the pepper): identical inputs hash identically, so an
-    operator can still correlate one actor's lines, but the tag reverses to
-    nothing without the deployment secret. Eight hex chars (32 bits) is enough
-    to join on and too short to brute-force a high-entropy client id; regnos
-    are lower-entropy, which is why the pepper -- not just the hash -- carries
-    the protection against dictionary enumeration.
+    The upload services now use the same helper, so auth and image logging agree
+    on what a ``regno_hash`` means. Kept as an alias because the auth log tests
+    import this name.
     """
-    return hashlib.sha256(f"{value}:{settings.SECRET_KEY}".encode("utf-8")).hexdigest()[:8]
+    return log_identity_hash(value)
 
 
 def _log_ip_network(ip: Any) -> str:

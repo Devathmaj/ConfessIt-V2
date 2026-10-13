@@ -1,9 +1,11 @@
 # app/routers/auth.py
 
+from datetime import datetime
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from ..postgres import Database
@@ -15,6 +17,9 @@ from ..dependencies import get_db
 from ..accounts import AccountType
 from ..models import AccountDetails, UserDetails
 from ..services.auth_service import (
+    access_token_session_id,
+    bearer_scheme,
+    create_websocket_ticket,
     credentials_exception,
     generate_magic_link_service,
     revoke_refresh_token_service,
@@ -22,6 +27,7 @@ from ..services.auth_service import (
     verify_magic_link_service,
     get_current_user
 )
+from ..services.authorization import require_participant
 from ..services.login_rate_limit import client_cookie_options, resolve_client_id
 
 router = APIRouter(
@@ -33,6 +39,14 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     redirect_url: str
+
+
+class WebSocketTicket(BaseModel):
+    """A one-use credential for the next WebSocket handshake."""
+
+    ticket: str
+    expires_at: datetime
+    expires_in: int
 
 class RefreshRequest(BaseModel):
     """An alternative to the refresh cookie, for non-browser callers only.
@@ -283,6 +297,41 @@ def logout(
         revoke_refresh_token_service(raw, db)
     _clear_refresh_cookie(response, secure=cookie_secure(request.url.scheme))
     return {"message": "Signed out"}
+
+
+@router.post("/ws-ticket", response_model=WebSocketTicket)
+def mint_websocket_ticket(
+    response: Response,
+    current_user: Annotated[UserDetails, Depends(require_participant)],
+    credentials: Annotated[
+        Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)
+    ],
+    db: Database = Depends(get_db),
+):
+    """Mint the short-lived, single-use ticket a WebSocket presents in its URL.
+
+    The access token is deliberately not accepted as a WebSocket credential: Uvicorn logs
+    the handshake path and query string, so putting a 30-minute bearer there writes a live
+    API credential into stdout. This endpoint is the authenticated, non-URL exchange; the
+    ticket it returns is bound to the caller's login session, expires in under a minute,
+    and can be redeemed once. It is a participant-only surface because both live-message
+    endpoints are participant-only.
+    """
+    if credentials is None:
+        raise credentials_exception()
+    session_id = access_token_session_id(credentials.credentials)
+    if session_id is None:
+        raise credentials_exception()
+    try:
+        ticket = create_websocket_ticket(db, current_user, session_id)
+    except ValueError:
+        # The dependency already resolved a participant; this only refuses a malformed
+        # session id or an account shape that cannot own a socket. Keep it generic.
+        raise credentials_exception()
+    # A ticket is a credential in a response body; keep it out of caches.
+    response.headers["Cache-Control"] = "no-store"
+    return ticket
+
 
 # Deliberately not a response_model. The response is a ``UserDetails`` for a participant and
 # an ``AccountDetails`` for a staff account, and a single model would have to declare every

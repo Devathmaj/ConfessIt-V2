@@ -45,7 +45,7 @@ type HybridRow = {
   recipient_name: string | null;
   anonymous: boolean;
   comments_enabled: boolean;
-  author_id: string;
+  is_mine: boolean;
   user_info: { id: string; name: string };
   created_at: string;
   comments: unknown[];
@@ -68,7 +68,7 @@ const row = (id: string, body: string): HybridRow => ({
   recipient_name: null,
   anonymous: true,
   comments_enabled: true,
-  author_id: 'author-1',
+  is_mine: false,
   user_info: { id: 'author-1', name: 'Ada' },
   created_at: '2026-04-10T10:00:00.000Z',
   comments: [],

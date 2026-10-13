@@ -46,6 +46,13 @@ services:
     depends_on:
       - redis
       - postgres
+    # Keep host-side Docker logs bounded even in local development; production has
+    # the same limit in docker-compose.prod.yml, and Loki has its own retention.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       # Auto-reload uses uvicorn's StatReload (mtime polling), not watchfiles: the
       # Dockerfile uninstalls watchfiles, whose Rust-backed watcher crash-loops with

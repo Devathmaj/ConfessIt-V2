@@ -298,13 +298,16 @@ class HybridSearchResponse(BaseModel):
 
 class UserInfo(BaseModel):
     """
-    Represents denormalized user information to be embedded in comments.
+    Represents denormalized user information embedded in comments and posts.
+
+    For an anonymous confession the server emits a fixed, non-identifying placeholder
+    (``id="anonymous"``, ``name="Anonymous"``, no photo) rather than the author's real
+    values. The client is not what protects the identity: the fields simply never carry it.
     """
     id: str
     name: str
     # Derived on read from the stored Cloudinary identity, never stored on the post. It is
-    # withheld for an anonymous confession so the author's photo cannot unmask them; the
-    # render layer hides the name on the same condition.
+    # always None for an anonymous confession, alongside the placeholder name and id.
     profile_picture_url: Optional[str] = None
 
 
@@ -354,9 +357,14 @@ class Confession(BaseModel):
     anonymous: bool
     comments_enabled: bool
     created_at: Optional[datetime] = None
-    author_id: str
+    # Omitted (None) for an anonymous confession. Participant responses carry ``is_mine``
+    # instead, so ownership controls never require the client to receive the author's id.
+    author_id: Optional[str] = None
     approved: bool = True
     user_info: Optional[UserInfo] = None
+    # Whether the caller of this response wrote the post. Computed server-side from the
+    # authenticated participant, never from a client-supplied author id.
+    is_mine: bool = False
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
     has_reported: bool = False

@@ -201,7 +201,9 @@ describe('CaseClosedGamePage', () => {
     });
     renderPage();
     await screen.findByText('Detective thread');
-    fireEvent.change(await screen.findByPlaceholderText(/Discuss leads/), { target: { value: 'On it' } });
+    const composer = await screen.findByPlaceholderText(/Discuss leads/);
+    expect(composer).toHaveAttribute('maxLength', '100');
+    fireEvent.change(composer, { target: { value: 'On it' } });
     fireEvent.click(screen.getByText('Send'));
     await waitFor(() => expect(sendChat).toHaveBeenCalledWith('On it'));
     expect(await screen.findByText('On it')).toBeTruthy();

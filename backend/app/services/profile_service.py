@@ -10,7 +10,7 @@ from sqlalchemy import or_, select, update
 
 from ..db_models import UserRecord
 from ..limits import USER_BIO_MAX
-from ..logger import get_logger
+from ..logger import get_logger, log_identity_hash, redact_log_identifiers
 from ..postgres import Database
 
 from ..models import Interest, UserDetails, clean_interests
@@ -136,7 +136,9 @@ def _discard_uploaded_picture(public_id: str, owner_regno: str) -> None:
         storage_service.delete_profile_asset(public_id, owner_regno=owner_regno)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
-            "Failed to discard refused profile upload for %s: %s", owner_regno, exc
+            "Failed to discard refused profile upload for regno_hash=%s: %s",
+            log_identity_hash(owner_regno),
+            redact_log_identifiers(exc, public_id, owner_regno),
         )
 
 

@@ -302,14 +302,39 @@ def _ws_handshake_allowed(ip: str) -> bool:
     return count <= WS_HANDSHAKE_LIMIT_PER_MINUTE
 
 
+async def _socket_account_valid(
+    session_id: str, account_id: str, account_type: str, db: Database
+) -> bool:
+    """Whether an accepted socket's session is still live.
+
+    Same revalidation seam as matchmaking chat: an accepted socket has no
+    per-request dependency, so every frame -- and every message about to be
+    forwarded -- re-reads the session and account. Any failure closes as
+    auth-required rather than becoming permission to keep delivering.
+    """
+    from ..services.auth_service import revalidate_websocket_session
+
+    try:
+        return await asyncio.to_thread(
+            revalidate_websocket_session,
+            db,
+            session_id=session_id,
+            account_id=account_id,
+            account_type=account_type,
+        ) is not None
+    except Exception as exc:
+        logger.error("Case Closed WS auth revalidation failed: %s", exc)
+        return False
+
+
 def _thread_still_open(db: Database, user) -> bool:
     """Whether a live socket's thread still accepts turns.
 
-    Re-checked on every ping (30s cadence, same request that keeps the socket
-    alive) so a connection cannot outlive the thread just because the client
-    has not noticed: the first confirmation, the case ending, or the event
-    rolling over all close it. Any resolution failure counts as closed --
-    there is nothing left to listen for, and REST stays the source of truth.
+    Re-checked on every received frame (the 30s ping and any other text), so a
+    connection cannot outlive the thread just because the client has not
+    noticed: the first confirmation, the case ending, or the event rolling over
+    all close it. Any resolution failure counts as closed -- there is nothing
+    left to listen for, and REST stays the source of truth.
     """
     try:
         return bool(case_closed_messaging.get_thread(db, user)["chat_open"])
@@ -321,17 +346,17 @@ def _thread_still_open(db: Database, user) -> bool:
 async def thread_websocket(
     websocket: WebSocket,
     db: Database = Depends(get_db),
-    token: Optional[str] = Query(None),
+    ticket: Optional[str] = Query(None),
 ):
     """Live detective-thread turns over the shared Redis pub/sub.
 
-    Same hardening as matchmaking chat (origin, flood brake, token,
-    membership gates pre-accept; send-via-REST-only; idle reap). The only
-    difference is entitlement: membership of the couple's Case Closed
-    session rather than of a matchmaking conversation. The channel is
+    Same hardening as matchmaking chat (origin, flood brake, short-lived
+    single-use ticket, membership gates pre-accept; send-via-REST-only; idle
+    reap). The only difference is entitlement: membership of the couple's Case
+    Closed session rather than of a matchmaking conversation. The channel is
     ``case-closed:{session_id}`` (distinct namespace, same infrastructure).
     """
-    from ..services.auth_service import verify_token_service
+    from ..services.auth_service import consume_websocket_ticket
     from .auth import _request_origin
 
     origin = websocket.headers.get("origin")
@@ -351,15 +376,21 @@ async def thread_websocket(
         await websocket.close(code=WS_CLOSE_HANDSHAKE_FLOODED)
         return
 
-    if not token:
+    if not ticket:
         await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
         return
     try:
-        user = verify_token_service(token, db)
+        consumed = consume_websocket_ticket(db, ticket)
     except Exception as exc:
-        logger.error("Case Closed WS auth failed: %s", exc)
+        logger.error("Case Closed WS ticket redemption failed: %s", exc)
         await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
         return
+    if consumed is None:
+        await websocket.close(code=WS_CLOSE_AUTH_REQUIRED)
+        return
+    user, session_id = consumed
+    account_id = str(user.id)
+    account_type = user.account_type
 
     try:
         thread = case_closed_messaging.get_thread(db, user)
@@ -408,6 +439,20 @@ async def thread_websocket(
                     message = await asyncio.to_thread(get_redis_message)
                     if message is None:
                         break
+
+                    # A live thread is not a lifetime grant either: the session
+                    # may have been revoked, superseded, expired or blocked, and
+                    # the thread may have closed. Check both before forwarding so
+                    # no message is delivered into an ended connection.
+                    if not await _socket_account_valid(
+                        session_id, account_id, account_type, db
+                    ):
+                        logger.info("Case Closed WS auth no longer valid; stopping delivery")
+                        return
+                    if not await asyncio.to_thread(_thread_still_open, db, user):
+                        logger.info("Case Closed WS thread ended; stopping delivery")
+                        return
+
                     try:
                         data = json.loads(message["data"])
                         await websocket.send_json({"type": "message", "data": data})
@@ -431,11 +476,20 @@ async def thread_websocket(
                     logger.info("Case Closed WS idle timeout")
                     close_code = WS_CLOSE_IDLE
                     break
+                # Revalidate on every frame, not only the literal "ping": a
+                # revoked session must not be able to keep the socket alive by
+                # sending arbitrary text instead.
+                if not await _socket_account_valid(
+                    session_id, account_id, account_type, db
+                ):
+                    logger.info("Case Closed WS closing: session no longer valid")
+                    close_code = WS_CLOSE_AUTH_REQUIRED
+                    break
+                if not await asyncio.to_thread(_thread_still_open, db, user):
+                    logger.info("Case Closed WS closing: thread ended mid-connection")
+                    close_code = WS_CLOSE_FORBIDDEN
+                    break
                 if data == "ping":
-                    if not _thread_still_open(db, user):
-                        logger.info("Case Closed WS closing: thread ended mid-connection")
-                        close_code = WS_CLOSE_FORBIDDEN
-                        break
                     await websocket.send_text("pong")
         except WebSocketDisconnect:
             close_code = 1000

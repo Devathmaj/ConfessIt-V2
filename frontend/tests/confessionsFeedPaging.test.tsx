@@ -48,7 +48,7 @@ type FeedRow = {
   recipient_name: string | null;
   anonymous: boolean;
   comments_enabled: boolean;
-  author_id: string;
+  is_mine: boolean;
   user_info: { id: string; name: string };
   created_at: string;
   comments: unknown[];
@@ -73,7 +73,7 @@ const post = (id: string, body: string, overrides: Partial<FeedRow> = {}): FeedR
   recipient_name: null,
   anonymous: true,
   comments_enabled: true,
-  author_id: 'author-1',
+  is_mine: false,
   user_info: { id: 'author-1', name: 'Ada' },
   created_at: stamp(10),
   comments: [],

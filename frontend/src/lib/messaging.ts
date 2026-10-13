@@ -10,6 +10,7 @@ import { endSessionIfTokenWasRejected } from './authEvents';
 import { API_URL, apiWsBase } from './apiBase';
 import { CONVERSATION_MESSAGE_MAX } from './limits';
 import type { MessageQuota } from './messageQuota';
+import { requestWebSocketTicket } from './wsTicket';
 
 
 interface Message {
@@ -54,7 +55,7 @@ type ErrorCallback = (error: Error) => void;
 
 /**
  * Handshake refusals that retrying cannot fix (SEC-003, mirrors the backend
- * close codes in `app/routers/messages.py`): an invalid token, a dialog the
+ * close codes in `app/routers/messages.py`): an invalid ticket, a dialog the
  * caller may not stream, or a foreign origin. Reconnecting on these would
  * re-fail the same gate five times and trip the handshake flood brake for
  * nothing, so they surface to error callbacks instead. Flood (4429) and idle
@@ -76,27 +77,29 @@ class MessagingClient {
   /**
    * Connect to WebSocket for a conversation
    */
-  connect(conversationId: string, token: string): Promise<void> {
+  async connect(conversationId: string, token: string): Promise<void> {
+    if (this.ws?.readyState === WebSocket.OPEN && this.conversationId === conversationId) {
+      return;
+    }
+
+    // Close existing connection if different conversation
+    if (this.ws && this.conversationId !== conversationId) {
+      this.disconnect();
+    }
+
+    this.conversationId = conversationId;
+    this.token = token;
+
+    // The socket hangs off the same API origin as every REST call, so one variable
+    // fixes both transports. `https` becomes `wss` and `http` becomes `ws`. The URL
+    // carries a one-use ticket, not the access token: Uvicorn logs the handshake
+    // path with its query string, and an access token there would be a live bearer.
+    const ticket = await requestWebSocketTicket(token);
+    const wsUrl = `${apiWsBase()}/messages/ws/${conversationId}?ticket=${encodeURIComponent(ticket)}`;
+
+    console.log('🔌 Connecting to WebSocket:', wsUrl.replace(ticket, 'TICKET'));
+
     return new Promise((resolve, reject) => {
-      if (this.ws?.readyState === WebSocket.OPEN && this.conversationId === conversationId) {
-        resolve();
-        return;
-      }
-
-      // Close existing connection if different conversation
-      if (this.ws && this.conversationId !== conversationId) {
-        this.disconnect();
-      }
-
-      this.conversationId = conversationId;
-      this.token = token;
-
-      // The socket hangs off the same API origin as every REST call, so one variable
-      // fixes both transports. `https` becomes `wss` and `http` becomes `ws`.
-      const wsUrl = `${apiWsBase()}/messages/ws/${conversationId}?token=${token}`;
-
-      console.log('🔌 Connecting to WebSocket:', wsUrl.replace(token, 'TOKEN'));
-
       try {
         this.ws = new WebSocket(wsUrl);
 
@@ -145,7 +148,7 @@ class MessagingClient {
           console.log('🔌 WebSocket disconnected:', event.code, event.reason);
           this.stopPingInterval();
 
-          // A refused handshake (bad token, no entitlement, foreign origin)
+          // A refused handshake (bad ticket, no entitlement, foreign origin)
           // fails the same way every time: report it instead of reconnecting
           // into the same refusal (and into the handshake flood brake).
           if (WS_CLOSE_NO_RETRY.has(event.code)) {

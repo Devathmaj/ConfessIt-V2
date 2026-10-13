@@ -29,6 +29,11 @@ FEED_MAX_LIMIT = 100
 # ``comment_count`` still carries the true total beside either window.
 FEED_COMMENTS_INITIAL = 10
 
+# The only author identity an anonymous confession may carry. Both values are constants so
+# every participant response agrees on the same non-identifying placeholder.
+ANONYMOUS_AUTHOR_ID = "anonymous"
+ANONYMOUS_AUTHOR_NAME = "Anonymous"
+
 
 def _cooldown_message(seconds_remaining: float) -> str:
     """The sentence a user is shown, from the number of seconds left.
@@ -165,10 +170,45 @@ class ConfessionService:
         return None
 
     @staticmethod
-    def _confession_payload(row):
+    def _anonymous_user_info() -> Dict[str, Any]:
+        """The placeholder every anonymous confession carries instead of its author."""
+        return {
+            "id": ANONYMOUS_AUTHOR_ID,
+            "name": ANONYMOUS_AUTHOR_NAME,
+            "profile_picture_url": None,
+        }
+
+    @classmethod
+    def _author_user_info(
+        cls, author, *, anonymous: bool, author_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Participant-facing author info, with anonymous posts always redacted.
+
+        The real name/id/photo never enter the payload for an anonymous post, even when the
+        author row is already loaded. Public posts keep naming their author as before.
+        """
+        if anonymous:
+            return cls._anonymous_user_info()
+        return {
+            "id": str(author.id) if author is not None else str(author_id or ""),
+            "name": (author.name or "Anonymous User") if author is not None else "Anonymous User",
+            "profile_picture_url": _profile_picture_url(author),
+        }
+
+    @staticmethod
+    def _confession_payload(row, viewer_id: Optional[str] = None):
+        """One participant-facing confession row, without an anonymous author's identity.
+
+        ``author_id`` is withheld for anonymous posts; ``is_mine`` is derived from the
+        authenticated caller so the client can still show ownership controls. Hydration
+        must use ``row.author_id`` server-side for author lookups, never this payload.
+        """
+        anonymous = bool(row.anonymous)
         return {"id": str(row.id), "body": row.body, "recipient_name": row.recipient_name,
-            "anonymous": row.anonymous, "comments_enabled": row.comments_enabled, "created_at": row.created_at,
-            "author_id": str(row.author_id), "approved": row.approved, "report_count": row.report_count,
+            "anonymous": anonymous, "comments_enabled": row.comments_enabled, "created_at": row.created_at,
+            "author_id": None if anonymous else str(row.author_id),
+            "is_mine": bool(viewer_id and str(row.author_id) == str(viewer_id)),
+            "approved": row.approved, "report_count": row.report_count,
             "reactions": row.reactions or {}, "heart_count": row.heart_count, "haha_count": row.haha_count,
             "whoa_count": row.whoa_count, "heartbreak_count": row.heartbreak_count,
             "comment_count": row.comment_count}
@@ -427,7 +467,7 @@ class ConfessionService:
             row = session.get(ConfessionRecord, str(confession_id))
             if row is None:
                 return None
-            payload = self._confession_payload(row)
+            payload = self._confession_payload(row, user_id)
             # Participant-scoped: hide other reporters, keep the count (which
             # includes the automated report). The caller did not file it, so
             # has_reported is always False here.
@@ -446,18 +486,13 @@ class ConfessionService:
             payload["user_reaction"] = None
             payload["reactions"] = {}
             payload["comments"] = []
-            try:
-                author = session.get(UserRecord, str(payload.get("author_id")))
-                if author is not None:
-                    info = UserInfo(
-                        id=str(author.id), name=author.name or "Anonymous User",
-                        profile_picture_url=_profile_picture_url(author),
-                    )
-                    if payload.get("anonymous"):
-                        info.profile_picture_url = None
-                    payload["user_info"] = info.model_dump()
-            except Exception:
-                pass
+            anonymous = bool(payload.get("anonymous"))
+            author = None if anonymous else session.get(UserRecord, str(row.author_id))
+            payload["user_info"] = self._author_user_info(
+                author,
+                anonymous=anonymous,
+                author_id=None if anonymous else str(row.author_id),
+            )
             return Confession(**payload)
 
     def create_automated_comment_safety_report(
@@ -842,9 +877,12 @@ class ConfessionService:
                 .where(ConfessionCommentRecord.id.in_(kept_ids))
                 .order_by(ConfessionCommentRecord.created_at.desc())
             ).all() if kept_ids else []
-            # Only the accounts this page actually names: its authors and its commenters.
-            # Reactors need no rows -- the feed carries counts plus id lists, never names.
-            wanted_user_ids = {str(row.author_id) for row in confession_models}
+            # Only the accounts this page actually names: its non-anonymous authors and its
+            # commenters. An anonymous author row is never read here, and reactors need no
+            # rows -- the feed carries counts plus id lists, never names.
+            wanted_user_ids = {
+                str(row.author_id) for row in confession_models if not row.anonymous
+            }
             wanted_user_ids |= {str(row.user_id) for row in comment_models}
             user_map = {
                 user.id: user for user in session.scalars(
@@ -861,7 +899,7 @@ class ConfessionService:
                     )
                 ).all():
                     confession_reporters.setdefault(str(target_id), []).append(str(reporter_id))
-            confession_rows = [self._confession_payload(row) for row in confession_models]
+            confession_rows = [self._confession_payload(row, user_id) for row in confession_models]
             comments_by_confession = {}
             for comment in self._hydrate_comments(session, comment_models, user_id, user_map):
                 comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
@@ -879,15 +917,13 @@ class ConfessionService:
                 key=lambda comment: comment.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
                 reverse=True,
             )
-            author = user_map.get(str(confession.get("author_id")))
-            confession["user_info"] = {
-                "id": str(confession.get("author_id")),
-                "name": author.name if author else "Anonymous User",
-                # Withheld on an anonymous post: a photo identifies its owner far more
-                # directly than a name does, so it follows the same condition the client
-                # uses to hide that name.
-                "profile_picture_url": _profile_picture_url(author) if not confession.get("anonymous") else None,
-            }
+            anonymous = bool(confession.get("anonymous"))
+            # The author id is absent from an anonymous payload, so it is only looked up
+            # for public posts. Anonymous posts get the fixed placeholder below.
+            author = None if anonymous else user_map.get(str(confession.get("author_id")))
+            confession["user_info"] = self._author_user_info(
+                author, anonymous=anonymous, author_id=confession.get("author_id"),
+            )
 
         confessions = []
         for confession_doc in confession_rows:
@@ -927,7 +963,7 @@ class ConfessionService:
             # and "not found" is the honest answer for a post that has been taken down.
             if row is not None and row.removed_at is not None:
                 row = None
-            confession_doc = self._confession_payload(row) if row else None
+            confession_doc = self._confession_payload(row, user_id) if row else None
         if confession_doc:
             reporter_ids = self._reporter_ids(confession_id)
             # Participant-scoped (SEC-002): identities stay server-side.
@@ -971,12 +1007,15 @@ class ConfessionService:
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
-            # Add user_info to single confession fetch
-            author_info = self._get_user_info(confession_doc['author_id'])
-            if author_info:
-                if confession_doc.get('anonymous'):
-                    author_info.profile_picture_url = None
-                confession_doc['user_info'] = author_info.model_dump()
+            # Author info, with anonymous posts carrying only the fixed placeholder. The
+            # real account row is not even read for an anonymous confession.
+            anonymous = bool(confession_doc.get('anonymous'))
+            if anonymous:
+                confession_doc['user_info'] = self._anonymous_user_info()
+            else:
+                author_info = self._get_user_info(confession_doc['author_id'])
+                if author_info:
+                    confession_doc['user_info'] = author_info.model_dump()
 
             return Confession(**confession_doc)
         return None
@@ -988,13 +1027,14 @@ class ConfessionService:
         with self.sessions() as session:
             row = session.get(ConfessionRecord, str(confession_id))
             confession = self._confession_payload(row) if row else None
+            author_id = str(row.author_id) if row else None
 
         if not confession:
             logger.error(f"Confession {confession_id} not found for update.")
             return None
 
-        if confession.get("author_id") != user_id:
-            logger.warning(f"User {user_id} attempted to edit confession {confession_id} owned by {confession.get('author_id')}")
+        if author_id != user_id:
+            logger.warning(f"User {user_id} attempted to edit confession {confession_id} owned by {author_id}")
             return None
 
         update_fields = {}
@@ -1555,7 +1595,9 @@ class ConfessionService:
                 .where(ConfessionCommentRecord.id.in_(kept_ids))
                 .order_by(ConfessionCommentRecord.created_at.desc())
             ).all() if kept_ids else []
-            wanted_user_ids = {str(row.author_id) for row in ordered_models}
+            wanted_user_ids = {
+                str(row.author_id) for row in ordered_models if not row.anonymous
+            }
             wanted_user_ids |= {str(row.user_id) for row in comment_models}
             user_map = {
                 user.id: user for user in session.scalars(
@@ -1583,7 +1625,7 @@ class ConfessionService:
             row = fresh.get(confession_id)
             if row is None or row.removed_at is not None:
                 continue
-            payload = self._confession_payload(row)
+            payload = self._confession_payload(row, user_id)
             reporter_ids = confession_reporters.get(str(payload["id"]), [])
             payload["has_reported"] = bool(user_id and user_id in reporter_ids)
             payload["reported_by"] = []
@@ -1593,12 +1635,11 @@ class ConfessionService:
                 key=lambda c: c.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
                 reverse=True,
             )
-            author = user_map.get(str(payload.get("author_id")))
-            payload["user_info"] = {
-                "id": str(payload.get("author_id")),
-                "name": author.name if author else "Anonymous User",
-                "profile_picture_url": _profile_picture_url(author) if not payload.get("anonymous") else None,
-            }
+            anonymous = bool(payload.get("anonymous"))
+            author = None if anonymous else user_map.get(str(payload.get("author_id")))
+            payload["user_info"] = self._author_user_info(
+                author, anonymous=anonymous, author_id=payload.get("author_id"),
+            )
             user_reaction = None
             if user_id and "reactions" in payload:
                 for reaction_type, reactor_ids in payload["reactions"].items():
@@ -1703,7 +1744,7 @@ class ConfessionService:
                 ).all()
             }
             wanted_user_ids = {
-                str(row.author_id) for row in fresh.values()
+                str(row.author_id) for row in fresh.values() if not row.anonymous
             } | {str(row.user_id) for row in comment_models}
             user_map = {
                 user.id: user for user in session.scalars(
@@ -1725,7 +1766,7 @@ class ConfessionService:
             row = fresh.get(str(confession_id))
             if row is None or row.removed_at is not None:
                 continue
-            payload = self._confession_payload(row)
+            payload = self._confession_payload(row, user_id)
             reporter_ids = confession_reporters.get(str(payload["id"]), [])
             payload["has_reported"] = bool(user_id and user_id in reporter_ids)
             payload["reported_by"] = []
@@ -1735,12 +1776,11 @@ class ConfessionService:
                 key=lambda c: c.get("created_at") or datetime.datetime.min.replace(tzinfo=timezone.utc),
                 reverse=True,
             )
-            author = user_map.get(str(payload.get("author_id")))
-            payload["user_info"] = {
-                "id": str(payload.get("author_id")),
-                "name": author.name if author else "Anonymous User",
-                "profile_picture_url": _profile_picture_url(author) if not payload.get("anonymous") else None,
-            }
+            anonymous = bool(payload.get("anonymous"))
+            author = None if anonymous else user_map.get(str(payload.get("author_id")))
+            payload["user_info"] = self._author_user_info(
+                author, anonymous=anonymous, author_id=payload.get("author_id"),
+            )
             user_reaction = None
             if user_id and "reactions" in payload:
                 for reaction_type, reactor_ids in payload["reactions"].items():

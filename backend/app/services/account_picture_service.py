@@ -20,8 +20,9 @@ know the order.
 It is a separate module from ``profile_service`` because the upload is not participant-specific:
 nothing in the rules mentions which table the row lives in, only which account it belongs to. That
 is deliberate, because ``actor_regno`` is separate from ``owner_regno`` below -- a staff member
-setting somebody else's picture is the same code path with two different regnos in it, and the
-separation is what makes "who changed this person's picture" answerable from the log afterwards.
+setting somebody else's picture is the same code path with two different regnos in it. Retained
+logs carry a stable peppered tag for each, never the raw value, so "who changed this person's
+picture" stays correlatable without turning the log store into a directory of registration numbers.
 
 **Why there are two public functions as well as the composed one.** :func:`read_and_prepare_account_picture`
 performs everything up to and including validation, and :func:`store_account_picture` performs the
@@ -44,7 +45,7 @@ a per-account folder with an unguessable id, so a URL cannot be walked from a li
 
 from fastapi import HTTPException, UploadFile, status
 
-from ..logger import get_logger
+from ..logger import get_logger, log_identity_hash, redact_log_identifiers
 from ..services.storage_service import storage_service
 
 logger = get_logger(__name__)
@@ -69,7 +70,8 @@ async def read_and_prepare_account_picture(
     (:meth:`storage_service.normalize_image`). Both operate on bytes already read here, so
     neither the client's filename nor its ``Content-Type`` takes part in any of it.
 
-    ``owner_regno`` and ``actor_regno`` are only used for logging, the same as in
+    ``owner_regno`` and ``actor_regno`` are only used for logging, and are represented
+    in those lines by stable peppered tags rather than raw values, the same as in
     :func:`store_account_picture`.
     """
     contents = await storage_service.read_upload_capped(file)
@@ -83,8 +85,11 @@ async def read_and_prepare_account_picture(
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
-            "Unexpected error validating profile image for %s (actor %s): %s",
-            owner_regno, actor_regno, exc,
+            "Unexpected error validating profile image for regno_hash=%s "
+            "(actor_hash=%s): %s",
+            log_identity_hash(owner_regno),
+            log_identity_hash(actor_regno),
+            redact_log_identifiers(exc, owner_regno, actor_regno),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file"
@@ -130,12 +135,19 @@ def store_account_picture(
             owner_regno=owner_regno,
         )
     except HTTPException:
-        logger.error("Cloudinary upload failed for %s (actor %s)", owner_regno, actor_regno)
+        logger.error(
+            "Cloudinary upload failed for regno_hash=%s (actor_hash=%s)",
+            log_identity_hash(owner_regno),
+            log_identity_hash(actor_regno),
+        )
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
-            "Unexpected error uploading profile image for %s (actor %s): %s",
-            owner_regno, actor_regno, exc,
+            "Unexpected error uploading profile image for regno_hash=%s "
+            "(actor_hash=%s): %s",
+            log_identity_hash(owner_regno),
+            log_identity_hash(actor_regno),
+            redact_log_identifiers(exc, owner_regno, actor_regno),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -164,8 +176,8 @@ async def upload_account_picture(
 
     ``actor_regno`` is who is performing the upload and is only used for logging. On the
     participant route the actor is the account owner; on the admin route it is the admin, and
-    keeping the two apart in the log is what makes "who changed this person's picture, and when"
-    answerable afterwards from the log alone.
+    keeping the two apart -- as stable peppered tags, not raw regnos -- is what makes "who
+    changed this person's picture, and when" answerable afterwards from the log alone.
 
     This is :func:`read_and_prepare_account_picture` followed by :func:`store_account_picture`,
     which is the sequence a caller with no refusal of its own in between wants. See the module
@@ -215,11 +227,21 @@ def retire_previous_picture(
         storage_service.delete_profile_asset(previous_public_id, owner_regno=owner_regno)
     except HTTPException as exc:
         logger.warning(
-            "Failed to delete previous profile asset for %s (actor %s): %s",
-            owner_regno, actor_regno, exc.detail,
+            "Failed to delete previous profile asset for regno_hash=%s "
+            "(actor_hash=%s): %s",
+            log_identity_hash(owner_regno),
+            log_identity_hash(actor_regno),
+            redact_log_identifiers(
+                exc.detail, owner_regno, actor_regno, previous_public_id
+            ),
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
-            "Unexpected error deleting previous profile asset for %s (actor %s): %s",
-            owner_regno, actor_regno, exc,
+            "Unexpected error deleting previous profile asset for regno_hash=%s "
+            "(actor_hash=%s): %s",
+            log_identity_hash(owner_regno),
+            log_identity_hash(actor_regno),
+            redact_log_identifiers(
+                exc, owner_regno, actor_regno, previous_public_id
+            ),
         )

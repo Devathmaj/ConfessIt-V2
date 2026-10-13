@@ -23,7 +23,6 @@ from .config import (
     validate_transport_security,
 )
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, staff_notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_plot_twist, admin_case_closed, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, plot_twist, case_closed, reaction_time, games, two_key_escape, leaderboards
-from .services.auth_service import verify_token_service
 from .dependencies import get_db
 from .postgres import Database, close_postgres_client, get_postgres_client
 from .services.storage_service import storage_service
@@ -31,7 +30,7 @@ from .services.redis_service import redis_service
 from .services.matchmaking_service import MatchmakingRefusal
 from .models import AccountDetails
 import uvicorn
-from .logger import get_logger, otlp_transport
+from .logger import get_logger, install_query_credential_redaction, otlp_transport
 from .telemetry import redact_client_url, redact_query_strings
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -280,6 +279,10 @@ _ai_generation_worker = None
 # ----------------------
 @app.on_event("startup")
 async def on_startup():
+    # Uvicorn's own loggers are configured before this module is imported, but a
+    # different launcher (or a test harness) may re-configure them later. Reinstall
+    # the idempotent query-credential filter once the process is actually serving.
+    install_query_credential_redaction()
     logger.info("Initializing PostgreSQL storage...")
     # The process-wide client, so startup and every request share one pool.
     postgres = get_postgres_client()

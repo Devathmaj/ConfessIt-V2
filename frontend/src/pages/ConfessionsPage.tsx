@@ -88,7 +88,8 @@ interface Confession {
   recipient_name?: string | null;
   anonymous: boolean;
   comments_enabled: boolean;
-  author_id: string;
+  /** Server-computed for this viewer; no author id is needed to show ownership controls. */
+  is_mine: boolean;
   user_info: UserInfo;
   created_at: string;
   comments: ConfessionComment[];
@@ -1264,7 +1265,7 @@ export const ConfessionsPage = () => {
           const hasReportedConfession = user && hasReportedByMe(confession, user.id);
           // Reporting your own post is refused by the server, so the flag is not offered on
           // it at all; the edit control above is the only action an author gets.
-          const isOwnConfession = !!user && user.id === confession.author_id;
+          const isOwnConfession = confession.is_mine;
           return (
             <Card key={confession.id} className="confession-card animate-fade-in transition-all duration-300 min-w-0 overflow-hidden" style={{ animationDelay: `${index * 0.1}s` }}>
               <CardHeader>
@@ -1287,7 +1288,7 @@ export const ConfessionsPage = () => {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    {isAuthenticated && user?.id === confession.author_id && (
+                    {isOwnConfession && (
                         <Button
                         size="icon"
                         variant="ghost"

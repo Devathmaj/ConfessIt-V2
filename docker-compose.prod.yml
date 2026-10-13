@@ -88,6 +88,14 @@ services:
       "16384"
     ]
     # No ports: reachable only through the edge and the Compose network.
+    # Bound the host's copy of stdout/stderr. The OTLP path has its own retention
+    # in Loki (168h); this stops the Docker daemon from keeping an unbounded second
+    # copy of every handshake line on the host.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"

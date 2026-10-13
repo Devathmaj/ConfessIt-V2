@@ -1,5 +1,7 @@
+import hashlib
 import logging
 import os
+import re
 import stat as stat_module
 from .config import settings
 import sys
@@ -12,6 +14,100 @@ from opentelemetry.sdk.resources import Resource
 
 # Correctly define the formatter
 FORMATTER = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# Uvicorn's accepted-WebSocket handshake line includes the full path *and query
+# string* at INFO. The application no longer sends an access token there -- the
+# socket uses a one-use ticket -- but a ticket is still a credential, and a
+# dependency or future route could put a token back in a query. Redacting the
+# value at the logging boundary keeps every such line safe regardless of which
+# caller built the URL. The name is kept so operators can still see which kind of
+# credential was present.
+_QUERY_CREDENTIAL_RE = re.compile(
+    r"([?&](?:token|ticket|access_token|refresh_token)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
+
+
+def _redact_query_credentials(value):
+    if isinstance(value, str):
+        return _QUERY_CREDENTIAL_RE.sub(r"\1[REDACTED]", value)
+    return value
+
+
+class QueryCredentialRedactionFilter(logging.Filter):
+    """Remove credential values from URL-shaped log messages.
+
+    Filters are applied by the logger before handlers, so this covers both the
+    console handler and any handler Uvicorn installs. It mutates the record's
+    message arguments rather than formatter output so every handler sees the same
+    sanitized line.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _redact_query_credentials(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(_redact_query_credentials(arg) for arg in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: _redact_query_credentials(value)
+                for key, value in record.args.items()
+            }
+        return True
+
+
+def install_query_credential_redaction() -> None:
+    """Install the filter on the loggers Uvicorn uses for handshake lines.
+
+    Called at import and again on startup: Uvicorn configures its loggers before
+    importing the ASGI app, but a test harness or a future launcher may configure
+    logging later, and adding the harmless filter twice is a no-op.
+    """
+    for name in ("uvicorn.error", "uvicorn.access"):
+        target = logging.getLogger(name)
+        if not any(
+            isinstance(existing, QueryCredentialRedactionFilter)
+            for existing in target.filters
+        ):
+            target.addFilter(QueryCredentialRedactionFilter())
+
+
+install_query_credential_redaction()
+
+
+def log_identity_hash(value: object) -> str:
+    """A stable, non-reversible 8-hex-char tag for a regno or other log identifier.
+
+    Keyed with ``SECRET_KEY`` (the pepper): identical inputs hash identically, so an
+    operator can still correlate one actor's lines, but the tag reverses to nothing
+    without the deployment secret. Eight hex chars (32 bits) is enough to join on and
+    too short to brute-force a high-entropy client id; regnos are lower-entropy, which
+    is why the pepper -- not just the hash -- carries the protection against dictionary
+    enumeration.
+    """
+    return hashlib.sha256(
+        f"{value}:{settings.SECRET_KEY}".encode("utf-8")
+    ).hexdigest()[:8]
+
+
+def redact_log_identifiers(message: object, *identifiers: object) -> str:
+    """Replace named identifiers embedded in an exception or log message with tags.
+
+    Upstream errors are the hard case: Cloudinary's text can repeat the public_id it
+    failed on, and a public_id contains the owner's regno. Passing both the message and
+    the values that must not survive produces a line that is still diagnosable by hash
+    while containing no raw identifier. Longer values go first so a public_id is tagged
+    as a whole rather than being partially rewritten through the regno inside it.
+    """
+    text = str(message)
+    for identifier in sorted(
+        {str(value) for value in identifiers if value},
+        key=len,
+        reverse=True,
+    ):
+        text = text.replace(identifier, f"[id:{log_identity_hash(identifier)}]")
+    return text
+
 
 _OTEL_LOG_HANDLER = None
 

@@ -162,15 +162,21 @@ describe('ConversationDialog: paged thread', () => {
     api.getConversationByMatch.mockResolvedValue({ status: 'success', is_blocked: false });
   });
 
-  it('shows the matchmaking retention notice in the chat box', async () => {
+  it('keeps privacy and safety guidance in the header, not above the composer', async () => {
     db = [message(0)];
     await renderDialog();
 
-    expect(
-      screen.getByText(
-        'For your privacy, matchmaking chat messages are automatically deleted 1 day after this chat ends.',
-      ),
-    ).toBeInTheDocument();
+    const retention =
+      'For your privacy, matchmaking chat messages are automatically deleted 1 day after this chat ends.';
+    // The chat box starts clean: none of the three paragraphs is in the composer area.
+    expect(screen.queryByText(retention)).toBeNull();
+    expect(screen.queryByText('You can send up to 100 messages in this conversation.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Privacy and safety' }));
+
+    expect(await screen.findByText(retention)).toBeInTheDocument();
+    expect(screen.getByText('You can send up to 100 messages in this conversation.')).toBeInTheDocument();
+    expect(screen.getByText(/messages are checked against our content policy/i)).toBeInTheDocument();
   });
 
   it('opens on the newest window with the total behind the pager', async () => {
@@ -283,10 +289,12 @@ describe('ConversationDialog: paged thread', () => {
     db = [message(0)];
     await renderDialog();
 
-    // The composer's notice must match what the report queue actually carries:
-    // the reported message's own body, and thread counts/participants -- never
-    // the other messages in the conversation.
-    const notice = screen.getByText(/messages are checked against our content policy/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Privacy and safety' }));
+
+    // The notice must match what the report queue actually carries: the reported
+    // message's own body, and thread counts/participants -- never the other
+    // messages in the conversation.
+    const notice = await screen.findByText(/messages are checked against our content policy/i);
     expect(notice).toHaveTextContent(/messages are checked against our content policy/i);
     expect(notice).toHaveTextContent(/reported to admins and moderators/i);
     expect(notice).toHaveTextContent(/only that message is visible to them/i);

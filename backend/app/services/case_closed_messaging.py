@@ -58,6 +58,7 @@ from .chat_message_crypto import (
     decrypt_case_closed_message,
     encrypt_case_closed_message,
 )
+from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
 from .redis_service import redis_service
 from .report_counters import MESSAGE, record_removal, record_report_filed
 
@@ -248,6 +249,24 @@ def _refusal(quota: Dict[str, Any]) -> Optional[HTTPException]:
     return None
 
 
+def _partner_blocked(session, row: CaseClosedSessionRecord, user_id: str) -> bool:
+    """Whether the other detective's account is blocked.
+
+    The session row knows the couple but not account state, so this is a live
+    read. The matchmaking chat path refuses a send to a blocked partner for the
+    same reason: a block must stop new turns reaching them, not merely hide the
+    thread from their next request.
+    """
+    partner_id = (
+        str(row.user_b_id) if str(row.user_a_id) == str(user_id) else str(row.user_a_id)
+    )
+    return bool(
+        session.scalar(
+            select(UserRecord.is_blocked).where(UserRecord.id == partner_id)
+        )
+    )
+
+
 def _session_expiry(row: CaseClosedSessionRecord, game: CaseClosedGameRecord) -> datetime:
     """The session's own end, from the stored explicit column or the event.
 
@@ -299,6 +318,17 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
     if closed_reason is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=closed_reason)
 
+    # A partner blocked after the thread opened stops new turns, exactly as in
+    # matchmaking chat. Refused before moderation so a blocked pair spends no
+    # safety call, then re-checked under the send transaction's row lock.
+    with db.sessions() as session:
+        _, row = _resolve_thread(session, str(user.id))
+        if _partner_blocked(session, row, str(user.id)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ACCOUNT_UNAVAILABLE_DETAIL,
+            )
+
     # Central moderation, before persistence: a flagged turn must never reach
     # the recipient, and a provider failure must abort before any row exists.
     # Imported locally (like the matchmaking path) so tests can patch the module
@@ -341,6 +371,11 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
             state = thread_state(locked, now=now, expires_at=expires_at)
             if not state["chat_open"]:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=state["closed_reason"])
+            if _partner_blocked(session, locked, str(user.id)):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=ACCOUNT_UNAVAILABLE_DETAIL,
+                )
             quota = _quota(_usage(session, str(row.id), str(user.id)))
             refusal = _refusal(quota)
             if refusal is not None:
