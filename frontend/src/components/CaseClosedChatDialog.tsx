@@ -185,6 +185,10 @@ export const CaseClosedChatDialog = ({
         <CardDescription>
           Private to your pair for this case (400 per thread, 200 each). Chatting never costs an
           investigation action, and the thread closes the moment either of you confirms the accusation.
+          <span className="mt-1 block" role="note">
+            For your privacy, Case Closed chat messages are automatically deleted when this game
+            session expires.
+          </span>
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

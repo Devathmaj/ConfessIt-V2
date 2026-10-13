@@ -16,7 +16,7 @@ which row the service can see, so the tests do not depend on the router that hap
 in.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -35,6 +35,7 @@ from app.db_models import (
 from app.models import AccountDetails, UserDetails
 from app.services import love_note_service, matchmaking_service
 from app.services.message_service import message_service
+from tests.chat_helpers import make_message_record
 
 
 def make_user(db, regno, gender="other"):
@@ -358,12 +359,13 @@ def _make_thread(db, one, two, body="hello"):
         session.flush()
         conversation_id = str(conversation.id)
         session.add(
-            MessageRecord(
+            make_message_record(
                 conversation_id=conversation_id,
                 sender_regno=one,
                 receiver_regno=two,
                 body=body,
                 created_at=now,
+                delete_after=now + timedelta(days=1),
                 is_read=False,
             )
         )

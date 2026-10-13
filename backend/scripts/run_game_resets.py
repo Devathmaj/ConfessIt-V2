@@ -106,6 +106,16 @@ def main() -> int:
             f"[game-resets] league action={league.get('action')}{league_error}",
             flush=True,
         )
+        cleanup = summary.get("chat_cleanup", {})
+        cleanup_error = f" error={cleanup['error']}" if cleanup.get("error") else ""
+        print(
+            "[game-resets] chat-cleanup "
+            f"matchmaking={cleanup.get('matchmaking_messages_deleted', 0)} "
+            f"case_closed={cleanup.get('case_closed_messages_deleted', 0)} "
+            f"evidence={cleanup.get('reported_evidence_deleted', 0)} "
+            f"action={cleanup.get('action')}{cleanup_error}",
+            flush=True,
+        )
         succeeded = reset_cycle_succeeded(summary)
         print(
             f"[game-resets] finished at {datetime.now(timezone.utc).isoformat()} "

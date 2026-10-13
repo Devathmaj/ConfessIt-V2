@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import os
 import threading
@@ -16,6 +17,18 @@ os.environ.setdefault(
 os.environ.setdefault(
     "TOKEN_HASH_PEPPER",
     "bb5e97d44532f0cf881d23496899e04175c30d8db62b501c5a22057ab1200e31",
+)
+# Chat encryption is required at startup and is never allowed to fall back to
+# plaintext. This fixed, test-only 32-byte key is set before app.config imports
+# so message tests can encrypt/decrypt against the real service. It is not a
+# deployment secret and exists only for this process group.
+os.environ.setdefault(
+    "CHAT_ENCRYPTION_ACTIVE_KEY_VERSION",
+    "v1",
+)
+os.environ.setdefault(
+    "CHAT_ENCRYPTION_KEY_V1",
+    base64.b64encode(b"confessit-test-key-32-bytes-0000").decode(),
 )
 
 import pytest

@@ -74,6 +74,7 @@ from app.services.report_counters import (
     report_column,
     tally_for_row,
 )
+from tests.chat_helpers import make_message_record
 from app.services.report_resolution_service import (
     hide_comment,
     hide_confession,
@@ -195,12 +196,13 @@ def make_message(db, sender, receiver, *, body="hello"):
         )
         session.add(conversation)
         session.flush()
-        row = MessageRecord(
+        row = make_message_record(
             conversation_id=str(conversation.id),
             sender_regno=sender["regno"],
             receiver_regno=receiver["regno"],
             body=body,
             created_at=now,
+            delete_after=now + timedelta(days=1),
             is_read=False,
         )
         session.add(row)

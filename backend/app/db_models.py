@@ -9,8 +9,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric,
-    SmallInteger, ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
+    Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary,
+    Numeric, SmallInteger, ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -905,32 +905,59 @@ class ConversationRecord(Base):
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_message_preview: Mapped[Optional[str]] = mapped_column(String(160))
+    # The conversation list's preview is a copy of the newest visible message's
+    # first 100 characters. It is encrypted exactly like the body it came from:
+    # storing it in plaintext would be a second durable copy of message content
+    # outside the encrypted column. ``last_message_preview_message_id`` and
+    # ``last_message_preview_sender_regno`` are bound into the preview's AAD, so
+    # a preview cannot be moved to another conversation or attributed to another
+    # sender without failing authentication.
+    last_message_preview_ciphertext: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
+    last_message_preview_nonce: Mapped[Optional[bytes]] = mapped_column(LargeBinary(length=12))
+    last_message_preview_key_version: Mapped[Optional[str]] = mapped_column(String(16))
+    last_message_preview_message_id: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False))
+    last_message_preview_sender_regno: Mapped[Optional[str]] = mapped_column(String(100))
+    # The preview is deleted when the message it copies passes its retention
+    # deadline, even if a cleanup run has not physically removed the message yet.
+    last_message_preview_delete_after: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     blocked_by: Mapped[list[str]] = mapped_column(ARRAY(String(100)), default=list, server_default=text("'{}'"))
     terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class MessageRecord(RemovedContentColumns, Base):
+    """One matchmaking chat message, encrypted at rest.
+
+    The plaintext body never reaches this table. ``body_ciphertext`` is the
+    AES-256-GCM output with its 16-byte authentication tag appended (the shape
+    ``AESGCM.encrypt`` returns), ``body_nonce`` is the fresh 12-byte nonce used
+    for this one row, and ``body_key_version`` selects the key for decryption.
+    ``delete_after`` is the authoritative logical and physical retention
+    deadline: match expiry + ``MATCHMAKING_CHAT_RETENTION_HOURS``.
+
+    Body length and per-participant quotas are enforced by the service before
+    encryption; a CHECK on ciphertext length would enforce nothing meaningful.
+    """
+
     __tablename__ = "messages"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     conversation_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
     sender_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     receiver_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
-    body: Mapped[str] = mapped_column(Text)
+    body_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    body_nonce: Mapped[bytes] = mapped_column(LargeBinary(length=12), nullable=False)
+    body_key_version: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # The one retention timestamp. Logical reads require delete_after > now and
+    # the scheduler deletes rows where delete_after <= now, so there is no second
+    # clock that can drift away from it.
+    delete_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     __table_args__ = (
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
-        CheckConstraint(
-            f"length(body) <= {MESSAGE_BODY_MAX}",
-            # Value in the name, for the same reason as the comment-body constraint above. A
-            # stable name here meant the installed constraint was accepted as-is however stale
-            # its definition: this database was holding ``length(body) <= 2000`` against a model
-            # that says 100, and a direct write of 101 characters was accepted while the API
-            # refused it.
-            name=f"ck_messages_body_length_{MESSAGE_BODY_MAX}",
-        ),
+        Index("ix_messages_conversation_delete_after", "conversation_id", "delete_after"),
     )
 
 
@@ -1070,7 +1097,16 @@ class MessageReportRecord(Base):
     __tablename__ = "message_reports"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    message_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("messages.id", ondelete="CASCADE"), index=True)
+    # SET NULL rather than CASCADE: ordinary chat retention deletes the message,
+    # but the report is the moderation audit record and must survive it. The
+    # separately encrypted evidence row (``chat_message_evidence``) is keyed by
+    # report id and keeps the individual reported message available for review.
+    message_id: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     # Nullable: an automated report (Azure AI Content Safety) has no participant
     # behind it -- the receiver is the only person who can *manually* report a
     # message, so a system report carries NULL here and names the sender in
@@ -1090,6 +1126,63 @@ class MessageReportRecord(Base):
     # Mirrors ``reports.source`` (see ReportRecord); backfills to "user" for history.
     source: Mapped[str] = mapped_column(String(32), default="user", server_default=text("'user'"), index=True)
     __table_args__ = (UniqueConstraint("message_id", "reporter_regno"),)
+
+
+class ChatMessageEvidenceRecord(Base):
+    """One separately encrypted copy of a reported/flagged chat message.
+
+    Ordinary chat history is deleted on its own retention schedule; moderation
+    evidence follows a different one. This table holds only the individual
+    message a report names -- never a conversation -- encrypted again with its
+    own AAD binding the original message/chat/sender, the report id/kind, and
+    the evidence id. It deliberately
+    has no foreign key to ``messages`` or ``case_closed_messages``: those rows
+    are purged first, and the evidence must outlive them for its own window.
+
+    ``expires_at`` is ``report time + REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``
+    and is the deadline the daily cleanup uses. Decryption is exposed only
+    through the authorised report-review path, which audits each access.
+    """
+
+    __tablename__ = "chat_message_evidence"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    report_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), unique=True, index=True)
+    report_kind: Mapped[str] = mapped_column(String(20), index=True)
+    # Kept as a plain UUID string rather than a FK: the referenced message is
+    # expected to be gone at some point, and the id is useful metadata even then.
+    message_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    chat_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    sender_ref: Mapped[str] = mapped_column(String(100), index=True)
+    body_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    body_nonce: Mapped[bytes] = mapped_column(LargeBinary(length=12), nullable=False)
+    body_key_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    message_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (
+        Index("ix_chat_message_evidence_report", "report_kind", "report_id"),
+    )
+
+
+class ChatEvidenceAccessRecord(Base):
+    """Append-only audit trail for reported-content review.
+
+    Every time the report queue returns the decrypted body of a reported
+    message, one row records which staff account read which report's evidence.
+    No message text, key material or nonce is stored here.
+    """
+
+    __tablename__ = "chat_evidence_access"
+
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
+    report_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    report_kind: Mapped[str] = mapped_column(String(20), index=True)
+    evidence_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
+    accessed_by_regno: Mapped[str] = mapped_column(String(100), index=True)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    action: Mapped[str] = mapped_column(String(40), default="report_queue_review", server_default=text("'report_queue_review'"))
 
 
 class AnagramGameRecord(Base):
@@ -3188,6 +3281,12 @@ class CaseClosedSessionRecord(Base):
     locked_culprit_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     first_investigation_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     accusation_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # The authoritative end of this couple's Case Closed session, copied from
+    # the pinned global event's exclusive ``period_end_date`` (UTC midnight at
+    # the start of that date) when the session is created. Chat messages carry
+    # this same instant in ``delete_after``; locking the thread after a guess
+    # never moves it. Nullable only for rows created before the column existed.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     elapsed_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -3264,13 +3363,18 @@ class CaseClosedEvidenceRecord(Base):
 
 
 class CaseClosedMessageRecord(RemovedContentColumns, Base):
-    """One chat turn in a couple's Case Closed detective thread.
+    """One chat turn in a couple's Case Closed detective thread, encrypted at rest.
 
     Scoped to the couple's game session (one thread per session), not to a
     matchmaking match: the thread is found via the caller's current Case
     Closed session, so the game id and session id travel together. Quotas
     (400 per thread, 200 per detective) are enforced in
     ``case_closed_messaging``; the columns here only persist the transcript.
+
+    ``delete_after`` is the session's own ``expires_at`` at send time. Chat
+    locking (an accusation confirmation) closes writes but never changes this
+    deadline; only the game session's expiry makes the messages eligible for
+    the next scheduled purge.
 
     Carries ``removed_at``/``removed_by_regno`` like every other content table
     so an Azure Content Safety removal can hide a turn without deleting it: the
@@ -3288,16 +3392,16 @@ class CaseClosedMessageRecord(RemovedContentColumns, Base):
     sender_user_id: Mapped[str] = mapped_column(
         Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    body: Mapped[str] = mapped_column(Text)
+    body_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    body_nonce: Mapped[bytes] = mapped_column(LargeBinary(length=12), nullable=False)
+    body_key_version: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    delete_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     __table_args__ = (
         Index("ix_case_closed_messages_session_created", "session_id", "created_at"),
-        CheckConstraint(
-            f"length(body) <= {MESSAGE_BODY_MAX}",
-            name=f"ck_case_closed_messages_body_length_{MESSAGE_BODY_MAX}",
-        ),
+        Index("ix_case_closed_messages_session_delete_after", "session_id", "delete_after"),
     )
 
 
@@ -3317,10 +3421,14 @@ class CaseClosedMessageReportRecord(Base):
     __tablename__ = "case_closed_message_reports"
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
-    message_id: Mapped[str] = mapped_column(
+    # SET NULL for the same reason as ``message_reports.message_id``: ordinary
+    # chat retention removes the turn, while the moderation report and its
+    # separately encrypted evidence follow their own retention window.
+    message_id: Mapped[Optional[str]] = mapped_column(
         Uuid(as_uuid=False),
-        ForeignKey("case_closed_messages.id", ondelete="CASCADE"),
+        ForeignKey("case_closed_messages.id", ondelete="SET NULL"),
         index=True,
+        nullable=True,
     )
     # Nullable for the same reason as ``message_reports.reporter_regno``: an
     # automated report has no participant behind it.

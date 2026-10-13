@@ -22,6 +22,9 @@ dist-ssr
 *.env
 backend/.env
 frontend/.env
+# The template is tracked so a fresh clone knows what to fill in; only real
+# secrets stay ignored.
+!.env.example
 
 # Prometheus remote-write password, shared by Tempo (writer), Grafana (reader)
 # and the Prometheus healthcheck via bind mounts. The tracked configs hold only

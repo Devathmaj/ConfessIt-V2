@@ -749,7 +749,27 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
     except Exception as exc:
         logging.getLogger(__name__).exception("League due scan failed after reset run")
         league = {"action": "error", "error": f"{type(exc).__name__}: {exc}"}
-    return {"games": games, "league": league, "at": moment.isoformat()}
+
+    # Chat retention rides the same daily tick. It needs only the database and
+    # the indexed deadlines already stored on each row -- never the encryption
+    # keys -- so the scheduler can run it without being a trusted decryptor.
+    # Failure is isolated like a game failure: the rest of the pass already
+    # committed, and the next run retries the remaining batch.
+    chat_cleanup: dict = {"action": "ok"}
+    try:
+        from .chat_retention_service import cleanup_expired_chat_messages
+
+        result = cleanup_expired_chat_messages(db, now=moment)
+        chat_cleanup = {"action": "ok", **result}
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Chat retention cleanup failed after reset run")
+        chat_cleanup = {"action": "error", "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "games": games,
+        "league": league,
+        "chat_cleanup": chat_cleanup,
+        "at": moment.isoformat(),
+    }
 
 
 def reset_cycle_succeeded(summary: dict) -> bool:
@@ -765,7 +785,10 @@ def reset_cycle_succeeded(summary: dict) -> bool:
     ):
         return False
     league = summary.get("league")
-    return not (isinstance(league, dict) and league.get("action") == "error")
+    if isinstance(league, dict) and league.get("action") == "error":
+        return False
+    chat_cleanup = summary.get("chat_cleanup")
+    return not (isinstance(chat_cleanup, dict) and chat_cleanup.get("action") == "error")
 
 
 def has_current_session(db: Database, game_id: str) -> bool:

@@ -94,6 +94,11 @@ services:
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      # AES-256-GCM chat-at-rest keys. Required here as in the base compose file: no
+      # plaintext fallback, and the API refuses to boot without the active version.
+      # Deliberately absent from game-scheduler, which only deletes by deadline.
+      CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: ${CHAT_ENCRYPTION_ACTIVE_KEY_VERSION:-v1}
+      CHAT_ENCRYPTION_KEY_V1: ${CHAT_ENCRYPTION_KEY_V1:?set CHAT_ENCRYPTION_KEY_V1 in the root .env}
       CLOUD: "true"
       # Single-host acknowledgment for the cleartext Compose-network transports below
       # (SEC-004): remove once DATABASE_URL carries ?sslmode=require and REDIS_URL is

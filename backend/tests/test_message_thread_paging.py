@@ -31,6 +31,7 @@ from app.main import app
 from app.models import UserDetails
 from app.services import message_service
 from app.services.auth_service import get_current_user
+from tests.chat_helpers import make_message_record, read_message_body
 
 WINDOW = timedelta(hours=4)
 
@@ -84,10 +85,11 @@ def fill(db, conversation_id, sender, receiver, count, *, start=0):
     with db.sessions.begin() as session:
         for index in range(start, start + count):
             session.add(
-                MessageRecord(
+                make_message_record(
                     conversation_id=conversation_id, sender_regno=sender,
                     receiver_regno=receiver, body=f"seeded {index}",
                     created_at=base + timedelta(seconds=index),
+                    delete_after=base + timedelta(days=2),
                     is_read=True,
                 )
             )
@@ -173,10 +175,11 @@ def test_reading_an_older_page_marks_read_only_what_it_returned(db, alice_client
         base = datetime.now(timezone.utc)
         for index in range(3):
             session.add(
-                MessageRecord(
+                make_message_record(
                     conversation_id=conversation_id, sender_regno="bob",
                     receiver_regno="alice", body=f"for alice {index}",
                     created_at=base + timedelta(seconds=index),
+                    delete_after=base + timedelta(days=2),
                     is_read=False,
                 )
             )
@@ -190,7 +193,7 @@ def test_reading_an_older_page_marks_read_only_what_it_returned(db, alice_client
     assert bodies(newest) == ["for alice 2"]
     with db.sessions() as session:
         states = {
-            row.body: row.is_read for row in session.scalars(
+            read_message_body(row): row.is_read for row in session.scalars(
                 select(MessageRecord).where(MessageRecord.conversation_id == conversation_id)
             ).all()
         }

@@ -12,6 +12,8 @@ from ..models import UserDetails, Match, Conversation
 from ..services.storage_service import storage_service
 from ..config import settings
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
+from .chat_encryption import ChatDecryptionError
+from .chat_message_crypto import decrypt_matchmaking_preview
 
 # Logger
 logger = get_logger(__name__)
@@ -50,6 +52,32 @@ def _match_data(row):
             "user_2_regno": row.user_2_regno, "created_at": row.created_at,
             "expires_at": row.expires_at}
 
+def _conversation_preview(row):
+    """Decrypt the stored preview only while its own retention deadline is open.
+
+    The preview is message content, encrypted under the same policy as the body
+    it copies. Once ``last_message_preview_delete_after`` passes it must stop
+    being readable even if the daily cleanup has not cleared the columns yet.
+    A row that fails authentication is omitted rather than shown stale.
+    """
+    delete_after = getattr(row, "last_message_preview_delete_after", None)
+    if delete_after is None:
+        return None
+    if delete_after.tzinfo is None:
+        delete_after = delete_after.replace(tzinfo=timezone.utc)
+    if delete_after <= datetime.now(timezone.utc):
+        return None
+    try:
+        return decrypt_matchmaking_preview(row)
+    except ChatDecryptionError as exc:
+        logger.error(
+            "Conversation preview decryption failed for conversation %s (%s); "
+            "omitting preview",
+            row.id,
+            exc.code,
+        )
+        return None
+
 def _conversation_data(row):
     if row is None:
         return None
@@ -58,7 +86,7 @@ def _conversation_data(row):
             "status": row.status, "requested_at": row.requested_at,
             "accepted_at": row.accepted_at, "created_at": row.created_at,
             "last_message_at": row.last_message_at,
-            "last_message_preview": row.last_message_preview,
+            "last_message_preview": _conversation_preview(row),
             "is_blocked": bool(row.blocked_by),
             "blocked_by": row.blocked_by[0] if row.blocked_by else None}
 

@@ -28,6 +28,7 @@ from app.db_models import (
 )
 from app.services.storage_service import storage_service
 from app.utils import escape_like_literal
+from tests.chat_helpers import make_message_record
 
 REACTIONS = {"heart": [], "haha": [], "whoa": [], "heartbreak": []}
 
@@ -144,12 +145,13 @@ def make_message(db, sender, receiver, *, body="hello"):
         )
         session.add(conversation)
         session.flush()
-        row = MessageRecord(
+        row = make_message_record(
             conversation_id=str(conversation.id),
             sender_regno=sender["regno"],
             receiver_regno=receiver["regno"],
             body=body,
             created_at=now,
+            delete_after=now + timedelta(days=1),
             is_read=False,
         )
         session.add(row)
@@ -251,7 +253,7 @@ def test_love_note_search_matches_reason_body_reporter_and_sender(db, admin_clie
     assert missed["total"] == 0
 
 
-def test_message_search_matches_reason_body_and_both_regnos(db, admin_client):
+def test_message_search_matches_reason_and_both_regnos_but_not_the_body(db, admin_client):
     sender = make_user(db, "loudmouth")
     receiver = make_user(db, "quietone")
     message_id = make_message(db, sender, receiver, body="midnight threats here")
@@ -260,11 +262,13 @@ def test_message_search_matches_reason_body_and_both_regnos(db, admin_client):
     assert reasons(admin_client.get(
         "/admin/messages/reports", params={"q": "threatening"}).json()) == ["threatening tone"]
     assert reasons(admin_client.get(
-        "/admin/messages/reports", params={"q": "midnight"}).json()) == ["threatening tone"]
-    assert reasons(admin_client.get(
         "/admin/messages/reports", params={"q": "quietone"}).json()) == ["threatening tone"]
     assert reasons(admin_client.get(
         "/admin/messages/reports", params={"q": "loudmouth"}).json()) == ["threatening tone"]
+    # The body is ciphertext at rest. Searching it would require decrypting every
+    # reported message for the query, so it is deliberately not a search surface.
+    assert admin_client.get(
+        "/admin/messages/reports", params={"q": "midnight"}).json()["total"] == 0
     missed = admin_client.get("/admin/messages/reports", params={"q": "nothing like this"}).json()
     assert missed["total"] == 0
 
@@ -272,9 +276,9 @@ def test_message_search_matches_reason_body_and_both_regnos(db, admin_client):
 def test_like_wildcards_match_literally_not_as_wildcards(db, admin_client):
     # "%" and "_" in q must match themselves. Unescaped, q="%" is pattern "%%%",
     # which matches every row in the queue, and q="a_b" matches "axb" too --
-    # both overmatches that also defeat any index on the column. The corpus
-    # below separates the readings: only the "100% certain" / "a_b plan" row
-    # holds literal wildcard characters.
+    # both overmatches that also defeat any index on the column. The reasons
+    # below separate the readings; message bodies are ciphertext and are not
+    # part of this search at all.
     sender = make_user(db, "wildmouth")
     receiver = make_user(db, "wildone")
     plain_id = make_message(db, sender, receiver, body="midnight plot here")
@@ -282,19 +286,19 @@ def test_like_wildcards_match_literally_not_as_wildcards(db, admin_client):
     wild_id = make_message(db, sender, receiver, body="a_b plan")
     file_message_report(db, wild_id, receiver, sender["regno"], reason="100% certain")
     decoy_id = make_message(db, sender, receiver, body="axb decoy")
-    file_message_report(db, decoy_id, receiver, sender["regno"], reason="unrelated remark")
+    file_message_report(db, decoy_id, receiver, sender["regno"], reason="a_b plan")
 
     # Literal "%" matches only the row containing one (unescaped: all three).
     assert reasons(admin_client.get(
         "/admin/messages/reports", params={"q": "%"}).json()) == ["100% certain"]
     # Literal "_" matches only the row containing one (unescaped: all three).
     assert reasons(admin_client.get(
-        "/admin/messages/reports", params={"q": "_"}).json()) == ["100% certain"]
-    # "a%b" is not a substring of anything here (unescaped: matches a_b and axb).
+        "/admin/messages/reports", params={"q": "_"}).json()) == ["a_b plan"]
+    # "a%b" is not a substring of anything here (unescaped: matches a_b plan).
     assert admin_client.get("/admin/messages/reports", params={"q": "a%b"}).json()["total"] == 0
     # "a_b" matches the literal holder only (unescaped: also "axb decoy").
     assert reasons(admin_client.get(
-        "/admin/messages/reports", params={"q": "a_b"}).json()) == ["100% certain"]
+        "/admin/messages/reports", params={"q": "a_b"}).json()) == ["a_b plan"]
     assert reasons(admin_client.get(
         "/admin/messages/reports", params={"q": "100%"}).json()) == ["100% certain"]
 

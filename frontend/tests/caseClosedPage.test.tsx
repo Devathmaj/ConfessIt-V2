@@ -110,6 +110,17 @@ describe('CaseClosedGamePage', () => {
     expect(screen.getByText(/Timer starts on first investigation/)).toBeTruthy();
   });
 
+  it('shows the Case Closed retention notice in the detective thread', async () => {
+    getState.mockResolvedValue(baseState());
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        'For your privacy, Case Closed chat messages are automatically deleted when this game session expires.',
+      ),
+    ).toBeTruthy();
+  });
+
   it('investigates a lead and shows the discovery + evidence', async () => {
     const after = baseState({
       my_path: ['lead-a'], investigated_lead_ids: ['lead-a'],
@@ -289,6 +300,14 @@ describe('CaseClosedGamePage', () => {
 
   it('shuts the thread when the case ends without an accusation', async () => {
     getState.mockResolvedValue(baseState({ stage: 'completed', finalized: true }));
+    // A completed case's transcript read agrees that the thread is closed; leaving
+    // the beforeEach mock at chat_open true made this assertion race the fetch.
+    getMessages.mockResolvedValue({
+      game_id: 'g1', session_id: 's1', messages: [], count: 0, total: 0,
+      quota: { conversation_limit: 400, participant_limit: 200, conversation_count: 0, participant_count: 0, conversation_remaining: 400, participant_remaining: 200, can_send: false, limit_reached: null },
+      chat_open: false,
+      closed_reason: 'The detective thread closed when the case ended',
+    });
     renderPage();
     await screen.findByText('Detective thread');
 

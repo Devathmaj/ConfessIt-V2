@@ -385,6 +385,53 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
     OTEL_SERVICE_NAME: str = "confessit-backend"
 
+    # --- Chat message encryption at rest ---
+    #
+    # Chat bodies are encrypted with AES-256-GCM before they reach PostgreSQL. The
+    # active key version selects the key used for new writes; old rows keep the
+    # version they were written with, so rotating to v2 never makes v1 records
+    # unreadable. Keys are Base64-encoded 32-byte values, live only in the trusted
+    # backend environment, and are validated at startup (see
+    # app.services.chat_encryption.validate_startup_configuration).
+    #
+    # V2..V8 are declared so a future rotation can be made by configuration alone:
+    # add CHAT_ENCRYPTION_KEY_V2, set the active version to v2, and keep V1 for
+    # historical rows. They are optional; only the active version must resolve.
+    CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: str = "v1"
+    CHAT_ENCRYPTION_KEY_V1: str | None = None
+    CHAT_ENCRYPTION_KEY_V2: str | None = None
+    CHAT_ENCRYPTION_KEY_V3: str | None = None
+    CHAT_ENCRYPTION_KEY_V4: str | None = None
+    CHAT_ENCRYPTION_KEY_V5: str | None = None
+    CHAT_ENCRYPTION_KEY_V6: str | None = None
+    CHAT_ENCRYPTION_KEY_V7: str | None = None
+    CHAT_ENCRYPTION_KEY_V8: str | None = None
+
+    @field_validator("CHAT_ENCRYPTION_ACTIVE_KEY_VERSION")
+    @classmethod
+    def _validate_chat_key_version(cls, value: str) -> str:
+        """Normalise the version label; key material is validated by the service."""
+        version = (value or "").strip().lower()
+        if not version:
+            raise ValueError("CHAT_ENCRYPTION_ACTIVE_KEY_VERSION must not be blank.")
+        if not version.startswith("v") or not version[1:].isdigit():
+            raise ValueError(
+                "CHAT_ENCRYPTION_ACTIVE_KEY_VERSION must look like v1, v2, ... "
+                f"(got {value!r})."
+            )
+        return version
+
+    # Matchmaking chats keep their four-hour sending window. Their messages stay
+    # readable for this many hours after the match's own ``expires_at`` (not from
+    # whenever the cleanup happens to run), then the daily scheduler purges them.
+    MATCHMAKING_CHAT_RETENTION_HOURS: int = Field(default=24, ge=1)
+    # Upper bound on rows one cleanup statement batch handles, so a large backlog
+    # does not hold one long transaction.
+    CHAT_CLEANUP_BATCH_SIZE: int = Field(default=500, ge=1)
+    # Reported/flagged message evidence is stored separately from ordinary chat
+    # history and encrypted again, with its own retention window.
+    REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS: int = Field(default=30, ge=1)
+
     # --- Feature flags ---
     ENABLE_DEBUG_ENDPOINTS: bool = False
 

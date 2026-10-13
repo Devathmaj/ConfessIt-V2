@@ -3,9 +3,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from sqlalchemy import and_, func, or_, select
+from ..config import settings
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
-from ..db_models import ConversationRecord, MessageRecord, MessageReportRecord, UserRecord
+from ..db_models import (
+    ConversationRecord,
+    MatchRecord,
+    MessageRecord,
+    MessageReportRecord,
+    UserRecord,
+)
 from ..logger import get_logger
 from ..limits import CONVERSATION_MESSAGE_MAX, CONVERSATION_PARTICIPANT_MESSAGE_MAX
 from ..utils import isoformat_datetime
@@ -14,6 +21,17 @@ from fastapi import HTTPException, status
 from ..models import UserDetails
 from .redis_service import redis_service
 from .auth_service import ACCOUNT_UNAVAILABLE_DETAIL
+from .chat_encryption import ChatDecryptionError, ChatEncryptionError
+from .chat_evidence_service import (
+    REPORT_KIND_MATCHMAKING,
+    capture_report_evidence,
+)
+from .chat_message_crypto import (
+    decrypt_matchmaking_message,
+    decrypt_matchmaking_preview,
+    encrypt_matchmaking_message,
+    encrypt_matchmaking_preview,
+)
 from .report_counters import MESSAGE, record_report_filed, record_removal
 
 logger = get_logger(__name__)
@@ -106,11 +124,29 @@ class MessageService:
 
     @staticmethod
     def _conversation_payload(row):
+        # The preview is encrypted message content, not metadata. Do not decrypt
+        # it once its own retention deadline has passed: physical deletion may
+        # still be waiting for the next daily run, but the list must stop
+        # exposing it immediately.
+        preview = None
+        delete_after = getattr(row, "last_message_preview_delete_after", None)
+        if delete_after is not None and delete_after.tzinfo is None:
+            delete_after = delete_after.replace(tzinfo=timezone.utc)
+        if delete_after is not None and delete_after > datetime.now(timezone.utc):
+            try:
+                preview = decrypt_matchmaking_preview(row)
+            except ChatDecryptionError as exc:
+                logger.error(
+                    "Conversation preview decryption failed for conversation %s (%s); "
+                    "omitting preview",
+                    row.id,
+                    exc.code,
+                )
         return {
             "id": str(row.id), "match_id": str(row.match_id), "initiator_regno": row.initiator_regno,
             "receiver_regno": row.receiver_regno, "status": row.status, "requested_at": row.requested_at,
             "accepted_at": row.accepted_at, "created_at": row.created_at,
-            "last_message_at": row.last_message_at, "last_message_preview": row.last_message_preview,
+            "last_message_at": row.last_message_at, "last_message_preview": preview,
             "is_blocked": bool(row.blocked_by), "blocked_by": row.blocked_by or [],
             "terminated_at": row.terminated_at,
         }
@@ -140,7 +176,9 @@ class MessageService:
         the transcript the other party sees a hole where it was, and letting its removal hand
         the allowance back would mean the ceiling depended on how many reports succeeded.
 
-        Messages remain in the database permanently; old rows are never deleted.
+        Rows past their retention deadline may still be counted until the daily purge
+        physically removes them. That is deliberate: the allowance is spent by writing,
+        not restored by cleanup, and the thread is read-only by then anyway.
         """
         total = session.scalar(
             select(func.count())
@@ -220,6 +258,28 @@ class MessageService:
             usage = self._message_usage(session, conversation_id, regno)
         return self._quota(usage)
 
+    @staticmethod
+    def _aware(value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    def _match_expiry(self, db: Database, match_id: str) -> datetime:
+        """The match's own four-hour deadline, normalised to UTC.
+
+        ``messages`` belongs to a conversation, and the conversation belongs to
+        exactly one match. The match row is the record matchmaking already uses
+        for ``expires_at`` (it is what the inbox and accept/request paths check),
+        so reading it here keeps one authoritative expiry instead of deriving a
+        second one from ``conversations.created_at``.
+        """
+        with db.sessions() as session:
+            row = session.get(MatchRecord, str(match_id))
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+        return self._aware(row.expires_at)
+
     def send_message(
         self,
         db: Database,
@@ -263,17 +323,17 @@ class MessageService:
                 detail="Cannot send messages: this conversation is blocked"
             )
 
-        # Expiry is a send-only restriction (4 hours from creation). Kept out of
-        # validate_conversation_participant() so an expired conversation stays readable.
-        created_at = conversation.get("created_at")
-        if created_at:
-            expiry_time = created_at + timedelta(hours=4)
-            if datetime.now(timezone.utc) > expiry_time:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Conversation has expired"
-                )
-        
+        # Expiry is a send-only restriction. The authoritative four-hour clock is
+        # the match's own ``expires_at`` -- the same timestamp the rest of
+        # matchmaking treats as the end of the chat -- not a second value derived
+        # from the conversation row. Kept out of validate_conversation_participant()
+        # so an expired conversation stays readable for its retention window.
+        match_expires_at = self._match_expiry(db, conversation["match_id"])
+        if datetime.now(timezone.utc) >= match_expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Conversation has expired"
+            )
         # Determine receiver
         receiver_id = (
             conversation["receiver_regno"] 
@@ -326,12 +386,13 @@ class MessageService:
                 detail="Content moderation is temporarily unavailable. Please retry shortly.",
             ) from exc
 
-        # Create message document
+        # Create message document. The plaintext stays in this local variable only:
+        # moderation has already seen it, and the database row below receives the
+        # AES-256-GCM payload instead.
         message_doc = {
             "conversation_id": str(conversation_id),
             "sender_regno": sender.regno,
             "receiver_regno": receiver_id,
-            "body": body,
             "created_at": datetime.now(timezone.utc),
             "is_read": False
         }
@@ -349,6 +410,8 @@ class MessageService:
         # removal performs) together with its automated report, in this one transaction, so
         # a report/hide bookkeeping failure rolls the whole send back rather than leaving a
         # visible message that should have been hidden or a hidden one with no audit trail.
+        # Its separately encrypted evidence is written in the same transaction, so a report
+        # never exists without the individual message it names.
         automated_report_id: Optional[str] = None
         try:
             with db.sessions.begin() as session:
@@ -363,14 +426,53 @@ class MessageService:
                         detail="Cannot send messages: this conversation is blocked"
                     )
 
+                # The match is re-read under its own lock so a send racing the
+                # four-hour boundary cannot commit a message into an expired chat.
+                match_row = session.scalar(
+                    select(MatchRecord)
+                    .where(MatchRecord.id == str(conversation["match_id"]))
+                    .with_for_update()
+                )
+                if match_row is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Conversation not found",
+                    )
+                match_expiry = self._aware(match_row.expires_at)
+                if message_doc["created_at"] >= match_expiry:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Conversation has expired"
+                    )
+                delete_after = match_expiry + timedelta(
+                    hours=settings.MATCHMAKING_CHAT_RETENTION_HOURS
+                )
+
                 quota = self._quota(self._message_usage(session, conversation_id, sender.regno))
                 refusal = self._quota_refusal(quota)
                 if refusal is not None:
                     raise refusal
 
+                # Allocate the id before encrypting: it is authenticated as part of
+                # the record's AAD, so the ciphertext is bound to this row from the
+                # moment it exists.
+                message_id = new_id()
+                encrypted = encrypt_matchmaking_message(
+                    message_id=message_id,
+                    conversation_id=str(conversation_id),
+                    sender_regno=sender.regno,
+                    plaintext=body or "",
+                )
                 row = MessageRecord(
+                    id=message_id,
                     conversation_id=str(conversation_id), sender_regno=sender.regno,
-                    receiver_regno=receiver_id, body=body, created_at=message_doc["created_at"], is_read=False,
+                    receiver_regno=receiver_id,
+                    body_ciphertext=encrypted.ciphertext,
+                    body_nonce=encrypted.nonce,
+                    body_key_version=encrypted.key_version,
+                    created_at=message_doc["created_at"],
+                    delete_after=delete_after,
+                    is_read=False,
                 )
                 if decision.should_hide:
                     # Born hidden: the same removed_at write a moderator's removal performs,
@@ -381,12 +483,24 @@ class MessageService:
                 session.add(row)
                 if conversation_row and not decision.should_hide:
                     # A hidden message must not become the conversation preview: that preview
-                    # is a denormalised copy of the newest *visible* message and is read by
-                    # both participants and staff.
+                    # is an encrypted copy of the newest *visible* message and is read by
+                    # both participants and staff. It carries the same retention deadline as
+                    # the message it copies.
+                    preview = encrypt_matchmaking_preview(
+                        conversation_id=str(conversation_id),
+                        message_id=message_id,
+                        sender_regno=sender.regno,
+                        plaintext=(body or "")[:100],
+                    )
                     conversation_row.last_message_at = message_doc["created_at"]
-                    conversation_row.last_message_preview = body[:100]
+                    conversation_row.last_message_preview_ciphertext = preview.ciphertext
+                    conversation_row.last_message_preview_nonce = preview.nonce
+                    conversation_row.last_message_preview_key_version = preview.key_version
+                    conversation_row.last_message_preview_message_id = message_id
+                    conversation_row.last_message_preview_sender_regno = sender.regno
+                    conversation_row.last_message_preview_delete_after = delete_after
                 session.flush()
-                message_doc["id"] = str(row.id)
+                message_doc["id"] = message_id
                 if decision.should_report:
                     # Idempotent: exactly one automated report per message. A new message
                     # cannot already have one, but the check makes retries safe and the
@@ -412,6 +526,20 @@ class MessageService:
                         session.add(report_row)
                         session.flush()
                         automated_report_id = str(report_row.id)
+                        # The blocked/flagged message itself is preserved for review
+                        # under the evidence retention rule, separate from ordinary
+                        # chat history.
+                        capture_report_evidence(
+                            session,
+                            report_id=automated_report_id,
+                            report_kind=REPORT_KIND_MATCHMAKING,
+                            message_id=str(message_doc["id"]),
+                            chat_id=str(conversation_id),
+                            sender_ref=sender.regno,
+                            plaintext=body or "",
+                            message_created_at=message_doc["created_at"],
+                            reported_at=message_doc["created_at"],
+                        )
                         record_report_filed(
                             session, kind=MESSAGE, author_regno=sender.regno,
                         )
@@ -426,6 +554,17 @@ class MessageService:
                 quota = self._quota(quota, messages_just_sent=1)
         except HTTPException:
             raise
+        except ChatEncryptionError as exc:
+            # Encryption is configured at startup, so this is an operational failure
+            # (for example a rotated-away active key). The transaction rolled back and
+            # nothing was delivered; never fall back to storing plaintext.
+            logger.error(
+                "Chat encryption failed for a new message (%s); send aborted", exc.code
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not securely store this message.",
+            ) from exc
         except Exception as exc:
             # Report/hide bookkeeping failed after a successful moderation result: never
             # silently treat as successful. The transaction above rolled back, so no partial
@@ -570,15 +709,24 @@ class MessageService:
             )
 
         limit = max(1, min(int(limit or CONVERSATION_MESSAGE_MAX), CONVERSATION_MESSAGE_MAX))
+        now = datetime.now(timezone.utc)
+        # Logical expiry, independent of physical cleanup: a message past its
+        # retention deadline is unreachable through this read even if the next
+        # daily scheduler run has not removed the row yet.
         visible = [
             MessageRecord.conversation_id == str(conversation_id),
             MessageRecord.removed_at.is_(None),
+            MessageRecord.delete_after > now,
         ]
         with db.sessions() as session:
             anchor = None
             if before is not None:
                 anchor = session.get(MessageRecord, str(before))
-                if anchor is None or str(anchor.conversation_id) != str(conversation_id):
+                if (
+                    anchor is None
+                    or str(anchor.conversation_id) != str(conversation_id)
+                    or self._aware(anchor.delete_after) <= now
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail="Message not found.",
@@ -597,6 +745,7 @@ class MessageService:
                 select(func.count()).select_from(MessageRecord).where(
                     MessageRecord.conversation_id == str(conversation_id),
                     MessageRecord.removed_at.is_(None),
+                    MessageRecord.delete_after > now,
                 )
             ) or 0
             # Newest first for the slice, then back to oldest-first for the reply: the
@@ -610,10 +759,29 @@ class MessageService:
                 .limit(limit)
             ).all()
             rows = list(reversed(newest_first))
-            messages = [{"id": str(row.id), "conversation_id": row.conversation_id,
-                "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno, "body": row.body,
-                "created_at": row.created_at, "is_read": row.is_read} for row in rows]
-            returned_ids = [str(row.id) for row in rows]
+
+        messages = []
+        for row in rows:
+            try:
+                plaintext = decrypt_matchmaking_message(row)
+            except ChatDecryptionError as exc:
+                # A corrupted or unauthenticated row is withheld, not delivered
+                # with a placeholder body that could be mistaken for content.
+                # Only ids and the sanitized code are logged.
+                logger.error(
+                    "Chat message decryption failed for message %s in conversation %s (%s)",
+                    row.id,
+                    conversation_id,
+                    exc.code,
+                )
+                continue
+            messages.append({
+                "id": str(row.id), "conversation_id": str(row.conversation_id),
+                "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno,
+                "body": plaintext,
+                "created_at": row.created_at, "is_read": row.is_read,
+            })
+        returned_ids = [str(msg["id"]) for msg in messages]
 
         # Mark messages as read for receiver, scoped to the ids actually returned above.
         # Reading an older page must not mark newer, unloaded messages as though they were
@@ -662,20 +830,25 @@ class MessageService:
         - Message exists in an accepted conversation
         - No duplicate reports
         """
-        # Get message
+        # Read only the metadata needed to authorise the report. The ciphertext
+        # is not decrypted until the report is actually being committed, so an
+        # unauthorised caller never causes plaintext to be produced.
         try:
             with db.sessions() as session:
                 row = session.get(MessageRecord, str(message_id))
-                message = {"id": str(row.id), "conversation_id": row.conversation_id,
+                message = {
+                    "id": str(row.id), "conversation_id": str(row.conversation_id),
                     "sender_regno": row.sender_regno, "receiver_regno": row.receiver_regno,
-                    "body": row.body, "created_at": row.created_at, "is_read": row.is_read} if row else None
+                    "created_at": row.created_at, "is_read": row.is_read,
+                    "delete_after": self._aware(row.delete_after),
+                } if row else None
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid message ID"
             )
         
-        if not message:
+        if not message or message["delete_after"] <= datetime.now(timezone.utc):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Message not found"
@@ -724,22 +897,55 @@ class MessageService:
             "status": "pending"
         }
         
-        with db.sessions.begin() as session:
-            row = MessageReportRecord(
-                message_id=report_doc["message_id"], reporter_regno=report_doc["reporter_regno"],
-                reported_user_regno=report_doc["reported_user_regno"], reason=report_doc["reason"],
-                reported_at=report_doc["reported_at"], status=report_doc["status"],
+        try:
+            with db.sessions.begin() as session:
+                message_row = session.get(MessageRecord, report_doc["message_id"])
+                if message_row is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Message not found",
+                    )
+                plaintext = decrypt_matchmaking_message(message_row)
+                row = MessageReportRecord(
+                    message_id=report_doc["message_id"], reporter_regno=report_doc["reporter_regno"],
+                    reported_user_regno=report_doc["reported_user_regno"], reason=report_doc["reason"],
+                    reported_at=report_doc["reported_at"], status=report_doc["status"],
+                )
+                session.add(row)
+                session.flush()
+                report_id = str(row.id)
+                # Preserve only the reported message, encrypted separately, so the
+                # report remains reviewable after ordinary chat history is purged.
+                capture_report_evidence(
+                    session,
+                    report_id=report_id,
+                    report_kind=REPORT_KIND_MATCHMAKING,
+                    message_id=report_doc["message_id"],
+                    chat_id=message_row.conversation_id,
+                    sender_ref=message_row.sender_regno,
+                    plaintext=plaintext,
+                    message_created_at=message_row.created_at,
+                    reported_at=report_doc["reported_at"],
+                )
+                # Charged to the sender, not the receiver: the receiver filed the complaint. By
+                # regno because that is how ``messages`` names its author -- see report_counters.
+                record_report_filed(
+                    session, kind=MESSAGE, author_regno=report_doc["reported_user_regno"]
+                )
+        except ChatDecryptionError as exc:
+            logger.error(
+                "Chat message decryption failed while filing report for message %s (%s)",
+                message_id,
+                exc.code,
             )
-            session.add(row)
-            session.flush()
-            report_id = str(row.id)
-            # Charged to the sender, not the receiver: the receiver filed the complaint. By
-            # regno because that is how ``messages`` names its author -- see report_counters.
-            record_report_filed(
-                session, kind=MESSAGE, author_regno=report_doc["reported_user_regno"]
-            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="This message could not be reported.",
+            ) from exc
         
-        logger.info(f"Message {message_id} reported by {reporter.regno} for: {reason}")
+        # The report reason is free text a participant wrote; the message body is
+        # never logged at all. Neither belongs in an application log.
+        logger.info("Message %s reported by %s", message_id, reporter.regno)
 
         # Staff-facing notice (role-based, best-effort): a failed write here must
         # never unwind the report that was just committed.

@@ -34,6 +34,7 @@ from app.services import content_safety_service as css
 from app.services.auth_service import get_current_user
 from app.services.report_resolution_service import pending_report_totals
 from conftest import override_get_current_user
+from tests.chat_helpers import make_message_record
 
 from test_case_closed import (  # noqa: E402
     A_ID,
@@ -128,10 +129,16 @@ def _report(db, message_id):
 
 
 def _message(db, body) -> CaseClosedMessageRecord:
+    from tests.chat_helpers import read_case_closed_body
+
     with db.sessions() as session:
-        return session.scalar(
-            select(CaseClosedMessageRecord).where(CaseClosedMessageRecord.body == body)
-        )
+        for row in session.scalars(select(CaseClosedMessageRecord)).all():
+            try:
+                if read_case_closed_body(row) == body:
+                    return row
+            except Exception:
+                continue
+    return None
 
 
 def _only_report(admin_client):
@@ -156,10 +163,10 @@ def _seed_matchmaking_report(db, sender_regno, reporter_regno, reported_at):
         )
         session.add(conversation)
         session.flush()
-        message = MessageRecord(
+        message = make_message_record(
             conversation_id=str(conversation.id), sender_regno=sender_regno,
             receiver_regno=reporter_regno, body="a matchmaking message",
-            created_at=now, is_read=False,
+            created_at=now, delete_after=now + timedelta(days=1), is_read=False,
         )
         session.add(message)
         session.flush()
@@ -298,7 +305,13 @@ def test_the_queue_total_counts_case_closed_reports(db, cc_http, cc_players, adm
     assert pending_report_totals(db)["messages"] == 1
 
 
-def test_search_matches_a_case_closed_body(db, cc_http, cc_players, admin_client):
+def test_search_does_not_search_a_case_closed_body(db, cc_http, cc_players, admin_client):
+    """Bodies are ciphertext at rest and are deliberately not a search surface.
+
+    Searching them would mean decrypting every reported turn for a query, which
+    is the broad read the report queue exists to avoid. The reason and the two
+    party regnos remain searchable.
+    """
     _start_session(db, cc_http, cc_players)
     sent = _send(cc_http, cc_players["a"], "a uniquely searchable claim")
     with acting_as(cc_players["b"]):
@@ -307,14 +320,15 @@ def test_search_matches_a_case_closed_body(db, cc_http, cc_players, admin_client
             json={"message_id": sent.json()["id"], "reason": REASON},
         )
 
-    assert only_report_with_body(admin_client, "uniquely searchable")["kind"] == "case_closed"
-    assert admin_client.get("/admin/messages/reports?q=no-such-text").json()["reports"] == []
-
-
-def only_report_with_body(admin_client, needle):
-    reports = admin_client.get(f"/admin/messages/reports?q={needle}").json()["reports"]
-    assert len(reports) == 1
-    return reports[0]
+    assert admin_client.get(
+        "/admin/messages/reports", params={"q": "uniquely searchable"}
+    ).json()["reports"] == []
+    reason_matches = admin_client.get(
+        "/admin/messages/reports", params={"q": REASON}
+    ).json()["reports"]
+    assert len(reason_matches) == 1
+    assert reason_matches[0]["kind"] == "case_closed"
+    assert reason_matches[0]["body"] == "a uniquely searchable claim"
 
 
 def test_the_two_message_kinds_merge_newest_first(db, cc_http, cc_players, admin_client):
@@ -362,7 +376,9 @@ def test_removing_a_case_closed_turn_hides_it_from_both_participants(db, cc_http
     with db.sessions() as session:
         message = session.get(CaseClosedMessageRecord, sent.json()["id"])
         assert message is not None
-        assert message.body == "the removed turn"
+        from tests.chat_helpers import read_case_closed_body
+
+        assert read_case_closed_body(message) == "the removed turn"
         assert message.removed_at is not None
         assert message.removed_by_regno is not None
 

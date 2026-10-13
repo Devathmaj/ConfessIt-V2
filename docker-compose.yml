@@ -75,6 +75,19 @@ services:
       # key above. Without it a database dump turns stored hashes into an offline search;
       # rotating it invalidates all sessions and unredeemed links, so rotate deliberately.
       TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
+      # AES-256-GCM keys for chat bodies at rest, Base64-encoded 32 bytes. Required:
+      # there is no plaintext fallback, and app startup refuses to run without the
+      # active version. The active version selects new writes; historical versions
+      # stay configured so rows written before a rotation remain readable. These are
+      # injected here only -- game-scheduler deletes by indexed deadline and must
+      # never receive key material.
+      CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: ${CHAT_ENCRYPTION_ACTIVE_KEY_VERSION:-v1}
+      CHAT_ENCRYPTION_KEY_V1: ${CHAT_ENCRYPTION_KEY_V1:?set CHAT_ENCRYPTION_KEY_V1 in the root .env}
+      # Retention defaults are also declared in app.config; passing them here means
+      # an operator can change one in the root .env without rebuilding the image.
+      MATCHMAKING_CHAT_RETENTION_HOURS: ${MATCHMAKING_CHAT_RETENTION_HOURS:-24}
+      REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS: ${REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS:-30}
+      CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       # The bundled collector serves plaintext gRPC on the Compose network only, so the
@@ -148,6 +161,10 @@ services:
       # deliberately.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
       TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
+      # Cleanup tuning, not key material: the scheduler deletes by indexed deadline
+      # and must never receive CHAT_ENCRYPTION_*. Keeping the batch size here in
+      # step with the API means one root .env setting controls the purge.
+      CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
       # The scheduler builds the same Settings object, whose connection strings are
       # required: REDIS_URL resolves from backend/.env off this password, exactly as
       # on the API. Telemetry rides the plaintext local collector like the API does.

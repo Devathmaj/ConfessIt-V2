@@ -92,6 +92,11 @@ RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "admin": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "moderator": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "users": ("emoji",),
+    # Conversation previews used to be stored as plaintext. They are now an
+    # encrypted copy of the newest visible message (see ConversationRecord), so
+    # the old text column is both unreadable by the model and a second durable
+    # copy of chat content the encryption change exists to remove.
+    "conversations": ("last_message_preview",),
     # The failed-move counter Two-Key Escape kept briefly: scoring counts
     # start-to-finish elapsed time only, so the column has no reader left.
     # The consumed-charges list it kept even more briefly: keys are
@@ -128,7 +133,8 @@ WIDENED_COLUMNS: dict[tuple[str, str], str] = {
 # declaring an index the database cannot build would fail every boot instead of
 # degrading to a scan. Entries are (table, column); names derive as ix_trgm_<table>_<column>.
 TRGM_INDEX_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("messages", "body"),
+    # ``messages.body`` is gone: the body is ciphertext now, so a trigram index
+    # could not answer a text search and the report queue no longer searches it.
     ("message_reports", "reason"),
     ("message_reports", "reporter_regno"),
     ("message_reports", "reported_user_regno"),
@@ -212,6 +218,14 @@ class PostgresClient:
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
     def initialize(self) -> None:
+        # Refuse to boot against the old plaintext chat tables. The encrypted
+        # schema changes NOT NULL columns and drops the body column, which
+        # create_all cannot apply to an existing table. This repository has no
+        # Alembic (schema converges through this method); the migration is the
+        # one-shot, explicitly destructive script in scripts/recreate_chat_schema.py
+        # because the old rows are disposable demo data and a data-preserving
+        # backfill would be far more code than the schema is worth.
+        self.assert_no_legacy_plaintext_chat_schema()
         # pgvector must exist before any table using vector(1536) is created.
         # Without this, create_all fails on a fresh database with "type vector
         # does not exist". Requires the pgvector extension package on the
@@ -248,6 +262,37 @@ class PostgresClient:
         # Automated confession moderation (Batch 1): system-actor reports reuse
         # the reports table with a nullable reporter and a source column.
         self.apply_report_source_convergence()
+
+    def assert_no_legacy_plaintext_chat_schema(self) -> None:
+        """Fail clearly when an old plaintext chat schema is still installed.
+
+        ``create_all`` only creates missing tables, and ``apply_missing_columns``
+        cannot turn the old NOT NULL ``body`` text column into the encrypted
+        columns without inventing data. Rather than silently starting with a
+        table the models cannot write to, point the operator at the one-shot
+        reset. The detection is narrow: only these two chat tables are checked,
+        so a clean database or one already on the encrypted schema boots
+        normally.
+        """
+        with self.engine.connect() as connection:
+            legacy = connection.execute(
+                text(
+                    "SELECT table_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND column_name = 'body' "
+                    "AND table_name IN ('messages', 'case_closed_messages')"
+                )
+            ).all()
+        if legacy:
+            names = ", ".join(sorted({row[0] for row in legacy}))
+            raise RuntimeError(
+                f"Legacy plaintext chat schema detected ({names}.body). "
+                "This build stores AES-256-GCM ciphertext instead. For a disposable "
+                "development/demo database, run "
+                "`python scripts/recreate_chat_schema.py --yes` from the backend "
+                "directory to drop only the chat/report tables and recreate them. "
+                "Do not run that against a database whose chat data must be preserved."
+            )
 
     def apply_missing_columns(self) -> None:
         """Add columns declared in the models but missing from an already-created table.

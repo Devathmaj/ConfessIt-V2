@@ -162,6 +162,17 @@ describe('ConversationDialog: paged thread', () => {
     api.getConversationByMatch.mockResolvedValue({ status: 'success', is_blocked: false });
   });
 
+  it('shows the matchmaking retention notice in the chat box', async () => {
+    db = [message(0)];
+    await renderDialog();
+
+    expect(
+      screen.getByText(
+        'For your privacy, matchmaking chat messages are automatically deleted 1 day after this chat ends.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('opens on the newest window with the total behind the pager', async () => {
     db = Array.from({ length: 35 }, (_, index) => message(index));
     await renderDialog();
@@ -275,7 +286,7 @@ describe('ConversationDialog: paged thread', () => {
     // The composer's notice must match what the report queue actually carries:
     // the reported message's own body, and thread counts/participants -- never
     // the other messages in the conversation.
-    const notice = screen.getByRole('note');
+    const notice = screen.getByText(/messages are checked against our content policy/i);
     expect(notice).toHaveTextContent(/messages are checked against our content policy/i);
     expect(notice).toHaveTextContent(/reported to admins and moderators/i);
     expect(notice).toHaveTextContent(/only that message is visible to them/i);

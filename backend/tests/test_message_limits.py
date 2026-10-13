@@ -38,6 +38,7 @@ from app.db_models import (
 )
 from app.limits import CONVERSATION_MESSAGE_MAX, CONVERSATION_PARTICIPANT_MESSAGE_MAX
 from app.main import app
+from tests.chat_helpers import make_message_record
 from app.models import UserDetails
 from app.postgres import get_postgres_client
 from app.services.auth_service import get_current_user
@@ -115,10 +116,11 @@ def fill(db, conversation_id, regno, count, *, other="bob", start=0):
     with db.sessions.begin() as session:
         for index in range(start, start + count):
             session.add(
-                MessageRecord(
+                make_message_record(
                     conversation_id=conversation_id, sender_regno=regno,
                     receiver_regno=other, body=f"seeded {index}",
                     created_at=datetime.now(timezone.utc) + timedelta(seconds=index),
+                    delete_after=datetime.now(timezone.utc) + timedelta(days=2),
                     is_read=True,
                 )
             )

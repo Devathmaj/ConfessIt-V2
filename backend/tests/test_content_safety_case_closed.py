@@ -83,10 +83,16 @@ def _start_session(db, http, players):
 
 
 def _message(db, body) -> CaseClosedMessageRecord:
+    from tests.chat_helpers import read_case_closed_body
+
     with db.sessions() as session:
-        return session.scalar(
-            select(CaseClosedMessageRecord).where(CaseClosedMessageRecord.body == body)
-        )
+        for row in session.scalars(select(CaseClosedMessageRecord)).all():
+            try:
+                if read_case_closed_body(row) == body:
+                    return row
+            except Exception:
+                continue
+    return None
 
 
 def _report(db, message_id):

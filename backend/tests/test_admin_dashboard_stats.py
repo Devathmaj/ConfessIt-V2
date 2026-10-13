@@ -32,6 +32,7 @@ from app.db_models import (
     ReportRecord,
     UserRecord,
 )
+from tests.chat_helpers import make_message_record
 
 REACTIONS = {"heart": [], "haha": [], "whoa": [], "heartbreak": []}
 REASON = "this breaks the rules"
@@ -106,12 +107,13 @@ def make_message(db, sender, receiver, *, body="hello"):
         )
         session.add(conversation)
         session.flush()
-        row = MessageRecord(
+        row = make_message_record(
             conversation_id=str(conversation.id),
             sender_regno=sender["regno"],
             receiver_regno=receiver["regno"],
             body=body,
             created_at=now,
+            delete_after=now + timedelta(days=1),
             is_read=False,
         )
         session.add(row)

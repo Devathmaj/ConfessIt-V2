@@ -80,3 +80,8 @@ SQLAlchemy==2.1.4
 # docker-compose.yml pgvector/pgvector:pg16 image).
 pgvector==0.4.2
 numpy==2.2.6
+# AES-256-GCM for chat bodies at rest (app/services/chat_encryption.py). Used
+# directly for AESGCM rather than through a higher-level wrapper so the stored
+# format (combined ciphertext+tag, explicit 12-byte nonce, AAD) is fully
+# controlled here. 50.0.2 is the current stable release of the line.
+cryptography==50.0.2

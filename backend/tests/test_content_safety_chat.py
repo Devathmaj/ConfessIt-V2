@@ -28,6 +28,8 @@ from app.services import content_safety_service as css
 from app.services.auth_service import get_current_user
 from app.services.report_resolution_service import unhide_message
 from app.services import report_resolution_service
+from app.services.chat_message_crypto import decrypt_matchmaking_preview
+from tests.chat_helpers import find_message_by_body, make_message_record
 
 WINDOW = timedelta(hours=4)
 SENDER = "chat-sender"
@@ -87,8 +89,13 @@ def make_accepted_conversation(db, sender, receiver) -> str:
 
 
 def message_for(db, body) -> MessageRecord:
+    return find_message_by_body(db, body)
+
+
+def conversation_preview(db, conversation_id) -> str | None:
     with db.sessions() as session:
-        return session.scalar(select(MessageRecord).where(MessageRecord.body == body))
+        conversation = session.get(ConversationRecord, conversation_id)
+        return decrypt_matchmaking_preview(conversation)
 
 
 def report_for(db, message_id):
@@ -202,9 +209,7 @@ def test_conversation_preview_does_not_leak_a_hidden_message(db, client, login_a
         _mock_moderation(monkeypatch, {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 6})
         client.post("/messages/send", json={"conversation_id": cast, "body": "hidden two"})
 
-    with db.sessions() as session:
-        conversation = session.get(ConversationRecord, cast)
-    assert conversation.last_message_preview == "visible one"
+    assert conversation_preview(db, cast) == "visible one"
 
 
 # ------------------------------------------------------------------ admin queue + restore
@@ -278,9 +283,7 @@ def test_unhide_restores_azure_hidden_message_and_preview(db, client, login_as, 
 
     unhide_message(db, str(row.id), "staff-regno")
 
-    with db.sessions() as session:
-        conversation = session.get(ConversationRecord, cast)
-    assert conversation.last_message_preview == "restored newest"
+    assert conversation_preview(db, cast) == "restored newest"
 
 
 def test_unhide_refuses_a_message_hidden_by_a_human(db):
@@ -289,9 +292,10 @@ def test_unhide_refuses_a_message_hidden_by_a_human(db):
     make_user(db, RECEIVER)
     conversation_id = make_accepted_conversation(db, SENDER, RECEIVER)
     with db.sessions.begin() as session:
-        row = MessageRecord(
+        row = make_message_record(
             conversation_id=conversation_id, sender_regno=SENDER,
-            receiver_regno=RECEIVER, body="manual", created_at=now, is_read=False,
+            receiver_regno=RECEIVER, body="manual", created_at=now,
+            delete_after=now + timedelta(days=1), is_read=False,
             removed_at=now, removed_by_regno="moderator-1",
         )
         session.add(row)

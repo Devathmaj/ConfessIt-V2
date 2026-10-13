@@ -912,7 +912,8 @@ export const ReportsReview = () => {
             {/* The box is a draft; the button sends it. Firing three queue reads per
                 keystroke would answer a query the operator had already retyped, so typing
                 only edits the draft and Search (or Enter) issues the one question the
-                database answers -- reason, reported content and who reported it. */}
+                database answers -- reason and who reported it. Encrypted message bodies
+                are not searchable. */}
             <div className="flex w-full gap-2 sm:max-w-xl">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -925,7 +926,7 @@ export const ReportsReview = () => {
                       submitSearch();
                     }
                   }}
-                  placeholder="Search reasons, reported content, or reporter"
+                  placeholder="Search reasons or reporter"
                   className="pl-9"
                 />
               </div>
@@ -970,7 +971,7 @@ export const ReportsReview = () => {
               {refreshing ? ' · Updating…' : ''}
             </Badge>
             <p className="text-xs text-muted-foreground">
-              Search matches the reason, the reported content and who reported it, across all
+              Search matches the reason and who reported it (message bodies stay encrypted), across all
               three queues at once.
             </p>
           </div>

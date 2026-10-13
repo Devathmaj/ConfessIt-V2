@@ -151,10 +151,18 @@ def _canonical(a: str, b: str) -> tuple[str, str]:
 
 
 def _event_deadline(game: CaseClosedGameRecord) -> Optional[datetime]:
+    """The session's actual end instant.
+
+    Game periods use an *exclusive* end date: a session whose
+    ``period_end_date`` is January 3 is playable through January 2 and ends at
+    00:00 UTC on January 3, which is when the scheduler is due to roll it over.
+    Chat retention and the deadline shown to players share this one value;
+    there is no separate end-of-day timestamp that could disagree with the
+    scheduler.
+    """
     if game.period_end_date is None:
         return None
-    d = game.period_end_date
-    return datetime(d.year, d.month, d.day, 23, 59, tzinfo=timezone.utc)
+    return datetime.combine(game.period_end_date, time.min, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +342,10 @@ def _get_or_create_session_row(session, game, user_a_id: str, user_b_id: str):
         )
     )
     if row is not None:
+        # Converge a session created before the column existed onto the same
+        # authoritative deadline every new session gets.
+        if row.expires_at is None:
+            row.expires_at = _event_deadline(game)
         return row
     row = CaseClosedSessionRecord(
         case_closed_game_id=str(game.id),
@@ -341,6 +353,8 @@ def _get_or_create_session_row(session, game, user_a_id: str, user_b_id: str):
         user_a_id=user_a_id,
         user_b_id=user_b_id,
         status="investigating",
+        # The pinned event's actual end, not a duration recomputed from today.
+        expires_at=_event_deadline(game),
     )
     session.add(row)
     try:

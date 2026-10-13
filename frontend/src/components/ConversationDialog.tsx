@@ -1268,6 +1268,19 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Retention notice: visible in the chat box on every viewport, including
+                after the sending window closes. It describes the server's rule, not a
+                promise that physical deletion happens at this exact instant. */}
+            <div
+              className="px-2 pt-3 text-center text-xs text-muted-foreground sm:px-4"
+              role="note"
+            >
+              <p>
+                For your privacy, matchmaking chat messages are automatically deleted 1 day
+                after this chat ends.
+              </p>
+            </div>
+
             {/* Message Input */}
             {canChat && !is_blocked && (
               <div className="border-t px-2 pt-2 sm:px-4 sm:pt-2 text-center text-xs text-muted-foreground">

@@ -320,6 +320,16 @@ async def on_startup():
     # cookies without Secure on an https site. Same fail-fast shape as above.
     validate_cookie_transport()
 
+    # Before a single chat message can be accepted: the active AES-256-GCM key
+    # must exist, decode as Base64 and be exactly 32 bytes. There is no plaintext
+    # fallback, so a missing or malformed key must stop the process here rather
+    # than surface as an insert failure after a user has typed a message. The
+    # scheduler process deliberately does not call this and receives no keys.
+    from .services.chat_encryption import validate_startup_configuration
+
+    validate_startup_configuration()
+    logger.info("Chat message encryption configuration validated.")
+
     postgres.initialize()
     # No accounts are created here. Booting the application used to seed a test participant
     # and a test admin, which meant a fresh deployment -- or a dropped-and-recreated

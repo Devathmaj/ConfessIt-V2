@@ -38,6 +38,7 @@ from app.models import AccountType, UserDetails
 from app.postgres import new_id
 from app.services.admin_service import serialize_datetime
 from app.services.auth_service import get_current_user
+from app.services.chat_message_crypto import decrypt_matchmaking_preview
 
 WINDOW = timedelta(hours=4)
 REASON = "this is hateful"
@@ -84,12 +85,6 @@ def make_accepted_conversation(db, sender, receiver):
         session.add(conversation)
         session.flush()
         return str(conversation.id)
-
-
-def message_id_for(db, body) -> str:
-    with db.sessions() as session:
-        row = session.scalar(select(MessageRecord).where(MessageRecord.body == body))
-    return str(row.id)
 
 
 def only_report(response):
@@ -363,7 +358,9 @@ def test_closing_a_report_leaves_the_message_alone(admin_client, thread, db):
     with db.sessions() as session:
         message = session.get(MessageRecord, thread["message_id"])
         assert message is not None
-        assert message.body == "a message"
+        from tests.chat_helpers import read_message_body
+
+        assert read_message_body(message) == "a message"
         assert message.removed_at is None
 
 
@@ -384,7 +381,9 @@ def test_removing_a_message_keeps_both_the_message_and_the_report(admin_client, 
     with db.sessions() as session:
         message = session.get(MessageRecord, thread["message_id"])
         assert message is not None
-        assert message.body == "a message"
+        from tests.chat_helpers import read_message_body
+
+        assert read_message_body(message) == "a message"
         assert message.removed_at is not None
         assert message.removed_by_regno is not None
         report = session.get(MessageReportRecord, thread["report_id"])
@@ -421,7 +420,12 @@ def test_removing_a_message_moves_the_conversation_preview_off_it(thread, db, ad
 
     with db.sessions() as session:
         conversation = session.get(ConversationRecord, thread["conversation_id"])
-        assert "a message" not in (conversation.last_message_preview or "")
+        preview = (
+            decrypt_matchmaking_preview(conversation)
+            if conversation.last_message_preview_ciphertext
+            else None
+        )
+        assert "a message" not in (preview or "")
 
 
 def test_a_removed_message_is_still_visible_to_staff_on_its_report(thread, admin_client, db):

@@ -309,7 +309,7 @@ def test_the_love_note_caps_match_the_constraints():
     write during input, before any CHECK is evaluated, which left
     ``ck_love_notes_body_length_1000`` unable to reject anything: the database raised
     ``StringDataRightTruncation`` and the constraint was unreachable. ``Text`` plus the CHECK
-    is how ``confessions.body`` and ``messages.body`` already enforce the same invariant.
+    is how ``confessions.body`` already enforces the same invariant.
     """
     from app.db_models import LoveNoteRecord
 
@@ -552,18 +552,19 @@ def test_length_constraints_are_installed(db):
                     "WHERE conname IN ("
                     f"  'ck_confessions_body_length_{CONFESSION_BODY_MAX}',"
                     f"  'ck_confession_comments_body_length_{COMMENT_BODY_MAX}',"
-                    f"  'ck_messages_body_length_{MESSAGE_BODY_MAX}',"
                     f"  'ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}')"
                 )
             )
         }
+    # Chat bodies are ciphertext now, so their 100-character rule is enforced by
+    # the Pydantic request model and the service before encryption. A CHECK on
+    # ciphertext length would measure the wrong thing and enforce nothing.
     assert installed == {
         ("confessions", f"ck_confessions_body_length_{CONFESSION_BODY_MAX}"),
         (
             "confession_comments",
             f"ck_confession_comments_body_length_{COMMENT_BODY_MAX}",
         ),
-        ("messages", f"ck_messages_body_length_{MESSAGE_BODY_MAX}"),
         ("love_notes", f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}"),
     }
 
@@ -571,11 +572,12 @@ def test_length_constraints_are_installed(db):
 def test_the_pre_convention_unsuffixed_length_constraints_are_retired(db):
     """The name a constraint had before the value moved into it must not outlive the change.
 
-    ``ck_messages_body_length`` and ``ck_confession_comments_body_length`` are how these two were
-    originally spelled, and they carry the *old* limits. Renaming the model to
-    ``ck_messages_body_length_100`` only adds the tight rule; the loose one would sit beside it
-    and keep permitting what the API refuses. Two CHECK constraints on a column are not a
-    maximum -- each is enforced on its own.
+    ``ck_confession_comments_body_length`` is how this one was originally spelled, and it carries
+    the *old* limit. Renaming the model to the suffixed name only adds the tight rule; the loose
+    one would sit beside it and keep permitting what the API refuses. Two CHECK constraints on a
+    column are not a maximum -- each is enforced on its own. The retired ``ck_messages_body_length``
+    is checked here too, because chat bodies are ciphertext now and no body-length CHECK should
+    survive on that table at all.
     """
     db.apply_check_constraints()
     with db.engine.begin() as connection:
@@ -657,32 +659,27 @@ def test_no_superseded_confession_length_constraint_is_left_behind(db):
     "table, limit, column",
     [
         ("confessions", CONFESSION_BODY_MAX, "body"),
-        ("messages", MESSAGE_BODY_MAX, "body"),
         ("love_notes", LOVE_NOTE_BODY_MAX, "body"),
     ],
 )
 def test_database_rejects_over_long_text_written_outside_the_api(db, table, limit, column):
     """The invariant has to hold for a script or migration, not just an HTTP request."""
     # Reconciled first so the assertion is about the *declared* limit rather than whatever a
-    # previous run left behind. A test database that predates a limit change keeps the old CHECK
-    # (`ck_messages_body_length` at 2000 rather than the current `MESSAGE_BODY_MAX` of 100), and
-    # then the 101-character insert is accepted -- the test fails for a reason that has nothing to
+    # previous run left behind. A test database that predates a limit change keeps the old CHECK,
+    # and then an over-long insert is accepted -- the test fails for a reason that has nothing to
     # do with the code under test. `create_all` cannot fix an existing table, so only this does.
+    # Chat bodies are not in this parameter set: they are ciphertext now, and their 100-character
+    # rule lives in the request model and the send service before encryption.
     db.apply_check_constraints()
 
     with db.engine.begin() as connection:
         savepoint = connection.begin_nested()
         _insert_user(connection, "limits-owner")
-        # The `messages` statement needs two participants: `matches` has a foreign key on both
-        # `user_1_regno` and `user_2_regno`, so without this the insert fails on the key and the
-        # test passes for the wrong reason -- it would be asserting that a `ck_` constraint
-        # rejects the row while the database was actually complaining about a missing user.
         _insert_user(connection, "limits-peer")
         # `love_notes` carries a foreign key on both `sender_id` and `recipient_id`, so it needs a
         # third participant beyond the two above. Without it the insert fails on the key and the
         # test passes for the wrong reason -- asserting that a `ck_` constraint rejects the row
-        # while the database was actually complaining about a missing user. Same false negative
-        # the `messages` case documents, one participant over.
+        # while the database was actually complaining about a missing user.
         _insert_user(connection, "limits-recipient")
         statement = {
             "confessions": (
@@ -690,30 +687,6 @@ def test_database_rejects_over_long_text_written_outside_the_api(db, table, limi
                 "comments_enabled, created_at, author_id) VALUES "
                 "(gen_random_uuid(), :body, 'Sam', false, false, now(), "
                 "(SELECT id FROM users WHERE regno = 'limits-owner'))"
-            ),
-            "messages": (
-                # The `gen_random_uuid()` fallbacks exist because `ON CONFLICT DO NOTHING RETURNING`
-                # yields no row when the match or conversation already exists, and the next CTE
-                # still needs an id to join on. They must be bare `gen_random_uuid()` and not
-                # `::text`: `mid` and `cid` are uuid columns, and PostgreSQL will not coalesce a
-                # uuid with text -- it rejects the statement outright with "COALESCE types uuid
-                # and text cannot be matched", which is a failure in the test's own SQL and not
-                # the database constraint this test exists to check.
-                "WITH ins AS ("
-                "INSERT INTO matches (id, user_1_regno, user_2_regno, created_at, expires_at) "
-                "VALUES (gen_random_uuid(), 'limits-owner', 'limits-peer', now(), now()+interval '4 hours') "
-                "ON CONFLICT DO NOTHING RETURNING id AS mid"
-                "), m2 AS ("
-                "SELECT COALESCE((SELECT mid FROM ins), gen_random_uuid()) AS mid"
-                "), conv AS ("
-                "INSERT INTO conversations (id, match_id, initiator_regno, receiver_regno, status, created_at, requested_at, accepted_at) "
-                "SELECT gen_random_uuid(), mid, 'limits-owner', 'limits-peer', 'accepted', now(), now(), now() FROM m2 "
-                "ON CONFLICT DO NOTHING RETURNING id AS cid"
-                "), c2 AS ("
-                "SELECT COALESCE((SELECT cid FROM conv), gen_random_uuid()) AS cid"
-                ") "
-                "INSERT INTO messages (id, conversation_id, sender_regno, receiver_regno, body, created_at) "
-                "SELECT gen_random_uuid(), cid, 'limits-owner', 'limits-peer', :body, now() FROM c2"
             ),
             "love_notes": (
                 # ``image_public_id``/``image_format`` are what the row holds now; the old test

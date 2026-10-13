@@ -46,6 +46,11 @@ from ..services.report_resolution_service import unhide_case_closed_message as u
 from ..services.report_resolution_service import unhide_comment as unhide_comment_service
 from ..services.report_resolution_service import unhide_confession as unhide_confession_service
 from ..services.report_resolution_service import unhide_message as unhide_message_service
+from ..services.chat_evidence_service import (
+    audit_evidence_access,
+    decrypt_evidence,
+    evidence_for_reports,
+)
 from ..services.content_safety_service import (
     AUTOMATED_REPORTER_DISPLAY_NAME,
     AUTOMATED_SOURCE,
@@ -903,9 +908,9 @@ def get_message_reports(
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the message body and both parties' regnos."),
+    q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the report reason and both parties' regnos. Message bodies are encrypted and are deliberately not searched."),
     db: Database = Depends(get_db),
-    _: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
+    reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
     """Every reported chat message, newest first, with the message and both parties.
 
@@ -925,10 +930,15 @@ def get_message_reports(
     legacy row closed out before the rename is still returned by the filter whose name matches the
     label the screen prints (section 17.1).
 
-    ``q`` narrows in SQL to reports whose reason, message body or either party's regno
-    matches, with the total counted under the same filter so the screen pages the question
-    it asked. The message join is many-to-one on a unique key, so neither the page nor
-    the COUNT can fan out; the names stay a display concern resolved in bulk below.
+    ``q`` narrows in SQL to reports whose reason or either party's regno matches, with the
+    total counted under the same filter so the screen pages the question it asked. The body
+    is ciphertext at rest and is deliberately not searchable: doing so would mean decrypting
+    every message for a query, which is exactly the unrestricted access this queue exists to
+    avoid. The names stay a display concern resolved in bulk below.
+
+    Bodies come from the separately encrypted evidence row for each report, never from a
+    general chat-history read. A moderator sees the individual reported message and thread
+    metadata; they cannot walk the rest of the conversation from here.
 
     **Two message surfaces, one queue.** Matchmaking chat messages and Case Closed
     detective-thread turns both report here, so the tab a moderator already watches covers
@@ -947,17 +957,18 @@ def get_message_reports(
         filters_mm.append(MessageReportRecord.status.in_(wanted))
         filters_cc.append(CaseClosedMessageReportRecord.status.in_(wanted))
     if cleaned:
+        # The message body is not searchable: it is encrypted, and decrypting
+        # every row to run a LIKE would be a broad read rather than a report
+        # review. Reason and the two party identifiers remain searchable.
         filters_mm.append(or_(
             ilike_contains(MessageReportRecord.reason, cleaned),
             ilike_contains(MessageReportRecord.reporter_regno, cleaned),
             ilike_contains(MessageReportRecord.reported_user_regno, cleaned),
-            ilike_contains(MessageRecord.body, cleaned),
         ))
         filters_cc.append(or_(
             ilike_contains(CaseClosedMessageReportRecord.reason, cleaned),
             ilike_contains(CaseClosedMessageReportRecord.reporter_regno, cleaned),
             ilike_contains(CaseClosedMessageReportRecord.reported_user_regno, cleaned),
-            ilike_contains(CaseClosedMessageRecord.body, cleaned),
         ))
     from ..services.admin_service import ADMIN_MAX_SKIP as _ADMIN_MAX_SKIP
 
@@ -1002,6 +1013,22 @@ def get_message_reports(
         mm_page = [r for kind, r in page if kind == "matchmaking"]
         cc_page = [r for kind, r in page if kind == "case_closed"]
 
+        # Reported-message evidence is the authoritative source for the body:
+        # it survives ordinary chat retention and is the only content this
+        # endpoint is allowed to decrypt. Decryption is attempted only for the
+        # reports on this page.
+        evidence_by_report = evidence_for_reports(
+            session, [str(report.id) for _kind, report in page]
+        )
+        evidence_bodies: Dict[str, str] = {}
+        for _kind, report in page:
+            evidence = evidence_by_report.get(str(report.id))
+            if evidence is None:
+                continue
+            plaintext = decrypt_evidence(evidence, report_id=str(report.id))
+            if plaintext is not None:
+                evidence_bodies[str(report.id)] = plaintext
+
         # Two bulk reads rather than two per row: a queue grows with every report filed, so
         # the per-row lookup would be a cost paid on every page a moderator opens.
         regnos = {report.reporter_regno for report in mm_page} | {report.reported_user_regno for report in mm_page}
@@ -1013,15 +1040,21 @@ def get_message_reports(
             return {"regno": regno, "name": person.name if person else "Unknown"}
 
         # --- Matchmaking chat: message + conversation context, in bulk. -------------------
-        message_ids = {report.message_id for report in mm_page}
+        message_ids = {report.message_id for report in mm_page if report.message_id}
         messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
 
         # Conversation context, in three bulk reads rather than three per row. A reported
         # message without its thread is a sentence with nothing around it, and "who was this
         # person talking to, and had anything else in there already come down" is the context
-        # that decides whether one message is a single lapse or a pattern.
+        # that decides whether one message is a single lapse or a pattern. Evidence carries
+        # the conversation id even after the message row has been purged.
         conversation_ids = {
             str(message.conversation_id) for message in messages.values() if message.conversation_id
+        }
+        conversation_ids |= {
+            str(evidence_by_report[str(report.id)].chat_id)
+            for report in mm_page
+            if str(report.id) in evidence_by_report
         }
         conversations = {
             str(row.id): row for row in session.scalars(
@@ -1058,13 +1091,18 @@ def get_message_reports(
             thread_removed = {str(row[0]): row[2] for row in counted}
 
         # --- Case Closed detective threads: turn + couple context, in bulk. ----------------
-        cc_message_ids = {report.message_id for report in cc_page}
+        cc_message_ids = {report.message_id for report in cc_page if report.message_id}
         cc_messages = {
             str(message.id): message for message in session.scalars(
                 select(CaseClosedMessageRecord).where(CaseClosedMessageRecord.id.in_(cc_message_ids))
             ).all()
         } if cc_message_ids else {}
         cc_session_ids = {str(message.session_id) for message in cc_messages.values()}
+        cc_session_ids |= {
+            str(evidence_by_report[str(report.id)].chat_id)
+            for report in cc_page
+            if str(report.id) in evidence_by_report
+        }
         cc_sessions = {
             str(row.id): row for row in session.scalars(
                 select(CaseClosedSessionRecord).where(CaseClosedSessionRecord.id.in_(cc_session_ids))
@@ -1097,9 +1135,27 @@ def get_message_reports(
     def _mm_row(report) -> Dict[str, Any]:
         reporter = users.get(report.reporter_regno)
         reported_user = users.get(report.reported_user_regno)
-        message = messages.get(str(report.message_id))
+        message = messages.get(str(report.message_id)) if report.message_id else None
+        evidence = evidence_by_report.get(str(report.id))
+        chat_id = (
+            str(evidence.chat_id)
+            if evidence is not None
+            else (str(message.conversation_id) if message is not None else None)
+        )
+        # Evidence is the only content source a moderator may decrypt. There is
+        # deliberately no fallback to the live chat row: that path would hand out
+        # content whose evidence retention window had closed and would bypass the
+        # access audit below.
+        body = evidence_bodies.get(str(report.id))
+        if body is None:
+            body = "[Message not found]"
+        created_at = (
+            evidence.message_created_at
+            if evidence is not None
+            else (message.created_at if message is not None else None)
+        )
 
-        conversation = conversations.get(str(message.conversation_id)) if message else None
+        conversation = conversations.get(chat_id) if chat_id else None
         conversation_context = None
         if conversation is not None:
             conversation_context = {
@@ -1123,13 +1179,14 @@ def get_message_reports(
         return {
             "id": str(report.id),
             "kind": "matchmaking",
-            "message_id": str(report.message_id),
-            "body": message.body if message else "[Message not found]",
+            "message_id": str(report.message_id) if report.message_id else None,
+            "body": body,
             # When the message was sent. The screen previously showed only when it was
             # *reported*, so a message could sit in the queue looking like it was sent moments
-            # ago however long ago it actually was.
-            "message_created_at": serialize_datetime(message.created_at) if message else None,
-            "conversation_id": str(message.conversation_id) if message else None,
+            # ago however long ago it actually was. Evidence keeps this timestamp after the
+            # live row is purged.
+            "message_created_at": serialize_datetime(created_at) if created_at else None,
+            "conversation_id": chat_id,
             "conversation": conversation_context,
             # Automated reports carry no participant reporter; the system is the author. The
             # live users row wins for a manual report, so a renamed participant appears under
@@ -1167,8 +1224,22 @@ def get_message_reports(
     def _cc_row(report) -> Dict[str, Any]:
         reporter = users.get(report.reporter_regno)
         reported_user = users.get(report.reported_user_regno)
-        message = cc_messages.get(str(report.message_id))
-        couple = cc_sessions.get(str(message.session_id)) if message else None
+        message = cc_messages.get(str(report.message_id)) if report.message_id else None
+        evidence = evidence_by_report.get(str(report.id))
+        chat_id = (
+            str(evidence.chat_id)
+            if evidence is not None
+            else (str(message.session_id) if message is not None else None)
+        )
+        body = evidence_bodies.get(str(report.id))
+        if body is None:
+            body = "[Message not found]"
+        created_at = (
+            evidence.message_created_at
+            if evidence is not None
+            else (message.created_at if message is not None else None)
+        )
+        couple = cc_sessions.get(chat_id) if chat_id else None
 
         conversation_context = None
         if couple is not None:
@@ -1192,10 +1263,10 @@ def get_message_reports(
         return {
             "id": str(report.id),
             "kind": "case_closed",
-            "message_id": str(report.message_id),
-            "body": message.body if message else "[Message not found]",
-            "message_created_at": serialize_datetime(message.created_at) if message else None,
-            "conversation_id": str(message.session_id) if message else None,
+            "message_id": str(report.message_id) if report.message_id else None,
+            "body": body,
+            "message_created_at": serialize_datetime(created_at) if created_at else None,
+            "conversation_id": chat_id,
             "conversation": conversation_context,
             "reporter": (
                 {"regno": None, "name": AUTOMATED_REPORTER_DISPLAY_NAME}
@@ -1225,6 +1296,23 @@ def get_message_reports(
     for report in cc_page:
         by_id[str(report.id)] = _cc_row(report)
     enriched_reports = [by_id[str(report.id)] for kind, report in page]
+
+    # Auditing is part of the read: if it cannot be recorded, the decrypted
+    # reported content is not returned. Only ids and the reviewer are stored.
+    returned_evidence = {
+        report_id: evidence
+        for report_id, evidence in evidence_by_report.items()
+        if report_id in evidence_bodies
+    }
+    audit_evidence_access(
+        db,
+        reviewer_regno=reviewer.regno,
+        report_kind_by_id={
+            report_id: evidence.report_kind
+            for report_id, evidence in returned_evidence.items()
+        },
+        evidence_by_report=returned_evidence,
+    )
 
     return {
         "reports": enriched_reports,

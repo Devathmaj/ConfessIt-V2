@@ -59,6 +59,11 @@ from ..db_models import (
 from ..logger import get_logger
 from ..postgres import Database, is_valid_id
 from ..utils import isoformat_datetime
+from .chat_encryption import ChatDecryptionError
+from .chat_message_crypto import (
+    decrypt_matchmaking_message,
+    encrypt_matchmaking_preview,
+)
 from .notification_service import create_notification_service
 from .storage_service import storage_service
 from .report_counters import (
@@ -290,33 +295,69 @@ def _stamp_removal(row, reviewer_regno: str) -> bool:
     return True
 
 
+def _clear_conversation_preview(conversation) -> None:
+    conversation.last_message_at = None
+    conversation.last_message_preview_ciphertext = None
+    conversation.last_message_preview_nonce = None
+    conversation.last_message_preview_key_version = None
+    conversation.last_message_preview_message_id = None
+    conversation.last_message_preview_sender_regno = None
+    conversation.last_message_preview_delete_after = None
+
+
 def _recompute_conversation_preview(session, conversation_id: Optional[str]) -> None:
     """Move a conversation's preview to the newest message that is still visible.
 
     A removed message stays in ``messages`` and is excluded from every participant read, so
     without this the conversation list would keep showing the first 100 characters of a post
     that has been taken down -- the one place the removal would still be leaking its text.
+
+    The preview is an encrypted copy, so this decrypts the replacement message and re-encrypts
+    its first 100 characters under the preview's own AAD. If the replacement cannot be
+    decrypted the preview is cleared rather than left pointing at older text.
     """
     if not conversation_id:
         return
     conversation = session.get(ConversationRecord, str(conversation_id))
     if conversation is None:
         return
+    now = datetime.now(timezone.utc)
     newest = session.scalar(
         select(MessageRecord)
         .where(
             MessageRecord.conversation_id == str(conversation_id),
             MessageRecord.removed_at.is_(None),
+            MessageRecord.delete_after > now,
         )
         .order_by(MessageRecord.created_at.desc())
         .limit(1)
     )
     if newest is None:
-        conversation.last_message_at = None
-        conversation.last_message_preview = None
+        _clear_conversation_preview(conversation)
         return
+    try:
+        plaintext = decrypt_matchmaking_message(newest)
+    except ChatDecryptionError as exc:
+        logger.error(
+            "Conversation preview recompute could not decrypt message %s (%s); clearing preview",
+            newest.id,
+            exc.code,
+        )
+        _clear_conversation_preview(conversation)
+        return
+    preview = encrypt_matchmaking_preview(
+        conversation_id=str(conversation_id),
+        message_id=str(newest.id),
+        sender_regno=newest.sender_regno,
+        plaintext=(plaintext or "")[:100],
+    )
     conversation.last_message_at = newest.created_at
-    conversation.last_message_preview = (newest.body or "")[:100]
+    conversation.last_message_preview_ciphertext = preview.ciphertext
+    conversation.last_message_preview_nonce = preview.nonce
+    conversation.last_message_preview_key_version = preview.key_version
+    conversation.last_message_preview_message_id = str(newest.id)
+    conversation.last_message_preview_sender_regno = newest.sender_regno
+    conversation.last_message_preview_delete_after = newest.delete_after
 
 
 def resolve_confession_report(
@@ -510,7 +551,9 @@ def resolve_message_report(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
         reporter_regno = report.reporter_regno
-        message = session.get(MessageRecord, str(report.message_id))
+        # message_id is nullable once ordinary retention has purged the row; the
+        # report and its encrypted evidence survive and the ruling still closes.
+        message = session.get(MessageRecord, str(report.message_id)) if report.message_id else None
         if message is not None:
             # A message can only be reported by its receiver, so the sender and the reporter
             # are always two different people here. The self-report case only arises for
@@ -574,7 +617,11 @@ def resolve_case_closed_message_report(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
 
         reporter_regno = report.reporter_regno
-        message = session.get(CaseClosedMessageRecord, str(report.message_id))
+        message = (
+            session.get(CaseClosedMessageRecord, str(report.message_id))
+            if report.message_id
+            else None
+        )
         if message is not None:
             author_regno = _regno_for_user(session, message.sender_user_id)
             if status_value == REMOVAL_STATUS and _stamp_removal(message, reviewer_regno):
