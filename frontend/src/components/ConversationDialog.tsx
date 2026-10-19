@@ -191,6 +191,69 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const unsubscribeMessageRef = useRef<(() => void) | null>(null);
   const unsubscribeErrorRef = useRef<(() => void) | null>(null);
 
+  /**
+   * The conversation data the countdown reads.
+   *
+   * The countdown runs on a timer set up once, when the dialog mounts, and a
+   * timer's callback closes over the values of the render that created it. On the
+   * path where the dialog is opened without data -- the matchmaking page, which
+   * fetches it afterwards -- that render has no data at all, so the countdown
+   * returned on every tick and never rendered a thing. Holding the data in a ref
+   * is what lets the timer see the data that arrived after it was set up.
+   */
+  const conversationDataRef = useRef<ConversationData | null>(initialConversationData || null);
+
+  /**
+   * The ids of the messages on screen, kept in step with the list
+   * synchronously.
+   *
+   * The list itself is state, and a state update only becomes visible after the
+   * next render. A dedupe that reads the list (or a ref the render fills in)
+   * therefore sees a message as absent while it is already on screen -- and
+   * that is how the same message ended up on screen twice: the sender put it
+   * there and the live echo arrived before the list had caught up.
+   *
+   * This set is updated the moment a message is added or the list is replaced,
+   * so the two can never both claim it.
+   */
+  const messageIdsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * The conversation this dialog has already opened a live stream for.
+   *
+   * Initialising is the effect's job, but the effect can be re-run by a state
+   * change that has nothing to do with it -- an unblock flips the block flag,
+   * and the effect depends on it -- and a second initialisation is not
+   * harmless: it loads the history twice, opens a second socket (orphaning the
+   * first, which keeps pinging and keeps holding a Redis connection), and
+   * registers a second message subscription, so every live message arrives
+   * twice.
+   *
+   * So the initialisation is claimed synchronously, before the first await:
+   * whoever gets here first does the work, the other one does nothing.
+   */
+  const initializedConversationRef = useRef<string | null>(null);
+
+  /** Replace the known ids with those of a list that has just been set. */
+  const rememberMessageIds = (list: Message[]) => {
+    messageIdsRef.current = new Set(list.map((message) => message.id));
+  };
+
+  /**
+   * Put a message on screen, unless it is already there.
+   *
+   * Answers whether it was added, so the caller knows whether the count moved.
+   */
+  const appendMessage = (message: Message): boolean => {
+    if (messageIdsRef.current.has(message.id)) {
+      return false;
+    }
+    messageIdsRef.current.add(message.id);
+    setMessages((previous) => [...previous, message]);
+    setTotalMessages((previous) => previous + 1);
+    return true;
+  };
+
   // Keep backup of messages updated
   useEffect(() => {
     if (messages.length > 0) {
@@ -226,6 +289,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       cleanup();
     };
   }, []);
+
+  // Keep the countdown's view of the data in step with the data itself, and start
+  // it as soon as there is something to count down.
+  //
+  // The timer above is set up once and reads through the ref, because the data
+  // often arrives after the timer does: the dialog opened from the matchmaking
+  // page fetches its own conversation, and the first render had none to count
+  // down. Without this the header stayed empty until the first tick, and the
+  // expiry that locks the composer only ever happened if the timer happened to
+  // have been set up after the data landed.
+  useEffect(() => {
+    conversationDataRef.current = conversationData;
+    updateTimeLeft();
+  }, [conversationData]);
 
   // Check block status when conversation data changes
   useEffect(() => {
@@ -287,7 +364,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       });
 
       if (token && messages.length === 0) {
-        loadMessagesFromBackend(token).catch(error => {
+        loadMessagesFromBackend().catch(error => {
           console.error('Failed to load messages for read-only conversation:', error);
         });
       }
@@ -307,6 +384,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       unsubscribeErrorRef.current = null;
     }
     messagingClient.disconnect();
+    // The live stream is gone, so this conversation may be opened again -- after
+    // an unblock, for instance, when the thread becomes live again.
+    initializedConversationRef.current = null;
   };
 
   const initializeMessaging = async () => {
@@ -320,6 +400,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
     const conversationId = conversationData.conversation.id;
 
+    // Claimed synchronously, before the first await: two initialisations that
+    // overlap would load the history twice, open two sockets (orphaning the
+    // first) and register two subscriptions, so every live message would
+    // arrive twice. Whoever claims it first does the work.
+    if (initializedConversationRef.current === conversationId) {
+      console.log('🔁 Messaging already initialised for this conversation; skipping');
+      return;
+    }
+    initializedConversationRef.current = conversationId;
+
     console.log('🔍 Initializing messaging:', {
       conversation_id: conversationId,
       has_token: !!token,
@@ -329,7 +419,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     try {
       // Always load existing messages first
       console.log('⏳ Loading messages...');
-      await loadMessagesFromBackend(token);
+      await loadMessagesFromBackend();
       console.log('✅ Messages loaded');
 
       // Only connect WebSocket if not blocked (for real-time updates). The ref, not
@@ -339,7 +429,15 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // and unblocking leaves the thread silently socketless.
       if (!blockedRef.current) {
         console.log('⏳ Connecting to WebSocket...');
-        await messagingClient.connect(conversationId, token);
+        const opened = await messagingClient.connect(conversationId);
+        if (!opened) {
+          // Overtaken: the dialog closed (or the thread changed) while the
+          // ticket was being fetched. There is no socket to subscribe to, and
+          // no socket to leave behind.
+          console.log('↩️ WebSocket connect overtaken; not subscribing');
+          setIsConnected(false);
+          return;
+        }
         console.log('✅ WebSocket connection promise resolved');
 
         // Subscribe to new messages
@@ -350,27 +448,26 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             ...newMessage,
             is_sender: isFromCaller
           };
-          // Dedupe against the backup: a message redelivered while a page read is in
-          // flight must not land twice, and the total below must not count it twice
-          // either -- a phantom extra row would offer one empty older page too many,
-          // which at least heals on the next read.
-          if (!messagesBackupRef.current.some((message) => message.id === newMessage.id)) {
-            setMessages((prev) => [...prev, messageWithFlag]);
-            setTotalMessages((prev) => prev + 1);
+          // Dedupe by id, against the set that is kept in step synchronously:
+          // a message redelivered while a page read is in flight must not land
+          // twice, and the total below must not count it twice either -- a
+          // phantom extra row would offer one empty older page too many, which
+          // at least heals on the next read.
+          if (appendMessage(messageWithFlag)) {
+            // The live socket is how a partner's message reaches this thread, so the allowance
+            // has to move here too or the composer keeps offering a room that is no longer
+            // there. Derived from the server's counts rather than recounted from the list, and
+            // only for the conversation this subscription was opened for.
+            setQuotaState((previous) =>
+              previous && previous.conversationId === newMessage.conversation_id
+                ? {
+                    conversationId: previous.conversationId,
+                    quota: quotaAfterIncomingMessage(previous.quota, isFromCaller) ?? previous.quota,
+                  }
+                : previous
+            );
+            scrollToBottom();
           }
-          // The live socket is how a partner's message reaches this thread, so the allowance
-          // has to move here too or the composer keeps offering a room that is no longer
-          // there. Derived from the server's counts rather than recounted from the list, and
-          // only for the conversation this subscription was opened for.
-          setQuotaState((previous) =>
-            previous && previous.conversationId === newMessage.conversation_id
-              ? {
-                  conversationId: previous.conversationId,
-                  quota: quotaAfterIncomingMessage(previous.quota, isFromCaller) ?? previous.quota,
-                }
-              : previous
-          );
-          scrollToBottom();
         });
         unsubscribeMessageRef.current = unsubscribeMessage;
 
@@ -397,11 +494,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     }
   };
 
-  const loadMessagesFromBackend = async (token: string) => {
+  const loadMessagesFromBackend = async () => {
     console.log('📥 loadMessagesFromBackend called:', {
       has_conversationData: !!conversationData,
       conversation_id: conversationData?.conversation?.id,
-      has_token: !!token
     });
     
     if (!conversationData?.conversation?.id) {
@@ -417,7 +513,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         messages,
         quota: fetchedQuota,
         total: fetchedTotal,
-      } = await fetchMessages(conversationData.conversation.id, token, THREAD_PAGE_SIZE);
+      } = await fetchMessages(conversationData.conversation.id, THREAD_PAGE_SIZE);
       console.log('✅ Messages fetched:', messages.length);
 
       // Add is_sender flag to each message
@@ -426,6 +522,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         is_sender: msg.sender_regno === currentUserRef.current
       }));
 
+      // The list is replaced, so the known ids are replaced with it -- in the
+      // same breath, before the render that would otherwise catch up later.
+      rememberMessageIds(messagesWithFlags);
       setMessages(messagesWithFlags);
       // A numeric total means the server pages: the window above is the newest page and
       // older ones wait behind the pager. Without one the whole thread came back, as it
@@ -460,7 +559,6 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     try {
       const { messages: older, total: fetchedTotal } = await fetchMessages(
         conversationData.conversation.id,
-        token,
         THREAD_PAGE_SIZE,
         oldest.id,
       );
@@ -477,6 +575,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         ...msg,
         is_sender: msg.sender_regno === currentUserRef.current,
       }));
+      // The older rows are added to the list, so their ids join the known ones
+      // -- in the same breath, before the render that would otherwise catch up
+      // later and let a live arrival claim a row that is already there.
+      flagged.forEach((message) => messageIdsRef.current.add(message.id));
       setMessages((prev) => {
         const known = new Set(prev.map((message) => message.id));
         return [...flagged.filter((message) => !known.has(message.id)), ...prev];
@@ -567,16 +669,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   };
 
   const updateTimeLeft = () => {
-    if (!conversationData) return;
+    // Read through the ref, not the state: the timer was set up on the first
+    // render, and on the path where the dialog is opened without data that
+    // render had none.
+    const data = conversationDataRef.current;
+    if (!data) return;
 
     // Use the backend-provided is_expired flag as the source of truth
-    if (conversationData.match.is_expired) {
+    if (data.match.is_expired) {
       setTimeLeft('Expired');
       return;
     }
 
     const now = serverNow();
-    const expiresAt = timestampMs(conversationData.match.expires_at);
+    const expiresAt = timestampMs(data.match.expires_at);
     const diff = expiresAt - now;
 
     if (diff <= 0) {
@@ -674,15 +780,26 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     try {
       const sent = await sendMessage(
         conversationData.conversation.id,
-        textToSend,
-        token
+        textToSend
       );
 
       // The send reports the allowance as it left it, so the counter moves to the server's
       // answer rather than to a guess made here.
       recordQuota(sent.quota);
 
-      // Message will appear via real-time WebSocket subscription
+      // The message goes on screen here, not on the live echo.
+      //
+      // The REST call has already stored it, so the server's answer is the
+      // message: waiting for the echo to bring it back means that a socket
+      // that is not connected, a publish that did not go out, or a socket the
+      // server reaped leaves the sender looking at a thread without their own
+      // message -- and the composer has already been cleared, so the natural
+      // thing to do is send it again. The echo, if it ever arrives, finds the
+      // message already here and is deduped by id.
+      appendMessage({
+        ...sent,
+        is_sender: sent.sender_regno === currentUserRef.current,
+      });
       scrollToBottom();
     } catch (error) {
       console.error('Error sending message:', error);
@@ -830,17 +947,20 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           // Restore messages
           if (savedMessages.length > 0) {
             console.log('🔄 Restoring messages after state update:', savedMessages.length);
+            // The list is replaced, so the known ids are replaced with it.
+            rememberMessageIds(savedMessages);
             setMessages(savedMessages);
             messagesBackupRef.current = savedMessages;
           } else {
             // If there were no messages, try to load them
             console.log('📥 No saved messages, loading from backend...');
-            fetchMessages(newConversationData.conversation.id, token)
+            fetchMessages(newConversationData.conversation.id)
               .then(({ messages: fetchedMessages, quota: fetchedQuota, total: fetchedTotal }) => {
                 const messagesWithFlags = fetchedMessages.map((msg) => ({
                   ...msg,
                   is_sender: msg.sender_regno === currentUserRef.current
                 }));
+                rememberMessageIds(messagesWithFlags);
                 setMessages(messagesWithFlags);
                 setTotalMessages(
                   typeof fetchedTotal === 'number' ? fetchedTotal : messagesWithFlags.length,
@@ -881,12 +1001,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // Clear hide preference from localStorage
       const hideKey = `hide_messages_${conversationData.match.id}`;
       localStorage.removeItem(hideKey);
-      
-      // Reinitialize WebSocket connection
-      if (conversationData.conversation.status === 'accepted' && !conversationData.match.is_expired) {
-        await initializeMessaging();
-      }
-      
+
+      // The live stream is opened by the effect above, not here. The block flag
+      // it depends on has just changed, so the effect runs again and opens the
+      // socket; opening it here as well would initialise the thread twice --
+      // two history loads, two sockets (the first orphaned, still pinging and
+      // still holding a Redis connection) and two message subscriptions, so
+      // every live message would arrive twice.
       onRefresh(); // Refresh parent
     } catch (error: any) {
       console.error('Error unblocking user:', error);

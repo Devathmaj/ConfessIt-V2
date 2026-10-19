@@ -26,6 +26,8 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
+from ..postgres import get_row, is_valid_id
+
 from ..limits import (
     CASE_CLOSED_LLM_TIMEOUT_SECONDS,
     CASE_CLOSED_MAX_REPAIR_ATTEMPTS,
@@ -341,7 +343,7 @@ def create_blueprint_draft(db, config: CaseClosedGenerationConfig, created_by: s
 def get_blueprint(db, blueprint_id: str) -> dict:
     BlueprintRecord, _ = _records()
     with db.sessions() as session:
-        row = session.get(BlueprintRecord, blueprint_id)
+        row = get_row(session, BlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         return _blueprint_view(row)
@@ -359,7 +361,7 @@ def list_blueprints(db) -> list[dict]:
 def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
     BlueprintRecord, _ = _records()
     with db.sessions.begin() as session:
-        row = session.get(BlueprintRecord, blueprint_id)
+        row = get_row(session, BlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         try:
@@ -378,7 +380,7 @@ def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
 
         # Stage A via the shared client (same contract as Plot Twist).
         with db.sessions() as session:
-            row = session.get(BlueprintRecord, bid)
+            row = get_row(session, BlueprintRecord, bid)
             assert row is not None
             config = CaseClosedGenerationConfig.model_validate(dict(row.config or {}))
         payload, _meta = generate_structured_json(
@@ -410,7 +412,7 @@ def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
             report = case_closed_validation.validate_blueprint(payload)
     except Exception as exc:
         with db.sessions.begin() as session:
-            row = session.get(BlueprintRecord, bid)
+            row = get_row(session, BlueprintRecord, bid)
             if row is not None:
                 row.status = "generation_failed"
                 row.validation_errors = [
@@ -419,7 +421,7 @@ def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
         raise _as_http(exc)
 
     with db.sessions.begin() as session:
-        row = session.get(BlueprintRecord, bid)
+        row = get_row(session, BlueprintRecord, bid)
         assert row is not None
         if report.ok:
             row.blueprint = payload
@@ -436,7 +438,7 @@ def generate_blueprint(db, blueprint_id: str, llm_config=None) -> dict:
 def approve_blueprint(db, blueprint_id: str) -> dict:
     BlueprintRecord, _ = _records()
     with db.sessions() as session:
-        row = session.get(BlueprintRecord, blueprint_id)
+        row = get_row(session, BlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         content = dict(row.blueprint or {})
@@ -448,7 +450,7 @@ def approve_blueprint(db, blueprint_id: str) -> dict:
     report = case_closed_validation.validate_blueprint(content)
     if not report.ok:
         with db.sessions.begin() as session:
-            row = session.get(BlueprintRecord, blueprint_id)
+            row = get_row(session, BlueprintRecord, blueprint_id)
             assert row is not None
             row.status = "generation_failed"
             row.validation_errors = [e.model_dump() for e in report.errors]
@@ -457,7 +459,7 @@ def approve_blueprint(db, blueprint_id: str) -> dict:
             detail="Blueprint is invalid; regenerate before approving.",
         )
     with db.sessions.begin() as session:
-        row = session.get(BlueprintRecord, blueprint_id)
+        row = get_row(session, BlueprintRecord, blueprint_id)
         assert row is not None
         row.status = "approved"
     return get_blueprint(db, blueprint_id)
@@ -474,7 +476,7 @@ def _next_package_version(session, blueprint_id: str) -> int:
 def get_package(db, package_id: str) -> dict:
     _, PackageRecord = _records()
     with db.sessions() as session:
-        row = session.get(PackageRecord, package_id)
+        row = get_row(session, PackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case package not found.")
         return _package_view(row)
@@ -482,6 +484,12 @@ def get_package(db, package_id: str) -> dict:
 
 def list_packages(db, blueprint_id: Optional[str] = None) -> list[dict]:
     _, PackageRecord = _records()
+    if blueprint_id is not None and not is_valid_id(blueprint_id):
+        # A malformed id names no blueprint, and it must not reach a uuid column to
+        # find that out: the filter compares against one, and PostgreSQL raises
+        # ``invalid input syntax for type uuid`` on a value that is not a uuid.
+        # A blueprint that does not exist has no packages, which is the answer.
+        return []
     with db.sessions() as session:
         query = select(PackageRecord).order_by(PackageRecord.created_at.desc())
         if blueprint_id is not None:
@@ -504,7 +512,7 @@ def latest_published_package(db) -> Optional[dict]:
 def generate_package(db, blueprint_id: str, created_by: str, llm_config=None) -> dict:
     BlueprintRecord, PackageRecord = _records()
     with db.sessions() as session:
-        brow = session.get(BlueprintRecord, blueprint_id)
+        brow = get_row(session, BlueprintRecord, blueprint_id)
         if brow is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         if brow.status != "approved":
@@ -548,7 +556,7 @@ def generate_package(db, blueprint_id: str, created_by: str, llm_config=None) ->
 def publish_package(db, package_id: str) -> dict:
     _, PackageRecord = _records()
     with db.sessions() as session:
-        row = session.get(PackageRecord, package_id)
+        row = get_row(session, PackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case package not found.")
         content = dict(row.package or {})
@@ -558,14 +566,14 @@ def publish_package(db, package_id: str) -> dict:
     try:
         BlueprintRecord, _ = _records()
         with db.sessions() as session:
-            brow = session.get(BlueprintRecord, blueprint_id)
+            brow = get_row(session, BlueprintRecord, blueprint_id)
             blueprint = dict(brow.blueprint) if brow is not None else None
     except Exception:
         blueprint = None
     report = case_closed_validation.validate_package(content, blueprint=blueprint)
     if not report.ok:
         with db.sessions.begin() as session:
-            row = session.get(PackageRecord, package_id)
+            row = get_row(session, PackageRecord, package_id)
             assert row is not None
             row.status = "validation_failed"
             row.validation_errors = [e.model_dump() for e in report.errors]
@@ -574,7 +582,7 @@ def publish_package(db, package_id: str) -> dict:
             detail="Case package is invalid; regenerate before publishing.",
         )
     with db.sessions.begin() as session:
-        row = session.get(PackageRecord, package_id)
+        row = get_row(session, PackageRecord, package_id)
         assert row is not None
         if row.status == "published":
             return _package_view(row)

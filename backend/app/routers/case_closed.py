@@ -13,6 +13,7 @@ from ..dependencies import get_db
 from ..limits import (
     CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
     MESSAGE_BODY_MAX,
+    PAGE_OFFSET_MAX,
     REPORT_REASON_MAX,
     USER_DEPARTMENT_MAX,
     USER_REGNO_MAX,
@@ -83,7 +84,7 @@ def current_state(
 def partner_candidates(
     db: Database = Depends(get_db),
     user=Depends(require_participant),
-    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching participants to skip."),
     limit: int = Query(
         50,
         ge=1,
@@ -417,7 +418,21 @@ async def thread_websocket(
         logger.info("Case Closed WS connected: %s to session %s", user.regno, thread["session_id"])
         pubsub = redis_service.subscribe_to_conversation(channel_id)
         if not pubsub:
-            await websocket.send_json({"error": "Failed to connect to message stream"})
+            # A capacity refusal (this worker is already serving as many live
+            # threads as it can) and a Redis outage are told apart: the open
+            # sockets carry on in the first case, and the refusal says which it
+            # was rather than looking like a working thread.
+            at_capacity = redis_service.subscriber_capacity_reached()
+            logger.warning(
+                "Case Closed WS refused: %s could not subscribe to session %s%s",
+                user.regno,
+                thread["session_id"],
+                " (live-chat capacity reached)" if at_capacity else "",
+            )
+            await websocket.send_json({
+                "error": "Live updates are unavailable for this thread right now",
+                "reason": "capacity" if at_capacity else "unavailable",
+            })
             await websocket.close(code=WS_CLOSE_SERVER_ERROR)
             return
 

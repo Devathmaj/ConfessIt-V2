@@ -3,8 +3,8 @@
 #
 # - Validates every environment value it interpolates, then writes the 00:01 UTC
 #   crontab, embedding this container's own environment (cron jobs run with a
-#   near-empty environment, so DATABASE_URL is baked into a wrapper the schedule
-#   calls rather than trusted to leak through).
+#   near-empty environment, so every setting the tick needs is baked into a
+#   wrapper the schedule calls rather than trusted to leak through).
 # - Runs one catch-up pass immediately, so a restart after missed midnights
 #   still opens today's periods instead of waiting for the next 01:00 tick.
 #   The pass is idempotent, so this is a no-op on an ordinary restart.
@@ -67,14 +67,46 @@ reject_shell_metachars() {
   esac
 }
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "[game-scheduler] DATABASE_URL is not set; refusing to start" >&2
-  exit 1
-fi
+# Read the named setting into $_setting_value.
+#
+# The name always comes from the literal REQUIRED_SETTINGS list, never from the
+# environment, so the indirect expansion cannot be steered into evaluating
+# anything else. An assignment never re-splits, re-globs or re-quotes what it
+# stores, so a secret full of spaces, quotes, $ or backticks survives intact.
+# The unset form (${VAR-}, not ${VAR}) keeps `set -u` quiet for a variable the
+# deployment simply does not set -- the emptiness check is the caller's job.
+read_setting() {
+  eval "_setting_value=\${$1-}"
+}
+
+# Every setting the app's Settings model requires. cron(8) does not pass the
+# container environment to the jobs it runs, so each of these has to be baked
+# into the generated wrapper: the tick builds the same Settings object the API
+# does, and a single missing required field aborts the whole pass before one
+# game is evaluated -- a reset that never runs is invisible (no session rolls
+# over, no league event finalises, no expired chat is purged) and the only
+# symptom is a non-zero exit in the container log.
+#
+# This list is asserted against app.config.Settings in
+# backend/tests/test_scheduler_entrypoint.py, so a newly required setting
+# cannot be added to the app without the wrapper following it.
+REQUIRED_SETTINGS="DATABASE_URL TEST_DATABASE_URL REDIS_URL SECRET_KEY TOKEN_HASH_PEPPER"
 
 # All validation happens before any file is written, so a refused value leaves
 # no half-generated wrapper behind.
-reject_line_breaks "$DATABASE_URL" "DATABASE_URL"
+for _setting in $REQUIRED_SETTINGS; do
+  read_setting "$_setting"
+  if [ -z "$_setting_value" ]; then
+    # Fail closed and loud: the tick builds the same Settings object the API
+    # does, so a missing required field would abort every reset -- silently,
+    # at 00:01 UTC, long after the operator stopped watching the container.
+    # Refusing to start here names the missing setting instead.
+    echo "[game-scheduler] $_setting is not set; refusing to start" >&2
+    exit 1
+  fi
+  reject_line_breaks "$_setting_value" "$_setting"
+done
+
 reject_line_breaks "${TZ:-}" "TZ"
 reject_line_breaks "$APP_DIR" "APP_DIR"
 reject_shell_metachars "$APP_DIR" "APP_DIR"
@@ -106,9 +138,22 @@ esac
 # Every expansion below is wrapped in single quotes (via escape_single_quotes),
 # so word splitting, globbing, $ expansion, backticks and backslashes in values
 # are all inert where the wrapper runs them.
+#
+# The wrapper exports every required setting, not just the database URL: the
+# tick imports the app, and the app's Settings object refuses to be built
+# without them. Exporting only DATABASE_URL left the 00:01 tick dying on a
+# pydantic ValidationError before it evaluated a single game -- no rollover,
+# no AI generation cycle, no league finalisation, no chat retention -- while
+# the catch-up pass at container start (which does inherit the container
+# environment) kept succeeding and made the stack look healthy.
 {
   printf '#!/bin/sh\n'
-  printf 'export DATABASE_URL=%s\n' "'$(escape_single_quotes "$DATABASE_URL")'"
+  for _setting in $REQUIRED_SETTINGS; do
+    read_setting "$_setting"
+    printf 'export %s=%s\n' \
+      "$_setting" \
+      "'$(escape_single_quotes "$_setting_value")'"
+  done
   if [ -n "${TZ:-}" ]; then
     printf 'export TZ=%s\n' "'$(escape_single_quotes "$TZ")'"
   fi

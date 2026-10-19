@@ -15,6 +15,7 @@ from ..models import (
     ConnectionsScheduledPuzzleCreate,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import connections_service
 from ..services.authorization import require_capability
 from ..services.connections_service import CONNECTIONS_GAMES_MAX_LIMIT
@@ -115,7 +116,7 @@ def delete_connections_scheduled(
 
 @router.get("", response_model=Dict[str, Any])
 def list_connections_games(
-    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=CONNECTIONS_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

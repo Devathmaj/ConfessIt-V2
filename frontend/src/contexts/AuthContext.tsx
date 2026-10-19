@@ -2,9 +2,11 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken } from '../services/api';
+import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken, isTokenRejected } from '../services/api';
 import { API_URL } from '../lib/apiBase';
-import { purgeLegacyPersistedToken } from '../lib/tokenStore';
+import { purgeLegacyPersistedToken, subscribeToAccessToken } from '../lib/tokenStore';
+import { announceSessionEnded, onSessionEnded } from '../lib/sessionChannel';
+import { awaitPendingRefresh, invalidatePendingRefreshes } from '../lib/sessionRefresh';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
@@ -72,14 +74,57 @@ export interface VerifyTokenResult {
   redirectUrl?: string;
 }
 
+/**
+ * What came of a read of the signed-in account.
+ *
+ * Three answers for three different situations, and the boot sequence acts on
+ * the difference:
+ *
+ * * `read` -- the account was read; the session is live and the app is signed in.
+ * * `rejected` -- the server refused the token (or there was none): the session
+ *   is over, and it ends.
+ * * `unavailable` -- the *request* failed: a timeout, a dropped connection, a 500
+ *   while the backend is deploying. The token was never judged, so the session is
+ *   still alive, and another attempt is worth making.
+ *
+ * The last one is why this is not a boolean. A transport failure used to be read
+ * as a refusal, which ended the session -- and the logout revokes it server-side
+ * too, so a backend having a bad moment for half a minute signed the person out
+ * for good.
+ */
+export type AccountRead = 'read' | 'rejected' | 'unavailable';
+
+/**
+ * How long to wait before each attempt to read the account again, after the
+ * request itself failed.
+ *
+ * Bounded and spaced on purpose: the point is to ride out a backend that is
+ * deploying or a network that blipped, not to keep a browser hammering a backend
+ * that is down. The delays grow, because a backend that is coming back usually
+ * takes a moment longer than one that was only briefly unreachable.
+ */
+const ACCOUNT_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000];
+
 interface AuthContextType {
   user: User | null;
-  logout: () => void;
+  /**
+   * End the session: locally, on the server, and in this browser's other tabs.
+   *
+   * Answers when the revocation has been sent, so a caller that needs "signed
+   * out" to mean "the server session is over" can wait for it.
+   */
+  logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
   token: string | null;
   verifyMagicToken: (token: string) => Promise<VerifyTokenResult>;
-  fetchAndSetUser: (token: string) => Promise<void>; // Expose fetchAndSetUser
+  /**
+   * Read the signed-in account and put it in the context.
+   *
+   * Answers what came of the read, because the boot sequence has to act on the
+   * difference between a refused token and a request that failed.
+   */
+  fetchAndSetUser: (token: string) => Promise<AccountRead>;
   /** Whether the signed-in account holds `capability`. False whenever nobody is signed in. */
   can: (capability: Capability) => boolean;
   /**
@@ -102,6 +147,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // The token in this context is a mirror of the store, never a copy of it.
+  //
+  // It used to be written twice -- at boot and after a magic-link sign-in -- and
+  // never again, while the interceptor rotated the token in the store every time
+  // it met a 401. Half an hour into a session the context held a bearer the server
+  // had already expired, and the chat paths, which read the context's copy, sent
+  // it: the ticket exchange answered 401, and the refusal was read as the end of
+  // the session. Half an hour of use, and the person was signed out while their
+  // refresh cookie was still good for another day.
+  //
+  // So the store announces every rotation and this context follows it. One token,
+  // read from one place, at the moment it is used.
+  useEffect(() => subscribeToAccessToken(setToken), []);
+
   // Which door this browser last signed in through, kept as a ref rather than read off `user`.
   // A logout clears the user, and a route guard that fires afterwards has nothing left to
   // inspect -- without this it would send every account to /login, and a moderator's regno
@@ -116,20 +175,57 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // read at the moment the answer is needed.
   const lastAccountType = useRef<AccountType | undefined>(undefined);
 
-  const logout = useCallback(() => {
-    // The server revokes the session row it holds; the browser does not wait for the reply,
-    // because signing out must not hang on the network and the local session clears either
-    // way. If the call never lands, the refresh cookie simply lapses at its deadline.
-    void serverLogout();
+  const logout = useCallback(async (): Promise<void> => {
+    // Signing out, in the order that survives a refresh being in flight.
+    //
+    // The old code fired the revocation and cleared the local session at once,
+    // and the server did the rest whenever it got there. Two races came out of
+    // that, and both are the same race seen from two sides:
+    //
+    // * the refresh that was already in flight answered *after* the log out and
+    //   put its token back into the store, so the person was signed in again
+    //   without doing anything;
+    // * the revocation carried the cookie value the refresh had already
+    //   replaced, so the server found nothing to revoke and the session it had
+    //   just extended stayed alive -- while the browser held the newer cookie,
+    //   and a reload quietly signed the person back in.
+    //
+    // So: the pending work is invalidated first (a refresh that lands now has
+    // nowhere to put its token), the local session is cleared (the screen says
+    // so at once), the in-flight refresh is awaited (so the revocation carries
+    // the value the browser actually holds), and the revocation is awaited in
+    // turn (so "signed out" means the server session is over, not merely that
+    // the screen says so).
+    invalidatePendingRefreshes();
     setUser(null);
-    setToken(null);
     clearInMemoryToken();
+
+    await awaitPendingRefresh();
+    await serverLogout();
+
+    // The other tabs of this browser share the refresh cookie, so they have
+    // lost this session whether they know it or not. Telling them is the
+    // difference between one tab signing out and the browser pretending it did.
+    announceSessionEnded();
   }, []);
 
-  const fetchAndSetUser = useCallback(async (currentToken: string) => {
+  // Another tab ended the session. The cookie is shared, so this tab has lost
+  // it too: the token goes, and the signed-in account with it. The server
+  // session is already revoked by the tab that signed out, so there is nothing
+  // to revoke again here.
+  useEffect(
+    () =>
+      onSessionEnded(() => {
+        clearInMemoryToken();
+        setUser(null);
+      }),
+    [],
+  );
+
+  const fetchAndSetUser = useCallback(async (currentToken: string): Promise<AccountRead> => {
     if (!currentToken) {
       setIsLoading(false);
-      return;
+      return 'rejected';
     }
     try {
       const userData = await getCurrentUser(currentToken);
@@ -153,17 +249,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           account_type: accountType,
           capabilities: userData.capabilities ?? [],
         });
-      } else {
-        console.error("User ID is missing from the authentication response.");
-        logout();
+        return 'read';
       }
+      console.error("User ID is missing from the authentication response.");
+      void logout();
+      return 'rejected';
     } catch (error) {
-      console.error("Failed to fetch user data, token might be expired:", error);
-      logout();
+      if (isTokenRejected(error)) {
+        // The server refused the token: the session is over, and it has to end.
+        console.error("The access token was rejected; ending the session.");
+        void logout();
+        return 'rejected';
+      }
+      // The *request* failed, not the token: a timeout, a dropped connection, a 500
+      // while the backend is deploying. The token was never judged, so the session is
+      // still alive -- and ending it here would revoke it server-side too, signing the
+      // person out for good over a backend having a bad moment.
+      console.error("Could not read the signed-in account; the session is kept:", error);
+      return 'unavailable';
     }
   }, [logout]);
 
   useEffect(() => {
+    // The boot handshake is bounded and cancellable: a backend that stops
+    // answering must not hold the app on its splash screen for ever, and a
+    // provider that goes away must not keep reading after the fact.
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
     const initializeAuth = async () => {
       // A token an older build persisted is wiped rather than trusted: the bearer is
       // never read back from JS-readable storage, only minted fresh below.
@@ -173,13 +286,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // comes back with a fresh bearer; anything else answers null and the browser
       // simply stays signed out.
       const restoredToken = await refreshAccessToken();
-      if (restoredToken) {
-        setToken(restoredToken);
-        await fetchAndSetUser(restoredToken);
+      if (!restoredToken) {
+        setIsLoading(false);
+        return;
       }
+      const outcome = await fetchAndSetUser(restoredToken);
+      // The app is ready either way. A session whose account could not be read is
+      // still a session, and the guards decide what to show while it is recovered.
       setIsLoading(false);
+      if (outcome !== 'unavailable' || cancelled) return;
+
+      // The request failed, not the token, so the session is alive: the cookie is
+      // still good for the rest of the day. Try again in the background -- the app
+      // must not sit on its splash screen waiting for a backend to come back -- and
+      // bounded, so a backend that stays down is not hammered.
+      for (const delay of ACCOUNT_RECOVERY_DELAYS_MS) {
+        await new Promise<void>((resolve) => {
+          timers.push(setTimeout(resolve, delay));
+        });
+        if (cancelled) return;
+        const retried = await fetchAndSetUser(restoredToken);
+        if (retried !== 'unavailable') return;
+      }
     };
     initializeAuth();
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
   }, [fetchAndSetUser]);
 
   // The access token expires on its own schedule, and the token is already cleared by the
@@ -189,7 +323,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const handleAuthExpired = () => {
       console.warn('Access token was rejected as expired. Ending session.');
-      logout();
+      void logout();
     };
 
     window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
@@ -204,7 +338,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const handleSessionSuperseded = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       console.warn('Access token was rejected because the session was replaced by a new login.', detail);
-      logout();
+      void logout();
       toast.error(detail);
     };
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2, Search } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -96,6 +96,21 @@ export const PartnerPicker = ({
   const [choosingId, setChoosingId] = useState<string | null>(null);
 
   /**
+   * The read that is allowed to answer.
+   *
+   * Two reads of the picker can be in flight at once: the reader changes a filter
+   * while the previous filter's read is still on the wire. Nothing stopped the
+   * slower one from being written, so the rows that arrived last were the ones
+   * for the filter the reader had already changed away from -- the list showed
+   * the people they had just filtered *out*, and said so with the right count.
+   *
+   * Each read claims a number and only the most recent claim may write, which is
+   * the same guard the search on the confessions feed already had
+   * (``searchRequestId``) and the same reasoning.
+   */
+  const latestReadId = useRef(0);
+
+  /**
    * One page from the server: the next `PARTNER_PAGE_SIZE` people the current
    * filters match, starting at `skip`. `append` grows the window downwards, so
    * a "load more" click adds beneath the rows already on screen and the
@@ -107,6 +122,9 @@ export const PartnerPicker = ({
       append: boolean,
       filters: { search: string; sameGender: boolean; cohortKey: string },
     ) => {
+      // Claimed before anything awaits, so a read that is overtaken knows it was.
+      const readId = latestReadId.current + 1;
+      latestReadId.current = readId;
       if (append) {
         setLoadingMore(true);
       } else {
@@ -121,15 +139,24 @@ export const PartnerPicker = ({
           genderMode: filters.sameGender ? 'same' : 'different',
           ...(cohort ? { year: cohort.year, department: cohort.department } : {}),
         });
+        // A newer read has answered since: this one is for a filter the reader has
+        // already changed, so its rows are not the ones on screen.
+        if (latestReadId.current !== readId) return;
         const rows = partnerRowsOf(answer);
         setPartners((previous) => (append ? [...previous, ...rows] : rows));
         setTotal(partnerTotalOf(answer, rows.length));
         setError(null);
       } catch (loadError) {
+        if (latestReadId.current !== readId) return;
         setError(describeApiError(loadError, 'Could not load people to choose from.'));
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        // Only the read that is still current may clear the flags: a stale read
+        // that finished last would report "loaded" over a read that is still
+        // running, and the spinner would go out while the list was empty.
+        if (latestReadId.current === readId) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [loadPartners],

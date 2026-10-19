@@ -1,7 +1,7 @@
 from ..logger import get_logger
 from fastapi import HTTPException, status
 from sqlalchemy import Float, case, cast, func, or_, select, update
-from ..postgres import PostgresClient, get_postgres_client
+from ..postgres import PostgresClient, get_postgres_client, is_valid_id
 from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
 import datetime
@@ -148,6 +148,49 @@ class ConfessionService:
         self.client = client if client is not None else get_postgres_client()
         self.sessions = self.client.sessions
         self.REACTION_TYPES = ["heart", "haha", "whoa", "heartbreak"]
+
+    @staticmethod
+    def _confession_row(session, confession_id, *, for_update=False):
+        """The confession row, or None when the id names no row at all.
+
+        A malformed id names no row, and it must not reach the database: the id goes
+        straight into a uuid column, and PostgreSQL raises ``invalid input syntax for
+        type uuid`` on a value that is not a uuid. Nothing caught that, so a request
+        that named nothing at all was answered with a 500 -- on a public route, with
+        no authentication, which is a 500 anybody can ask for on purpose.
+
+        The answer is the one these endpoints already give for a confession that is
+        not there, rather than a new one: a malformed id is an id that names no row,
+        and the endpoints' "not found" is the truth about both. A client that opens a
+        thread by id gets one answer for "there is no such confession", whatever
+        shape the id had.
+
+        ``for_update`` locks the row until the transaction ends. A caller that reads
+        a row and writes it back has to hold the lock across both halves, or two such
+        callers overwrite one another -- see :meth:`react_to_confession`.
+        """
+        if not is_valid_id(confession_id):
+            return None
+        if for_update:
+            return session.scalar(
+                select(ConfessionRecord)
+                .where(ConfessionRecord.id == str(confession_id))
+                .with_for_update()
+            )
+        return session.get(ConfessionRecord, str(confession_id))
+
+    @staticmethod
+    def _comment_row(session, comment_id, *, for_update=False):
+        """The comment row, or None -- see :meth:`_confession_row`."""
+        if not is_valid_id(comment_id):
+            return None
+        if for_update:
+            return session.scalar(
+                select(ConfessionCommentRecord)
+                .where(ConfessionCommentRecord.id == str(comment_id))
+                .with_for_update()
+            )
+        return session.get(ConfessionCommentRecord, str(comment_id))
 
     def _reporter_ids(self, target_id: str) -> List[Any]:
         # Includes automated system reports (reported_by_id IS NULL) in the
@@ -781,7 +824,7 @@ class ConfessionService:
         else:
             ordering = [ConfessionCommentRecord.created_at.desc(), ConfessionCommentRecord.id.asc()]
         with self.sessions() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            row = self._confession_row(session, confession_id)
             if row is None or row.removed_at is not None:
                 return None
             visible = [
@@ -957,7 +1000,7 @@ class ConfessionService:
 
     def get_confession(self, confession_id: str, user_id: Optional[str] = None) -> Optional[Confession]:
         with self.sessions() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            row = self._confession_row(session, confession_id)
             # A removed confession reads as absent rather than as a placeholder. The row is
             # still there for the report about it, but this is the participant-facing getter
             # and "not found" is the honest answer for a post that has been taken down.
@@ -1025,7 +1068,7 @@ class ConfessionService:
         Used to update a confession's settings, such as toggling comments or anonymity.
         """
         with self.sessions() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            row = self._confession_row(session, confession_id)
             confession = self._confession_payload(row) if row else None
             author_id = str(row.author_id) if row else None
 
@@ -1059,7 +1102,7 @@ class ConfessionService:
             return self.get_confession(confession_id, user_id)
 
         with self.sessions.begin() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            row = self._confession_row(session, confession_id)
             if row:
                 if "comments_enabled" in update_fields: row.comments_enabled = update_fields["comments_enabled"]
                 if "anonymous" in update_fields: row.anonymous = update_fields["anonymous"]
@@ -1094,7 +1137,14 @@ class ConfessionService:
             return None
 
         with self.sessions.begin() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            # The row is locked for the rest of the transaction. The reaction map is a
+            # read-modify-write -- read the map, rebuild it, write it back -- so without
+            # the lock two reactions that land together both read the same map and the
+            # second write erases the first: one participant's reaction disappears, and
+            # the denormalised counts, which are recomputed from that same map, go with
+            # it. The lock is held from the read to the write, so the second reaction
+            # reads what the first wrote.
+            row = self._confession_row(session, confession_id, for_update=True)
             # A removed confession no longer exists as far as a participant is concerned, so
             # reacting to it fails the same way reacting to a deleted one does. Leaving the
             # write open would let engagement accumulate on a post nobody can see, and the
@@ -1126,7 +1176,7 @@ class ConfessionService:
 
     def add_comment_to_confession(self, confession_id: str, comment_data: CommentCreate, user: UserDetails) -> any:
         with self.sessions() as session:
-            row = session.get(ConfessionRecord, str(confession_id))
+            row = self._confession_row(session, confession_id)
             confession = self._confession_payload(row) if row else None
         # Commenting on removed content is refused for the same reason reacting to it is:
         # the post is not in the participant's view, so a new comment on it is a write into a
@@ -1146,6 +1196,11 @@ class ConfessionService:
         if existing_comments_count >= 3:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
             return "COMMENT_LIMIT_REACHED"
+        # This count is a fast fail, not the rule. It is read here, before the moderation
+        # call below, and the comment itself is written in a later transaction -- so two
+        # requests from the same participant can both read "two so far" and both go on to
+        # insert. The authoritative check is repeated under the parent's row lock, in the
+        # transaction that inserts.
 
         # Central comment moderation: same principal/logic as confessions
         # (everything >1 flagged+hidden). Runs BEFORE persistence; failures
@@ -1184,6 +1239,31 @@ class ConfessionService:
         automated_report_id: Optional[str] = None
         try:
             with self.sessions.begin() as session:
+                # The parent row is locked for the rest of this transaction, so the
+                # participant's own comment count and the parent's counter are both
+                # decided under one lock. Every comment on this confession queues behind
+                # the same row, which is what makes the limit below a rule rather than a
+                # suggestion: two comments from the same participant cannot both see "two
+                # so far" and both insert.
+                confession_row = self._confession_row(session, confession_id, for_update=True)
+                if confession_row is None:
+                    logger.warning(
+                        f"Confession {confession_id} disappeared before the comment was written"
+                    )
+                    return "CONFESSION_NOT_FOUND"
+                comments_by_this_user = session.scalar(
+                    select(func.count())
+                    .select_from(ConfessionCommentRecord)
+                    .where(
+                        ConfessionCommentRecord.confession_id == str(confession_id),
+                        ConfessionCommentRecord.user_id == user_id,
+                    )
+                ) or 0
+                if comments_by_this_user >= 3:
+                    logger.warning(
+                        f"User {user_id} tried to post more than 3 comments on confession {confession_id}"
+                    )
+                    return "COMMENT_LIMIT_REACHED"
                 row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
                     body=comment_data.body, created_at=now)
                 if decision.should_hide:
@@ -1195,12 +1275,21 @@ class ConfessionService:
                 session.add(row)
                 session.flush()
                 comment_id = str(row.id)
-                confession_row = session.get(ConfessionRecord, str(confession_id))
                 # Visible comments advertise in the parent count; born-hidden
                 # ones never do (hide_comment decrements on transition, so
                 # not incrementing here lands in the same state).
-                if confession_row and not decision.should_hide:
-                    confession_row.comment_count += 1
+                #
+                # The increment is relative, for the same reason the matching decrement
+                # in report_resolution_service is: a read followed by a write of "the value
+                # I read plus one" loses the other comment whenever two land on the same
+                # parent at once, and this column is exactly the number the feed shows.
+                if not decision.should_hide:
+                    session.execute(
+                        update(ConfessionRecord)
+                        .where(ConfessionRecord.id == str(confession_id))
+                        .values(comment_count=ConfessionRecord.comment_count + 1)
+                        .execution_options(synchronize_session=False)
+                    )
                 if decision.should_report:
                     existing = session.scalar(
                         select(ReportRecord.id).where(
@@ -1320,7 +1409,12 @@ class ConfessionService:
     def _react_to_comment(self, comment_id: str, user_id: str, reaction_type: str) -> Optional[ConfessionComment]:
         user_new_reaction = None
         with self.sessions.begin() as session:
-            row = session.get(ConfessionCommentRecord, str(comment_id))
+            # The comment row is locked for the rest of the transaction. The like and
+            # dislike lists are read, rebuilt and written back, so without the lock two
+            # participants reacting at the same time both read the same lists and the
+            # second write erases the first -- and the counts, which are derived from
+            # those same lists, with it.
+            row = self._comment_row(session, comment_id, for_update=True)
             # As with a removed confession: no reaction lands on content a participant can no
             # longer see, so the like count cannot quietly drift away from the visible list.
             if not row or row.removed_at is not None:
@@ -1343,7 +1437,7 @@ class ConfessionService:
         logger.info(f"User {user_id} reacted to comment {comment_id} with {reaction_type}")
         
         with self.sessions() as session:
-            row = session.get(ConfessionCommentRecord, str(comment_id))
+            row = self._comment_row(session, comment_id)
             user = session.get(UserRecord, row.user_id) if row else None
         if not row:
             return None
@@ -1367,7 +1461,7 @@ class ConfessionService:
     def report_comment(self, comment_id: str, report_data: ReportCreate, user: UserDetails) -> Optional[ConfessionComment]:
         user_id = str(user.id)
         with self.sessions() as session:
-            comment = session.get(ConfessionCommentRecord, str(comment_id))
+            comment = self._comment_row(session, comment_id)
         if not comment:
             return None
         # Nobody reports their own writing, whatever state it is in: a self-report has nothing
@@ -1438,7 +1532,7 @@ class ConfessionService:
     def report_confession(self, confession_id: str, report_data: ReportCreate, user: UserDetails) -> Optional[Confession]:
         user_id = str(user.id)
         with self.sessions() as session:
-            confession = session.get(ConfessionRecord, str(confession_id))
+            confession = self._confession_row(session, confession_id)
         if not confession:
             return None
         # Nobody reports their own post either -- see report_comment for why the check sits

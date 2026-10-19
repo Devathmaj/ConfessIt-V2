@@ -5,7 +5,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { Toaster, toast } from 'sonner';
 import { MagicLinkVerification } from '@/services/MagicLinkVerification';
 import { refreshAccessToken } from '@/services/api';
-import { AuthContext, type VerifyTokenResult } from '@/contexts/AuthContext';
+import { AuthContext, type AccountRead, type VerifyTokenResult } from '@/contexts/AuthContext';
 
 // The component's silent-refresh fallback must be hermetic: a real network call to the
 // API origin has no server behind it here. Default to "no session", overridden per test.
@@ -96,7 +96,7 @@ describe('MagicLinkVerification: pending login state', () => {
     // login succeeded, so the shared refresh cookie restores the session here.
     seedPendingStates();
     vi.mocked(refreshAccessToken).mockResolvedValueOnce('restored-token');
-    const fetchAndSetUser = vi.fn(async (_token: string) => {});
+    const fetchAndSetUser = vi.fn(async (_token: string): Promise<AccountRead> => 'read');
     render(
       <AuthContext.Provider value={{ ...authValue(vi.fn(async (): Promise<VerifyTokenResult> => ({ success: false }))), fetchAndSetUser }}>
         <MemoryRouter initialEntries={['/verify-login?token=abc123']}>

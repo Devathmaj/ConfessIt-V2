@@ -735,7 +735,11 @@ class LoginTokenRecord(Base):
     # Hash of the refresh token value this session most recently rotated *away from*.
     # Never a credential itself: it is kept so a replayed old token -- a second use of an
     # already-consumed value -- is recognisable in the logs as a replay rather than as
-    # random noise.
+    # random noise, and so a refused refresh can tell a stale copy (the browser that lost
+    # a rotation race, which may still be holding the newer value) from a value no
+    # session ever held (a dead cookie, which is cleared). Only the most recent value is
+    # kept, which is the only one a racing tab can still be holding. Indexed by
+    # ``PostgresClient.apply_refresh_replay_index``: the lookup sits on the refusal path.
     refresh_token_replaced_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
 
@@ -952,6 +956,12 @@ class ConversationRecord(Base):
     last_message_preview_delete_after: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), index=True
     )
+    # The participant who closed this conversation, and the only one who may reopen
+    # it. An array for compatibility with the rows already written, but it holds a
+    # single regno: blocking a conversation is closing it, and a chat has one
+    # closer at a time. There is no mutual-blocking state -- two participants each
+    # holding a chat shut is not something this application models, and the
+    # service refuses a second close rather than adding a second entry.
     blocked_by: Mapped[list[str]] = mapped_column(ARRAY(String(100)), default=list, server_default=text("'{}'"))
     terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
@@ -3575,6 +3585,43 @@ class GameGenerationJobRecord(Base):
             "status IN ('queued', 'running', 'retry_wait', 'published', 'failed', 'cancelled')",
             name="ck_game_generation_jobs_status_known",
         ),
+    )
+
+
+class GameResetHeartbeatRecord(Base):
+    """The last outcome of the daily game-reset tick.
+
+    The tick runs in the scheduler sidecar: a separate process that starts, does
+    one pass and exits. Nothing it does outlives it, so a tick that stopped
+    running -- a broken cron entry, a sidecar that would not start, a pass that
+    died before it could say anything -- left no trace anywhere. The games simply
+    stopped rolling over, and the only symptom was a stale leaderboard days
+    later.
+
+    This row is that trace. One row per job, written by the tick after every
+    pass and read by the backend, which publishes it as a metric so that "the
+    daily job has not succeeded since <time>" is a thing an alert can see.
+
+    ``last_success_at`` is the timestamp the alert cares about, and it moves only
+    on a pass that finished without a failure: a failed attempt records
+    ``last_attempt_at`` and ``last_error`` and leaves the last success alone, so
+    one bad night does not erase the run before it, and the age of the last
+    success is what says how long the job has really been broken.
+    """
+    __tablename__ = "game_reset_heartbeats"
+
+    # The job this heartbeat is about. The primary key, so a second job gets its
+    # own row rather than overwriting this one, and so the write is an upsert
+    # that cannot produce a duplicate.
+    job: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Diagnostic only: the failure text of the last failed attempt, cleared on the
+    # next success. It is short on purpose -- a whole traceback would not fit a
+    # column, and the traceback is in the tick's own log.
+    last_error: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 
 

@@ -24,6 +24,7 @@ from ..models import (
     LeagueSummary,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import (
     featured_games,
     game_configs,
@@ -268,7 +269,7 @@ def admin_individual_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -297,7 +298,7 @@ def admin_couples_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -329,7 +330,7 @@ def admin_game_board(
     competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),
@@ -376,7 +377,7 @@ def admin_game_category_board(
     category: str,
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_BOARD_LIMIT, ge=1, le=_MAX_BOARD_LIMIT),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

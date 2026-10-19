@@ -64,6 +64,29 @@ def credentials_exception() -> HTTPException:
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
+class StaleRefreshTokenError(HTTPException):
+    """The presented refresh token is a stale copy of a live session's previous value.
+
+    A refusal like any other -- the value can never succeed again -- but the caller
+    has to tell it apart from a value no session ever held. The browser that
+    presented a rotated-away value may still hold the *newer* value that replaced it
+    (two tabs of one browser racing a refresh), and deleting the cookie would sign
+    that browser out of a session it is still using.
+
+    The client sees the same generic 401 as any other refusal: the answer must not
+    tell a caller whether a random token belonged to a live account. Only the
+    server's own decision about the cookie differs.
+    """
+
+
+def _stale_refresh_token_exception() -> HTTPException:
+    return StaleRefreshTokenError(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 # What the superseded holder is told on their very next request, and what the frontend
 # surfaces as the reason they were signed out. Kept distinguishable from the generic
 # credentials wording so the client can show "signed in elsewhere" rather than "try again".
@@ -1304,6 +1327,25 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
             )
             if row is None:
+                # The value may be a stale copy of a session's previous refresh
+                # token -- the other tab of a browser that raced a rotation --
+                # rather than a value no session ever held. The two are different
+                # for the caller's cookie: the stale copy's browser still holds
+                # the newer, live value, and deleting the cookie would sign that
+                # browser out of a session it is still using. Only the most
+                # recently rotated value is remembered per session, which is
+                # exactly the one a racing tab can still be holding.
+                rotated_away_from = session.scalar(
+                    select(LoginTokenRecord.id)
+                    .where(LoginTokenRecord.refresh_token_replaced_hash == hashed)
+                    .limit(1)
+                )
+                if rotated_away_from is not None:
+                    logger.warning(
+                        f"Refresh rejected: the presented token was rotated away from "
+                        f"session {rotated_away_from}"
+                    )
+                    raise _stale_refresh_token_exception()
                 logger.debug(
                     f"Refresh rejected: no session holds refresh token "
                     f"(hash_hint={hashed[:6]})"
@@ -1392,7 +1434,10 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                     # rather than the replay.
                     replay_proven = True
                     replay_holder = getattr(account, "regno", None)
-                    refusal = credentials_exception()
+                    # Stale, not dead: this is the value a concurrent rotation
+                    # replaced, and the browser that presented it may still hold the
+                    # newer one. The caller must not delete the cookie over it.
+                    refusal = _stale_refresh_token_exception()
                 else:
                     logger.warning(f"Refresh race lost for session {session_id}")
                     refusal = credentials_exception()
@@ -1434,6 +1479,14 @@ def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
     records which newer session replaced it, and an unredeemed magic-link row is untouched
     (its pre-redemption `revoked` column is the mechanism for that, not the session status).
     The raw value is looked up by its hash and never logged.
+
+    A value that was *rotated away* still names its session: it is the value that session
+    replaced one refresh ago. That is what makes a log out reliable when it races a
+    refresh. The refresh rotates the cookie, so a log out sent with the value it replaced
+    would find nothing to revoke and leave the session alive -- with the browser holding
+    the newer cookie, and a reload quietly signing the person back in. The fallback only
+    ever reaches the session that value belonged to, so it ends that session and nothing
+    else.
     """
     if not raw_token:
         return False
@@ -1442,6 +1495,14 @@ def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
         row = session.scalar(
             select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
         )
+        if row is None:
+            # The value was rotated away: the session it belonged to is the one that
+            # replaced it, and that is the session a log out is asking to end.
+            row = session.scalar(
+                select(LoginTokenRecord).where(
+                    LoginTokenRecord.refresh_token_replaced_hash == hashed
+                )
+            )
         if row is None:
             return False
         if row.session_status != SESSION_STATUS_ACTIVE:

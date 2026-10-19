@@ -14,6 +14,7 @@ from ..models import (
     TriviaDropScheduleRequest,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import trivia_service
 from ..services.authorization import require_capability
 from ..services.trivia_service import TRIVIA_QUESTIONS_MAX_LIMIT
@@ -140,7 +141,7 @@ def update_trivia_draft(
 
 @router.get("", response_model=Dict[str, Any])
 def list_trivia_questions(
-    skip: int = Query(0, ge=0, description="How many questions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many questions to skip."),
     limit: int = Query(50, ge=1, le=TRIVIA_QUESTIONS_MAX_LIMIT, description="How many questions to return. Clamped so one request can never materialise the whole bank at once."),
     status: Optional[str] = Query(
         None,

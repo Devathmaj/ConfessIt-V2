@@ -16,6 +16,7 @@ from ..models import (
     UserDetails,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import league_boards, league_game_boards
 from ..services.authorization import require_participant
 from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
@@ -44,7 +45,7 @@ def individual_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -74,7 +75,7 @@ def couples_board(
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
     game_id: Optional[str] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -108,7 +109,7 @@ def game_board(
     competition_type: str = Query(default=COMPETITION_INDIVIDUAL),
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
@@ -175,7 +176,7 @@ def game_category_board(
     category: str,
     period: str = Query(default="weekly"),
     anchor: Optional[date] = Query(default=None),
-    skip: int = Query(default=0, ge=0),
+    skip: int = Query(default=0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),

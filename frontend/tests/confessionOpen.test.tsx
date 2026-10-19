@@ -181,16 +181,15 @@ describe('clicking a confession in the feed', () => {
 
   it('does not open when a reaction is clicked', async () => {
     const body = 'I still think about you';
-    // Distinct counts so each reaction button has its own accessible name, and signed in,
-    // because a reaction is refused to an anonymous visitor and the write is what has to
-    // happen for this to be a real conflict with the body handler.
+    // Signed in, because a reaction is refused to an anonymous visitor and the write is
+    // what has to happen for this to be a real conflict with the body handler.
     await renderFeed(
       [confession({ body, heart_count: 7, haha_count: 3, whoa_count: 1, heartbreak_count: 0 })],
       { signedIn: true }
     );
     api.reactToConfession.mockResolvedValue(undefined);
 
-    fireEvent.click(within(cardFor(body)).getByRole('button', { name: '7' }));
+    fireEvent.click(within(cardFor(body)).getByRole('button', { name: /heart reaction/i }));
 
     // A reaction is a write. If it also opened the confession, every tap on a reaction would
     // throw the reader into a dialog they did not ask for.
@@ -203,7 +202,7 @@ describe('clicking a confession in the feed', () => {
     await renderFeed([confession({ body, heart_count: 7 })]);
     api.reactToConfession.mockResolvedValue(undefined);
 
-    fireEvent.click(within(cardFor(body)).getByRole('button', { name: '7' }));
+    fireEvent.click(within(cardFor(body)).getByRole('button', { name: /heart reaction/i }));
 
     expect(api.reactToConfession).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

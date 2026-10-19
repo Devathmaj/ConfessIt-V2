@@ -23,12 +23,21 @@ too. If they did not, a moderator could take a participant's entire history down
 screen without the authoritative count moving at all, and the tally would then be a measure of
 which screen the ruling happened on rather than of what was done to the person.
 
-**Idempotency is the caller's job, and it already is.** Removal counters must be incremented
-only on the transition to removed, not on every call -- so ``resolve_*_report`` and the two
-``hide_*`` functions all gate on the boolean ``_stamp_removal`` returns, and only the ``True``
-branch reaches here. A repeat request against already-removed content increments nothing. This
-is the same gate that keeps the notification count and the ``comment_count`` decrement correct,
-for the same reason: one removal is one event.
+**Idempotency is the caller's job, and it now holds under concurrency.** Removal counters must
+be incremented only on the transition to removed, not on every call -- so ``resolve_*_report``
+and the two ``hide_*`` functions all gate on the boolean ``_stamp_removal`` returns, and only
+the ``True`` branch reaches here. A repeat request against already-removed content increments
+nothing. This is the same gate that keeps the notification count and the ``comment_count``
+decrement correct, for the same reason: one removal is one event.
+
+The gate is only as good as the transition it guards, so the transition is itself atomic: the
+content row is stamped by a single conditional ``UPDATE`` (``WHERE removed_at IS NULL``), which
+PostgreSQL settles by re-checking the predicate after the row lock is taken. Of two moderators
+racing on the same content exactly one is told it took the content down, and the other is told
+the content was already down -- so it never reaches this module, never moves a counter, and
+never pushes the author over the threshold a second time. A counter that moved twice for one
+removal would inflate the tally an appeal is argued from and block an account one removal
+early, which is exactly what the threshold rule below is meant to prevent.
 
 **A removal that takes the total past the threshold blocks the participant.** This is the one
 automatic consequence of the counts, and it lives here because this module is the single funnel

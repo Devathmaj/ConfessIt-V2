@@ -46,7 +46,6 @@ const WS_CLOSE_NO_RETRY = new Set([4001, 4003, 4403]);
 
 class CaseClosedMessagingClient {
   private ws: WebSocket | null = null;
-  private token: string | null = null;
   private messageCallbacks: Set<MessageCallback> = new Set();
   private errorCallbacks: Set<ErrorCallback> = new Set();
   private reconnectAttempts = 0;
@@ -54,17 +53,44 @@ class CaseClosedMessagingClient {
   private reconnectDelay = 1000;
   private pingInterval: number | null = null;
 
-  async connect(token: string): Promise<void> {
+  /**
+   * The connection's generation.
+   *
+   * A connect waits for a ticket, and that wait can be overtaken: the thread
+   * closes, or the case ends, and the ticket arrives afterwards for a socket
+   * nobody wants. Opening it anyway leaves a live socket behind -- still
+   * pinging, still holding a Redis connection, and still delivering into a
+   * thread that has moved on.
+   */
+  private generation = 0;
+
+  /**
+   * Open a live stream for the caller's thread.
+   *
+   * Answers whether the stream was opened: a connect that is overtaken opens
+   * nothing and answers false, so the caller knows not to subscribe to a
+   * socket that will never deliver anything.
+   */
+  async connect(): Promise<boolean> {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      return;
+      return true;
     }
     this.disconnect();
-    this.token = token;
+    // Read after the disconnect, which moves the generation on: this connect
+    // belongs to the generation it starts in.
+    const generation = this.generation;
 
     // The URL carries a one-use ticket, never the access token: Uvicorn logs the
     // accepted handshake path with its query string. A reconnect mints a fresh
-    // ticket, so a spent or expired value is never reused.
-    const ticket = await requestWebSocketTicket(token);
+    // ticket, so a spent or expired value is never reused. The bearer behind the
+    // ticket is read from the store when the exchange happens -- a token captured
+    // when the dialog opened would be an expired one by the evening.
+    const ticket = await requestWebSocketTicket();
+    if (generation !== this.generation) {
+      // Overtaken while the ticket was being fetched: the thread closed and
+      // the socket this would open is not wanted.
+      return false;
+    }
     const wsUrl = `${apiWsBase()}/games/case-closed/ws?ticket=${encodeURIComponent(ticket)}`;
 
     return new Promise((resolve, reject) => {
@@ -80,7 +106,7 @@ class CaseClosedMessagingClient {
           try {
             const data: WsFrame = JSON.parse(event.data);
             if (data.type === 'connected') {
-              resolve();
+              resolve(true);
             } else if (data.type === 'message' && data.data) {
               this.messageCallbacks.forEach((callback) => {
                 try {
@@ -122,11 +148,9 @@ class CaseClosedMessagingClient {
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             setTimeout(() => {
-              if (this.token) {
-                this.connect(this.token).catch((error) => {
-                  console.error('Case Closed WS reconnect failed:', error);
-                });
-              }
+              this.connect().catch((error) => {
+                console.error('Case Closed WS reconnect failed:', error);
+              });
             }, this.reconnectDelay * this.reconnectAttempts);
           }
         };
@@ -152,6 +176,9 @@ class CaseClosedMessagingClient {
 
   disconnect(): void {
     this.stopPingInterval();
+    // The generation moves on, so a connect that is still waiting for its
+    // ticket learns that its answer is no longer wanted and opens nothing.
+    this.generation += 1;
     if (this.ws) {
       try {
         if (this.ws.readyState === WebSocket.OPEN) this.ws.close(1000);
@@ -160,7 +187,6 @@ class CaseClosedMessagingClient {
       }
       this.ws = null;
     }
-    this.token = null;
     this.reconnectAttempts = 0;
   }
 

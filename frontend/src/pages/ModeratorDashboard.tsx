@@ -299,7 +299,7 @@ export const ModeratorDashboard = () => {
   ].filter((queue) => can(queue.capability));
 
   const handleLogout = () => {
-    logout();
+    void logout();
     toast.success('Logged out of moderator mode.');
   };
 

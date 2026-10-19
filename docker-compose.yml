@@ -172,9 +172,16 @@ services:
       # and must never receive CHAT_ENCRYPTION_*. Keeping the batch size here in
       # step with the API means one root .env setting controls the purge.
       CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
-      # The scheduler builds the same Settings object, whose connection strings are
-      # required: REDIS_URL resolves from backend/.env off this password, exactly as
-      # on the API. Telemetry rides the plaintext local collector like the API does.
+      # Explicit here, not resolved from backend/.env as the API does: the cron
+      # job runs with a near-empty environment, so the generated wrapper has to
+      # export every setting the tick needs -- and the wrapper is what the
+      # 00:01 tick actually reads. Relying on a file that is excluded from the
+      # production image (.dockerignore) left the daily tick dying on a missing
+      # REDIS_URL.
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
+      # The password the URL above carries, injected separately so it stays in
+      # one place (the root .env) rather than in a tracked file. Telemetry
+      # rides the plaintext local collector like the API does.
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     restart: unless-stopped

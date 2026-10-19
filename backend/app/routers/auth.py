@@ -17,6 +17,7 @@ from ..dependencies import get_db
 from ..accounts import AccountType
 from ..models import AccountDetails, UserDetails
 from ..services.auth_service import (
+    StaleRefreshTokenError,
     access_token_session_id,
     bearer_scheme,
     create_websocket_ticket,
@@ -155,6 +156,40 @@ def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
         samesite="lax",
     )
 
+
+def _refresh_refusal(
+    request: Request, exc: HTTPException, *, cookie_presented: bool
+) -> JSONResponse:
+    """The answer to a refused refresh, with the cookie deleted when it is dead.
+
+    FastAPI builds a *fresh* response for a raised ``HTTPException``, so a
+    ``Set-Cookie`` written on the injected response is discarded on the way out.
+    That is why the deletion never reached the browser: the cookie stayed in the
+    jar and was re-sent with every later request. The refusal is therefore built
+    here, as a response, rather than raised.
+
+    The cookie is deleted only when it is dead, and only when it was the
+    credential that was presented. A value that was rotated away from a session
+    that is still alive is a stale copy -- the browser may be holding the newer
+    value that replaced it, and deleting the cookie would sign that browser out
+    of a session it is still using. Two tabs racing a refresh is exactly that:
+    one of them rotates, the other is refused, and the loser must not take the
+    winner's cookie with it.
+
+    The Origin/Referer refusal is not routed through here: a request that looked
+    cross-site says nothing about the cookie, and destroying a session because of
+    it would hand an attacker exactly that.
+    """
+    refusal = JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+    stale = isinstance(exc, StaleRefreshTokenError)
+    if cookie_presented and not stale:
+        _clear_refresh_cookie(refusal, secure=cookie_secure(request.url.scheme))
+    return refusal
+
 @router.post("/login/{account_type}/magic")
 async def generate_magic_link(
     account_type: AccountType,
@@ -249,7 +284,9 @@ def refresh_access_token(
 
     Every refusal is a generic 401 except the superseded case, which keeps the dedicated
     ``session_superseded`` wording so the client can say the person was signed in
-    elsewhere. A failed refresh also clears the cookie, so a dead token is not re-sent.
+    elsewhere. A failed refresh also clears the cookie, so a dead token is not re-sent --
+    except when the presented value is a stale copy of a live session's previous one,
+    where the browser may still be holding the newer value (see ``_refresh_refusal``).
     """
     cookie_raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
     raw = cookie_raw
@@ -261,9 +298,11 @@ def refresh_access_token(
         _enforce_cookie_origin(request)
     try:
         result = rotate_refresh_token_service(raw, db)
-    except HTTPException:
-        _clear_refresh_cookie(response, secure=cookie_secure(request.url.scheme))
-        raise
+    except HTTPException as exc:
+        # Answered, not raised: a raised HTTPException is turned into a fresh
+        # response by FastAPI, and the cookie deletion this refusal owes the
+        # browser would be discarded with the injected response.
+        return _refresh_refusal(request, exc, cookie_presented=using_cookie)
     response.set_cookie(value=result["refresh_token"], **_refresh_cookie_options(request))
     return {"access_token": result["access_token"], "token_type": result["token_type"]}
 

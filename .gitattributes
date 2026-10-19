@@ -1,0 +1,10 @@
+# A shell script with CRLF line endings is not a shell script: dash reads
+# "set -eu\r" as an illegal option and exits before the first line runs. The
+# game-scheduler entrypoint is executed straight from the working tree (the
+# container bind-mounts ./backend), so a checkout that rewrote its line
+# endings would leave the sidecar unable to start -- silently, because the
+# container's command is the script itself.
+#
+# Every shell script is therefore stored and checked out with LF endings,
+# whatever the host's core.autocrlf says.
+*.sh text eol=lf

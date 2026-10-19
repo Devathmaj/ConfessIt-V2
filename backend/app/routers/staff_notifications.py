@@ -23,6 +23,7 @@ from ..accounts import AccountType, normalize_account_type
 from ..dependencies import get_db
 from ..models import AccountDetails
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services.auth_service import get_current_user
 from ..services.staff_notification_service import (
     STAFF_NOTIFICATIONS_MAX_LIMIT,
@@ -82,7 +83,7 @@ class StaffEnabledUpdate(BaseModel):
 def get_staff_notifications(
     current_user: Annotated[AccountDetails, Depends(_require_staff)],
     db: Database = Depends(get_db),
-    skip: int = Query(0, ge=0, description="How many matching notices to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching notices to skip."),
     limit: int = Query(
         50,
         ge=1,

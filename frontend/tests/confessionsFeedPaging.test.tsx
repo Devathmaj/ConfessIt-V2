@@ -220,6 +220,71 @@ describe('ConfessionsPage: paged feed', () => {
   });
 });
 
+/**
+ * The feed paging under a list that moves.
+ *
+ * Paging is by offset, and an offset only means something against a list that has
+ * not moved. A post that arrives while the reader is paging down shifts the
+ * window under them, and the next page starts one row too early -- so it hands
+ * back a row they have already seen, and the same id twice is a duplicate React
+ * key. A post that is taken down shifts it the other way, and a row they have
+ * not seen is never handed to them at all.
+ */
+describe('ConfessionsPage: a feed that moves under the reader', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db = [];
+    api.getConfessions.mockImplementation((sortBy: string = 'time', params?: Record<string, unknown>) =>
+      serveFeed(sortBy, params ?? {}),
+    );
+    api.getConfessionCooldown.mockResolvedValue({ status: 'eligible', message: 'Proceed?' });
+  });
+
+  it('shows no row twice when a post arrives between two page reads', async () => {
+    db = Array.from({ length: 12 }, (_, index) =>
+      post(`c${index}`, `feed post number ${index}`, { created_at: stamp(index + 1) }),
+    );
+    await renderFeed();
+    await screen.findByText('feed post number 10');
+
+    // Somebody posts while the reader is paging: the new post goes to the head of
+    // a time-ordered feed, so everything below it moves down by one.
+    db = [post('c-new', 'a brand new post', { created_at: stamp(20) }), ...db];
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more confessions' }));
+    await screen.findByText('a brand new post');
+
+    // No id is on screen twice. The same id twice is a duplicate React key, and
+    // it is what the reader sees as a card that will not go away.
+    const cards = Array.from(document.querySelectorAll('.confession-card'));
+    const ids = cards.map((card) => card.getAttribute('data-confession-id'));
+    const distinct = new Set(ids.filter(Boolean));
+    expect(distinct.size).toBe(ids.filter(Boolean).length);
+  });
+
+  it('keeps the row that a taken-down post would have hidden', async () => {
+    db = Array.from({ length: 12 }, (_, index) =>
+      post(`c${index}`, `feed post number ${index}`, { created_at: stamp(index + 1) }),
+    );
+    await renderFeed();
+    await screen.findByText('feed post number 10');
+
+    // The feed is newest first, so the head of it is what the reader has already
+    // paged past. A post there is taken down: everything below it moves up by
+    // one, so an offset that counted the old list steps over a row.
+    db = db.filter((row) => row.id !== 'c11');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more confessions' }));
+
+    // The row that the shift would have hidden is on screen: nothing was stepped
+    // over. Matched exactly, so "feed post number 10" is not read as "feed post
+    // number 1".
+    await waitFor(() => {
+      expect(screen.queryByText('feed post number 1')).toBeInTheDocument();
+    });
+  });
+});
+
 describe('ConfessionsPage: thread ordering', () => {
   const comment = (id: string, body: string, likes = 0, dislikes = 0) => ({
     id,

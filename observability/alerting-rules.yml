@@ -136,3 +136,86 @@ groups:
             The 95th percentile of backend request duration has been above 1 second for
             15 minutes, while serving at least 20 requests in the window. Typical
             development traffic measures around 25ms.
+
+  - name: confessit-game-reset
+    rules:
+      # The daily game-reset tick has not succeeded for two days.
+      #
+      # The tick runs at 00:01 UTC in the scheduler sidecar -- a process that starts,
+      # does one pass and exits. Nothing it does outlives it, so a tick that stopped
+      # running (a broken cron entry, a sidecar that would not start, a pass that died
+      # before it could say anything) left no trace: the games simply stopped rolling
+      # over, and the only symptom was a leaderboard days stale. This is the alert
+      # that makes that visible.
+      #
+      # The metric is the timestamp of the last *successful* pass, recorded in the
+      # database by the tick itself and published by the backend as
+      # confessit_game_reset_last_success_seconds. A failed pass moves the attempt
+      # timestamp but not the success one, so the age of the success stamp is what
+      # says how long the job has really been broken.
+      #
+      # Two days, not one, because one missed night is not a broken job: a deploy
+      # that takes the sidecar down at 00:01, or a database that is briefly
+      # unreachable, would page on a single-day threshold. Two consecutive missed
+      # ticks means the schedule itself is gone. The `for` window adds half an hour
+      # on top, so the age has to be sustained rather than momentary.
+      - alert: ConfessItGameResetStalled
+        expr: |
+          (time() - max(confessit_game_reset_last_success_seconds{exported_job="confessit-backend"})) > 172800
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: The daily game-reset tick has not succeeded in over two days
+          description: >-
+            The last successful game-reset pass was more than 48 hours ago, so the
+            games have not been rolling over on schedule. The tick runs at 00:01 UTC
+            in the scheduler sidecar; check that the sidecar is running, that its cron
+            entry is intact, and the tick's own log for the last failure.
+
+      # The tick is running, and the last pass it made failed.
+      #
+      # This is the other half of the stalled rule and it fires much sooner, because
+      # it is a different fact: the job is alive and is not doing its work. The
+      # attempt stamp is newer than the success stamp exactly when the most recent
+      # pass failed -- on a successful pass the two are the same instant.
+      #
+      # `max` over the series because each worker publishes its own copy (the
+      # instance label differs per process), and they all publish the same value.
+      - alert: ConfessItGameResetFailing
+        expr: |
+          max(confessit_game_reset_last_attempt_seconds{exported_job="confessit-backend"})
+          >
+          max(confessit_game_reset_last_success_seconds{exported_job="confessit-backend"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The last game-reset pass failed
+          description: >-
+            The game-reset tick ran and did not succeed: the most recent attempt is
+            newer than the last success. The games are not rolling over. The failure
+            text is in the heartbeat row and the traceback is in the sidecar's log.
+
+      # No successful pass has ever been recorded.
+      #
+      # The absence of the series, rather than a sentinel value inside it: "no
+      # successful reset has ever been recorded" and "the last successful reset was
+      # at the epoch" are different facts, and only one of them is true. A sentinel
+      # would collapse them into each other.
+      #
+      # The grace period covers a stack that has just come up and whose tick has not
+      # run yet -- the sidecar's catch-up pass at container start records a success,
+      # but a stack without the sidecar never will.
+      - alert: ConfessItGameResetNeverRan
+        expr: absent(confessit_game_reset_last_success_seconds{exported_job="confessit-backend"})
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful game-reset pass has ever been recorded
+          description: >-
+            The backend has never published a successful game-reset heartbeat, so the
+            daily tick either has not run or cannot reach the database. The games
+            will not roll over on schedule. Check the scheduler sidecar and the
+            observability stack's own metrics path.

@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 
 from ..dependencies import get_db
 from ..accounts import AccountRef, Capability
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/admin/love-notes", tags=["Admin - Love Notes"])
 
 @router.get("", response_model=Dict[str, Any])
 def get_all_love_notes(
-    skip: int = Query(0, ge=0, description="How many matching notes to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching notes to skip."),
     limit: int = Query(50, ge=1, le=LOVE_NOTES_MAX_LIMIT, description="How many matching notes to return. Clamped so one request can never materialise the whole table."),
     status: str = Query("all", description="Narrow to one moderation state: all, pending_review, approved or rejected."),
     order: str = Query("newest", description="Timeline order by arrival: newest or oldest first."),
@@ -113,7 +114,7 @@ def regenerate_love_note_redaction(
 @router.get("/reports")
 def get_love_note_reports(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(50, ge=1, le=200),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the note's redacted moderation preview, the reporter regno and the sender name/regno."),
     db: Database = Depends(get_db),

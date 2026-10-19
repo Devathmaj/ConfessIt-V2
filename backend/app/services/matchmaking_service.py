@@ -329,12 +329,25 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     # No target. A match is a fact about two people, not a thing on a page: the recipient has
     # no list of their matches to open, and the match id means nothing until someone asks for
     # the conversation it opened. So this notice says what happened and stops there.
-    create_notification_service(
-        recipient_regno=matched_user.regno,
-        heading="You appeared in matchmaking",
-        body=f"You were matched with {current_user.name}",
-        db=db
-    )
+    #
+    # Best-effort, like every other notice this application writes: the match is already
+    # committed, and a notice that cannot be stored is a missing inbox entry rather than a
+    # failed match. Letting the write raise would answer 500 for a match that stands
+    # anyway, and the participant would never be told who they were matched with.
+    try:
+        create_notification_service(
+            recipient_regno=matched_user.regno,
+            heading="You appeared in matchmaking",
+            body=f"You were matched with {current_user.name}",
+            db=db
+        )
+    except Exception:
+        logger.warning(
+            "Failed to write the matchmaking notification for match %s; the match is "
+            "already committed",
+            match_id_str,
+            exc_info=True,
+        )
 
     # Return match details immediately with full user information. ``matched_user`` was built
     # above from the matched row, so its ``profile_picture_url`` is already the derived public CDN

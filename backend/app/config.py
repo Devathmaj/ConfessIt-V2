@@ -248,6 +248,32 @@ class Settings(BaseSettings):
     # connecting somewhere unintended. A `rediss://` URL opts into TLS (see redis_service,
     # which requires a valid certificate for it); anything crossing a network must use one.
     REDIS_URL: str = Field(...)
+
+    # --- Redis pools ---
+    #
+    # Two pools, because a chat socket and a command want opposite things.
+    #
+    # A subscriber holds its connection for the life of the socket, which can be
+    # minutes; a command connection is short-lived. Sharing one pool between them
+    # meant a busy chat drained the pool for everybody: the REST send still
+    # stored the message and still answered 201, but the publish could not get a
+    # connection, so the live echo never went out and every conversation on that
+    # worker quietly became poll-only -- the sender's own message looked lost,
+    # and the login rate limiter, which rides the same pool, degraded with it.
+    #
+    # So the publishers have a pool of their own, and the subscribers have a
+    # ceiling of their own.
+    #
+    # The subscriber ceiling is also the number of concurrent live chats one
+    # worker serves: past it, a new socket is refused (loudly, and the open ones
+    # carry on) rather than the whole worker turning quiet.
+    #
+    # Both are optional and default as shown; set them in backend/.env to size a
+    # deployment (the subscriber ceiling is the one worth thinking about: it is
+    # how many people can have a live chat open at once per worker process).
+    REDIS_COMMAND_POOL_MAX_CONNECTIONS: int = Field(default=50, ge=1)
+    REDIS_PUBSUB_POOL_MAX_CONNECTIONS: int = Field(default=100, ge=1)
+
     CLOUD: bool = False
 
     @field_validator("REDIS_URL")

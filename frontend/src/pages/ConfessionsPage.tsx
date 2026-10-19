@@ -42,6 +42,7 @@ import {
   type ConfessionCooldown,
 } from '@/lib/confessionCooldown';
 import { serverNow } from '@/lib/serverClock';
+import { appendUnseen, rereadWindow, windowHasDrifted } from '@/lib/pagedWindow';
 import {
   COMMENT_BODY_MAX,
   CONFESSION_BODY_MAX,
@@ -464,18 +465,60 @@ export const ConfessionsPage = () => {
     setSemanticResults((prev) => prev.map((conf) => (conf.id === id ? patch(conf) : conf)));
   };
 
-  /** Snapshot all three lists so an optimistic update can roll back. */
-  const snapshotEverywhere = () => ({
-    feed: [...confessions],
-    keyword: [...keywordResults],
-    semantic: [...semanticResults],
+  /**
+   * One post, as every list that holds it, so an optimistic update can roll back.
+   *
+   * Per post rather than wholesale. A failed reaction must not undo a reaction
+   * that was saved after this snapshot was taken -- which is what restoring the
+   * whole feed did, and what left the screen disagreeing with the server.
+   */
+  const snapshotOf = (confessionId: string) => ({
+    feed: confessions.find((c) => c.id === confessionId) ?? null,
+    keyword: keywordResults.find((c) => c.id === conversationId) ?? null,
+    semantic: semanticResults.find((c) => c.id === conversationId) ?? null,
   });
 
-  const restoreEverywhere = (snap: { feed: Confession[]; keyword: Confession[]; semantic: Confession[] }) => {
-    setConfessions(snap.feed);
-    setKeywordResults(snap.keyword);
-    setSemanticResults(snap.semantic);
+  /** Put one post back the way the snapshot found it, in every list that holds it. */
+  const restoreOf = (confessionId: string, snap: ReturnType<typeof snapshotOf>) => {
+    const { feed, keyword, semantic } = snap;
+    if (feed) {
+      setConfessions((prev) => prev.map((c) => (c.id === conversationId ? feed : c)));
+    }
+    if (keyword) {
+      setKeywordResults((prev) => prev.map((c) => (c.id === conversationId ? keyword : c)));
+    }
+    if (semantic) {
+      setSemanticResults((prev) => prev.map((c) => (c.id === conversationId ? semantic : c)));
+    }
   };
+
+  /**
+   * The newest reaction request for each item, so a slow answer cannot overwrite a
+   * newer one.
+   *
+   * Two reactions clicked in quick succession leave two requests in flight, and the
+   * earlier one can answer after the later one has. Writing the earlier answer
+   * over the later one leaves the screen showing a reaction the reader did not
+   * choose -- and a count that disagrees with the server until the next read.
+   *
+   * The key is the item the request is about -- a post, or a comment on one -- so
+   * reacting to one post does not discard the answer for another. The search has
+   * the same problem and the same answer (see ``searchRequestId``).
+   */
+  const reactionRequestIds = useRef<Map<string, number>>(new Map());
+  const nextReactionRequestId = useRef(0);
+
+  /** Claim the right to answer for an item, and say which request this is. */
+  const claimReaction = (key: string): number => {
+    const id = nextReactionRequestId.current + 1;
+    nextReactionRequestId.current = id;
+    reactionRequestIds.current.set(key, id);
+    return id;
+  };
+
+  /** Whether this request is still the one whose answer matters. */
+  const isLatestReaction = (key: string, id: number): boolean =>
+    reactionRequestIds.current.get(key) === id;
 
   /**
    * Grow the feed downwards: the next page appends beneath the posts already on screen,
@@ -489,7 +532,26 @@ export const ConfessionsPage = () => {
       const page = splitPage(
         await getConfessions(sortBy, { skip: confessions.length, limit: FEED_PAGE_SIZE }),
       );
-      setConfessions((prev) => [...prev, ...page.rows]);
+      // The window may have moved under the reader between two reads: a post inserted
+      // above it shifts the offset, and one removed above it steps a row over. Appending
+      // into a shifted window shows a row twice and hides another, so the window is
+      // re-read instead -- which keeps the reader's place and puts the rows back in the
+      // order the server ranks them.
+      if (windowHasDrifted(confessions, page.rows, total, page.total)) {
+        const reread = await rereadWindow<Confession>(
+          confessions.length,
+          FEED_PAGE_SIZE,
+          async (skip, limit) => {
+            const answer = splitPage(await getConfessions(sortBy, { skip, limit }));
+            return { rows: answer.rows, total: answer.total };
+          },
+        );
+        setConfessions(reread.rows);
+        setTotal(reread.total);
+        setPagedFeed(page.enveloped);
+        return;
+      }
+      setConfessions((prev) => appendUnseen(prev, page.rows));
       setTotal(page.total);
       setPagedFeed(page.enveloped);
     } catch (error) {
@@ -517,22 +579,56 @@ export const ConfessionsPage = () => {
     if (!selectedConfession || loadingMoreComments) return;
     const confessionId = selectedConfession.id;
     const sort = commentSort;
+    const held = selectedConfession.comments;
     setLoadingMoreComments(true);
     try {
       const answer = await getConfessionComments(confessionId, {
-        skip: selectedConfession.comments.length,
+        skip: held.length,
         limit: COMMENTS_PAGE_SIZE,
         sort,
       });
       const rows = (
         Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
       );
+      // The same drift the feed has: a reply inserted above the window shifts the
+      // offset, and one removed above it steps a row over. The window is re-read
+      // rather than appended into, which keeps the reader's place in the thread.
+      const totalAfter = Array.isArray(answer as unknown)
+        ? selectedConfession.comment_count ?? 0
+        : ((answer as { total?: unknown }).total ?? selectedConfession.comment_count ?? 0);
+      if (windowHasDrifted(held, rows, selectedConfession.comment_count ?? 0, totalAfter)) {
+        const reread = await rereadWindow<ConfessionComment>(
+          held.length,
+          COMMENTS_PAGE_SIZE,
+          async (skip, limit) => {
+            const page = await getConfessionComments(confessionId, { skip, limit, sort });
+            const pageRows = (
+              Array.isArray(page as unknown)
+                ? (page as unknown as ConfessionComment[])
+                : page.comments
+            );
+            const pageTotal = Array.isArray(page as unknown)
+              ? pageRows.length
+              : ((page as { total?: unknown }).total ?? pageRows.length);
+            return { rows: pageRows, total: pageTotal };
+          },
+        );
+        setSelectedConfession((prev) =>
+          prev && prev.id === confessionId ? { ...prev, comments: reread.rows } : prev,
+        );
+        setConfessions((prev) =>
+          prev.map((conf) =>
+            conf.id === confessionId ? { ...conf, comments: reread.rows } : conf,
+          ),
+        );
+        return;
+      }
       setSelectedConfession((prev) =>
-        prev && prev.id === confessionId ? { ...prev, comments: [...prev.comments, ...rows] } : prev,
+        prev && prev.id === confessionId ? { ...prev, comments: appendUnseen(prev.comments, rows) } : prev,
       );
       setConfessions((prev) =>
         prev.map((conf) =>
-          conf.id === confessionId ? { ...conf, comments: [...conf.comments, ...rows] } : conf,
+          conf.id === confessionId ? { ...conf, comments: appendUnseen(conf.comments, rows) } : conf,
         ),
       );
     } catch (error) {
@@ -671,7 +767,11 @@ export const ConfessionsPage = () => {
       return;
     }
     
-    const snapshot = snapshotEverywhere();
+    // Each request claims the right to answer for this post, so a slow answer
+    // cannot overwrite a newer one.
+    const key = `post:${confessionId}`;
+    const requestId = claimReaction(key);
+    const snapshot = snapshotOf(confessionId);
 
     patchConfessionEverywhere(confessionId, (conf) => {
       const newConf = { ...conf };
@@ -693,10 +793,16 @@ export const ConfessionsPage = () => {
 
     try {
       const updatedConfession = await reactToConfession(confessionId, reactionType);
+      // A newer reaction for this post has already spoken; this answer is stale.
+      if (!isLatestReaction(key, requestId)) return;
       patchConfessionEverywhere(confessionId, (c) => ({ ...c, ...updatedConfession }));
     } catch (error) {
       toast.error("Failed to save reaction.");
-      restoreEverywhere(snapshot);
+      // The restore is scoped to this request: a failure that arrived after a
+      // newer reaction was saved must not undo it.
+      if (isLatestReaction(key, requestId)) {
+        restoreOf(confessionId, snapshot);
+      }
     }
   };
 
@@ -706,7 +812,11 @@ export const ConfessionsPage = () => {
       return;
     }
 
-    const snapshot = snapshotEverywhere();
+    // Each request claims the right to answer for this comment, so a slow answer
+    // cannot overwrite a newer one.
+    const key = `comment:${confessionId}:${commentId}`;
+    const requestId = claimReaction(key);
+    const snapshot = snapshotOf(confessionId);
 
     const updateReactionState = (conf: Confession) => {
       if (conf.id !== confessionId) return conf;
@@ -754,6 +864,9 @@ export const ConfessionsPage = () => {
       const apiCall = reaction === 'like' ? likeComment : dislikeComment;
       const updatedCommentFromServer = await apiCall(commentId);
 
+      // A newer reaction for this comment has already spoken; this answer is stale.
+      if (!isLatestReaction(key, requestId)) return;
+
       const syncWithServer = (conf: Confession) => {
         if (conf.id !== confessionId) return conf;
 
@@ -776,9 +889,13 @@ export const ConfessionsPage = () => {
 
     } catch (error) {
       toast.error(`Failed to ${reaction} comment.`);
-      restoreEverywhere(snapshot);
-      const originalSelected = snapshot.feed.find((c: Confession) => c.id === confessionId);
-      setSelectedConfession(originalSelected || null);
+      // The restore is scoped to this request: a failure that arrived after a
+      // newer reaction was saved must not undo it.
+      if (isLatestReaction(key, requestId)) {
+        restoreOf(confessionId, snapshot);
+        const originalSelected = snapshot.feed;
+        setSelectedConfession(originalSelected || null);
+      }
     }
   };
 
@@ -1010,11 +1127,15 @@ export const ConfessionsPage = () => {
   // Filling the icon is only legible for the heart; the laugh, eye, and
   // heartbreak outlines become solid blobs when filled, so keep their shape
   // and let the selected button highlight carry the reaction state.
+  //
+  // The label is what a screen reader announces, and the count alone is not a
+  // name: a button that says "70" tells nobody what it does. The count stays in
+  // the name because it is the other half of what the button is for.
   const reactionTypes = [
-    { type: 'heart', icon: Heart, countKey: 'heart_count', fillsWhenSelected: true },
-    { type: 'haha', icon: Laugh, countKey: 'haha_count', fillsWhenSelected: false },
-    { type: 'whoa', icon: Eye, countKey: 'whoa_count', fillsWhenSelected: false },
-    { type: 'heartbreak', icon: HeartCrack, countKey: 'heartbreak_count', fillsWhenSelected: false },
+    { type: 'heart', label: 'Heart', icon: Heart, countKey: 'heart_count', fillsWhenSelected: true },
+    { type: 'haha', label: 'Haha', icon: Laugh, countKey: 'haha_count', fillsWhenSelected: false },
+    { type: 'whoa', label: 'Whoa', icon: Eye, countKey: 'whoa_count', fillsWhenSelected: false },
+    { type: 'heartbreak', label: 'Heartbreak', icon: HeartCrack, countKey: 'heartbreak_count', fillsWhenSelected: false },
   ] as const;
 
   /**
@@ -1353,6 +1474,11 @@ export const ConfessionsPage = () => {
                           variant={isSelected ? 'default' : 'ghost'}
                           size="sm"
                           onClick={() => handleReaction(confession.id, reaction.type)}
+                          // The button is a toggle, so its pressed state is part of what it
+                          // says -- and the name says what the button is for as well as how
+                          // many people have used it.
+                          aria-pressed={isSelected}
+                          aria-label={`${reaction.label} reaction (${confession[reaction.countKey]})`}
                           className={`transition-colors ${isSelected ? 'btn-romantic' : 'hover:bg-romantic/10'}`}
                         >
                           <Icon className={`w-4 h-4 mr-1.5 ${isSelected && reaction.fillsWhenSelected ? 'fill-current' : ''}`} />
@@ -1456,28 +1582,35 @@ export const ConfessionsPage = () => {
                       <div className="flex items-center justify-between">
                           <p className="text-xs text-muted-foreground">{formatDateTimeDDMMYYYY(comment.created_at)}</p>
                           <div className="flex items-center gap-2">
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
+                              <Button
+                                size="icon"
+                                variant="ghost"
                                 className={`h-7 w-7 rounded-full transition-colors ${
-                                  comment.user_reaction === 'like' 
-                                  ? 'bg-red-500 text-white hover:bg-red-600' 
+                                  comment.user_reaction === 'like'
+                                  ? 'bg-red-500 text-white hover:bg-red-600'
                                   : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
-                                }`} 
+                                }`}
                                 onClick={() => handleCommentReaction(selectedConfession.id, comment.id, 'like')}
+                                // An icon with no label has no accessible name at all, and
+                                // the count beside it is a sibling rather than part of the
+                                // button -- so the name is stated here.
+                                aria-pressed={comment.user_reaction === 'like'}
+                                aria-label={`Like (${comment.like_count})`}
                               >
                                   <ThumbsUp className="h-4 w-4" />
                               </Button>
                               <span className="text-xs font-medium">{comment.like_count}</span>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
+                              <Button
+                                size="icon"
+                                variant="ghost"
                                 className={`h-7 w-7 rounded-full transition-colors ${
-                                  comment.user_reaction === 'dislike' 
-                                  ? 'bg-red-500 text-white hover:bg-red-600' 
+                                  comment.user_reaction === 'dislike'
+                                  ? 'bg-red-500 text-white hover:bg-red-600'
                                   : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
-                                }`} 
+                                }`}
                                 onClick={() => handleCommentReaction(selectedConfession.id, comment.id, 'dislike')}
+                                aria-pressed={comment.user_reaction === 'dislike'}
+                                aria-label={`Dislike (${comment.dislike_count})`}
                               >
                                   <ThumbsDown className="h-4 w-4" />
                               </Button>

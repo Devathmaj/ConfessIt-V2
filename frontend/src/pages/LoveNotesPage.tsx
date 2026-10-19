@@ -262,6 +262,22 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
     const [isSending, setIsSending] = useState(false);
 
     /**
+     * The read that is allowed to answer.
+     *
+     * Two reads of the recipient list can be in flight at once: the sender changes
+     * a filter while the previous filter's read is still on the wire. Nothing
+     * stopped the slower one from being written, so the list that arrived last was
+     * the list for the filter the sender had already changed away from -- people
+     * they had just filtered out, under the count for the filter they had just
+     * chosen.
+     *
+     * Each read claims a number and only the most recent claim may write, which is
+     * the same guard the search on the confessions feed already had
+     * (``searchRequestId``) and the same reasoning.
+     */
+    const latestRecipientReadId = useRef(0);
+
+    /**
      * One recipient page from the server: the next `RECIPIENT_PAGE_SIZE` people the current
      * filters match, starting at `skip`.
      *
@@ -275,6 +291,9 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         append: boolean,
         filters?: { search?: string; cohortKey?: string; includeSameGender?: boolean }
     ) => {
+        // Claimed before anything awaits, so a read that is overtaken knows it was.
+        const readId = latestRecipientReadId.current + 1;
+        latestRecipientReadId.current = readId;
         const search = filters?.search ?? appliedSearch;
         const cohort = cohortFromKey(filters?.cohortKey ?? selectedCohortKey);
         const widenGender = filters?.includeSameGender ?? includeSameGender;
@@ -291,14 +310,23 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 includeSameGender: widenGender,
                 ...(cohort ? { year: cohort.year, department: cohort.department } : {}),
             });
+            // A newer read has answered since: this one is for a filter the sender has
+            // already changed, so its rows are not the ones on screen.
+            if (latestRecipientReadId.current !== readId) return;
             setRecipients((previous) => (append ? [...previous, ...page.users] : page.users));
             setRecipientsTotal(page.total);
         } catch (error) {
+            if (latestRecipientReadId.current !== readId) return;
             console.error("Failed to load recipients:", error);
             toast.error("Could not load recipients. Please try again.");
         } finally {
-            setLoadingRecipients(false);
-            setLoadingMoreRecipients(false);
+            // Only the read that is still current may clear the flags: a stale read
+            // that finished last would report "loaded" over a read that is still
+            // running, and the spinner would go out while the list was empty.
+            if (latestRecipientReadId.current === readId) {
+                setLoadingRecipients(false);
+                setLoadingMoreRecipients(false);
+            }
         }
     };
 

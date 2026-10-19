@@ -5,8 +5,11 @@
  */
 
 // These three helpers talk to the API with fetch rather than the shared axios instance, so
-// they would otherwise miss the response interceptor that ends an expired session.
-import { endSessionIfTokenWasRejected } from './authEvents';
+// they would otherwise miss the response interceptor that extends an expired session.
+// `authorizedFetch` is that same courtesy for the fetch transport: it carries the bearer
+// that is current at the moment of the call and refreshes an expired one instead of
+// treating the refusal as the end of the session.
+import { authorizedFetch } from './authFetch';
 import { API_URL, apiWsBase } from './apiBase';
 import { CONVERSATION_MESSAGE_MAX } from './limits';
 import type { MessageQuota } from './messageQuota';
@@ -32,6 +35,15 @@ interface Message {
  */
 export interface SentMessage extends Message {
   quota: MessageQuota;
+  /**
+   * Whether the live echo went out.
+   *
+   * The message is stored either way, so this is the only thing that says
+   * whether the partner's open socket will show it without the thread being
+   * read again: "delivered" when the publish went out, "unavailable" when it
+   * did not (a Redis outage, or a publisher that could not get a connection).
+   */
+  realtime?: 'delivered' | 'unavailable';
 }
 
 /** The transcript of a conversation, plus how much room is left in it. */
@@ -66,7 +78,6 @@ const WS_CLOSE_NO_RETRY = new Set([4001, 4003, 4403]);
 class MessagingClient {
   private ws: WebSocket | null = null;
   private conversationId: string | null = null;
-  private token: string | null = null;
   private messageCallbacks: Set<MessageCallback> = new Set();
   private errorCallbacks: Set<ErrorCallback> = new Set();
   private reconnectAttempts = 0;
@@ -75,26 +86,61 @@ class MessagingClient {
   private pingInterval: number | null = null;
 
   /**
-   * Connect to WebSocket for a conversation
+   * The connection's generation.
+   *
+   * A connect waits for a ticket, and that wait can be overtaken: the dialog
+   * closes, or the thread changes, and the ticket arrives afterwards for a
+   * socket nobody wants. Opening it anyway leaves a live socket behind --
+   * still pinging, still holding a Redis connection, and still delivering into
+   * a thread that has moved on. The generation is how a connect notices that
+   * its answer is no longer wanted.
    */
-  async connect(conversationId: string, token: string): Promise<void> {
+  private generation = 0;
+
+  /**
+   * Open a live stream for a conversation.
+   *
+   * Answers whether the stream was opened. A connect that is overtaken -- the
+   * dialog closed while the ticket was being fetched -- opens nothing and
+   * answers false, so the caller knows not to subscribe to a socket that will
+   * never deliver anything.
+   */
+  async connect(conversationId: string): Promise<boolean> {
     if (this.ws?.readyState === WebSocket.OPEN && this.conversationId === conversationId) {
-      return;
+      return true;
     }
 
-    // Close existing connection if different conversation
-    if (this.ws && this.conversationId !== conversationId) {
-      this.disconnect();
-    }
+    // Any socket that is already open is closed before a new one is taken,
+    // not only one that belongs to another conversation. Re-initialising the
+    // same conversation would otherwise overwrite the reference and leave the
+    // old socket running: still pinging, still holding a Redis connection, and
+    // still delivering into a thread that has moved on.
+    //
+    // The subscribers stay: the thread is the one they signed up for, and
+    // dropping them would leave the new socket delivering into nobody.
+    this.closeSocket('Replaced by a new connection');
 
+    // The generation is read before the ticket is fetched, so a disconnect
+    // while the fetch is in flight is noticed when it answers.
+    const generation = this.generation;
     this.conversationId = conversationId;
-    this.token = token;
 
     // The socket hangs off the same API origin as every REST call, so one variable
     // fixes both transports. `https` becomes `wss` and `http` becomes `ws`. The URL
     // carries a one-use ticket, not the access token: Uvicorn logs the handshake
     // path with its query string, and an access token there would be a live bearer.
-    const ticket = await requestWebSocketTicket(token);
+    // The ticket exchange reads the bearer that is current right now -- a token
+    // captured when the dialog opened would be an hour-old bearer by the evening.
+    const ticket = await requestWebSocketTicket();
+    if (generation !== this.generation) {
+      // Overtaken while the ticket was being fetched: the dialog closed (or the
+      // thread changed) and the socket this would open is not wanted. Opening
+      // it would leave a live socket behind that nobody closes -- still
+      // pinging, still holding a Redis connection, and still delivering into a
+      // thread that has moved on.
+      console.log('🔌 Connect overtaken; not opening a socket');
+      return false;
+    }
     const wsUrl = `${apiWsBase()}/messages/ws/${conversationId}?ticket=${encodeURIComponent(ticket)}`;
 
     console.log('🔌 Connecting to WebSocket:', wsUrl.replace(ticket, 'TICKET'));
@@ -115,7 +161,7 @@ class MessagingClient {
             
             if (data.type === 'connected') {
               console.log('✅ WebSocket authenticated:', data.user_regno);
-              resolve();
+              resolve(true);
             } else if (data.type === 'message' && data.data) {
               // Broadcast message to all callbacks
               this.messageCallbacks.forEach(callback => {
@@ -170,11 +216,11 @@ class MessagingClient {
             this.reconnectAttempts++;
             console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
             setTimeout(() => {
-              if (this.conversationId && this.token) {
+              if (this.conversationId) {
                 // Explicit call form, not `.catch(console.error)`: the production
                 // build strips console.* calls via esbuild `drop`, which cannot
                 // remove a bare function reference.
-                this.connect(this.conversationId, this.token).catch((error) => {
+                this.connect(this.conversationId).catch((error) => {
                   console.error('WebSocket reconnect failed:', error);
                 });
               }
@@ -232,18 +278,36 @@ class MessagingClient {
   }
 
   /**
+   * Close the socket, keeping the subscriptions.
+   *
+   * `disconnect` ends the client's whole life -- socket and subscribers -- and
+   * is what a closed dialog wants. Replacing the socket is a different thing:
+   * the thread is still the one the subscribers signed up for, so they stay
+   * and the new socket takes over delivering to them.
+   */
+  private closeSocket(reason: string): void {
+    if (!this.ws) return;
+    try {
+      this.ws.close(1000, reason);
+    } catch {
+      /* already gone */
+    }
+    this.ws = null;
+  }
+
+  /**
    * Disconnect from WebSocket
    */
   disconnect() {
     this.stopPingInterval();
-    
-    if (this.ws) {
-      this.ws.close(1000, 'Client disconnecting');
-      this.ws = null;
-    }
-    
+
+    // The generation moves on, so a connect that is still waiting for its
+    // ticket learns that its answer is no longer wanted and opens nothing.
+    this.generation += 1;
+
+    this.closeSocket('Client disconnecting');
+
     this.conversationId = null;
-    this.token = null;
     this.messageCallbacks.clear();
     this.errorCallbacks.clear();
     this.reconnectAttempts = 0;
@@ -283,16 +347,18 @@ export class SendMessageError extends Error {
 
 /**
  * Send a message via REST API
+ *
+ * The bearer is not a parameter: it is read from the store when the request is
+ * made, so a send an hour into a session carries the token that is current
+ * rather than the one the dialog happened to open with.
  */
 export async function sendMessage(
   conversationId: string,
-  body: string,
-  token: string
+  body: string
 ): Promise<SentMessage> {
-  const response = await fetch(`${API_URL}/messages/send`, {
+  const response = await authorizedFetch(`${API_URL}/messages/send`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -303,7 +369,6 @@ export async function sendMessage(
   });
 
   if (!response.ok) {
-    endSessionIfTokenWasRejected(response.status);
     const error = await response.json();
     // The refusal is the message: a conversation or a participant that has run out of room
     // answers with the reason, and replacing it with a generic failure would throw away the
@@ -326,7 +391,6 @@ export async function sendMessage(
  */
 export async function fetchMessages(
   conversationId: string,
-  token: string,
   limit: number = CONVERSATION_MESSAGE_MAX,
   before?: string,
 ): Promise<ConversationTranscript> {
@@ -334,20 +398,15 @@ export async function fetchMessages(
   if (before) params.set('before', before);
   const url = `${API_URL}/messages/${conversationId}?${params.toString()}`;
   console.log('🌐 Fetching messages from:', url);
-  console.log('🔑 Using token:', token ? 'TOKEN_EXISTS' : 'NO_TOKEN');
-  
+
   try {
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
+    const response = await authorizedFetch(url, {
       signal: AbortSignal.timeout(15000),
     });
 
     console.log('📡 Fetch response status:', response.status, response.statusText);
 
     if (!response.ok) {
-      endSessionIfTokenWasRejected(response.status);
       // Fixed string, never the server's `detail`: this endpoint answers 404
       // for an unknown conversation and 403 for someone else's, and rendering
       // the distinction would turn the toast into an existence oracle for
@@ -377,13 +436,11 @@ export async function fetchMessages(
  */
 export async function reportMessage(
   messageId: string,
-  reason: string,
-  token: string
+  reason: string
 ): Promise<void> {
-  const response = await fetch(`${API_URL}/messages/report`, {
+  const response = await authorizedFetch(`${API_URL}/messages/report`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -394,7 +451,6 @@ export async function reportMessage(
   });
 
   if (!response.ok) {
-    endSessionIfTokenWasRejected(response.status);
     const error = await response.json();
     throw new Error(error.detail || 'Failed to report message');
   }

@@ -255,7 +255,7 @@ export const AdminDashboard = () => {
   ].filter((action) => can(action.capability));
 
   const handleLogout = () => {
-    logout();
+    void logout();
     toast.success('Logged out of admin mode.');
   };
 

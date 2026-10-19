@@ -451,6 +451,38 @@ export const ReportsReview = () => {
   /** Whether the first load is still in flight, which is the only one that takes the loading cards. */
   const isFirstLoad = useRef(true);
 
+  /**
+   * The read that is allowed to answer, per queue.
+   *
+   * Two reads of one queue can be in flight at once: the reviewer changes the
+   * question while the previous question's read is still on the wire, or a ruling
+   * re-reads the window while a "show more" is still loading. Nothing stopped the
+   * slower answer from being written, so the window ended up holding rows from a
+   * filter the reviewer had already changed away from -- or rows from two filters
+   * at once, with a total that belonged to neither.
+   *
+   * Each read claims a number for its queue, and only the most recent claim for
+   * that queue may write. Per queue rather than per screen, because the three
+   * queues are independent: a "show more" on one of them must not be discarded
+   * because another one was read at the same moment.
+   */
+  const queueReadIds = useRef<Record<QueueKey, number>>({
+    confessions: 0,
+    loveNotes: 0,
+    messages: 0,
+  });
+
+  /** Claim the right to answer for one queue, and take it from whoever held it. */
+  const claimQueueRead = (queue: QueueKey): number => {
+    const next = queueReadIds.current[queue] + 1;
+    queueReadIds.current[queue] = next;
+    return next;
+  };
+
+  /** Whether the read that claimed `readId` is still the one allowed to answer. */
+  const isCurrentQueueRead = (queue: QueueKey, readId: number): boolean =>
+    queueReadIds.current[queue] === readId;
+
   const setQueueLoading = (key: string, value: boolean) =>
     setLoading((previous) => ({ ...previous, [key]: value }));
 
@@ -476,6 +508,15 @@ export const ReportsReview = () => {
   useEffect(() => {
     let cancelled = false;
     const fetchQueues = async () => {
+      // Claimed for all three queues before anything awaits. A "show more" or a
+      // ruling-triggered re-read that is still in flight was reading the previous
+      // question, so its answer is not one for this one -- and this read is the one
+      // that answers for these queues now.
+      const readIds = {
+        confessions: claimQueueRead('confessions'),
+        loveNotes: claimQueueRead('loveNotes'),
+        messages: claimQueueRead('messages'),
+      };
       try {
         if (isFirstLoad.current) {
           setQueueLoading('confessions', true);
@@ -500,6 +541,16 @@ export const ReportsReview = () => {
         if (answers.every((answer) => Array.isArray(answer))) {
           // The params went nowhere: one legacy list per queue, split nowhere, paged
           // never -- exactly the screen as it behaved before pagination existed.
+          //
+          // One state for all three, so it is written only if all three reads are
+          // still the current ones.
+          if (
+            !isCurrentQueueRead('confessions', readIds.confessions) ||
+            !isCurrentQueueRead('loveNotes', readIds.loveNotes) ||
+            !isCurrentQueueRead('messages', readIds.messages)
+          ) {
+            return;
+          }
           setLegacyQueues({
             confessions: reportsOf<ConfessionReport>(confessions),
             loveNotes: reportsOf<LoveNoteReport>(loveNotes),
@@ -507,18 +558,27 @@ export const ReportsReview = () => {
           });
         } else {
           setLegacyQueues(null);
-          setConfessionQueue({
-            items: reportsOf<ConfessionReport>(confessions),
-            total: totalOf(confessions, 0),
-          });
-          setLoveNoteQueue({
-            items: reportsOf<LoveNoteReport>(loveNotes),
-            total: totalOf(loveNotes, 0),
-          });
-          setMessageQueue({
-            items: reportsOf<MessageReport>(messages),
-            total: totalOf(messages, 0),
-          });
+          // Each queue is written on its own claim, so a queue that a newer read
+          // has taken over keeps that read's rows and the other two still get
+          // this one's.
+          if (isCurrentQueueRead('confessions', readIds.confessions)) {
+            setConfessionQueue({
+              items: reportsOf<ConfessionReport>(confessions),
+              total: totalOf(confessions, 0),
+            });
+          }
+          if (isCurrentQueueRead('loveNotes', readIds.loveNotes)) {
+            setLoveNoteQueue({
+              items: reportsOf<LoveNoteReport>(loveNotes),
+              total: totalOf(loveNotes, 0),
+            });
+          }
+          if (isCurrentQueueRead('messages', readIds.messages)) {
+            setMessageQueue({
+              items: reportsOf<MessageReport>(messages),
+              total: totalOf(messages, 0),
+            });
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -531,6 +591,12 @@ export const ReportsReview = () => {
           setQueueLoading('loveNotes', false);
           setQueueLoading('messages', false);
           setRefreshing(false);
+          // A "show more" that was still in flight when the question changed was
+          // reading the old one, and its answer is discarded -- so the window is
+          // this read's, and nothing is being appended to it any more. The flag is
+          // released here as well, or the button would stay disabled for a request
+          // that no longer means anything.
+          setLoadingMore(null);
           isFirstLoad.current = false;
         }
       }
@@ -587,6 +653,10 @@ export const ReportsReview = () => {
       loveNotes: getAdminLoveNoteReports,
       messages: getAdminMessageReports,
     };
+    // Claimed before the read: this page belongs to the question as it is now, and
+    // a read that has since been overtaken -- a new question, or a re-read of this
+    // queue -- must not append rows to a window that has moved on.
+    const readId = claimQueueRead(queue);
     setLoadingMore(queue);
     try {
       const loaded = queueWindows[queue].items.length;
@@ -596,6 +666,7 @@ export const ReportsReview = () => {
         skip: loaded,
         limit: QUEUE_PAGE_SIZE,
       });
+      if (!isCurrentQueueRead(queue, readId)) return;
       const rows = reportsOf(answer);
       const total = totalOf(answer, loaded + rows.length);
       if (queue === 'confessions') {
@@ -615,10 +686,13 @@ export const ReportsReview = () => {
         }));
       }
     } catch (error) {
+      if (!isCurrentQueueRead(queue, readId)) return;
       console.error('Failed to load more reports', error);
       toast.error('Unable to load more reports.');
     } finally {
-      setLoadingMore(null);
+      if (isCurrentQueueRead(queue, readId)) {
+        setLoadingMore(null);
+      }
     }
   };
 
@@ -636,6 +710,11 @@ export const ReportsReview = () => {
       loveNotes: getAdminLoveNoteReports,
       messages: getAdminMessageReports,
     };
+    // Claimed before the read, for the same reason as the "show more" above: this
+    // re-read answers for the window as it is now, and a read that has been
+    // overtaken -- a new question, or a newer re-read of this queue -- must not
+    // replace the window with rows from the question the reviewer has left.
+    const readId = claimQueueRead(queue);
     setRefreshing(true);
     try {
       const loaded = queueWindows[queue].items.length;
@@ -645,6 +724,7 @@ export const ReportsReview = () => {
         skip: 0,
         limit: Math.max(loaded, QUEUE_PAGE_SIZE),
       });
+      if (!isCurrentQueueRead(queue, readId)) return;
       const rows = reportsOf(answer);
       const total = totalOf(answer, rows.length);
       if (queue === 'confessions') {
@@ -655,10 +735,13 @@ export const ReportsReview = () => {
         setMessageQueue({ items: rows as MessageReport[], total });
       }
     } catch (error) {
+      if (!isCurrentQueueRead(queue, readId)) return;
       console.error('Failed to refresh the report queue', error);
       toast.error('Unable to refresh the reports.');
     } finally {
-      setRefreshing(false);
+      if (isCurrentQueueRead(queue, readId)) {
+        setRefreshing(false);
+      }
     }
   };
 

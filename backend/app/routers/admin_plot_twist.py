@@ -2,14 +2,15 @@
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ..accounts import Capability
 from ..dependencies import get_db
 from ..limits import (
     AI_GENERATION_HISTORY_DEFAULT_LIMIT,
     AI_GENERATION_HISTORY_MAX_LIMIT,
+    PAGE_OFFSET_MAX,
 )
 from ..models import (
     AccountDetails,
@@ -22,6 +23,7 @@ from ..models import (
 from ..postgres import Database
 from ..services import ai_game_automation, plot_twist_generation
 from ..services.authorization import require_capability
+from ..utils import validation_error_detail
 
 router = APIRouter(prefix="/admin/plot-twist", tags=["Admin - Plot Twist"])
 
@@ -44,7 +46,17 @@ def create_blueprint(
     """Store the story-generation parameters as a draft blueprint row."""
     from ..services.plot_twist_schemas import GenerationConfig
 
-    config = GenerationConfig.model_validate(payload.model_dump(exclude_none=True))
+    try:
+        config = GenerationConfig.model_validate(payload.model_dump(exclude_none=True))
+    except ValidationError as exc:
+        # The payload is checked twice: once by the model this route publishes
+        # and again by the stricter model the pipeline uses. The second check
+        # raises a Pydantic error, which is not an HTTPException -- and an
+        # exception nobody handles is a 500 for a payload the client got wrong.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=validation_error_detail(exc),
+        ) from exc
     created = plot_twist_generation.create_blueprint_draft(db, config, created_by=account.regno)
     return PlotTwistBlueprintView(**created)
 
@@ -198,7 +210,7 @@ def current_session(
 
 @router.get("/sessions")
 def list_sessions(
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(AI_GENERATION_HISTORY_DEFAULT_LIMIT, ge=1, le=AI_GENERATION_HISTORY_MAX_LIMIT),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

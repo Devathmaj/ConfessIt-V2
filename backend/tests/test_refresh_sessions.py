@@ -369,6 +369,11 @@ def test_two_concurrent_refreshes_of_one_token_leave_exactly_one_winner(db, no_a
     )
     assert loser_response.json()["detail"] == "Could not validate credentials"
 
+    # The loser's refusal must not delete the cookie: in a browser, the two tabs
+    # share one jar, and the winner has just put the newer value in it. A deletion
+    # here would sign both tabs out of a session that is still live.
+    assert "set-cookie" not in loser_response.headers, loser_response.headers
+
     # The winner's rotated refresh cookie is still live, and the loser's replay did not
     # revoke the session: a refresh with the winner's new value, and the access token from
     # the original login, both still work.
@@ -540,6 +545,44 @@ def test_logout_revokes_the_session_on_the_server(db, no_auth_override):
 
     assert browser.post(REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: cookie}).status_code == 401
     assert browser.get("/auth/me", headers=_bearer(access_token)).status_code == 401
+
+
+def test_a_logout_that_races_a_refresh_still_ends_the_session(db, no_auth_override):
+    """The race a log out has to survive: a refresh that lands first.
+
+    The refresh rotates the cookie, so a log out that carries the value it
+    replaced would find nothing to revoke -- and the session it had just
+    extended would stay alive, with the browser holding the newer cookie. The
+    value still names the session it belonged to, so the log out ends it, and the
+    newer value is dead with it: a reload cannot sign the person back in.
+    """
+    _seed_user(db, "logout-race-user")
+    browser = _browser()
+    _redeem_token(browser, _mint_token_for(db, "logout-race-user"))
+    cookie = _refresh_cookie(browser)
+    assert cookie is not None
+    session_id = session_id_of(db, cookie)
+
+    # The refresh wins the race: the cookie is rotated before the log out lands.
+    assert browser.post(REFRESH_ENDPOINT).status_code == 200
+    rotated = _refresh_cookie(browser)
+    assert rotated and rotated != cookie
+
+    # The log out carries the value the refresh has already replaced.
+    logged_out = _browser().post(
+        LOGOUT_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: cookie}
+    )
+    assert logged_out.status_code == 200, logged_out.text
+
+    # The session the refresh had just extended is over, not left alive.
+    row = _session_row(db, session_id)
+    assert row.session_status == SESSION_STATUS_REVOKED
+
+    # And the value the browser now holds cannot bring it back: a reload finds
+    # no session to restore.
+    assert _browser().post(
+        REFRESH_ENDPOINT, cookies={settings.REFRESH_COOKIE_NAME: rotated}
+    ).status_code == 401
 
 
 def test_logout_is_idempotent_and_works_after_the_access_token_has_lapsed(db, no_auth_override):

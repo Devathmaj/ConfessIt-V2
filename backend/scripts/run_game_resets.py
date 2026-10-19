@@ -15,6 +15,10 @@ Exit status is 0 only when every game and the league scan succeeded, so a
 failed tick surfaces loudly in the container logs and in cron's own exit
 reporting. A repeated run is always safe: each game's evaluation is
 idempotent, and a second run for the same boundary changes nothing.
+
+Every failure -- a database that is not there, a game that refuses to open, a
+setting that is missing or invalid -- is reported the same way: exit 1 and a
+sanitized report, never a raw traceback carrying the DSN or the signing key.
 """
 
 import os
@@ -43,10 +47,26 @@ def _sanitize_failure(text: str) -> str:
     """Redact DSN/password/secret material from a traceback before printing.
 
     SQLAlchemy/DBAPI errors echo the connection URL (user:password@host); cron
-    logs are retained, so the raw traceback is a credential leak.
+    logs are retained, so the raw traceback is a credential leak. A settings
+    error is worse: pydantic echoes the whole settings mapping it was given,
+    which carries the DSNs and the signing key verbatim. So the values the
+    tick was handed are redacted by value as well as by shape.
+
+    The character class is ``[^@\\s]`` -- "not @, not whitespace". It used to
+    read ``[^@\\\\s]``, which in a raw string excludes the letter ``s`` as
+    well, so the rule never matched a PostgreSQL DSN (every one of them
+    contains an ``s``) and the DSN was logged in full.
     """
-    redacted = re.sub(r"://[^@\\s]+@", "://***@", text)
-    for secret_name in ("DB_PASSWORD", "SECRET_KEY", "TOKEN_HASH_PEPPER", "REDIS_PASSWORD"):
+    redacted = re.sub(r"://[^@\s]+@", "://***@", text)
+    for secret_name in (
+        "DB_PASSWORD",
+        "SECRET_KEY",
+        "TOKEN_HASH_PEPPER",
+        "REDIS_PASSWORD",
+        "DATABASE_URL",
+        "TEST_DATABASE_URL",
+        "REDIS_URL",
+    ):
         secret = os.getenv(secret_name)
         if secret and len(secret) >= 4:
             redacted = redacted.replace(secret, "***")
@@ -75,21 +95,29 @@ def _wait_for_db(client) -> None:
 
 
 def main() -> int:
-    from app.config import validate_transport_security
-    from app.postgres import PostgresClient
-    from app.services.game_scheduler import reset_cycle_succeeded, run_reset_cycle
-
-    # Same transport posture as the API boot: a cloud sidecar on cleartext
-    # database/cache connections refuses to run rather than moving credentials
-    # and session data over an observable network.
-    validate_transport_security()
-
-    started = datetime.now(timezone.utc)
-    print(f"[game-resets] starting reset cycle at {started.isoformat()}", flush=True)
-    # One-shot process: small pool (not the prod WEB_WORKERS-sized pool) so a
-    # cron tick holds at most 2 connections instead of the serving budget.
-    client = PostgresClient(pool_size=2, max_overflow=0)
+    # The app imports live inside the try: a missing or invalid setting makes
+    # `import app.config` raise a pydantic ValidationError, and at module
+    # level that error would escape the sanitizing handler below and land in
+    # the container log as a raw traceback -- carrying the very DSN and secrets
+    # the handler exists to redact. A tick that cannot even build its
+    # settings must fail the same way any other failure does: sanitized, and
+    # with a non-zero exit.
+    client = None
     try:
+        from app.config import validate_transport_security
+        from app.postgres import PostgresClient
+        from app.services.game_scheduler import reset_cycle_succeeded, run_reset_cycle
+
+        # Same transport posture as the API boot: a cloud sidecar on cleartext
+        # database/cache connections refuses to run rather than moving credentials
+        # and session data over an observable network.
+        validate_transport_security()
+
+        started = datetime.now(timezone.utc)
+        print(f"[game-resets] starting reset cycle at {started.isoformat()}", flush=True)
+        # One-shot process: small pool (not the prod WEB_WORKERS-sized pool) so a
+        # cron tick holds at most 2 connections instead of the serving budget.
+        client = PostgresClient(pool_size=2, max_overflow=0)
         _wait_for_db(client)
         summary = run_reset_cycle(client)
         for game_id, info in summary["games"].items():
@@ -124,17 +152,20 @@ def main() -> int:
         )
         return 0 if succeeded else 1
     except Exception:
-        # Sanitized: raw tracebacks echo the DB DSN (user:password@host).
+        # Sanitized: raw tracebacks echo the DB DSN (user:password@host) and
+        # the settings the tick was handed.
+        print("[game-resets] reset cycle failed; details below", flush=True)
         print(
             _sanitize_failure(traceback.format_exc()),
             flush=True,
         )
         return 1
     finally:
-        try:
-            client.close()
-        except Exception:
-            pass
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

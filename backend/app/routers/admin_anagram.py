@@ -17,6 +17,7 @@ from ..models import (
     ScheduledWordCreate,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import anagram_service
 from ..services.authorization import require_capability
 from ..services.scheduled_contents import (
@@ -134,7 +135,7 @@ def delete_anagram_scheduled(
 
 @router.get("", response_model=Dict[str, Any])
 def list_anagram_games(
-    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=ANAGRAM_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

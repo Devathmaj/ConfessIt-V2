@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import Dict, List, Optional, Any
 from ..dependencies import get_db
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services.confession_service import ConfessionService, FEED_MAX_LIMIT
 from ..models import Confession, ConfessionComment, UserDetails, ConfessionCreate, ConfessionCooldown, ReactionCreate, CommentCreate, ReportCreate, ConfessionUpdate, SemanticSearchRequest, HybridSearchResponse
 from ..services.authorization import (
@@ -29,7 +30,7 @@ def create_confession(confession_data: ConfessionCreate, service: ConfessionServ
 @router.get("/confessions", response_model=Dict[str, Any])
 def get_confessions(
     sort_by: str = Query('time', enum=['popularity', 'time', 'comments']),
-    skip: int = Query(0, ge=0, description="How many visible confessions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many visible confessions to skip."),
     limit: int = Query(50, ge=1, le=FEED_MAX_LIMIT, description="How many visible confessions to return. Clamped so one request can never materialise the whole feed at once."),
     service: ConfessionService = Depends(get_confession_service),
     current_user: Optional[UserDetails] = Depends(get_current_participant_optional),
@@ -90,7 +91,7 @@ def get_confession_cooldown(service: ConfessionService = Depends(get_confession_
 def get_confession_comments(
     confession_id: str,
     sort: str = Query('latest', enum=['latest', 'relevant'], description="Thread order: newest first, or most approved first."),
-    skip: int = Query(0, ge=0, description="How many visible comments to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many visible comments to skip."),
     limit: int = Query(10, ge=1, le=FEED_MAX_LIMIT, description="How many visible comments to return."),
     service: ConfessionService = Depends(get_confession_service),
     current_user: Optional[UserDetails] = Depends(get_current_participant_optional),

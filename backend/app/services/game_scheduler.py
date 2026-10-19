@@ -764,12 +764,58 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
     except Exception as exc:
         logging.getLogger(__name__).exception("Chat retention cleanup failed after reset run")
         chat_cleanup = {"action": "error", "error": f"{type(exc).__name__}: {exc}"}
-    return {
+    summary = {
         "games": games,
         "league": league,
         "chat_cleanup": chat_cleanup,
         "at": moment.isoformat(),
     }
+
+    # The pass records its own outcome, so that a tick which stops running is
+    # visible rather than silent.
+    #
+    # This is the cron path, and it is the only one that records: the tick runs in a
+    # process that comes and goes, so a pass that never happened leaves no trace
+    # anywhere -- the games simply stop rolling over and nobody is watching. The
+    # recorded heartbeat is what the backend publishes as a metric, and what the
+    # "the daily reset has not succeeded" alert reads.
+    #
+    # Best-effort, and deliberately so: the pass has already done its work by the
+    # time this runs, and a heartbeat that could not be written must not turn a
+    # successful rollover into a failed one. A missing heartbeat is itself a
+    # signal -- the alert fires on an absent series too.
+    try:
+        from .reset_heartbeat import record_reset_outcome
+
+        record_reset_outcome(
+            db,
+            succeeded=reset_cycle_succeeded(summary),
+            error=_reset_cycle_error(summary),
+            now=moment,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("Could not record the reset heartbeat")
+
+    return summary
+
+
+def _reset_cycle_error(summary: dict) -> Optional[str]:
+    """A short description of why a pass failed, for the heartbeat row.
+
+    Every failure the pass isolated, in one line: which game, which stage, and
+    what it said. Clipped to the width of the column by the writer, because a
+    column that is too narrow for the text is the writer's business and not this
+    one's.
+    """
+    parts = []
+    for game_id, info in (summary.get("games") or {}).items():
+        if isinstance(info, dict) and info.get("action") == "error":
+            parts.append(f"{game_id}: {info.get('error')}")
+    for stage in ("league", "chat_cleanup"):
+        info = summary.get(stage)
+        if isinstance(info, dict) and info.get("action") == "error":
+            parts.append(f"{stage}: {info.get('error')}")
+    return "; ".join(parts) or None
 
 
 def reset_cycle_succeeded(summary: dict) -> bool:

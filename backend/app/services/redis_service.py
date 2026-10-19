@@ -15,57 +15,120 @@ logger = get_logger(__name__)
 
 
 class RedisService:
-    """Service for handling Redis Pub/Sub operations"""
+    """Service for handling Redis Pub/Sub operations.
 
-    def __init__(self):
+    Two pools, not one, because the two kinds of connection want opposite
+    things.
+
+    A *command* connection is short-lived: a publish, a rate-limit counter, a
+    ping. A *subscriber* connection is held for the life of a chat socket, which
+    can be minutes. Sharing a single pool between them meant a busy chat drained
+    the pool for everybody on that worker: the REST send still stored the message
+    and still answered 201, but the publish could not get a connection, so the
+    live echo never went out and every conversation on the worker silently
+    became poll-only. The sender's own message appeared to vanish, and the
+    login rate limiter -- which rides the same pool -- degraded with it.
+
+    So the publishers have a pool of their own and the subscribers have a
+    ceiling of their own. The subscriber ceiling is the number of concurrent
+    live chats one worker serves: past it a new socket is refused, loudly and
+    only for that socket, while the open ones keep working.
+    """
+
+    def __init__(
+        self,
+        command_pool_max: Optional[int] = None,
+        pubsub_pool_max: Optional[int] = None,
+    ):
         self.redis_url = settings.REDIS_URL
+        # The ceilings are the deployment's (see app.config). The parameters let
+        # a test ask for a small pool instead of the production one.
+        self.command_pool_max = int(
+            command_pool_max or settings.REDIS_COMMAND_POOL_MAX_CONNECTIONS
+        )
+        self.pubsub_pool_max = int(
+            pubsub_pool_max or settings.REDIS_PUBSUB_POOL_MAX_CONNECTIONS
+        )
         self._client: Optional[redis.Redis] = None
         self._pool: Optional[ConnectionPool] = None
+        self._pubsub_client: Optional[redis.Redis] = None
+        self._pubsub_pool: Optional[ConnectionPool] = None
         self._lock = threading.Lock()
+        # How many subscriptions this process currently holds. One per open
+        # socket, so it is also the number of live chats the worker serves.
+        self._live_subscriptions = 0
+
+    def _build_pool(self, max_connections: int) -> ConnectionPool:
+        """A pool with the deployment's connection options."""
+        extra: dict[str, Any] = {}
+        if self.redis_url.lower().startswith("rediss://"):
+            # TLS is the point of the scheme, so it is enforced rather than
+            # negotiated: the server must present a valid certificate for its
+            # hostname, and a handshake that cannot prove that fails instead of
+            # falling back to cleartext. Anything that must cross a network --
+            # chat traffic included -- belongs on a rediss:// URL.
+            # Password (from the URL userinfo) and TLS are both honoured by
+            # from_url; nothing here downgrades or strips them.
+            extra["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            extra["ssl_check_hostname"] = True
+        return redis.connection.ConnectionPool.from_url(
+            self.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            # Not a problem for the subscribers: redis-py gives a blocking
+            # pub/sub read a read timeout of its own (None), so a socket that
+            # hears nothing for minutes is not cut off by this.
+            socket_timeout=5,
+            socket_keepalive=True,
+            max_connections=max_connections,
+            health_check_interval=30,
+            **extra,
+        )
 
     def _get_client(self) -> redis.Redis:
-        """Get or create Redis client (thread-safe, pooled)."""
+        """Get or create the command client (thread-safe, pooled).
+
+        Both clients are created here, under one lock, so the two pools can
+        never be built twice or drift apart.
+        """
         if self._client is not None:
             return self._client
         with self._lock:
             if self._client is not None:
                 return self._client
-            extra: dict[str, Any] = {}
-            if self.redis_url.lower().startswith("rediss://"):
-                # TLS is the point of the scheme, so it is enforced rather than
-                # negotiated: the server must present a valid certificate for its
-                # hostname, and a handshake that cannot prove that fails instead of
-                # falling back to cleartext. Anything that must cross a network --
-                # chat traffic included -- belongs on a rediss:// URL.
-                # Password (from the URL userinfo) and TLS are both honoured by
-                # from_url; nothing here downgrades or strips them.
-                extra["ssl_cert_reqs"] = ssl.CERT_REQUIRED
-                extra["ssl_check_hostname"] = True
-            # Shared pool: one process-wide pool, bounded so a burst of
-            # websocket subscribers cannot open unbounded sockets.
-            self._pool = redis.connection.ConnectionPool.from_url(
-                self.redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                socket_keepalive=True,
-                max_connections=50,
-                health_check_interval=30,
-                **extra,
-            )
+            self._pool = self._build_pool(self.command_pool_max)
             self._client = redis.Redis(
                 connection_pool=self._pool,
                 retry=Retry(ExponentialBackoff(), 3),
                 retry_on_error=[ConnectionError, TimeoutError],
             )
-            logger.info("Redis client initialized (pooled, max_connections=50)")
+            # The subscribers get their own pool, so a burst of open chats can
+            # never starve the publishers (or the rate limiter).
+            self._pubsub_pool = self._build_pool(self.pubsub_pool_max)
+            self._pubsub_client = redis.Redis(
+                connection_pool=self._pubsub_pool,
+                retry=Retry(ExponentialBackoff(), 3),
+                retry_on_error=[ConnectionError, TimeoutError],
+            )
+            logger.info(
+                "Redis client initialized (command pool max_connections=%s, "
+                "subscriber pool max_connections=%s)",
+                self.command_pool_max,
+                self.pubsub_pool_max,
+            )
         return self._client
-    
+
+    def _get_pubsub_client(self) -> redis.Redis:
+        """The subscriber client: one connection per open chat socket."""
+        self._get_client()
+        assert self._pubsub_client is not None
+        return self._pubsub_client
+
     @property
     def client(self) -> redis.Redis:
         """Property to access Redis client"""
         return self._get_client()
-    
+
     def publish_message(self, conversation_id: str, message_data: dict) -> bool:
         """
         Publish a message to a conversation channel.
@@ -99,27 +162,55 @@ class RedisService:
             # is a realtime degradation, not a data loss.
             logger.error(f"Redis publish outage on conversation:{conversation_id}: {e}")
             return False
-    
+
     def subscribe_to_conversation(self, conversation_id: str) -> Optional[redis.client.PubSub]:
         """
-        Subscribe to a conversation channel
-        
+        Subscribe to a conversation channel.
+
+        The subscription holds its connection for as long as the socket lives, so
+        it comes from the subscriber pool -- never from the one the publishers
+        use. A full subscriber pool means this worker is already serving as many
+        live chats as it can: the socket is refused, and the refusal says so
+        rather than quietly turning the whole worker poll-only.
+
         Args:
             conversation_id: PostgreSQL conversation str as string
-        
+
         Returns:
             PubSub object or None
         """
+        channel = f"conversation:{conversation_id}"
         try:
-            pubsub = self.client.pubsub()
-            channel = f"conversation:{conversation_id}"
+            pubsub = self._get_pubsub_client().pubsub()
             pubsub.subscribe(channel)
-            logger.info(f"Subscribed to {channel}")
-            return pubsub
         except Exception as e:
-            logger.error(f"Error subscribing to conversation: {e}")
+            if self.subscriber_capacity_reached():
+                logger.error(
+                    "Subscriber pool exhausted (%s live subscriptions, ceiling %s); "
+                    "refusing a new live subscription on %s: %s",
+                    self._live_subscriptions,
+                    self.pubsub_pool_max,
+                    channel,
+                    e,
+                )
+            else:
+                logger.error(f"Error subscribing to conversation: {e}")
             return None
-    
+        with self._lock:
+            self._live_subscriptions += 1
+        logger.info("Subscribed to %s", channel)
+        return pubsub
+
+    def subscriber_capacity_reached(self) -> bool:
+        """Whether this worker is already serving as many live chats as it can.
+
+        The subscriber pool's ceiling is the live-chat ceiling: past it a new
+        socket is refused, while the open ones carry on. Callers read this to
+        tell a capacity refusal from a Redis outage.
+        """
+        with self._lock:
+            return self._live_subscriptions >= self.pubsub_pool_max
+
     def unsubscribe(self, pubsub: redis.client.PubSub, conversation_id: str):
         """Unsubscribe from a conversation channel and release it.
 
@@ -143,6 +234,12 @@ class RedisService:
                 pubsub.close()
             except Exception:
                 pass
+        finally:
+            # The connection is released either way, so the live-chat count has
+            # to come down either way.
+            with self._lock:
+                if self._live_subscriptions > 0:
+                    self._live_subscriptions -= 1
 
     def ping(self) -> bool:
         """Check if Redis is available"""
@@ -155,20 +252,23 @@ class RedisService:
     def close(self):
         """Close pooled Redis connections. Called from app lifespan shutdown."""
         with self._lock:
-            if self._client is not None:
-                try:
-                    self._client.close()
-                except Exception as e:
-                    logger.error(f"Error closing Redis client: {e}")
-                finally:
-                    self._client = None
-            if self._pool is not None:
-                try:
-                    self._pool.disconnect()
-                except Exception as e:
-                    logger.error(f"Error disconnecting Redis pool: {e}")
-                finally:
-                    self._pool = None
+            for client in (self._client, self._pubsub_client):
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception as e:
+                        logger.error(f"Error closing Redis client: {e}")
+            for pool in (self._pool, self._pubsub_pool):
+                if pool is not None:
+                    try:
+                        pool.disconnect()
+                    except Exception as e:
+                        logger.error(f"Error disconnecting Redis pool: {e}")
+            self._client = None
+            self._pubsub_client = None
+            self._pool = None
+            self._pubsub_pool = None
+            self._live_subscriptions = 0
             logger.info("Redis client closed")
 
 

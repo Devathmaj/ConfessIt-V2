@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, ShieldOff } from 'lucide-react';
 import { blockConversation } from '@/services/api';
+import { describeApiError } from '@/lib/apiError';
 import { toast } from 'sonner';
 
 interface BlockUserDialogProps {
@@ -39,7 +40,10 @@ export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
       onClose();
     } catch (error) {
       console.error('Error blocking user:', error);
-      toast.error('Failed to block user. Please try again.');
+      // The server's own explanation, so a refusal that means something ("This
+      // conversation is already closed.") is shown rather than a generic retry
+      // suggestion. The same describer the unblock path uses.
+      toast.error(describeApiError(error, 'Failed to block user. Please try again.'));
     } finally {
       setIsBlocking(false);
     }
@@ -54,7 +58,7 @@ export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
             Block {otherUserName}?
           </DialogTitle>
           <DialogDescription>
-            This action will block this conversation.
+            This action will close this conversation.
           </DialogDescription>
         </DialogHeader>
 
@@ -64,9 +68,9 @@ export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
             <div className="space-y-2 text-sm text-yellow-900">
               <p className="font-semibold">What happens when you block:</p>
               <ul className="list-disc list-inside space-y-1 ml-2">
-                <li><strong>{otherUserName}</strong> will be notified that you blocked them</li>
-                <li>Neither of you can send new messages</li>
-                <li>You can unblock or hide messages later</li>
+                <li>The chat closes for both of you — neither of you can send new messages</li>
+                <li>Nothing is deleted: you can both still read the conversation</li>
+                <li>Only you can reopen it later</li>
               </ul>
             </div>
           </div>

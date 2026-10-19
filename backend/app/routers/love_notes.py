@@ -10,13 +10,14 @@ from ..utils import isoformat_datetime
 from datetime import datetime, timezone
 
 from ..dependencies import get_db
-from ..limits import USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
+from ..limits import PAGE_OFFSET_MAX, USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from ..models import Cohort, UserDetails
 from ..services.authorization import require_participant
 from ..services.love_note_service import (
     LOVE_NOTE_RECIPIENTS_MAX_LIMIT,
     LoveNoteCreate,
     LoveNoteReportCreate,
+    SEASON_ALREADY_CLAIMED,
     get_all_users_service,
     get_all_cohorts_service,
     love_note_image_url,
@@ -68,7 +69,7 @@ class RecipientListPage(BaseModel):
 def get_all_users(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
-    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching participants to skip."),
     limit: int = Query(50, ge=1, le=LOVE_NOTE_RECIPIENTS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole participant table."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the participant's name, run in SQL."),
     include_same_gender: bool = Query(False, description="Widen the list to the viewer's own gender. Off by default, so the picker opens on the genders the sender is not in."),
@@ -128,11 +129,16 @@ def send_love_note(
     # that mint one ask for no referrer (the ``referrerpolicy`` attributes on the love-note
     # images themselves are what enforce this on the actual image fetches).
     response.headers["Referrer-Policy"] = "no-referrer"
-    # Used to check if the user has already sent a love note
+    # A fast-fail, not the rule. The season is claimed by a conditional update in the
+    # service, inside the note's own transaction, because a read on the way in is a
+    # read-then-write: two sends in flight both see an unspent season and both believe
+    # they hold it. This check exists only so that the ordinary second send of the
+    # season is turned away before it uploads an image -- the service refuses it either
+    # way, and refuses it authoritatively.
     if current_user.love_notes_send_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You have already sent your love note for this season."
+            detail=SEASON_ALREADY_CLAIMED
         )
 
     # Basic validation
@@ -162,7 +168,7 @@ def get_received_love_notes(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
     response: Response = None,
-    skip: int = Query(0, ge=0, description="How many of the reader's notes to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many of the reader's notes to skip."),
     limit: int = Query(50, ge=1, le=100, description="How many of the reader's notes to return. Clamped so one request can never mint delivery URLs for the whole inbox at once."),
 ):
     """

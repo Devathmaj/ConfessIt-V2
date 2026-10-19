@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from ..config import settings
 from ..postgres import Database
 from ..postgres import new_id, is_valid_id
@@ -147,7 +148,13 @@ class MessageService:
             "receiver_regno": row.receiver_regno, "status": row.status, "requested_at": row.requested_at,
             "accepted_at": row.accepted_at, "created_at": row.created_at,
             "last_message_at": row.last_message_at, "last_message_preview": preview,
-            "is_blocked": bool(row.blocked_by), "blocked_by": row.blocked_by or [],
+            # Whether the chat is closed, and who closed it. The closer is one
+            # participant, not a list: the block is a close, and the participant
+            # who closed the chat is the one who may reopen it. The same shape the
+            # conversation payload carries, so a client never has to read the same
+            # field two ways.
+            "is_blocked": bool(row.blocked_by),
+            "blocked_by": row.blocked_by[0] if row.blocked_by else None,
             "terminated_at": row.terminated_at,
         }
 
@@ -643,7 +650,8 @@ class MessageService:
             "is_read": False
         }
         
-        if not redis_service.publish_message(conversation_id, redis_message):
+        published = redis_service.publish_message(conversation_id, redis_message)
+        if not published:
             # Persistence already committed above; this is a realtime outage, not
             # data loss. Logged loudly so a chat outage cannot hide behind the
             # boolean publish_message returns.
@@ -665,6 +673,12 @@ class MessageService:
             # Sent with the message so a client that has just used up its allowance learns
             # it here rather than by being refused on the next send.
             "quota": quota,
+            # Whether the live echo went out. The message is stored either way;
+            # this says whether an open socket will show it without the thread
+            # being read again. A publisher that cannot get a connection is a
+            # realtime degradation, and saying so is the difference between a
+            # visible outage and a message that looks lost.
+            "realtime": "delivered" if published else "unavailable",
         }
     
     def get_messages(
@@ -941,6 +955,32 @@ class MessageService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="This message could not be reported.",
+            ) from exc
+        except IntegrityError as exc:
+            # The duplicate check above is a read, and a read cannot settle a question
+            # two clicks are asking at the same time: both read "no report yet" and
+            # both insert. The unique constraint on (message_id, reporter_regno) is
+            # the authority, so the loser of that race trips it here.
+            #
+            # Without this the second report answers 500 -- a server fault for a
+            # complaint that is already filed, and the participant is left believing
+            # their report failed when it did not. It is the same answer the check
+            # above gives, which is the point: the two paths are the same decision
+            # reached by different means.
+            #
+            # Only that constraint is translated. Any other integrity failure is a
+            # real fault and is left to be one.
+            detail = str(exc.orig)
+            if "message_id" not in detail or "reporter_regno" not in detail:
+                raise
+            logger.info(
+                "Message %s was already reported by %s (duplicate report refused)",
+                message_id,
+                reporter.regno,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You have already reported this message",
             ) from exc
         
         # The report reason is free text a participant wrote; the message body is

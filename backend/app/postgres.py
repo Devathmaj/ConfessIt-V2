@@ -1,16 +1,63 @@
 """PostgreSQL engine and SQLAlchemy session lifecycle."""
 import threading
 import uuid
+from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Table, create_engine, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 from .db_models import Base
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# The advisory lock that serialises the schema convergence across the processes that
+# share this database.
+#
+# Every worker that boots runs ``PostgresClient.initialize()``, and the convergence
+# sequence is a series of "read the catalogue, then ALTER" steps. Two workers doing that
+# at the same moment on a database that still has work to do -- a first boot, or a deploy
+# that adds a CHECK constraint -- both see the constraint missing and both issue
+# ``ADD CONSTRAINT``; the loser is refused with ``duplicate_object`` and that worker dies
+# during startup, leaving the schema half-converged and the deploy flapping.
+#
+# A session-scoped ``pg_advisory_lock`` settles it. The second worker waits for the first
+# to finish and then finds the work already done: every step in the sequence is written to
+# be a no-op against a converged database, so the second pass costs a catalogue read and
+# changes nothing.
+#
+# The key is arbitrary but fixed, and it sits in a range of its own. An advisory lock is
+# a number the callers agree on, so reusing one for an unrelated lock would make the two
+# block each other for no reason: the account-cap keys are 7_240_xxx (``app.accounts``)
+# and the game-session keys are 7_250_xxx (``app.limits``).
+SCHEMA_INIT_LOCK_KEY = 7_260_001
+
+# The PostgreSQL error codes the convergence sequence treats as "somebody else got there
+# first" rather than as a failure. Spelled out rather than matched on the message text,
+# because the message is localised and the code is not.
+PG_DUPLICATE_TABLE = "42P07"        # duplicate_table
+PG_DUPLICATE_OBJECT = "42710"      # duplicate_object -- a constraint or index is there
+PG_UNDEFINED_OBJECT = "42704"       # undefined_object -- it is not there after all
+
+
+def _postgres_error_code(exc: BaseException) -> str | None:
+    """The ``SQLSTATE`` behind a database error, or None if it is not one.
+
+    psycopg puts the code on the exception's ``sqlstate``; SQLAlchemy wraps it, and the
+    wrapper keeps the original as ``orig``. Both are checked, because the error can reach
+    the caller as either.
+    """
+    original = getattr(exc, "orig", None)
+    for candidate in (original, exc):
+        code = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if code:
+            return str(code)
+    return None
 
 
 def new_id() -> str:
@@ -24,6 +71,28 @@ def is_valid_id(value: Any) -> bool:
         return True
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def get_row(session, record, row_id: Any):
+    """The row named by ``row_id``, or None when the id names no row at all.
+
+    A malformed id must never reach a typed column. It goes straight into a uuid
+    column, and PostgreSQL raises ``invalid input syntax for type uuid`` on a
+    value that is not a uuid -- an unhandled 500 for a request that named nothing
+    at all, on a route anybody can call.
+
+    A malformed id names no row, which is what every endpoint that takes one
+    already answers "not found" for, so refusing it here changes no answer except
+    turning a 500 into that one.
+
+    This is the one place the rule is written down, so a route added later
+    inherits it rather than having to remember it. Where the id reaches a column
+    through a WHERE rather than a primary-key lookup, guard it with
+    :func:`is_valid_id` instead: the same rule, applied before the query.
+    """
+    if not is_valid_id(row_id):
+        return None
+    return session.get(record, str(row_id))
 
 
 def _server_default_sql(column, dialect) -> str | None:
@@ -201,6 +270,10 @@ class PostgresClient:
         # how a value is *read back* -- aware, so the instant survives, yet the text in logs
         # and the values an operator sees in psql would stop matching what the app wrote.
         # The application is UTC end to end, so the session is told so.
+        #
+        # Kept on the instance because :meth:`schema_lock` connects the same way from an
+        # engine of its own.
+        self._connect_args = {"options": "-c timezone=UTC", "connect_timeout": 10}
         self.engine = create_engine(
             database_url or settings.DATABASE_URL,
             pool_pre_ping=True,
@@ -213,11 +286,88 @@ class PostgresClient:
             # Windows) instead of failing fast like an exhausted pool does. Seen
             # when several connections race to a host that resolves to both ::1
             # and 127.0.0.1 while only IPv4 is listening.
-            connect_args={"options": "-c timezone=UTC", "connect_timeout": 10},
+            connect_args=self._connect_args,
         )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
+        # The engine the schema-initialisation lock connection comes from. It is built
+        # here rather than inside :meth:`schema_lock` so that initialising a running
+        # process never builds an engine, and it uses a ``NullPool`` so that the lock
+        # connection is never returned to a pool while it is still holding the lock.
+        self._lock_engine = create_engine(
+            database_url or settings.DATABASE_URL,
+            poolclass=NullPool,
+            connect_args=self._connect_args,
+        )
+
     def initialize(self) -> None:
+        """Bring the database schema in line with the models, and keep it that way.
+
+        Serialised across every process that shares this database: the convergence
+        sequence is a series of "read the catalogue, then ALTER" steps, and two of them
+        running at once is how a deploy ends with half the workers up. See
+        :data:`SCHEMA_INIT_LOCK_KEY` and :meth:`schema_lock`.
+        """
+        with self.schema_lock():
+            self._converge_schema()
+
+    @contextmanager
+    def schema_lock(self):
+        """Hold the schema-initialisation advisory lock for the duration of the block.
+
+        A **session-scoped** ``pg_advisory_lock``, taken on one connection of its own and
+        released explicitly before that connection is closed. The lock is session-scoped
+        because it has to outlive the individual transactions the convergence runs in, and
+        it is released by hand because a session-scoped lock outlives those transactions
+        too: a connection that was discarded without unlocking would hold it until the
+        backend died, and the symptom of that -- a deploy that hangs on start-up with
+        nothing in the log -- is far harder to read than the one this prevents.
+
+        The connection comes from a small engine of its own (:attr:`_lock_engine`), not from
+        the application's pool. It is checked out for the whole convergence, and the
+        convergence steps each check out a connection of their own, so taking this one from
+        the pool would deadlock any deployment whose pool is a single connection wide --
+        which is exactly what ``scripts/recreate_chat_schema.py`` asks for (``pool_size=1,
+        max_overflow=0``). The ``NullPool`` keeps the lock connection outside that
+        accounting and closes it, rather than returning it, when the block ends.
+
+        The lock is *blocking* on purpose. The second worker waits for the first to finish
+        and then finds the work already done, which is what "converged" means; refusing
+        the lock instead would only move the crash to the next boot.
+
+        The implicit transaction the lock statement opens is committed straight away, so
+        the connection sits idle rather than "idle in transaction". A session-scoped lock
+        survives the commit, but an open snapshot would hold the database's vacuum back
+        for the whole of the convergence.
+        """
+        connection = self._lock_engine.connect()
+        try:
+            connection.execute(
+                text("SELECT pg_advisory_lock(:key)"), {"key": SCHEMA_INIT_LOCK_KEY}
+            )
+            connection.commit()
+            try:
+                yield
+            finally:
+                try:
+                    connection.execute(
+                        text("SELECT pg_advisory_unlock(:key)"),
+                        {"key": SCHEMA_INIT_LOCK_KEY},
+                    )
+                    connection.commit()
+                except Exception:
+                    # The lock belongs to the session, so it dies with the session. Closing
+                    # the backend is what releases it, so the connection must not be
+                    # returned anywhere it could be reused while still holding it.
+                    logger.error(
+                        "Could not release the schema-initialisation advisory lock; "
+                        "closing the connection so the lock dies with its session"
+                    )
+        finally:
+            connection.close()
+
+    def _converge_schema(self) -> None:
+        """The convergence sequence itself. Serialised by :meth:`schema_lock`."""
         # Refuse to boot against the old plaintext chat tables. The encrypted
         # schema changes NOT NULL columns and drops the body column, which
         # create_all cannot apply to an existing table. This repository has no
@@ -231,7 +381,7 @@ class PostgresClient:
         # does not exist". Requires the pgvector extension package on the
         # server (pgvector/pgvector:pg16 image); see docker-compose.yml.
         self.apply_vector_extension()
-        Base.metadata.create_all(self.engine)
+        self._create_tables()
         # Columns before constraints: a CHECK added to an already-created table can name a
         # column that only exists in the models, and PostgreSQL refuses the constraint if the
         # column is not there yet. Adding the columns first is what lets a partially-migrated
@@ -239,6 +389,8 @@ class PostgresClient:
         self.apply_missing_columns()
         self.apply_retired_columns()
         self.apply_unique_indexes()
+        # The refresh path's stale-copy lookup reads this column on every refusal.
+        self.apply_refresh_replay_index()
         self.apply_check_constraints()
         # Needs the extension installed first, and nothing else depends on it, so it
         # runs with the other additive DDL rather than in table-creation order.
@@ -262,6 +414,27 @@ class PostgresClient:
         # Automated confession moderation (Batch 1): system-actor reports reuse
         # the reports table with a nullable reporter and a source column.
         self.apply_report_source_convergence()
+
+    def _create_tables(self) -> None:
+        """Create the tables the models declare.
+
+        ``create_all`` is a check-then-create: it asks the catalogue whether a table is
+        there and creates it if not, so two creators on a fresh database both see it
+        missing and both create it, and the loser is refused with ``duplicate_table``.
+        The schema lock keeps the workers of this build apart; this is for the one that is
+        not taking it -- a rolling deploy, where the previous build is still up while
+        the new one boots. The retry finds the tables the other worker created and
+        creates the rest.
+        """
+        try:
+            Base.metadata.create_all(self.engine)
+        except ProgrammingError as exc:
+            if _postgres_error_code(exc) != PG_DUPLICATE_TABLE:
+                raise
+            logger.info(
+                "A concurrent worker created a table first; creating the remaining tables"
+            )
+            Base.metadata.create_all(self.engine)
 
     def assert_no_legacy_plaintext_chat_schema(self) -> None:
         """Fail clearly when an old plaintext chat schema is still installed.
@@ -450,6 +623,29 @@ class PostgresClient:
                         column.name,
                     )
 
+    def apply_refresh_replay_index(self) -> None:
+        """Index the hashes of refresh tokens that were rotated away.
+
+        A refused refresh looks the presented token up by the hash it replaced, to
+        tell a stale copy -- the browser that lost a rotation race -- from a value
+        no session ever held. Without an index that lookup is a sequential scan of
+        the session table, and it sits on the refusal path: exactly the path a
+        caller probing for live tokens produces.
+
+        Partial, because only a session that has rotated at least once has a value
+        there: the index then holds one row per rotating session rather than one
+        per session. ``IF NOT EXISTS`` and outside any data decision, so it is safe
+        to retry on every boot.
+        """
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    'CREATE INDEX IF NOT EXISTS "ix_login_tokens_refresh_token_replaced_hash" '
+                    'ON "login_tokens" ("refresh_token_replaced_hash") '
+                    "WHERE refresh_token_replaced_hash IS NOT NULL"
+                )
+            )
+
     def apply_trgm_indexes(self) -> None:
         """Install pg_trgm GIN indexes for the ILIKE-searched columns.
 
@@ -572,6 +768,13 @@ class PostgresClient:
         the new number the only rule in force. Dropping is safe to do at boot precisely
         because the replacement is added in the same transaction -- there is no window in
         which the column is unguarded.
+
+        Two workers converging the same database at once used to be able to collide here:
+        both read the catalogue, both saw a constraint missing, and the loser was refused
+        with ``duplicate_object`` and died during start-up. The schema lock keeps this
+        build's workers apart; each statement also tolerates that error and its
+        ``undefined_object`` counterpart, which covers a rolling deploy where the previous
+        build is still converging the same database without taking the lock.
         """
         with self.engine.begin() as connection:
             installed = {
@@ -592,28 +795,69 @@ class PostgresClient:
                     sqltext = str(constraint.sqltext).strip()
                     if not sqltext:
                         continue
-                    connection.execute(
-                        text(
-                            f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
-                            f"CHECK ({sqltext}) NOT VALID"
+                    added = self._run_constraint_ddl(
+                        connection,
+                        f'ALTER TABLE "{table.name}" ADD CONSTRAINT "{constraint.name}" '
+                        f"CHECK ({sqltext}) NOT VALID",
+                        tolerate=PG_DUPLICATE_OBJECT,
+                    )
+                    if added:
+                        logger.info(
+                            "Added CHECK constraint %s on %s (not validated)",
+                            constraint.name,
+                            table.name,
                         )
-                    )
-                    logger.info(
-                        "Added CHECK constraint %s on %s (not validated)",
-                        constraint.name,
-                        table.name,
-                    )
+                    else:
+                        logger.info(
+                            "CHECK constraint %s on %s was added by another worker first",
+                            constraint.name,
+                            table.name,
+                        )
                 for superseded in self._superseded_constraints(table, installed):
-                    connection.execute(
-                        text(
-                            f'ALTER TABLE "{table.name}" DROP CONSTRAINT "{superseded}"'
+                    dropped = self._run_constraint_ddl(
+                        connection,
+                        f'ALTER TABLE "{table.name}" DROP CONSTRAINT "{superseded}"',
+                        tolerate=PG_UNDEFINED_OBJECT,
+                    )
+                    if dropped:
+                        logger.info(
+                            "Dropped superseded CHECK constraint %s on %s",
+                            superseded,
+                            table.name,
                         )
-                    )
-                    logger.info(
-                        "Dropped superseded CHECK constraint %s on %s",
-                        superseded,
-                        table.name,
-                    )
+                    else:
+                        logger.info(
+                            "Superseded CHECK constraint %s on %s was already dropped",
+                            superseded,
+                            table.name,
+                        )
+
+    @staticmethod
+    def _run_constraint_ddl(connection, sql: str, *, tolerate: str) -> bool:
+        """Run one constraint DDL statement, tolerating a concurrent worker.
+
+        Returns whether this process was the one that applied the statement. The
+        ``tolerate`` code is the ``SQLSTATE`` that means somebody else got there first --
+        ``duplicate_object`` for an ``ADD`` and ``undefined_object`` for a ``DROP``.
+
+        The schema lock (:meth:`schema_lock`) already keeps the workers of this build
+        apart, so this is for the one that is not taking it: a rolling deploy, where the
+        previous build is still up and converging the same database while this one boots.
+
+        Each statement gets its own SAVEPOINT, and that is the load-bearing part. A DDL
+        error aborts the whole PostgreSQL transaction, so without one the tolerated
+        failure would take the rest of the batch down with it and the boot would fail on
+        a line that had nothing to do with the race. Rolling back to the savepoint leaves
+        the outer transaction usable and the batch running.
+        """
+        try:
+            with connection.begin_nested():
+                connection.execute(text(sql))
+        except ProgrammingError as exc:
+            if _postgres_error_code(exc) != tolerate:
+                raise
+            return False
+        return True
 
     def apply_not_null_constraints(self) -> None:
         """Tighten a column the models declare NOT NULL but the table still allows to be null.
@@ -1098,6 +1342,7 @@ class PostgresClient:
 
     def close(self) -> None:
         self.engine.dispose()
+        self._lock_engine.dispose()
 
 
 # Existing service annotations use this name; it now denotes only the engine/session provider.

@@ -12,6 +12,9 @@ weakens it fails here, not in a browser:
   raw value is dead (replay refused), and the access token is fresh
 - logout/failed-refresh clearing repeats path + Secure + SameSite (+ HttpOnly) so
   the deletion is honoured by browsers
+- a failed refresh clears the cookie only when the cookie is dead: a value that was
+  rotated away from a live session is a stale copy (two tabs racing a refresh), and
+  the browser may still be holding the newer value, so it must survive the refusal
 
 Deliberately NOT asserting `__Host-` prefix or `SameSite=Strict`: `__Host-` is
 rejected by browsers unless Path=/ exactly, which would widen this cookie from
@@ -154,6 +157,69 @@ def test_failed_refresh_clears_with_matching_flags(db):
     lowered = set_cookie.lower()
     assert f"path={settings.REFRESH_COOKIE_PATH}".lower() in lowered, set_cookie
     assert "samesite=lax" in lowered, set_cookie
+
+
+def test_a_revoked_session_clears_the_cookie(db):
+    # The cookie of a session that was signed out is dead too, and the browser has
+    # to be told: otherwise it keeps sending a value that can never work again.
+    browser = _login(db, "contract-revoked")
+    raw = _refresh_cookie(browser)
+    assert browser.post(LOGOUT_ENDPOINT, headers={"Origin": ALLOWED_ORIGIN}).status_code == 200
+
+    response = _browser().post(
+        REFRESH_ENDPOINT,
+        headers={"Origin": ALLOWED_ORIGIN},
+        cookies={settings.REFRESH_COOKIE_NAME: raw},
+    )
+    assert response.status_code == 401, response.text
+    set_cookie = response.headers.get("set-cookie", "")
+    assert f"path={settings.REFRESH_COOKIE_PATH}".lower() in set_cookie.lower(), set_cookie
+
+
+def test_a_rotated_away_value_does_not_delete_the_cookie(db):
+    """The multi-tab hazard: the loser of a rotation race must not take the
+    winner's cookie with it.
+
+    Two tabs of one browser can refresh at the same moment. One of them rotates
+    the cookie; the other is refused for presenting the value that was just
+    replaced. The browser is now holding the *newer* value, so a deletion on that
+    refusal would sign it out of a session it is still using -- the very thing the
+    cookie's own rotation is meant to survive.
+    """
+    browser = _login(db, "contract-stale")
+    old_raw = _refresh_cookie(browser)
+    assert old_raw
+
+    rotated = browser.post(REFRESH_ENDPOINT, headers={"Origin": ALLOWED_ORIGIN})
+    assert rotated.status_code == 200, rotated.text
+    new_raw = _refresh_cookie(browser)
+    assert new_raw and new_raw != old_raw, "refresh must rotate to a new raw value"
+
+    # The stale copy, presented as the tab that lost the race would.
+    refused = _browser().post(
+        REFRESH_ENDPOINT,
+        headers={"Origin": ALLOWED_ORIGIN},
+        cookies={settings.REFRESH_COOKIE_NAME: old_raw},
+    )
+    assert refused.status_code == 401, refused.text
+    # The answer is the same generic refusal either way: nothing about it tells a
+    # caller whether a random token belonged to a live account.
+    assert refused.json()["detail"] == "Could not validate credentials"
+    # ... but no deletion: the browser's newer value has to survive this refusal.
+    assert "set-cookie" not in refused.headers
+
+
+def test_a_refused_refresh_answers_the_generic_401(db):
+    # The client's contract: the refusal body and headers are unchanged, so the
+    # "signed in elsewhere" wording still stands apart from every other refusal.
+    response = _browser().post(
+        REFRESH_ENDPOINT,
+        headers={"Origin": ALLOWED_ORIGIN},
+        cookies={settings.REFRESH_COOKIE_NAME: "dead-value"},
+    )
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Could not validate credentials"}
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
 
 
 def test_logout_clears_with_matching_flags(db):

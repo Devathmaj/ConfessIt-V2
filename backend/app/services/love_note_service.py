@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from ..postgres import Database
 from ..db_models import LoveNoteRecord, LoveNoteReportRecord, UserRecord
 from ..logger import get_logger
@@ -21,6 +21,30 @@ from .report_counters import LOVE_NOTE, record_report_filed
 
 # Logger
 logger = get_logger(__name__)
+
+# What a sender is told when the season is already spent, and when the recipient has
+# opted out of receiving love notes. One definition each, so the router's fast-fail and
+# the service's authoritative refusal cannot drift apart in what they say: the client
+# renders the server's ``detail`` verbatim, and two spellings of one refusal would be
+# two different messages for one thing.
+SEASON_ALREADY_CLAIMED = "You have already sent your love note for this season."
+RECIPIENT_NOT_ACCEPTING = "This participant is not accepting love notes."
+
+
+def _discard_uploaded_image(note_id: str, public_id: str) -> None:
+    """Delete an image that was uploaded for a note which will never exist.
+
+    The object is in the bucket with nothing pointing at it, so it is unreachable
+    through any URL this application will ever produce. That makes deleting it
+    housekeeping rather than a decision about the note -- but it is still a delete, and
+    a failure to perform it is logged rather than raised: the note is already lost, and
+    a failed cleanup must not turn a refusal into a different error.
+    """
+    try:
+        storage_service.delete_love_note_asset(public_id)
+    except Exception:
+        logger.error("Failed to discard image for unsaved love note %s", note_id)
+
 
 class LoveNoteCreate(BaseModel):
     """
@@ -230,6 +254,20 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
     one-to-one with the row: the image cannot be named after anything the sender supplied, it
     cannot be re-pointed at another note, and deleting the note gives the deletion code a public_id
     it can read straight out of the database instead of parsing it back out of a stored URL.
+
+    Two rules are enforced here rather than at the edges that suggest them, because both are
+    reachable by any client that knows a recipient id and neither is a property of the
+    request:
+
+    * **One note per season.** The sender's season is claimed by a conditional update in this
+      note's own transaction, not by a read on the way in. The read-then-write it replaces
+      let two sends in flight both believe they held the season.
+    * **The recipient's opt-out.** The picker filters on ``love_notes_receive_enabled`` so a
+      sender is never offered somebody who opted out, but a preference the screen honours and
+      the API does not is not a preference.
+
+    A note that is refused is refused before it becomes a row, and the image uploaded for it
+    is discarded -- the object would otherwise sit in the bucket with nothing pointing at it.
     """
     with db.sessions() as session:
         recipient = session.get(UserRecord, str(note_data.recipient_id))
@@ -237,6 +275,21 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Recipient not found."
+        )
+
+    # The recipient's own switch, enforced here and not only in the picker. The picker
+    # filters on it so a sender is never *offered* somebody who opted out, but a client
+    # that knows a recipient id can ask for a note directly, and the API is where that
+    # request is answered. A preference the screen honours and the API does not is not
+    # a preference.
+    #
+    # This is the fast-fail: it keeps a refused note from uploading an image at all.
+    # The authoritative reading is the one taken inside the note's own transaction,
+    # below, where the note is actually written.
+    if not recipient.love_notes_receive_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=RECIPIENT_NOT_ACCEPTING,
         )
 
     note_id = new_id()
@@ -299,6 +352,62 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
 
     try:
         with db.sessions.begin() as session:
+            # The season is *claimed* here, not merely recorded. The old code read
+            # ``love_notes_send_enabled`` off the request's user and set it to true in
+            # this transaction, which is a read-then-write across two transactions: two
+            # sends in flight both read false, both believed they held the season, and
+            # both inserted a note.
+            #
+            # The conditional update is the claim. It matches the row only while the
+            # flag is still false, and PostgreSQL re-checks that after the row lock is
+            # taken, so of two racers exactly one sees ``rowcount == 1`` and the other
+            # is refused. The claim and the note are written in the same transaction,
+            # so there is no window in which the season is spent but no note exists.
+            claimed = session.execute(
+                update(UserRecord)
+                .where(
+                    UserRecord.id == str(sender.id),
+                    UserRecord.love_notes_send_enabled.is_(False),
+                )
+                .values(love_notes_send_enabled=True)
+                # The in-session copy of the sender is not kept in step: it is not
+                # loaded in this session, and the flag is read from the row that the
+                # update itself matched.
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            if claimed != 1:
+                # Two reasons a claim can fail, and they deserve different answers:
+                # the season is already spent, or there is no participant row for this
+                # sender at all. Telling a sender their season is gone because their
+                # account row is missing would be a lie about a season nobody spent.
+                if session.scalar(
+                    select(UserRecord.id).where(UserRecord.id == str(sender.id))
+                ) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Sender not found.",
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=SEASON_ALREADY_CLAIMED,
+                )
+
+            # The recipient's switch, read again where the note is written. The check
+            # before the upload is a fast-fail; this one is the reading the note is
+            # actually bound to, and a recipient who opted out in between is caught
+            # here rather than delivered a note they refused.
+            recipient_row = session.get(UserRecord, str(note_data.recipient_id))
+            if recipient_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Recipient not found.",
+                )
+            if not recipient_row.love_notes_receive_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=RECIPIENT_NOT_ACCEPTING,
+                )
+
             row = LoveNoteRecord(
                 id=note_id,
                 sender_id=sender.id, recipient_id=str(note_data.recipient_id),
@@ -309,19 +418,25 @@ def send_love_note_service(note_data: LoveNoteCreate, sender: UserDetails, db: D
                 created_at=love_note.created_at,
             )
             session.add(row)
-            sender_row = session.get(UserRecord, sender.id)
-            if sender_row:
-                sender_row.love_notes_send_enabled = True
             session.flush()
+    except HTTPException:
+        # The note was refused -- the season was already claimed, or the recipient
+        # opted out -- so the image uploaded for it points at nothing. It is discarded
+        # for the same reason a failed insert discards it: the note does not exist, so
+        # the object is unreachable through any URL this application will produce.
+        #
+        # The refusal is re-raised as it is. Collapsing it into the 500 below would
+        # report a policy decision as a server fault, and would tell the sender the
+        # wrong thing about why their note did not go out.
+        logger.info("Love note %s refused; discarding the uploaded image", note_id)
+        _discard_uploaded_image(note_id, stored_image["public_id"])
+        raise
     except Exception:
         # The image is already in the bucket with nothing pointing at it. Best-effort cleanup
         # rather than a leak: the note was never created, so the object is unreachable through
         # any URL this application will ever produce.
         logger.error("Failed to insert love note into the database; discarding uploaded image", exc_info=True)
-        try:
-            storage_service.delete_love_note_asset(stored_image["public_id"])
-        except Exception:
-            logger.error("Failed to discard image for unsaved love note %s", note_id)
+        _discard_uploaded_image(note_id, stored_image["public_id"])
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not send the love note."
@@ -477,12 +592,29 @@ def update_love_note_status_service(
             detail="Invalid love note id"
         )
 
-    # Get the love note before updating. The previous status is read inside the transaction and
-    # decides which notice the sender gets, so it has to be the value the row actually held --
-    # read outside, a second moderator clicking in between would produce the wrong notice.
+    # The transition is claimed under a row lock, and the claim is what makes the change
+    # idempotent.
+    #
+    # The lock is what the check and the write need together. "A rejected note cannot
+    # become approved" is a fact about the row, and a fact read outside the transaction
+    # that changes it is a fact that can be overtaken: two moderators clicking at once --
+    # or one moderator clicking twice -- both read ``pending_review``, both decide they
+    # are approving, and both walk away believing they delivered the note. The recipient
+    # is told it arrived twice, the sender is told it was delivered twice, and a note
+    # that was rejected in between is resurrected by the second click. Reading the row
+    # with ``FOR UPDATE`` takes the row lock before the status is read, so the second
+    # click waits for the first to commit and then reads the status the first one left.
+    #
+    # The previous status is read inside that same transaction because it decides which
+    # notice the sender gets; read outside, a second moderator clicking in between would
+    # produce the wrong notice.
     previous_status: Optional[str] = None
     with db.sessions.begin() as session:
-        love_note = session.get(LoveNoteRecord, str(note_id))
+        love_note = session.scalar(
+            select(LoveNoteRecord)
+            .where(LoveNoteRecord.id == str(note_id))
+            .with_for_update()
+        )
         if love_note:
             previous_status = love_note.status
             if previous_status == "rejected" and status_value != "rejected":
@@ -496,6 +628,14 @@ def update_love_note_status_service(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Love note not found"
         )
+
+    # A move to the status the note already holds is not a move. The note is already in
+    # the state it was asked to be in, so nothing changed and nothing is announced --
+    # one decision is one notice, and a second click on "approve" is not a second
+    # delivery. This is what makes the endpoint idempotent: the second call answers the
+    # same way as the first, and the only difference is that it stays quiet.
+    if previous_status == status_value:
+        return {"id": note_id, "status": status_value}
     
     # Create notifications based on status change
     from ..services.notification_service import create_notification_service

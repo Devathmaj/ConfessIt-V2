@@ -66,7 +66,7 @@ export const CaseClosedChatDialog = ({
   /** Why the thread is closed, from the caller's game state. */
   closedReason?: string | null;
 }) => {
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<CaseClosedChatMessage[]>([]);
   const [threadReport, setThreadReport] = useState<{ open: boolean; reason: string | null } | null>(null);
   const [total, setTotal] = useState(0);
@@ -82,6 +82,34 @@ export const CaseClosedChatDialog = ({
   const [reportTarget, setReportTarget] = useState<CaseClosedChatMessage | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const subscribedRef = useRef(false);
+
+  /**
+   * The ids of the turns on screen, kept in step with the list synchronously.
+   *
+   * The list is state, and a state update only becomes visible after the next
+   * render, so a de-dupe that reads the list sees a turn as absent while it is
+   * already on screen. That is how the count came to be wrong: the local append
+   * added one and the live echo of the same turn added another, because the
+   * echo's de-dupe guarded the row and not the counter.
+   */
+  const messageIdsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Put a turn on screen, unless it is already there.
+   *
+   * Answers whether it was added, so the caller knows whether the count and the
+   * allowance move. The count is the number of turns the thread holds, and a turn
+   * spends the room -- so a turn that was already on screen must move neither.
+   */
+  const appendMessage = (message: CaseClosedChatMessage): boolean => {
+    if (messageIdsRef.current.has(message.id)) {
+      return false;
+    }
+    messageIdsRef.current.add(message.id);
+    setMessages((previous) => [...previous, message]);
+    setTotal((t) => t + 1);
+    return true;
+  };
 
   // Both gates must agree the thread is open; either can close it alone. The
   // page knows about the lock first (its confirmation response lands there),
@@ -107,7 +135,13 @@ export const CaseClosedChatDialog = ({
         // caller's state polls, this transcript read still closes the thread.
         setThreadReport({ open: page.chat_open, reason: page.closed_reason });
         setMessages((prev) => {
-          if (!before) return page.messages;
+          if (!before) {
+            // The list is replaced, so the known ids are replaced with it.
+            messageIdsRef.current = new Set(page.messages.map((message) => message.id));
+            return page.messages;
+          }
+          // The older rows are added to the list, so their ids join the known ones.
+          page.messages.forEach((message) => messageIdsRef.current.add(message.id));
           const known = new Set(prev.map((m) => m.id));
           return [...page.messages.filter((m) => !known.has(m.id)), ...prev];
         });
@@ -130,22 +164,39 @@ export const CaseClosedChatDialog = ({
     // case ending) re-runs this effect and the cleanup below drops the
     // connection, so nothing persistent survives the lock. The server refuses
     // the handshake outright when the thread is already closed.
-    if (!sessionId || !token || !threadOpen || subscribedRef.current) return;
+    //
+    // The bearer is deliberately not part of this: it rotates every time the
+    // server refuses an expired one, and a rotation must not tear down a live
+    // thread and open it again. The ticket exchange reads the bearer that is
+    // current when it happens, and a thread opened without a session is refused
+    // by the server like any other.
+    if (!sessionId || !threadOpen || subscribedRef.current) return;
     subscribedRef.current = true;
     let offMessage: (() => void) | null = null;
     let offError: (() => void) | null = null;
     (async () => {
       try {
-        await caseClosedMessagingClient.connect(token);
+        const opened = await caseClosedMessagingClient.connect();
+        if (!opened) {
+          // Overtaken: the thread closed while the ticket was being fetched.
+          // There is no socket to subscribe to, and none to leave behind.
+          return;
+        }
         setConnected(true);
         offMessage = caseClosedMessagingClient.onMessage((incoming) => {
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === incoming.id)) return prev;
-            return [...prev, { ...incoming, is_sender: incoming.sender_user_id === user?.id }];
+          // The turn is added once, and the count and the allowance move with it.
+          // The sender's own turn is added by the send handler below, and the
+          // echo of it lands here: it is already on screen, so neither the count
+          // nor the allowance may move again -- the allowance was already spent
+          // by the send, which is why the echo must not spend it a second time.
+          const added = appendMessage({
+            ...incoming,
+            is_sender: incoming.sender_user_id === user?.id,
           });
-          setTotal((t) => t + 1);
-          setQuota((q) => quotaAfterIncomingMessage(q, incoming.sender_user_id === user?.id));
-          scrollToBottom();
+          if (added) {
+            setQuota((q) => quotaAfterIncomingMessage(q, incoming.sender_user_id === user?.id));
+            scrollToBottom();
+          }
         });
         offError = caseClosedMessagingClient.onError(() => setConnected(false));
       } catch {
@@ -159,7 +210,7 @@ export const CaseClosedChatDialog = ({
       subscribedRef.current = false;
       setConnected(false);
     };
-  }, [sessionId, token, threadOpen, user?.id, scrollToBottom]);
+  }, [sessionId, threadOpen, user?.id, scrollToBottom]);
 
   useEffect(() => {
     scrollToBottom();
@@ -251,11 +302,12 @@ export const CaseClosedChatDialog = ({
                   try {
                     const sent = await sendCaseClosedMessage(body);
                     setQuota(sent.quota);
-                    setMessages((prev) => {
-                      if (prev.some((m) => m.id === sent.id)) return prev;
-                      return [...prev, { ...sent, is_sender: true }];
-                    });
-                    setTotal((t) => t + 1);
+                    // The turn goes on screen here, and the count moves with it.
+                    // The live echo of the same turn lands on the socket handler
+                    // above, which finds it already here and moves neither the
+                    // count nor the allowance -- the allowance came from the
+                    // server's answer, which already counts this turn.
+                    appendMessage({ ...sent, is_sender: true });
                     setDraft('');
                     scrollToBottom();
                   } catch (error) {

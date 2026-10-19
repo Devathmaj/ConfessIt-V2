@@ -34,13 +34,25 @@ post and decided it broke a rule and the author is owed the reason. A direct hid
 that the content was removed, because no rule was cited against it and asserting one would be
 the application claiming a decision nobody made. ``hide_confession`` and ``hide_comment`` are
 the two direct-hide paths; both send the neutral copy.
+
+**Taking content down is one event, and the database says so.** Every path here ends in the
+same write -- the row is marked removed -- and each of them has to know whether *this call*
+is the one that did it, because the things that follow a removal (the parent's comment count,
+the author's tally, the notice to the author) are one-per-removal, not one-per-click. Two
+moderators acting on the same content at the same moment, or a double click on "hide", used to
+both read ``removed_at IS NULL`` before either committed, so both were told they had taken it
+down and both charged the author for it: an inflated tally, a comment count that disagrees
+with the thread, a duplicate notice, and an account blocked one removal early. The transition
+is therefore a single conditional ``UPDATE`` (``WHERE removed_at IS NULL``), which PostgreSQL
+settles by re-checking the predicate after the row lock is taken -- of two racers exactly one
+wins, and the loser is told the content was already down.
 """
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from ..accounts import AccountRef
 from ..db_models import (
@@ -209,6 +221,7 @@ def _notify_removal(
     reporter_regno: Optional[str],
     kind: str,
     cites_policy: bool,
+    took_it_down: bool,
 ) -> None:
     """Tell the author their content is gone and the reporter it was taken down.
 
@@ -221,8 +234,20 @@ def _notify_removal(
     the whole distinction described above ``_POLICY_BODIES``: a ruling on a report cites the
     policy, a direct removal does not. It is required rather than defaulted, so adding a fourth
     removal path cannot quietly inherit whichever copy the signature happened to default to.
+
+    **The author is told once, and only by the call that took the content down.** ``took_it_down``
+    is the answer to "was this the transition?", and it is the only thing that decides whether
+    the author hears about it. Two reports on the same comment, resolved one after the other,
+    are one takedown: the second ruling finds the content already down and has nothing new to
+    tell the author, who was told when it came down. Sending a second notice would read as a
+    second event, and there was only ever one.
+
+    The reporter is told either way. Their complaint is about *their* report, and each report
+    is answered on its own merits: the second reporter is told their complaint was upheld even
+    though somebody else got there first, because silence on an upheld report reads exactly like
+    being ignored.
     """
-    if author_regno:
+    if took_it_down and author_regno:
         bodies = _POLICY_BODIES if cites_policy else _NEUTRAL_BODIES
         create_notification_service(
             recipient_regno=author_regno,
@@ -275,8 +300,23 @@ def _notify_dismissal(db: Database, reporter_regno: Optional[str]) -> None:
         )
 
 
-def _stamp_removal(row, reviewer_regno: str) -> bool:
+def _stamp_removal(session, row, reviewer_regno: str) -> bool:
     """Mark a content row removed, and say whether this call is the one that did it.
+
+    **The transition is a single conditional ``UPDATE``, not a read followed by a write.** That
+    is the whole point of this function. Two moderators acting on the same content at the same
+    moment -- two participants reporting the same comment and both reports being resolved
+    together, a double click on "hide" -- used to both read ``removed_at IS NULL`` before either
+    committed, so both were told they had taken the content down. Each then decremented the
+    parent confession's ``comment_count``, charged the author a second upheld removal, and sent
+    a second notice. The tally that an appeal is argued from ended up inflated, and an account
+    crossed the automatic-block line one removal early.
+
+    The database settles it instead. ``WHERE removed_at IS NULL`` matches the row only while it
+    is still live, and PostgreSQL re-checks that predicate after the row lock is taken, so of
+    two racers exactly one sees ``rowcount == 1``. The loser is told the content was already
+    down and none of its side effects run. Same mechanism, and for the same reason, as the
+    one-note-per-season claim in ``love_note_service``.
 
     Re-deciding a report that has already been closed out as ``removed`` must not move the
     timestamp: ``removed_at`` is when the content came down, and re-stamping it would make the
@@ -288,11 +328,54 @@ def _stamp_removal(row, reviewer_regno: str) -> bool:
     came down -- and, more importantly, the side effects that follow a removal (the comment
     count, the conversation preview) are only run for the transition, not for every click.
     """
-    if row.removed_at is not None:
-        return False
-    row.removed_at = datetime.now(timezone.utc)
-    row.removed_by_regno = reviewer_regno
-    return True
+    now = datetime.now(timezone.utc)
+    model = type(row)
+    result = session.execute(
+        update(model)
+        .where(model.id == str(row.id), model.removed_at.is_(None))
+        .values(removed_at=now, removed_by_regno=reviewer_regno)
+        # The session's copy of the row is brought back into step below rather than by the
+        # update itself: it was read before the write, so it still says the content is live.
+        .execution_options(synchronize_session=False)
+    )
+    # The row's removal columns are read back from the database rather than from the copy
+    # this session loaded before the write, and that copy is stale by construction: for the
+    # racer that lost, it says the content is live when the winner has already taken it
+    # down, and reporting that back would tell a moderator their own decision removed
+    # nothing *and* that nothing was removed at all. Expiring makes the next read come from
+    # the database, which is the only copy that can be trusted about a row another
+    # transaction may have touched.
+    session.expire(row, ["removed_at", "removed_by_regno"])
+    return result.rowcount == 1
+
+
+def _decrement_comment_count(session, confession_id) -> bool:
+    """Take one comment off the count its parent confession advertises.
+
+    ``comment_count`` is denormalised onto the confession, so removing a comment has to walk
+    back up and subtract one. The write is a single conditional ``UPDATE`` for the same reason
+    the removal stamp is one: a read followed by a decrement loses updates when two removals
+    land on the same parent at once, and the column is exactly the number the feed shows, so a
+    lost update is a count that disagrees with the thread for as long as the row survives.
+
+    ``WHERE comment_count > 0`` is the guard against a negative count, and it lives in the
+    database where it cannot be raced past -- the column is denormalised and can already be out
+    of step with the rows underneath it, and a parent in that state simply does not move.
+
+    Returns whether the count moved. That is not the same question as "was the comment
+    removed": the caller only gets here for a removal that actually happened, so a count that
+    did not move means the column was already out of step, not that a removal went missing.
+    """
+    result = session.execute(
+        update(ConfessionRecord)
+        .where(
+            ConfessionRecord.id == str(confession_id),
+            ConfessionRecord.comment_count > 0,
+        )
+        .values(comment_count=ConfessionRecord.comment_count - 1)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
 
 
 def _clear_conversation_preview(conversation) -> None:
@@ -315,10 +398,22 @@ def _recompute_conversation_preview(session, conversation_id: Optional[str]) -> 
     The preview is an encrypted copy, so this decrypts the replacement message and re-encrypts
     its first 100 characters under the preview's own AAD. If the replacement cannot be
     decrypted the preview is cleared rather than left pointing at older text.
+
+    The conversation row is locked before the newest message is chosen, and that is the
+    whole point of the lock: the send path writes this same row while holding this same
+    lock, so the two writers cannot interleave. Without it, a removal that runs while a
+    send is still open chooses its replacement from a snapshot that does not contain the
+    message being sent, and then writes that older preview over the newer one -- the
+    conversation list regressing to a message that is not the newest, and briefly showing
+    text a moderator has just taken down.
     """
     if not conversation_id:
         return
-    conversation = session.get(ConversationRecord, str(conversation_id))
+    conversation = session.scalar(
+        select(ConversationRecord)
+        .where(ConversationRecord.id == str(conversation_id))
+        .with_for_update()
+    )
     if conversation is None:
         return
     now = datetime.now(timezone.utc)
@@ -409,12 +504,10 @@ def resolve_confession_report(
             # deleted a microsecond earlier takes the same branch as one that was not.
             reporter_regno = _regno_for_user(session, report.reported_by_id)
 
-            if status_value == REMOVAL_STATUS and _stamp_removal(target, reviewer_regno):
+            if status_value == REMOVAL_STATUS and _stamp_removal(session, target, reviewer_regno):
                 removed_content = True
                 if is_comment:
-                    parent = session.get(ConfessionRecord, str(target.confession_id))
-                    if parent is not None and parent.comment_count > 0:
-                        parent.comment_count = parent.comment_count - 1
+                    _decrement_comment_count(session, target.confession_id)
                 # An upheld report against the participant's writing. Inside the transition
                 # branch for the same reason as the comment count: re-deciding a report that
                 # was already ruled removed is not a second event and must not be counted as
@@ -429,9 +522,9 @@ def resolve_confession_report(
     # not undo a decision the moderator has been told was applied. No wall-clock time goes in
     # the body -- the row's own created_at renders in the reader's local time.
     #
-    # Keyed on the outcome that was asked for rather than on ``removed_content``: re-deciding
-    # an already-removed report still has to tell the reporter where it stands, and the author
-    # has already been told once.
+    # The reporter is told whatever the outcome was asked for: re-deciding an already-removed
+    # report still has to tell the reporter where it stands. The author is told only when this
+    # call was the one that took the content down -- one removal is one notice.
     if status_value == REMOVAL_STATUS:
         _notify_removal(
             db,
@@ -439,6 +532,7 @@ def resolve_confession_report(
             reporter_regno=reporter_regno,
             kind="comment" if is_comment else "confession",
             cites_policy=True,
+            took_it_down=removed_content,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -482,7 +576,7 @@ def resolve_love_note_report(
         if note is not None:
             author_regno = _regno_for_user(session, note.sender_id)
             if status_value == REMOVAL_STATUS:
-                removed_content = _stamp_removal(note, reviewer.regno)
+                removed_content = _stamp_removal(session, note, reviewer.regno)
                 if removed_content:
                     # Only on the transition: re-deciding an already-removed note is not a
                     # second takedown, and the sender's removal count has to say how many times
@@ -518,6 +612,7 @@ def resolve_love_note_report(
             reporter_regno=reporter_regno,
             kind="love_note",
             cites_policy=True,
+            took_it_down=removed_content,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -558,7 +653,7 @@ def resolve_message_report(
             # A message can only be reported by its receiver, so the sender and the reporter
             # are always two different people here. The self-report case only arises for
             # confessions, and _notify_removal collapses it.
-            if status_value == REMOVAL_STATUS and _stamp_removal(message, reviewer_regno):
+            if status_value == REMOVAL_STATUS and _stamp_removal(session, message, reviewer_regno):
                 # Moved forward off the message just taken down, so the conversation list does
                 # not keep previewing content a moderator has ruled against. Gated on the
                 # transition for the same reason as the comment count above: re-deciding an
@@ -580,6 +675,7 @@ def resolve_message_report(
             reporter_regno=reporter_regno,
             kind="message",
             cites_policy=True,
+            took_it_down=removed_content,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -624,14 +720,18 @@ def resolve_case_closed_message_report(
         )
         if message is not None:
             author_regno = _regno_for_user(session, message.sender_user_id)
-            if status_value == REMOVAL_STATUS and _stamp_removal(message, reviewer_regno):
+            if status_value == REMOVAL_STATUS and _stamp_removal(session, message, reviewer_regno):
                 removed_content = True
                 record_removal(session, kind=MESSAGE, author_regno=author_regno)
         elif report.reported_user_regno is not None:
             # The turn is gone from storage entirely; still charge the removal to
             # whoever wrote it, using the regno the report recorded at filing time.
             author_regno = report.reported_user_regno
-            if status_value == REMOVAL_STATUS:
+            # There is no content row left to stamp, so the report's own status is the only
+            # thing that can say whether this removal has already been charged. Without this
+            # a re-decision would charge the writer a second removal for a turn that went
+            # down once -- the same double count the content stamp prevents everywhere else.
+            if status_value == REMOVAL_STATUS and report.status != REMOVAL_STATUS:
                 removed_content = True
                 record_removal(session, kind=MESSAGE, author_regno=author_regno)
 
@@ -646,6 +746,7 @@ def resolve_case_closed_message_report(
             reporter_regno=reporter_regno,
             kind="message",
             cites_policy=True,
+            took_it_down=removed_content,
         )
     else:
         _notify_dismissal(db, reporter_regno)
@@ -706,7 +807,7 @@ def hide_confession(
         # Read the row back after stamping rather than trusting the branch below: on the
         # already-hidden path these are somebody else's decision, and the review screen is
         # about to render them as the audit trail they are.
-        hidden = _stamp_removal(confession, reviewer_regno)
+        hidden = _stamp_removal(session, confession, reviewer_regno)
         already_hidden = not hidden
         removed_at = confession.removed_at
         removed_by_regno = confession.removed_by_regno
@@ -756,7 +857,9 @@ def hide_comment(
     inside the ``if hidden`` branch rather than beside the lookup, because reading it as "this
     comment was acted on, so subtract one" would let a second click on an already-hidden comment
     take the count to zero while the comment stayed on screen for staff. Same reasoning as the
-    identical branch in :func:`resolve_confession_report`.
+    identical branch in :func:`resolve_confession_report`. The decrement itself is a single
+    conditional ``UPDATE`` (see :func:`_decrement_comment_count`), so two moderators taking
+    two comments off the same parent at once cannot lose one another's subtraction.
 
     The author is notified once, on the transition, and told the comment was removed with no
     claim about the policies -- nothing was ruled on here. **There is no unhide.**
@@ -782,18 +885,16 @@ def hide_comment(
 
         author_regno = _regno_for_user(session, comment.user_id)
         confession_id = str(comment.confession_id)
-        hidden = _stamp_removal(comment, reviewer_regno)
+        hidden = _stamp_removal(session, comment, reviewer_regno)
         already_hidden = not hidden
         removed_at = comment.removed_at
         removed_by_regno = comment.removed_by_regno
 
         if hidden:
-            parent = session.get(ConfessionRecord, confession_id)
-            # Guarded on > 0 rather than blind: the column is denormalised and can already be
-            # out of step with the rows, and a negative comment count would render as a
-            # nonsense number in the feed rather than as an obviously broken one.
-            if parent is not None and parent.comment_count > 0:
-                parent.comment_count = parent.comment_count - 1
+            # Guarded on > 0 in the database rather than blind: the column is denormalised and
+            # can already be out of step with the rows, and a negative comment count would
+            # render as a nonsense number in the feed rather than as an obviously broken one.
+            _decrement_comment_count(session, confession_id)
             # Charged to the comment's author, in the same bucket as a confession removal -- a
             # complaint about what somebody wrote on a confession is a complaint about them in
             # the same way. Only on the transition, as above.

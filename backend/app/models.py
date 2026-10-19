@@ -202,9 +202,48 @@ class ConfessionCreate(BaseModel):
 class ConfessionUpdate(BaseModel):
     """
     Model for updating a confession's settings.
+
+    Both fields are optional, because a patch names only what it changes. An
+    *explicit* null is not an omission, though, and it is refused rather than
+    treated as one -- see the validator below.
     """
+
     anonymous: Optional[bool] = None
     comments_enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _reject_explicit_nulls(self) -> "ConfessionUpdate":
+        """Refuse a field that was sent as null, as distinct from one that was left out.
+
+        Both fields are ``Optional[bool]``, so ``None`` is a legal *value* for them --
+        but it is not a legal *answer*. The two settings are booleans in the database
+        and neither column accepts null, so "off" is ``false`` and there is no third
+        state a client could be asking for.
+
+        Leaving the field out is how a client says "I am not touching this", and that
+        stays allowed: the service reads ``exclude_unset``, so an absent field is
+        never written. Sending the field as ``null`` is a different statement, and it
+        used to be read as one of the two booleans rather than as a mistake:
+
+        * ``comments_enabled: null`` was written into a NOT NULL column, so the
+          request answered 500 -- a server fault for a payload that was simply
+          wrong;
+        * ``anonymous: null`` was read as "not anonymous", which de-anonymised a
+          post that had been posted anonymously, because ``not None`` is ``True``.
+
+        The second is the reason this is refused rather than coerced: there is no
+        safe default to replace a null with, because the two defaults are opposites
+        and one of them is a privacy decision the participant made.
+
+        The refusal is a validation error, so it answers 422 naming the field --
+        rather than a 500 from the database, or a silent change to somebody's post.
+        """
+        for field in ("anonymous", "comments_enabled"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(
+                    f"{field} must be true or false; leave the field out to keep it unchanged."
+                )
+        return self
 
 class ReactionCreate(BaseModel):
     reaction: str = Field(max_length=REACTION_MAX)

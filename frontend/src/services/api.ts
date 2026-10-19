@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { API_URL } from '@/lib/apiBase';
+import { SESSION_REQUEST_TIMEOUT_MS } from '@/lib/apiTimeouts';
 import { getAccessToken } from '@/lib/tokenStore';
 import type { AccountType } from '@/lib/capabilities';
 import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
@@ -24,6 +25,7 @@ import {
   serverLogout,
   handleResponseError,
   isAuthRoute,
+  isTokenRejected,
 } from './api/auth';
 export {
   setInMemoryToken,
@@ -34,6 +36,7 @@ export {
   serverLogout,
   handleResponseError,
   isAuthRoute,
+  isTokenRejected,
 };
 
 // The API origin lives in `@/lib/apiBase` -- one variable for the whole app.
@@ -305,7 +308,14 @@ export const getCurrentUser = async (token?: string) => {
     ? { Authorization: `Bearer ${token}` }
     : getAuthHeaders();
 
-  const response = await axios.get(`${API_URL}/auth/me`, { headers });
+  const response = await axios.get(`${API_URL}/auth/me`, {
+    headers,
+    // The same budget the refresh gets, and for the same reason: this read is
+    // what the boot sequence waits on, and a backend that stops answering must
+    // not hold the whole app on its splash screen. Without a budget axios waits
+    // for ever, and there is no way out but a reload.
+    signal: AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS),
+  });
   return response.data;
 };
 

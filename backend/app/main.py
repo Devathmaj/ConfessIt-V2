@@ -274,6 +274,37 @@ app = FastAPI(
 # process; the queue itself lives in Postgres, so extra processes only poll.
 _ai_generation_worker = None
 
+# The process-local handle for the task that publishes the game-reset heartbeat.
+# One per process; the heartbeat itself lives in Postgres, so the workers all
+# publish the same value.
+_reset_heartbeat_task = None
+
+# How often the heartbeat is published. The metric it produces is a timestamp, so
+# the only thing staleness costs is how long the alert takes to notice a change --
+# and the tick itself runs once a day.
+RESET_HEARTBEAT_PUBLISH_INTERVAL_SECONDS = 60
+
+
+async def _publish_reset_heartbeat_forever(postgres: Database) -> None:
+    """Publish the game-reset heartbeat as a metric, for as long as the process runs.
+
+    The tick records its outcome in the database; this reads that record and turns
+    it into the two series the alerting rules read. A read that fails is logged
+    and retried on the next tick of the loop: the last published value stays
+    standing, so the alert keeps saying "the last success was at <time>", which is
+    still true, and the age keeps growing.
+    """
+    from .services.reset_heartbeat import publish_reset_heartbeat
+
+    while True:
+        try:
+            publish_reset_heartbeat(postgres)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Could not publish the game-reset heartbeat", exc_info=True)
+        await asyncio.sleep(RESET_HEARTBEAT_PUBLISH_INTERVAL_SECONDS)
+
 # ----------------------
 # Startup Event
 # ----------------------
@@ -391,6 +422,25 @@ async def on_startup():
     # Last, so the schema work above is not traced against no request.
     _init_dependency_instrumentation(postgres)
 
+    # Keep the game-reset heartbeat metric fresh.
+    #
+    # The 00:01 UTC reset tick runs in the scheduler sidecar and records its outcome
+    # in the database; this is what turns that record into a series an alert can
+    # watch. Without it a tick that stopped running is invisible: the games stop
+    # rolling over and nothing says so until a leaderboard is days stale.
+    #
+    # A background task rather than a scrape-time read, because the value has to
+    # travel the OTLP path the other application metrics travel -- that is where
+    # the alerting rules and the dashboards already look. Started here rather than
+    # at import because it needs the database client, which exists only after
+    # start-up.
+    #
+    # Only where something is exported: with no collector to export to, the gauge
+    # would be a no-op and the task would be a query every minute for nothing.
+    global _reset_heartbeat_task
+    if _reset_heartbeat_task is None and settings.OTEL_EXPORTER_OTLP_ENDPOINT:
+        _reset_heartbeat_task = asyncio.create_task(_publish_reset_heartbeat_forever(postgres))
+
 
 @app.on_event("shutdown")
 def on_shutdown():
@@ -403,6 +453,12 @@ def on_shutdown():
         # process dies, and the stale-job reclaim picks the cycle up again.
         _ai_generation_worker.stop()
         _ai_generation_worker = None
+    global _reset_heartbeat_task
+    if _reset_heartbeat_task is not None:
+        # The task only reads the database and sets a gauge, so cancelling it at
+        # shutdown is enough; there is nothing to flush on the way out.
+        _reset_heartbeat_task.cancel()
+        _reset_heartbeat_task = None
     close_postgres_client()
     try:
         redis_service.close()

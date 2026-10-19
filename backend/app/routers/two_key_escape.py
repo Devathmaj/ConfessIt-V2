@@ -5,7 +5,7 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, Query
 
 from ..dependencies import get_db
-from ..limits import USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
+from ..limits import PAGE_OFFSET_MAX, USER_DEPARTMENT_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from ..models import (
     CouplePartnerPage,
     CoupleSelectionRequest,
@@ -52,7 +52,7 @@ def current_state(
 def partner_candidates(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
-    skip: int = Query(0, ge=0, description="How many matching participants to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching participants to skip."),
     limit: int = Query(
         50,
         ge=1,

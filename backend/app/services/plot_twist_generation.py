@@ -32,7 +32,7 @@ from ..limits import (
     PLOT_TWIST_MAX_STUCK_REGENERATIONS,
     PLOT_TWIST_SESSION_LOCK_KEY,
 )
-from ..postgres import Database
+from ..postgres import Database, get_row, is_valid_id
 from . import plot_twist_validation
 from .plot_twist_schemas import (
     GenerationConfig,
@@ -292,7 +292,7 @@ def create_blueprint_draft(
 
 def get_blueprint(db: Database, blueprint_id: str) -> dict:
     with db.sessions() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         return _as_view(row)
@@ -314,7 +314,7 @@ def generate_blueprint(
     from .llm_client import LLMError, generate_structured_json
 
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         try:
@@ -370,7 +370,7 @@ def generate_blueprint(
         report = plot_twist_validation.validate_blueprint(payload, **budgets)
 
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id_str)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id_str)
         assert row is not None
         if report.ok:
             row.blueprint = payload
@@ -387,7 +387,7 @@ def generate_blueprint(
 def approve_blueprint(db: Database, blueprint_id: str) -> dict:
     """Move a validated blueprint to approved so Stage B may run."""
     with db.sessions() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         content = dict(row.blueprint or {})
@@ -401,7 +401,7 @@ def approve_blueprint(db: Database, blueprint_id: str) -> dict:
         # Diagnostics commit in their own transaction: raising inside the
         # write would roll them back.
         with db.sessions.begin() as session:
-            row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+            row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
             assert row is not None
             row.status = "generation_failed"
             row.validation_errors = [err.model_dump() for err in report.errors]
@@ -410,7 +410,7 @@ def approve_blueprint(db: Database, blueprint_id: str) -> dict:
             detail="Blueprint is invalid; regenerate before approving.",
         )
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         assert row is not None
         row.status = "approved"
     return get_blueprint(db, blueprint_id)
@@ -419,7 +419,7 @@ def approve_blueprint(db: Database, blueprint_id: str) -> dict:
 def _mark_blueprint_failed(db: Database, blueprint_id: str, exc: Exception) -> None:
     detail = getattr(exc, "detail", str(exc))
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         if row is not None:
             row.status = "generation_failed"
             row.validation_errors = [{"code": getattr(exc, "code", "model_error"), "message": detail}]
@@ -446,13 +446,19 @@ def _next_package_version(session, blueprint_id: str) -> int:
 
 def get_package(db: Database, package_id: str) -> dict:
     with db.sessions() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Story package not found.")
         return _package_view(row)
 
 
 def list_packages(db: Database, blueprint_id: Optional[str] = None) -> list[dict]:
+    if blueprint_id is not None and not is_valid_id(blueprint_id):
+        # A malformed id names no blueprint, and it must not reach a uuid column to
+        # find that out: the filter compares against one, and PostgreSQL raises
+        # ``invalid input syntax for type uuid`` on a value that is not a uuid.
+        # A blueprint that does not exist has no packages, which is the answer.
+        return []
     with db.sessions() as session:
         query = select(PlotTwistPackageRecord).order_by(
             PlotTwistPackageRecord.created_at.desc()
@@ -608,7 +614,7 @@ def generate_package(
     from .llm_client import LLMError, generate_structured_json
 
     with db.sessions() as session:
-        blueprint_row = session.get(PlotTwistBlueprintRecord, blueprint_id)
+        blueprint_row = get_row(session, PlotTwistBlueprintRecord, blueprint_id)
         if blueprint_row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint not found.")
         if blueprint_row.status != "approved":
@@ -841,7 +847,7 @@ def regenerate_scene(
     from .llm_client import generate_structured_json
 
     with db.sessions() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Story package not found.")
         if row.status == "published":
@@ -850,7 +856,7 @@ def regenerate_scene(
                 detail="Published packages are immutable; create a new version instead.",
             )
         package = dict(row.package or {})
-        blueprint_row = session.get(PlotTwistBlueprintRecord, str(row.blueprint_id))
+        blueprint_row = get_row(session, PlotTwistBlueprintRecord, str(row.blueprint_id))
         blueprint = dict(blueprint_row.blueprint) if blueprint_row is not None else {}
     scenes = list(package.get("scenes") or [])
     target = next((s for s in scenes if s.get("id") == scene_id), None)
@@ -887,7 +893,7 @@ def regenerate_scene(
     ]
     report = plot_twist_validation.validate_package(candidate, blueprint=blueprint or None)
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         assert row is not None
         if report.ok:
             row.package = candidate
@@ -1019,11 +1025,11 @@ def publish_package(db: Database, package_id: str) -> dict:
     unfinished, scoring nothing. Retrying a publish is safe and idempotent.
     """
     with db.sessions() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Story package not found.")
         package = dict(row.package or {})
-        blueprint_row = session.get(PlotTwistBlueprintRecord, str(row.blueprint_id))
+        blueprint_row = get_row(session, PlotTwistBlueprintRecord, str(row.blueprint_id))
         blueprint = dict(blueprint_row.blueprint) if blueprint_row is not None else None
         blueprint_approved = blueprint_row is not None and blueprint_row.status == "approved"
     report = plot_twist_validation.validate_package(package, blueprint=blueprint)
@@ -1031,7 +1037,7 @@ def publish_package(db: Database, package_id: str) -> dict:
         # Diagnostics commit in their own transaction: raising inside the
         # write would roll them back.
         with db.sessions.begin() as session:
-            row = session.get(PlotTwistPackageRecord, package_id)
+            row = get_row(session, PlotTwistPackageRecord, package_id)
             assert row is not None
             row.status = "validation_failed"
             row.validation_errors = [err.model_dump() for err in report.errors]
@@ -1045,7 +1051,7 @@ def publish_package(db: Database, package_id: str) -> dict:
             detail="An approved blueprint is required before publishing.",
         )
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         assert row is not None
         row.status = "published"
         row.validation_errors = []
@@ -1069,7 +1075,7 @@ def update_package_content(
     untouched. Published packages are immutable.
     """
     with db.sessions() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Story package not found.")
         if row.status == "published":
@@ -1077,7 +1083,7 @@ def update_package_content(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Published packages are immutable; generate a new version instead.",
             )
-        blueprint_row = session.get(PlotTwistBlueprintRecord, str(row.blueprint_id))
+        blueprint_row = get_row(session, PlotTwistBlueprintRecord, str(row.blueprint_id))
         blueprint = dict(blueprint_row.blueprint) if blueprint_row is not None else None
         blueprint_id = str(row.blueprint_id)
         stored = dict(row.package or {})
@@ -1092,7 +1098,7 @@ def update_package_content(
         # Diagnostics commit in their own transaction: raising inside the
         # write would roll them back, and the stored draft stays untouched.
         with db.sessions.begin() as session:
-            row = session.get(PlotTwistPackageRecord, package_id)
+            row = get_row(session, PlotTwistPackageRecord, package_id)
             assert row is not None
             row.status = "validation_failed"
             row.validation_errors = [err.model_dump() for err in report.errors]
@@ -1101,7 +1107,7 @@ def update_package_content(
             detail="Edited package is invalid; fix validation errors first.",
         )
     with db.sessions.begin() as session:
-        row = session.get(PlotTwistPackageRecord, package_id)
+        row = get_row(session, PlotTwistPackageRecord, package_id)
         assert row is not None
         row.package = candidate
         row.title = str(candidate.get("title") or row.title)

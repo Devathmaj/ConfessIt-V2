@@ -2,6 +2,9 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from fastapi.encoders import jsonable_encoder
+from pydantic import ValidationError
+
 # Registration numbers and application IDs are stored as text values.
 
 # LIKE metacharacters that must be escaped when user input is interpolated into
@@ -31,6 +34,33 @@ def ilike_contains(column, cleaned: str):
     backslashes are honoured on every backend rather than by accident.
     """
     return column.ilike(f"%{escape_like_literal(cleaned)}%", escape="\\")
+
+
+def validation_error_detail(exc: ValidationError) -> list:
+    """The error list FastAPI itself would have produced for this payload.
+
+    A payload checked twice -- once by the model the API publishes and again by
+    the stricter model the service uses -- has a failure the framework never
+    sees. The second check raises ``ValidationError``, which is not an
+    ``HTTPException``, and an exception nobody handles is a 500 for a payload the
+    client got wrong.
+
+    The shape is the one FastAPI's own request validation answers with -- a list
+    of ``{type, loc, msg, input}`` -- so a client that reads the first error out
+    of the list needs no second shape to understand, and the field the payload
+    got wrong is named in the ``loc`` the way it is for a request validation
+    error.
+    """
+    details = []
+    for error in exc.errors():
+        location = error.get("loc") or ()
+        details.append({
+            "type": str(error.get("type") or "value_error"),
+            "loc": ["body", *[str(part) for part in location]],
+            "msg": str(error.get("msg") or "is invalid"),
+            "input": jsonable_encoder(error.get("input")),
+        })
+    return details
 
 
 def isoformat_datetime(value):

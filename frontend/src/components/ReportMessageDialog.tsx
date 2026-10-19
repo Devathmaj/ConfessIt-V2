@@ -63,7 +63,7 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
       if (onSubmit) {
         await onSubmit(messageId, selectedReason);
       } else {
-        await reportMessage(messageId, selectedReason, token as string);
+        await reportMessage(messageId, selectedReason);
       }
 
       toast.success('Message reported successfully. Our team will review it.');

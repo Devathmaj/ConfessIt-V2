@@ -353,7 +353,22 @@ async def websocket_endpoint(
         pubsub = redis_service.subscribe_to_conversation(conversation_id)
 
         if not pubsub:
-            await websocket.send_json({"error": "Failed to connect to message stream"})
+            # Two very different refusals, and the difference is what an operator
+            # reads in the log: this worker is already serving as many live
+            # chats as it can -- in which case the open sockets carry on and only
+            # this one is refused -- or Redis itself is not answering. Either way
+            # the refusal is stated, not left to look like a working chat.
+            at_capacity = redis_service.subscriber_capacity_reached()
+            logger.warning(
+                "WebSocket refused: %s could not subscribe to conversation %s%s",
+                user.regno,
+                conversation_id,
+                " (live-chat capacity reached)" if at_capacity else "",
+            )
+            await websocket.send_json({
+                "error": "Live updates are unavailable for this chat right now",
+                "reason": "capacity" if at_capacity else "unavailable",
+            })
             await websocket.close(code=WS_CLOSE_SERVER_ERROR)
             return
 

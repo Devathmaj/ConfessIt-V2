@@ -312,7 +312,13 @@ describe('handleResponseError (access-token refresh)', () => {
 
     expect(mockedAxios.get).toHaveBeenCalledWith(
       'http://localhost:8001/auth/me',
-      { headers: { Authorization: 'Bearer valid-token' } },
+      {
+        headers: { Authorization: 'Bearer valid-token' },
+        // ... and it carries a budget: this read is what the boot sequence waits
+        // on, so a backend that stops answering must not hold the app on its
+        // splash screen for ever.
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 });

@@ -7,6 +7,7 @@
 import axios from 'axios';
 import { API_URL } from '@/lib/apiBase';
 import { endSessionIfTokenWasRejected, isSessionSupersededError } from '@/lib/authEvents';
+import { refreshAccessToken } from '@/lib/sessionRefresh';
 import {
   clearAccessToken,
   getAccessToken,
@@ -31,40 +32,13 @@ export const getAuthHeaders = () => {
 /**
  * Ask the server to mint a fresh access token for the session held by the refresh cookie.
  *
- * The cookie itself stays out of sight in page scripts; the server rotates it on every use,
- * so the proven holder of a cookie comes back with a new cookie and a short-lived access
- * token, which is kept in memory where the rest of the app reads it. Any failure — a lapsed or
- * revoked cookie, a superseded session, a network gap — answers null so the caller can end
- * the session instead of looping.
+ * The refresh itself lives in `@/lib/sessionRefresh`, because the chat paths -- which do
+ * not use axios at all -- need the very same single-flight refresh: the server rotates the
+ * refresh cookie on every use, so two concurrent refreshes would race each other and one
+ * of them would lose the cookie. It is re-exported here because this module is where the
+ * rest of the app has always imported it from.
  */
-
-/** How long a refresh may wait before the session is treated as absent. */
-const REFRESH_TIMEOUT_MS = 15_000;
-
-export const refreshAccessToken = async (): Promise<string | null> => {
-  try {
-    // Carries the refresh cookie: without credentials the cookie never travels and
-    // there is no session to extend.
-    const response = await axios.post(
-      `${API_URL}/auth/refresh`,
-      {},
-      {
-        withCredentials: true,
-        // The boot path awaits this before rendering any route, so a backend that
-        // stops answering must not leave the app on "Initializing..." forever.
-        // After this budget the refresh is a failed one: null, and the sign-in
-        // screen renders. Same budget as magic-link verification.
-        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
-      },
-    );
-    const accessToken = response.data?.access_token;
-    if (typeof accessToken !== 'string') return null;
-    setAccessToken(accessToken);
-    return accessToken;
-  } catch {
-    return null;
-  }
-};
+export { refreshAccessToken };
 
 /**
  * Tell the server the session is over, without waiting for it.
@@ -89,11 +63,27 @@ export const serverLogout = async (): Promise<void> => {
 export const isAuthRoute = (url: string | undefined) =>
   !!url && (url.includes('/auth/login/') || url.endsWith('/auth/refresh') || url.endsWith('/auth/logout'));
 
+/**
+ * Whether the failure is the server refusing the token, rather than the request failing.
+ *
+ * A 401 is the server's verdict on the token: it was not accepted, so the session is over
+ * and has to end. Everything else -- a timeout, a dropped connection, a 500 while the
+ * backend is deploying -- is the *request* failing, and says nothing at all about the
+ * token: the server never got to judge it.
+ *
+ * The difference decides whether a session is destroyed. Ending one over a transport
+ * failure revokes it server-side as well, so a backend having a bad moment for thirty
+ * seconds signs the person out for good.
+ */
+export const isTokenRejected = (error: unknown): boolean =>
+  (error as { response?: { status?: number } })?.response?.status === 401;
+
 // One refresh at a time. A page with several requests in flight can fail together, and each
-// failure shares this in-flight refresh instead of starting its own: exactly one rotation
+// failure shares the in-flight refresh instead of starting its own: exactly one rotation
 // reaches the server, which matters because the server rotates on every use and two
-// concurrent refreshes would race that rule.
-let refreshInFlight: Promise<string | null> | null = null;
+// concurrent refreshes would race that rule. The sharing itself lives with the refresh in
+// `@/lib/sessionRefresh`, so the chat paths -- which do not use axios -- join the same
+// rotation instead of racing a second one of their own.
 
 // A request replayed once is not replayed again; a second 401 after a fresh access token is
 // authoritative rather than a reason to keep trying. Weak for the request's config object,
@@ -137,12 +127,10 @@ export const handleResponseError = async (error: unknown): Promise<unknown> => {
     return Promise.reject(error);
   }
 
-  if (!refreshInFlight) {
-    refreshInFlight = refreshAccessToken().finally(() => {
-      refreshInFlight = null;
-    });
-  }
-  const freshToken = await refreshInFlight;
+  // One refresh, shared with every other caller (including the chat paths): the
+  // server rotates the refresh cookie on use, so two concurrent refreshes would
+  // race each other and one of them would lose the cookie.
+  const freshToken = await refreshAccessToken();
   if (!freshToken) {
     endSessionIfTokenWasRejected(error);
     return Promise.reject(error);

@@ -534,13 +534,21 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
         "created_at": isoformat_datetime(now),
         "is_read": False,
     }
-    if not redis_service.publish_message(channel_for_session(session_id), payload):
+    published = redis_service.publish_message(channel_for_session(session_id), payload)
+    if not published:
         logger.error(
             "Case Closed realtime outage: message %s persisted but Redis publish failed (session %s)",
             message_id, session_id,
         )
     logger.info("Case Closed message sent in session %s by %s", session_id, user.id)
-    return {**payload, "quota": quota}
+    # `realtime` says whether the live echo went out: the message is stored
+    # either way, so a client that reads the field knows whether the partner's
+    # open socket will show it without the thread being read again.
+    return {
+        **payload,
+        "quota": quota,
+        "realtime": "delivered" if published else "unavailable",
+    }
 
 
 def get_messages(

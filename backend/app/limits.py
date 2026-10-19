@@ -117,6 +117,18 @@ USER_REGNO_MAX = 100
 # field and a matchmaking grouping, not a filter anything is required to match against.
 USER_DEPARTMENT_MAX = 80
 
+# How far into a list a client may page. The page *size* is bounded per
+# endpoint; the offset was not, and an offset is an ``OFFSET`` clause -- a
+# PostgreSQL bigint. A value past that range is refused by the database as
+# "bigint out of range", which is a 500 for a request that asked for a page that
+# does not exist.
+#
+# A million rows is past any list this application holds, so the bound never
+# refuses a page a client could have had. It is here rather than left to each
+# endpoint because the cost of forgetting it is the same 500 on every one of
+# them: thirty-one routes took an unbounded offset.
+PAGE_OFFSET_MAX = 1_000_000
+
 # Bulk participant onboarding (``POST /admin/users/bulk-upload``).
 #
 # The row ceiling is deliberately a fixed application limit rather than a function of

@@ -16,6 +16,7 @@ from ..models import (
     WordleGameCreate,
 )
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from ..services import wordle_service
 from ..services.wordle_service import WORDLE_GAMES_MAX_LIMIT
 from ..services.authorization import require_capability
@@ -131,7 +132,7 @@ def delete_wordle_scheduled(
 
 @router.get("", response_model=Dict[str, Any])
 def list_wordle_games(
-    skip: int = Query(0, ge=0, description="How many sessions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many sessions to skip."),
     limit: int = Query(50, ge=1, le=WORDLE_GAMES_MAX_LIMIT, description="How many sessions to return. Clamped so one request can never materialise a whole season at once."),
     db: Database = Depends(get_db),
     _: AccountDetails = Depends(require_capability(Capability.GAMES_MANAGE)),

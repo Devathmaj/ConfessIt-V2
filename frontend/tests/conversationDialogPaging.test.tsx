@@ -35,7 +35,7 @@ const wsCallbacks = vi.hoisted(() => ({
 
 const messaging = vi.hoisted(() => ({
   messagingClient: {
-    connect: vi.fn(),
+    connect: vi.fn(async () => true),
     disconnect: vi.fn(),
     onMessage: vi.fn(),
     onError: vi.fn(),
@@ -82,8 +82,11 @@ const message = (index: number): ThreadRow => ({
 const conversationData = () => ({
   match: {
     id: 'match-1',
-    expires_at: '2026-05-01T14:00:00.000Z',
-    created_at: '2026-05-01T10:00:00.000Z',
+    // An hour from now, not a fixed date: the countdown reads the match's expiry and
+    // locks the composer when it passes, so a hard-coded date stops being a live
+    // match the day it goes by.
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     is_expired: false,
   },
   conversation: {
@@ -142,14 +145,14 @@ describe('ConversationDialog: paged thread', () => {
     vi.clearAllMocks();
     db = [];
     wsCallbacks.message = null;
-    messaging.messagingClient.connect.mockResolvedValue(undefined);
+    messaging.messagingClient.connect.mockResolvedValue(true);
     messaging.messagingClient.onMessage.mockImplementation((callback: never) => {
       wsCallbacks.message = callback as never;
       return () => {};
     });
     messaging.messagingClient.onError.mockImplementation(() => () => {});
     messaging.fetchMessages.mockImplementation(
-      async (_conversationId: string, _token: string, limit = 200, before?: string) => {
+      async (_conversationId: string, limit = 200, before?: string) => {
         let rows = [...db];
         if (before) {
           const anchor = rows.findIndex((row) => row.id === before);
@@ -202,10 +205,11 @@ describe('ConversationDialog: paged thread', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show older messages' }));
     await screen.findByText('thread message 0');
 
-    // The anchor went out as the oldest loaded id, not an offset.
+    // The anchor went out as the oldest loaded id, not an offset. The bearer is
+    // not a parameter: it is read from the store when the request is made, so a
+    // thread opened an hour into a session does not send the token it opened with.
     expect(messaging.fetchMessages).toHaveBeenCalledWith(
       'conv-1',
-      'token',
       30,
       'm5',
     );

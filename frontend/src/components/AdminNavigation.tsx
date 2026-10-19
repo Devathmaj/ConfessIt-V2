@@ -77,7 +77,7 @@ export const AdminNavigation = () => {
   const { can, logout, isAuthenticated } = useAuth();
 
   const handleLogout = () => {
-    logout();
+    void logout();
     setOpen(false);
     toast.success("Logged out of staff area.");
   };

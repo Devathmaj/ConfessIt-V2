@@ -1,7 +1,8 @@
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 from sqlalchemy import func, or_, select, text, update
 
 from ..postgres import new_id, is_valid_id
+from ..limits import PAGE_OFFSET_MAX, USER_YEAR_MAX, USER_YEAR_MIN
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Body
 from ..postgres import Database
 
@@ -154,7 +155,7 @@ def _user_payload(user):
 
 @router.get("/confessions", response_model=Dict[str, Any])
 def get_all_confessions(
-    skip: int = Query(0, ge=0, description="How many matching confessions to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching confessions to skip."),
     limit: int = Query(50, ge=1, le=CONFESSIONS_MAX_LIMIT, description="How many matching confessions to return. Clamped so one request can never materialise the whole table with every comment, report and reactor row attached."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the body, the recipient name and the sender's name, regno and email."),
     filter: str = Query("all", description="Narrow to a subset: all, reported, anonymous or with-comments."),
@@ -183,7 +184,7 @@ def get_all_confessions(
 @router.get("/confessions/search", response_model=Dict[str, Any])
 def search_confessions_hybrid(
     q: str = Query(..., min_length=1, max_length=1000, description="Keyword + meaning query: lexical matches first, similar-in-meaning below."),
-    skip: int = Query(0, ge=0, description="Keyword page offset; the semantic section is top-K only and ignores it."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="Keyword page offset; the semantic section is top-K only and ignores it."),
     limit: int = Query(10, ge=1, le=CONFESSIONS_MAX_LIMIT, description="Keyword page size; semantic is capped at the configured top-K."),
     filter: str = Query("all", description="Narrow to a subset: all, reported, anonymous or with-comments. Applies to both sections."),
     sort: str = Query("recent", description="Order the keyword page: recent, reports, comments or reactions. Semantic stays relevance-ordered."),
@@ -338,7 +339,7 @@ def get_confession_reports(
     status_filter: Optional[str] = Query(
         None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(50, ge=1, le=200),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the reason, the reporter name and the reported content."),
     db: Database = Depends(get_db),
@@ -392,11 +393,11 @@ def update_confession_report(
 
 @router.get("/users", response_model=Dict[str, Any])
 def get_all_users(
-    skip: int = Query(0, ge=0, description="How many matching participants to skip. Applies to the users table only when no account_type is given."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching participants to skip. Applies to the users table only when no account_type is given."),
     limit: int = Query(50, ge=1, le=ADMIN_USERS_MAX_LIMIT, description="How many matching participants to return. Clamped so one request can never materialise the whole table."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on name, regno, email (and department for participants)."),
     account_type: Optional[str] = Query(None, description="Restrict to one account table: users, admin or moderator."),
-    year: Optional[int] = Query(None, description="Participants only: exact year of study."),
+    year: Optional[int] = Query(None, ge=USER_YEAR_MIN, le=USER_YEAR_MAX, description="Participants only: exact year of study."),
     department: Optional[str] = Query(None, description="Participants only: exact department, case-insensitive."),
     sort: str = Query("name", description="name, name_desc, year, year_desc or removals_desc. Year/removals fall back to name on staff tables."),
     flagged: str = Query("all", description="Participants only: all, flagged (more than 5 removals) or ordinary."),
@@ -837,9 +838,9 @@ def read_app_configuration(
 
 @router.post("/config/matchmaking-slot", response_model=Dict[str, Any])
 def create_matchmaking_slot(
-    year_a: Year = Body(..., description="Year of the first cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
+    year_a: Annotated[Year, Body(..., description="Year of the first cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX.")],
+    year_b: Annotated[Year, Body(..., description="Year of the second cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX.")],
     department_a: str = Body(..., description="Department or division of the first cohort. Required."),
-    year_b: Year = Body(..., description="Year of the second cohort. Must be between USER_YEAR_MIN and USER_YEAR_MAX."),
     department_b: str = Body(..., description="Department or division of the second cohort. Required."),
     group_key: Optional[str] = Body(
         None,
@@ -862,6 +863,13 @@ def create_matchmaking_slot(
     so a year outside the range is a 422 naming the field. Without it the value would reach
     the table and be refused by a CHECK constraint as a 500, or -- on a write that somehow skipped
     that -- become a cohort that matches nobody.
+
+    The bound is written as ``Annotated[Year, Body(...)]`` rather than as ``Year = Body(...)``
+    because the second spelling **drops it**: a parameter whose default is an explicit ``Body``
+    takes that ``Body`` as its field info, and the constraints on the annotation are not carried
+    over. A year of 13 was accepted by the framework and refused by the table, which is the 500
+    the paragraph above describes as the thing the bound exists to prevent. The ``Annotated``
+    spelling keeps the bound *and* names the field in the 422, which the embedded form did not.
 
     ``group_key`` is a plain ``str`` rather than a ``UUID`` so that a malformed one is answered with
     a 400 naming the field, the way ``slot_id`` is on the delete route. Letting the type system
@@ -906,7 +914,7 @@ def get_message_reports(
     status_filter: Optional[str] = Query(
         None, alias="status", description="Filter by status: pending, dismissed (or the older reviewed), removed"
     ),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX),
     limit: int = Query(50, ge=1, le=200),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the report reason and both parties' regnos. Message bodies are encrypted and are deliberately not searched."),
     db: Database = Depends(get_db),

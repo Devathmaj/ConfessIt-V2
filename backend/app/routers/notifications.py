@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query, status
 from ..postgres import Database
+from ..limits import PAGE_OFFSET_MAX
 from typing import Annotated, Any, Dict, Optional
 from ..services.notification_service import NOTIFICATIONS_MAX_LIMIT
 
@@ -23,7 +24,7 @@ router = APIRouter(
 def get_notifications(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
-    skip: int = Query(0, ge=0, description="How many matching notices to skip."),
+    skip: int = Query(0, ge=0, le=PAGE_OFFSET_MAX, description="How many matching notices to skip."),
     limit: int = Query(50, ge=1, le=NOTIFICATIONS_MAX_LIMIT, description="How many matching notices to return. Clamped so one request can never serialise years of notices at once."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the heading and body."),
 ):

@@ -386,6 +386,28 @@ async def upload_profile_picture_service(
         # a refused change from leaving a stray object behind.
         _discard_uploaded_picture(result["public_id"], current_user.regno)
         raise
+    except Exception:
+        # The same is true of a fault that is not a refusal. A dead connection, a
+        # constraint, a timeout -- anything the database answers with an exception --
+        # rolls the transaction back exactly as a refusal does, so the row names the
+        # previous picture and the object just uploaded is named by nothing. This used
+        # to be the one path that left the object behind, because the cleanup only
+        # ran for an HTTPException: every upload that failed on the database leaked
+        # a Cloudinary object that no row would ever name and no owner could ever
+        # replace, and the leak was silent -- the account kept its old picture and
+        # the storage grew.
+        #
+        # So the cleanup covers every way out of the transaction, and the original
+        # failure is re-raised: a database fault is still a database fault, and
+        # answering it as something else would hide it.
+        logger.error(
+            "Profile picture upload for regno_hash=%s failed after the object was stored; "
+            "discarding the orphaned object",
+            log_identity_hash(current_user.regno),
+            exc_info=True,
+        )
+        _discard_uploaded_picture(result["public_id"], current_user.regno)
+        raise
 
     # Outside the transaction. If the write above rolled back, the row would be pointing at the old
     # object, and deleting it here is what would make that unrecoverable.

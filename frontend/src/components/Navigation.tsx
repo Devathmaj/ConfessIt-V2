@@ -20,7 +20,7 @@ export const Navigation = () => {
    * Used to log the user out of the application and display a farewell message.
    */
   const handleLogout = () => {
-    logout();
+    void logout();
     setIsOpen(false);
     toast.success('Goodbye! Come back soon ❤️');
   };

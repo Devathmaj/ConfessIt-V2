@@ -8,16 +8,23 @@
  * would be written to stdout and any log store it reaches. The ticket returned
  * here is bound to the caller's session, expires in under a minute, and can be
  * redeemed once -- by the time a log line is read, it is normally already spent.
+ *
+ * The bearer is read from the store at the moment of the call, never handed in
+ * by a caller: the token the auth context held used to be a copy that went
+ * stale half an hour into a session, and a ticket exchange with a stale bearer
+ * was answered 401 -- which read as "the session is over" and signed the person
+ * out while their refresh cookie was still good for another day. `authorizedFetch`
+ * refreshes an expired token and replays the request instead, so opening a chat
+ * is no longer how a session ends.
  */
 
-import { endSessionIfTokenWasRejected } from './authEvents';
+import { authorizedFetch } from './authFetch';
 import { API_URL } from './apiBase';
 
-export async function requestWebSocketTicket(token: string): Promise<string> {
-  const response = await fetch(`${API_URL}/auth/ws-ticket`, {
+export async function requestWebSocketTicket(): Promise<string> {
+  const response = await authorizedFetch(`${API_URL}/auth/ws-ticket`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     signal: AbortSignal.timeout(15000),
@@ -31,19 +38,6 @@ export async function requestWebSocketTicket(token: string): Promise<string> {
       if (typeof body?.detail === 'string') detail = body.detail;
     } catch {
       /* non-JSON refusal: keep the generic message */
-    }
-    // This fetch does not pass through the axios refresh interceptor. A 401 means
-    // the access token itself was rejected, so end the session rather than leaving
-    // the UI looking signed in. The response envelope carries the headers that let
-    // the shared helper distinguish an ordinary expiry from a superseded session.
-    if (response.status === 401) {
-      endSessionIfTokenWasRejected({
-        response: {
-          status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          data: body,
-        },
-      });
     }
     throw new Error(detail);
   }

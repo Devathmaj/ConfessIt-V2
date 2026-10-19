@@ -144,6 +144,12 @@ services:
       # the identical posture at tick time rather than assuming the API's boot
       # covered it.
       ALLOW_PLAINTEXT_DATA_TRANSPORT: "true"
+      # Every setting the tick needs, because cron(8) runs its jobs with a
+      # near-empty environment: the entrypoint bakes these into the wrapper the
+      # schedule calls, and the tick builds the same Settings object the API
+      # does. A required field missing here aborts the 00:01 pass before it
+      # evaluates a single game. TOKEN_HASH_PEPPER is inherited from the base
+      # compose file, like the API's.
       DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
       TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
