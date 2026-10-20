@@ -1,11 +1,13 @@
-"""Azure Functions app for the magic-link email pipeline.
+"""Azure Functions app for the ConfessIt email pipeline.
 
 Two functions share this app:
 
-* ``enqueue_email`` (``POST /api/email``) validates a backend request and writes
-  it to Azure Storage Queue. It never sends email.
+* ``enqueue_email`` (``POST /api/email``) validates a backend login or
+  notification request and writes it to Azure Storage Queue. It never sends
+  email.
 * ``process_email`` is a Storage Queue trigger that reads one message, validates
-  it again, and sends the login email through Azure Communication Services.
+  it again, and sends the corresponding email through Azure Communication
+  Services. The backend, not this app, decides who may receive a notification.
 
 Queue settings in ``host.json`` deliberately use ``batchSize: 1``. That is the
 strongest sequential-processing configuration the Storage Queue trigger offers
@@ -30,8 +32,19 @@ import azure.functions as func
 from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.queue import QueueClient
 
-from email_delivery import send_login_email
-from email_validation import InvalidEmailRequest, validate_email_request
+from email_delivery import (
+    PermanentEmailError,
+    check_recipient_domain,
+    send_login_email,
+    send_notification_email,
+)
+from email_suppression import find_suppression, record_suppression
+from email_validation import (
+    LOGIN_REQUEST_TYPE,
+    NOTIFICATION_REQUEST_TYPE,
+    InvalidEmailRequest,
+    validate_email_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +177,7 @@ def _queue_delay_seconds(
 @app.function_name(name="enqueue_email")
 @app.route(route="email", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def enqueue_email(req: func.HttpRequest) -> func.HttpResponse:
-    """Validate one login email request and queue it for asynchronous delivery."""
+    """Validate one email request and queue it for asynchronous delivery."""
     try:
         payload = req.get_json()
     except ValueError:
@@ -184,12 +197,18 @@ def enqueue_email(req: func.HttpRequest) -> func.HttpResponse:
         "schema_version": 1,
         "request_id": request_id,
         "type": request.type,
-        "link": request.link,
         "email": request.email,
         "name": request.name,
         "regno": request.regno,
         "enqueued_at": datetime.now(timezone.utc).isoformat(),
     }
+    if request.type == LOGIN_REQUEST_TYPE:
+        queued_request["link"] = request.link
+    else:
+        queued_request["title"] = request.title
+        queued_request["body"] = request.body
+        if request.link:
+            queued_request["link"] = request.link
     message_body = json.dumps(queued_request, separators=(",", ":"), ensure_ascii=False)
 
     if len(message_body.encode("utf-8")) > _QUEUE_MESSAGE_LIMIT_BYTES:
@@ -251,6 +270,33 @@ def enqueue_email(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+def _record_recipient_suppression(
+    *,
+    email: str,
+    exc: PermanentEmailError,
+    message_id: str,
+    request_id: str,
+) -> str:
+    """Persist a recipient failure, returning the scope actually recorded."""
+    if not exc.recipient:
+        return "none"
+    scope = "domain" if exc.suppress_domain else "address"
+    try:
+        record_suppression(
+            email, reason=exc.reason, suppress_domain=exc.suppress_domain
+        )
+    except Exception as suppression_exc:
+        logger.warning(
+            "email_suppression_write_failed message_id=%s request_id=%s "
+            "error_type=%s",
+            message_id,
+            request_id,
+            type(suppression_exc).__name__,
+        )
+        return "unrecorded"
+    return scope
+
+
 @app.function_name(name="process_email")
 @app.queue_trigger(
     arg_name="message",
@@ -261,9 +307,12 @@ def process_email(message: func.QueueMessage) -> None:
     """Process exactly one queued email request.
 
     Validation failures are acknowledged and dropped: retrying a permanently
-    malformed message only repeats the same failure. Send failures are re-raised
-    so the Functions runtime retries the message and eventually moves it to the
-    queue's poison queue after ``maxDequeueCount``.
+    malformed message only repeats the same failure. A recipient already in the
+    suppression table, a domain with no MX record, and a permanent ACS 400 are
+    also acknowledged: the first is skipped, the second is recorded, and the
+    third is recorded when ACS identified the address/domain. Transient send
+    failures are re-raised so the Functions runtime retries the message and
+    eventually moves it to the queue's poison queue after ``maxDequeueCount``.
     """
     message_id = _safe_log_value(getattr(message, "id", None))
     dequeue_count = getattr(message, "dequeue_count", None)
@@ -289,21 +338,102 @@ def process_email(message: func.QueueMessage) -> None:
         )
         return
 
-    # From here on the payload is a login request. ``request_id`` is generated
-    # by enqueue_email; fall back to the host's message id for older messages.
+    # From here on the payload is a validated email request. ``request_id`` is
+    # generated by enqueue_email; fall back to the host's message id for older
+    # messages.
     request_id = _safe_request_id(payload) or message_id
     delay = _queue_delay_seconds(payload, message)
     logger.info(
-        "email_process_start message_id=%s request_id=%s dequeue_count=%s "
-        "queue_delay_seconds=%s",
+        "email_process_start message_id=%s request_id=%s email_type=%s "
+        "dequeue_count=%s queue_delay_seconds=%s",
         message_id,
         request_id,
+        _safe_log_value(request.type),
         dequeue_count,
         delay,
     )
 
+    # The suppression table is the durable "never try this recipient again"
+    # state. A lookup failure must not stop delivery, so it is logged and the
+    # normal path continues.
     try:
-        send_login_email(request)
+        suppression = find_suppression(request.email)
+    except Exception as suppression_exc:
+        logger.warning(
+            "email_suppression_lookup_failed message_id=%s request_id=%s "
+            "error_type=%s",
+            message_id,
+            request_id,
+            type(suppression_exc).__name__,
+        )
+        suppression = None
+
+    if suppression is not None:
+        logger.info(
+            "email_suppressed message_id=%s request_id=%s email_type=%s "
+            "scope=%s reason=%s",
+            message_id,
+            request_id,
+            _safe_log_value(request.type),
+            _safe_log_value(suppression.scope),
+            _safe_log_value(suppression.reason, max_length=120),
+        )
+        return
+
+    try:
+        check_recipient_domain(request.email)
+    except PermanentEmailError as exc:
+        scope = _record_recipient_suppression(
+            email=request.email,
+            exc=exc,
+            message_id=message_id,
+            request_id=request_id,
+        )
+        logger.warning(
+            "email_send_suppressed message_id=%s request_id=%s email_type=%s "
+            "reason=%s suppression_scope=%s",
+            message_id,
+            request_id,
+            _safe_log_value(request.type),
+            _safe_log_value(exc.reason),
+            scope,
+        )
+        return
+    except Exception as exc:
+        # DNS is a preflight optimisation, not a delivery dependency. A
+        # resolver bug or outage must not suppress a real message.
+        logger.warning(
+            "email_domain_check_failed message_id=%s request_id=%s error_type=%s",
+            message_id,
+            request_id,
+            type(exc).__name__,
+        )
+
+    try:
+        if request.type == LOGIN_REQUEST_TYPE:
+            send_login_email(request)
+        elif request.type == NOTIFICATION_REQUEST_TYPE:
+            send_notification_email(request)
+        else:  # validation and this dispatch must stay in step
+            raise RuntimeError(f"Unsupported email type: {request.type!r}")
+    except PermanentEmailError as exc:
+        scope = _record_recipient_suppression(
+            email=request.email,
+            exc=exc,
+            message_id=message_id,
+            request_id=request_id,
+        )
+        logger.warning(
+            "email_send_permanent message_id=%s request_id=%s email_type=%s "
+            "reason=%s recipient_error=%s suppression_scope=%s",
+            message_id,
+            request_id,
+            _safe_log_value(request.type),
+            _safe_log_value(exc.reason),
+            "yes" if exc.recipient else "no",
+            scope,
+        )
+        return
     except Exception as exc:
         logger.error(
             "email_send_failed message_id=%s request_id=%s dequeue_count=%s "
@@ -314,7 +444,7 @@ def process_email(message: func.QueueMessage) -> None:
             type(exc).__name__,
             _error_code(exc),
         )
-        # Never acknowledge a failed send. The runtime owns retry/poison.
+        # Transient failures are left to the runtime's retry/poison policy.
         raise
 
     logger.info(

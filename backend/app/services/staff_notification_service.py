@@ -27,11 +27,10 @@ restarts cannot fan the same condition out into many rows.
 
 Preferences (which categories an account wants) are stored per staff account,
 created with the account, but deliberately *not* wired to the feed: the list
-returns every notice regardless of the switches. The switches are persisted
-intent for a future delivery layer. When that layer arrives it must ask
-:func:`should_deliver_staff_notification`, whose role check comes before the
-stored switches so a moderator can never be sent a game notice even if a
-database row says ``games_enabled = true``.
+returns every notice regardless of the switches. They gate email delivery,
+which asks the same role-first rules as :func:`should_deliver_staff_notification`
+so a moderator can never be sent a game notice even if a database row says
+``games_enabled = true``.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..accounts import AccountType, normalize_account_type
@@ -54,9 +53,14 @@ from ..db_models import (
     StaffNotificationRecord,
     TriviaDropQuestionRecord,
 )
+from ..logger import get_logger
 from ..models import AccountDetails
-from ..postgres import Database, is_valid_id
+from ..postgres import Database, get_postgres_client, is_valid_id
 from ..utils import ilike_contains, isoformat_datetime
+from .email_delivery_service import enqueue_notification_email
+from .notification_links import staff_notification_link
+
+logger = get_logger(__name__)
 
 # The whole category vocabulary. ``report`` covers every report queue
 # (confession/comment, love-note and chat-message reports) and the automatic
@@ -81,6 +85,19 @@ CATEGORY_PREFERENCE_COLUMNS: dict[str, str] = {
 }
 
 STAFF_NOTIFICATIONS_MAX_LIMIT = 100
+
+# The widths of the stored notice columns. Delivery reuses the exact clipped
+# values the inbox stores, so an email cannot say more than the notice it reports.
+STAFF_NOTIFICATION_HEADING_MAX = 120
+STAFF_NOTIFICATION_BODY_MAX = 500
+
+# Which account tables an audience names. Delivery iterates these roles, never
+# the other way around: a moderator's stored preference cannot widen this set.
+STAFF_AUDIENCE_ROLES: dict[str, tuple[str, ...]] = {
+    "admin": (AccountType.ADMIN.value,),
+    "moderator": (AccountType.MODERATOR.value,),
+    "all": (AccountType.ADMIN.value, AccountType.MODERATOR.value),
+}
 
 
 def _role_of(account: AccountDetails) -> str:
@@ -144,6 +161,164 @@ def should_deliver_staff_notification(
         return bool(getattr(row, CATEGORY_PREFERENCE_COLUMNS[category]))
 
 
+def staff_notification_email_recipients(
+    db: Database, *, audience: str, category: str
+) -> list[dict[str, str]]:
+    """The staff accounts an email for this stored notice may be sent to.
+
+    The role check runs first, so ``game`` has no moderator recipients even when
+    the database row says ``games_enabled = true``. For each permitted role the
+    account's master switch is read, followed by its category preference. A
+    missing preference row is all-on, matching the historical default and the
+    backfill.
+    """
+    roles = STAFF_AUDIENCE_ROLES.get(audience, ())
+    if category not in CATEGORY_PREFERENCE_COLUMNS:
+        return []
+
+    recipients: list[dict[str, str]] = []
+    for role in roles:
+        if not staff_category_allowed_for_role(role, category):
+            continue
+        model = ACCOUNT_MODELS.get(role)
+        if model not in (AdminRecord, ModeratorRecord):
+            continue
+        with db.sessions() as session:
+            accounts = [
+                {
+                    "id": str(account.id),
+                    "email": account.email,
+                    "name": account.name,
+                    "regno": account.regno,
+                }
+                for account in session.scalars(select(model)).all()
+            ]
+        for account in accounts:
+            if not should_deliver_staff_notification(
+                db,
+                account_type=role,
+                account_id=account["id"],
+                category=category,
+            ):
+                continue
+            recipients.append(
+                {
+                    "email": account["email"],
+                    "name": account["name"],
+                    "regno": account["regno"],
+                }
+            )
+    return recipients
+
+
+def deliver_staff_notification_email(
+    db: Database,
+    *,
+    audience: str,
+    category: str,
+    heading: str,
+    body: str,
+    game_id: Optional[str] = None,
+) -> None:
+    """Best-effort email fan-out for one freshly stored staff notice.
+
+    Called only after the notice transaction commits and only for a newly
+    inserted row, so retries and dedup winners do not send duplicate emails.
+    Every recipient is attempted independently; one failing address or HTTP
+    request must not suppress another recipient's notification.
+
+    The email carries the review queue or game console the in-app notice is
+    about. ``game_id`` narrows a game notice to its exact manage screen.
+    """
+    link = staff_notification_link(category, game_id=game_id)
+    try:
+        recipients = staff_notification_email_recipients(
+            db, audience=audience, category=category
+        )
+    except Exception as exc:
+        logger.warning(
+            "Staff notification email recipients could not be read "
+            "(category=%s, error_type=%s)",
+            category,
+            type(exc).__name__,
+        )
+        return
+
+    for recipient in recipients:
+        try:
+            enqueue_notification_email(
+                title=heading[:STAFF_NOTIFICATION_HEADING_MAX],
+                body=body[:STAFF_NOTIFICATION_BODY_MAX],
+                link=link,
+                **recipient,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Staff notification email was not queued "
+                "(category=%s, error_type=%s)",
+                category,
+                type(exc).__name__,
+            )
+
+
+_PENDING_EMAILS_KEY = "staff_notification_pending_emails"
+_EMAIL_LISTENER_KEY = "staff_notification_email_listener"
+
+
+def _schedule_staff_notification_email(
+    session,
+    *,
+    audience: str,
+    category: str,
+    heading: str,
+    body: str,
+    game_id: Optional[str] = None,
+) -> None:
+    """Send a staged staff notice after its transaction commits, never before.
+
+    ``notify_user_auto_blocked`` writes into the caller's transaction because the
+    alert must live or die with the block. Email is not transactional, so the
+    payload is queued on the session and released by ``after_commit``; a rollback
+    drops it. This keeps an admin from being told about a block that never
+    happened while still covering the one direct-row insertion path.
+    """
+    pending = session.info.setdefault(_PENDING_EMAILS_KEY, [])
+    pending.append(
+        {
+            "audience": audience,
+            "category": category,
+            "heading": heading,
+            "body": body,
+            "game_id": game_id,
+        }
+    )
+    if session.info.get(_EMAIL_LISTENER_KEY):
+        return
+    session.info[_EMAIL_LISTENER_KEY] = True
+
+    def _after_commit(committed_session):
+        payloads = list(committed_session.info.pop(_PENDING_EMAILS_KEY, []))
+        if not payloads:
+            return
+        try:
+            db = get_postgres_client()
+        except Exception as exc:
+            logger.warning(
+                "Staff notification email could not be delivered after commit "
+                "(error_type=%s)",
+                type(exc).__name__,
+            )
+            return
+        for payload in payloads:
+            deliver_staff_notification_email(db, **payload)
+
+    def _after_rollback(rolled_back_session):
+        rolled_back_session.info.pop(_PENDING_EMAILS_KEY, None)
+
+    event.listen(session, "after_commit", _after_commit)
+    event.listen(session, "after_rollback", _after_rollback)
+
+
 def create_staff_notification(
     db: Database,
     *,
@@ -155,6 +330,7 @@ def create_staff_notification(
     target_kind: Optional[str] = None,
     target_id: Optional[str] = None,
     dedup_key: Optional[str] = None,
+    game_id: Optional[str] = None,
 ) -> Optional[str]:
     """Store one staff notice. Idempotent on ``dedup_key``; never raises.
 
@@ -168,6 +344,12 @@ def create_staff_notification(
     ``created_at`` lets a scheduler event carry the instant the pass ran rather
     than the instant the insert happened; the two are the same for request-path
     notices, which leave it unset.
+
+    A newly inserted notice is also offered to the email delivery layer after
+    the row commits. The dedup winner path returns before that call, so a retry
+    cannot email the same staff twice. ``game_id`` only picks the email link's
+    destination; it is not stored, because the in-app feed opens the games
+    dashboard for every game notice.
     """
     if audience not in ("admin", "moderator", "all"):
         return None
@@ -178,13 +360,15 @@ def create_staff_notification(
     moment = created_at or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
+    stored_heading = heading[:STAFF_NOTIFICATION_HEADING_MAX]
+    stored_body = body[:STAFF_NOTIFICATION_BODY_MAX]
     try:
         with db.sessions.begin() as session:
             row = StaffNotificationRecord(
                 audience=audience,
                 category=category,
-                heading=heading[:120],
-                body=body[:500],
+                heading=stored_heading,
+                body=stored_body,
                 created_at=moment,
                 target_kind=target_kind,
                 target_id=target_id,
@@ -192,7 +376,7 @@ def create_staff_notification(
             )
             session.add(row)
             session.flush()
-            return str(row.id)
+            notification_id = str(row.id)
     except IntegrityError:
         # Lost a dedup race (or a retry): the notice is already stored, which
         # is the state the caller wanted. Read the winner back so the caller
@@ -209,6 +393,16 @@ def create_staff_notification(
             return None
     except Exception:
         return None
+
+    deliver_staff_notification_email(
+        db,
+        audience=audience,
+        category=category,
+        heading=stored_heading,
+        body=stored_body,
+        game_id=game_id,
+    )
+    return notification_id
 
 
 def notify_report_filed(
@@ -300,18 +494,26 @@ def notify_user_auto_blocked(
     update left it, so the reader sees the figure that crossed the line without
     opening anything.
     """
+    heading = "Participant automatically blocked"
     body = (
         f"User {regno} ({name}) was automatically blocked after "
         f"{removal_total} upheld removals."
-    )
+    )[:STAFF_NOTIFICATION_BODY_MAX]
     session.add(
         StaffNotificationRecord(
             audience="admin",
             category="report",
-            heading="Participant automatically blocked",
-            body=body[:500],
+            heading=heading,
+            body=body,
             created_at=datetime.now(timezone.utc),
         )
+    )
+    _schedule_staff_notification_email(
+        session,
+        audience="admin",
+        category="report",
+        heading=heading,
+        body=body,
     )
 
 
@@ -364,6 +566,7 @@ def notify_game_pending(
         body=body,
         created_at=created_at,
         dedup_key=f"game:pending:{game_id}:{session_id}",
+        game_id=game_id,
     )
 
 
@@ -400,6 +603,7 @@ def notify_featured_game_missing(
         ),
         created_at=moment,
         dedup_key=f"game:featured-missing:{today.isoformat()}",
+        game_id="featured",
     )
 
 
@@ -439,6 +643,7 @@ def notify_trivia_drop_empty(
         ),
         created_at=moment,
         dedup_key=f"game:trivia-empty:{today.isoformat()}",
+        game_id="trivia-drop",
     )
 
 
@@ -582,8 +787,8 @@ def list_staff_notifications(
     Every category pages in SQL now, including ``game``: the scheduler and
     start-up checks write real rows, so read state and pagination apply the same
     way to a game notice as to a report. Preferences are returned beside the
-    page but never filter it: the switches record intent for a future delivery
-    layer, and the page shows everything regardless.
+    page but never filter it: the switches gate email delivery, while the page
+    shows every stored notice regardless.
     """
     from fastapi import HTTPException, status
 

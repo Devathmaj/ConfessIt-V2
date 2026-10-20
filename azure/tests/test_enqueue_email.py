@@ -69,6 +69,19 @@ def _valid_payload(**overrides):
     return payload
 
 
+def _valid_notification_payload(**overrides):
+    payload = {
+        "title": "New confession report",
+        "body": "A participant reported a confession.",
+        "email": "staff@example.com",
+        "name": "Staff Person",
+        "regno": "staff-1",
+        "type": "notification",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _body(response):
     return json.loads(response.get_body().decode("utf-8"))
 
@@ -89,6 +102,40 @@ def test_valid_login_request_is_accepted_and_queued(fake_queue):
     assert queued["schema_version"] == 1
     assert queued["request_id"]
     datetime.fromisoformat(queued["enqueued_at"])  # parseable UTC timestamp
+
+
+def test_valid_notification_request_is_accepted_and_queued(fake_queue):
+    response = function_app.enqueue_email(
+        _FakeRequest(_valid_notification_payload())
+    )
+
+    assert response.status_code == 202
+    assert len(fake_queue.messages) == 1
+
+    queued = json.loads(fake_queue.messages[0])
+    assert queued["type"] == "notification"
+    assert queued["title"] == "New confession report"
+    assert queued["body"] == "A participant reported a confession."
+    assert queued["email"] == "staff@example.com"
+    assert queued["name"] == "Staff Person"
+    assert queued["regno"] == "staff-1"
+    assert "link" not in queued
+    assert queued["schema_version"] == 1
+
+
+def test_notification_link_is_accepted_and_queued(fake_queue):
+    response = function_app.enqueue_email(
+        _FakeRequest(
+            _valid_notification_payload(
+                link="https://app.example.com/admin/reports"
+            )
+        )
+    )
+
+    assert response.status_code == 202
+    queued = json.loads(fake_queue.messages[0])
+    assert queued["type"] == "notification"
+    assert queued["link"] == "https://app.example.com/admin/reports"
 
 
 def test_queue_success_is_not_reported_as_email_delivery(fake_queue, monkeypatch):
@@ -113,6 +160,23 @@ def test_enqueue_logs_do_not_expose_sensitive_values(fake_queue, caplog):
     assert "person@example.com" not in logs
     assert "Test Person" not in logs
     assert "22/CS0455" not in logs
+
+
+def test_notification_enqueue_logs_do_not_expose_content(fake_queue, caplog):
+    caplog.set_level(logging.INFO, logger=function_app.__name__)
+
+    response = function_app.enqueue_email(
+        _FakeRequest(_valid_notification_payload())
+    )
+
+    assert response.status_code == 202
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "email_request_queued" in logs
+    assert "New confession report" not in logs
+    assert "A participant reported a confession." not in logs
+    assert "staff@example.com" not in logs
+    assert "Staff Person" not in logs
+    assert "staff-1" not in logs
 
 
 def test_malformed_json_is_rejected(fake_queue):
@@ -187,6 +251,62 @@ def test_malformed_json_is_rejected(fake_queue):
             "regno": "22/CS0455",
             "type": "login",
         },
+        {
+            "title": "A title",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "body": "A body",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "title": "A\nbroken title",
+            "body": "A body",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "title": "A title",
+            "body": "A broken\x00body",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "title": "x" * 121,
+            "body": "A body",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "title": "A title",
+            "body": "A body",
+            "link": "not-a-url",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
+        {
+            "title": "A title",
+            "body": "A body",
+            "link": "javascript:alert(1)",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        },
         ["not", "an", "object"],
     ],
 )
@@ -198,7 +318,7 @@ def test_missing_or_invalid_fields_are_rejected(fake_queue, payload):
     assert fake_queue.messages == []
 
 
-@pytest.mark.parametrize("request_type", ["notification", "LOGIN", "", None, 1])
+@pytest.mark.parametrize("request_type", ["LOGIN", "", None, 1, "bogus"])
 def test_unsupported_types_are_rejected(fake_queue, request_type):
     response = function_app.enqueue_email(
         _FakeRequest(_valid_payload(type=request_type))

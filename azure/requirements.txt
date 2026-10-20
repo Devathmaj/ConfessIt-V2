@@ -1,4 +1,4 @@
-# Azure Functions dependencies for the magic-link email pipeline.
+# Azure Functions dependencies for the ConfessIt email pipeline.
 #
 # Official sources used for the APIs and programming model:
 # - https://github.com/Azure/azure-functions-python-library
@@ -15,3 +15,14 @@ azure-storage-queue==12.18.0
 
 # EmailClient.from_connection_string / begin_send / poller.result.
 azure-communication-email==1.1.0
+
+# Persistent recipient suppression state. The Function App stores a row for an
+# address or domain that ACS rejected permanently, so later messages skip it
+# instead of retrying or poisoning the queue.
+azure-data-tables==12.7.0
+
+# MX lookup for recipient domains. A domain with no MX record cannot receive
+# mail; treating that as permanent avoids pointless ACS calls and retries.
+# dnspython 2.8 is the newest release that supports the Functions Python 3.10
+# runtime; 2.9 requires Python 3.11+.
+dnspython==2.8.0

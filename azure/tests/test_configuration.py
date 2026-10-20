@@ -39,6 +39,14 @@ def test_host_json_minimizes_concurrency_and_retries_poisoned_messages():
             "regno": "x",
             "type": "login",
         },
+        {
+            "title": "A title",
+            "body": "A body",
+            "email": "a@b.co",
+            "name": "Test Person",
+            "regno": "x",
+            "type": "unsupported",
+        },
     ],
 )
 def test_validation_rejects_incomplete_or_unsupported_requests(payload):
@@ -61,3 +69,57 @@ def test_validation_normalizes_whitespace_and_keeps_the_exact_link():
     assert request.email == "person@example.com"
     assert request.name == "Test Person"
     assert request.regno == "22/CS0455"
+
+
+def test_validation_accepts_a_notification_title_and_body():
+    request = validate_email_request(
+        {
+            "title": "  New confession report  ",
+            "body": "  A participant reported a confession.  ",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        }
+    )
+
+    assert request.type == "notification"
+    assert request.title == "New confession report"
+    assert request.body == "A participant reported a confession."
+    assert request.link is None
+    assert request.email == "staff@example.com"
+
+
+def test_validation_accepts_a_notification_link():
+    request = validate_email_request(
+        {
+            "title": "New confession report",
+            "body": "A participant reported a confession.",
+            "link": "  https://app.example.com/admin/reports  ",
+            "email": "staff@example.com",
+            "name": "Staff Person",
+            "regno": "staff-1",
+            "type": "notification",
+        }
+    )
+
+    assert request.link == "https://app.example.com/admin/reports"
+
+
+@pytest.mark.parametrize(
+    "link",
+    ["not-a-url", "javascript:alert(1)", "https:///no-host", 12],
+)
+def test_validation_rejects_an_invalid_notification_link(link):
+    with pytest.raises(InvalidEmailRequest):
+        validate_email_request(
+            {
+                "title": "New confession report",
+                "body": "A participant reported a confession.",
+                "link": link,
+                "email": "staff@example.com",
+                "name": "Staff Person",
+                "regno": "staff-1",
+                "type": "notification",
+            }
+        )

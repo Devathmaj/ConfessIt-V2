@@ -1,8 +1,11 @@
 """Validation shared by the HTTP enqueue and queue-triggered processing functions.
 
-Both functions accept the same five fields, so one validator is the only place
-that can drift. Invalid input is represented by :class:`InvalidEmailRequest`;
-callers decide whether that becomes an HTTP 400 or a rejected queue message.
+Both functions accept the same request shapes, so one validator is the only place
+that can drift. Login requests carry a magic link; notification requests carry
+the already-composed title and body, plus an optional link to the page the
+notification is about. Invalid input is represented by
+:class:`InvalidEmailRequest`; callers decide whether that becomes an HTTP 400 or
+a rejected queue message.
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ from urllib.parse import urlsplit
 import re
 
 LOGIN_REQUEST_TYPE = "login"
+NOTIFICATION_REQUEST_TYPE = "notification"
+SUPPORTED_REQUEST_TYPES = frozenset({LOGIN_REQUEST_TYPE, NOTIFICATION_REQUEST_TYPE})
 
 # A queue message is capped at 64 KiB. These bounds keep a single request far
 # below that while still accepting every real magic link and registration number.
@@ -21,6 +26,12 @@ MAX_LINK_LENGTH = 8192
 MAX_EMAIL_LENGTH = 254
 MAX_NAME_LENGTH = 160
 MAX_REGNO_LENGTH = 100
+
+# The notification columns in the backend are 120 and 500 characters wide. The
+# Function accepts exactly the data those columns can hold, so an email can never
+# contain a title or body the in-app inbox did not store.
+MAX_TITLE_LENGTH = 120
+MAX_NOTIFICATION_BODY_LENGTH = 500
 
 # Deliberately permissive: the goal is to reject missing, malformed and header-
 # injection-shaped values before ACS sees them, not to be the final authority on
@@ -32,9 +43,12 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
 # and digits from any script.
 _REGNO_PATTERN = re.compile(rf"^[\w./-]{{1,{MAX_REGNO_LENGTH}}}$")
 
-# Names are free text (any script, spaces, punctuation), but control characters
-# would break the greeting or allow plain-text/header injection.
+# Names and titles are free text (any script, spaces, punctuation), but control
+# characters would break the greeting/subject or allow plain-text/header
+# injection. A notification body may contain line breaks and tabs, which are
+# normal prose; every other control character is rejected.
 _CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+_BODY_CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class InvalidEmailRequest(ValueError):
@@ -43,13 +57,15 @@ class InvalidEmailRequest(ValueError):
 
 @dataclass(frozen=True)
 class EmailRequest:
-    """The validated fields needed to build a login email."""
+    """The validated fields needed to build one login or notification email."""
 
-    link: str
+    link: str | None
     email: str
     name: str
     regno: str
     type: str
+    title: str | None = None
+    body: str | None = None
 
 
 def _required_string(
@@ -68,16 +84,7 @@ def _required_string(
     return text
 
 
-def validate_email_request(payload: Any) -> EmailRequest:
-    """Validate one login email request and return its normalised fields.
-
-    Only ``type="login"`` is supported. ``notification`` is rejected explicitly
-    rather than silently queued: the pipeline has no notification template and
-    accepting the request would promise delivery that cannot happen.
-    """
-    if not isinstance(payload, Mapping):
-        raise InvalidEmailRequest("The request body must be a JSON object.")
-
+def _valid_link(payload: Mapping[str, Any]) -> str:
     link = _required_string(payload, "link", max_length=MAX_LINK_LENGTH)
     try:
         parsed_link = urlsplit(link)
@@ -85,6 +92,37 @@ def validate_email_request(payload: Any) -> EmailRequest:
         raise InvalidEmailRequest("link must be an absolute http(s) URL.") from None
     if parsed_link.scheme.lower() not in ("http", "https") or not parsed_link.netloc:
         raise InvalidEmailRequest("link must be an absolute http(s) URL.")
+    return link
+
+
+def _optional_link(payload: Mapping[str, Any]) -> str | None:
+    """A notification's link, when present, under the same rules as a login link."""
+    value = payload.get("link")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidEmailRequest("link must be an absolute http(s) URL.")
+    if not value.strip():
+        return None
+    return _valid_link(payload)
+
+
+def validate_email_request(payload: Any) -> EmailRequest:
+    """Validate one email request and return its normalised fields.
+
+    ``type="login"`` requires an absolute http(s) ``link``. ``type="notification"``
+    requires a ``title`` and ``body`` and accepts an optional absolute http(s)
+    ``link``; the backend has already decided that this recipient should receive
+    the notification. No other type is accepted.
+    """
+    if not isinstance(payload, Mapping):
+        raise InvalidEmailRequest("The request body must be a JSON object.")
+
+    request_type = payload.get("type")
+    if request_type not in SUPPORTED_REQUEST_TYPES:
+        raise InvalidEmailRequest(
+            "type must be 'login' or 'notification'."
+        )
 
     name = _required_string(payload, "name", max_length=MAX_NAME_LENGTH)
     if _CONTROL_CHARACTER_PATTERN.search(name):
@@ -100,16 +138,31 @@ def validate_email_request(payload: Any) -> EmailRequest:
             "regno may contain only letters, numbers and the punctuation . / - _."
         )
 
-    request_type = payload.get("type")
-    if request_type != LOGIN_REQUEST_TYPE:
-        raise InvalidEmailRequest(
-            "type must be 'login'; only login email requests are supported."
+    if request_type == LOGIN_REQUEST_TYPE:
+        return EmailRequest(
+            link=_valid_link(payload),
+            email=email,
+            name=name,
+            regno=regno,
+            type=LOGIN_REQUEST_TYPE,
         )
 
+    title = _required_string(payload, "title", max_length=MAX_TITLE_LENGTH)
+    if _CONTROL_CHARACTER_PATTERN.search(title):
+        raise InvalidEmailRequest("title must not contain control characters.")
+
+    body = _required_string(
+        payload, "body", max_length=MAX_NOTIFICATION_BODY_LENGTH
+    )
+    if _BODY_CONTROL_CHARACTER_PATTERN.search(body):
+        raise InvalidEmailRequest("body must not contain control characters.")
+
     return EmailRequest(
-        link=link,
+        link=_optional_link(payload),
         email=email,
         name=name,
         regno=regno,
-        type=LOGIN_REQUEST_TYPE,
+        type=NOTIFICATION_REQUEST_TYPE,
+        title=title,
+        body=body,
     )

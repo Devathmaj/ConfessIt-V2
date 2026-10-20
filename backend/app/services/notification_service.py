@@ -5,10 +5,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from ..postgres import Database, is_valid_id
 from sqlalchemy import func, select
-from ..db_models import NotificationRecord
+from ..db_models import NotificationRecord, UserRecord
+from ..logger import get_logger
 
 from ..utils import isoformat_datetime
 from ..utils import ilike_contains
+from .email_delivery_service import enqueue_notification_email
+from .notification_links import participant_notification_link
+
+logger = get_logger(__name__)
 
 # What a notification can point at, and what the target id means in each case.
 #
@@ -78,6 +83,51 @@ def build_notification_heading(template: str, name: str) -> str:
     return template.replace(placeholder, name[: room - 1] + "…")
 
 
+def _deliver_notification_email(
+    recipient_regno: str,
+    heading: str,
+    body: str,
+    db: Database,
+    *,
+    link: Optional[str] = None,
+) -> None:
+    """Email one participant after their in-app notification has committed.
+
+    The participant table's ``notifications_enabled`` column is the direct gate:
+    there are no per-category preferences on a participant account. The lookup
+    runs after the notification transaction so a rolled-back notice never sends
+    an email, and every failure is swallowed because the stored notice remains
+    useful even when the email pipeline is unavailable. ``link`` is the same
+    target the inbox opens, when the notice has one.
+    """
+    try:
+        with db.sessions() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.regno == recipient_regno)
+            )
+            if user is None or not bool(user.notifications_enabled):
+                return
+            email = user.email
+            name = user.name
+
+        payload = {
+            "title": heading[:NOTIFICATION_HEADING_MAX],
+            "body": body[:NOTIFICATION_BODY_MAX],
+            "email": email,
+            "name": name,
+            "regno": recipient_regno,
+        }
+        if link:
+            payload["link"] = link
+        enqueue_notification_email(**payload)
+    except Exception as exc:
+        logger.warning(
+            "Notification email was not queued: delivery preparation failed "
+            "(error_type=%s)",
+            type(exc).__name__,
+        )
+
+
 def create_notification_service(
     recipient_regno: str,
     heading: str,
@@ -107,6 +157,10 @@ def create_notification_service(
     names a participant in a heading should build it with :func:`build_notification_heading`,
     which keeps the wording and shortens the name -- clipping the heading as a whole would
     take the wording with it.
+
+    Once the row commits, the same heading, body and target are handed to the email pipeline
+    when the participant's ``notifications_enabled`` column is true. Email failure never rolls
+    back or raises out of the stored notice.
     """
     if (target_kind is None) != (target_id is None):
         raise ValueError(
@@ -142,7 +196,19 @@ def create_notification_service(
         )
         session.add(row)
         session.flush()
-        return str(row.id)
+        notification_id = str(row.id)
+
+    # The in-app notice is committed before the email is attempted. Delivery is
+    # best-effort and gated by the participant's own notifications_enabled switch.
+    # The email carries the same target the inbox opens, when there is one.
+    _deliver_notification_email(
+        recipient_regno,
+        heading[:NOTIFICATION_HEADING_MAX],
+        body[:NOTIFICATION_BODY_MAX],
+        db,
+        link=participant_notification_link(target_kind, target_id),
+    )
+    return notification_id
 
 # Hard ceiling for one inbox page. Notification rows are small, but an account that
 # has been collecting them for years still must not have them all serialised at once.

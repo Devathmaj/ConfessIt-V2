@@ -55,6 +55,31 @@ class _FakeAsyncClient:
         return _FakeResponse(type(self).response_status)
 
 
+class _FakeSyncClient:
+    """Minimal ``httpx.Client`` stand-in with a recorded POST."""
+
+    instances: list["_FakeSyncClient"] = []
+    response_status = 202
+    error: Exception | None = None
+
+    def __init__(self, *, timeout=None, **kwargs):
+        self.timeout = timeout
+        self.posts: list[tuple[str, dict]] = []
+        type(self).instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def post(self, url, *, json):
+        self.posts.append((url, json))
+        if type(self).error is not None:
+            raise type(self).error
+        return _FakeResponse(type(self).response_status)
+
+
 class _RecordingLogger:
     def __init__(self):
         self.lines: list[str] = []
@@ -76,6 +101,15 @@ def _fake_http_client(monkeypatch):
     _FakeAsyncClient.error = None
     monkeypatch.setattr(email_delivery_service.httpx, "AsyncClient", _FakeAsyncClient)
     return _FakeAsyncClient
+
+
+@pytest.fixture
+def fake_sync_client(monkeypatch):
+    _FakeSyncClient.instances.clear()
+    _FakeSyncClient.response_status = 202
+    _FakeSyncClient.error = None
+    monkeypatch.setattr(email_delivery_service.httpx, "Client", _FakeSyncClient)
+    return _FakeSyncClient
 
 
 @pytest.fixture
@@ -145,6 +179,95 @@ async def test_enqueue_posts_the_expected_login_payload(monkeypatch, logged):
     assert "person@example.com" not in logged.lines[-1]
     assert "Test Person" not in logged.lines[-1]
     assert "22/CS0455" not in logged.lines[-1]
+
+
+def test_enqueue_notification_posts_the_expected_payload(
+    monkeypatch, logged, fake_sync_client
+):
+    monkeypatch.setattr(settings, "EMAIL_FUNCTION_URL", _ENQUEUE_URL)
+
+    queued = email_delivery_service.enqueue_notification_email(
+        title="New confession report",
+        body="A participant reported a confession.",
+        email="staff@example.com",
+        name="Staff Person",
+        regno="22/CS0455",
+    )
+
+    assert queued is True
+    client = fake_sync_client.instances[-1]
+    assert client.posts == [
+        (
+            _ENQUEUE_URL,
+            {
+                "title": "New confession report",
+                "body": "A participant reported a confession.",
+                "email": "staff@example.com",
+                "name": "Staff Person",
+                "regno": "22/CS0455",
+                "type": "notification",
+            },
+        )
+    ]
+    assert client.timeout is not None
+    assert "accepted for queueing" in logged.lines[-1]
+    assert "New confession report" not in logged.lines[-1]
+    assert "A participant reported a confession." not in logged.lines[-1]
+    assert "staff@example.com" not in logged.lines[-1]
+    assert "Staff Person" not in logged.lines[-1]
+    assert "22/CS0455" not in logged.lines[-1]
+
+
+def test_enqueue_notification_posts_the_optional_target_link(
+    monkeypatch, logged, fake_sync_client
+):
+    monkeypatch.setattr(settings, "EMAIL_FUNCTION_URL", _ENQUEUE_URL)
+
+    queued = email_delivery_service.enqueue_notification_email(
+        title="New confession report",
+        body="A participant reported a confession.",
+        email="staff@example.com",
+        name="Staff Person",
+        regno="22/CS0455",
+        link="https://app.example.com/admin/reports",
+    )
+
+    assert queued is True
+    client = fake_sync_client.instances[-1]
+    assert client.posts == [
+        (
+            _ENQUEUE_URL,
+            {
+                "title": "New confession report",
+                "body": "A participant reported a confession.",
+                "email": "staff@example.com",
+                "name": "Staff Person",
+                "regno": "22/CS0455",
+                "link": "https://app.example.com/admin/reports",
+                "type": "notification",
+            },
+        )
+    ]
+    assert "https://app.example.com/admin/reports" not in logged.lines[-1]
+
+
+def test_enqueue_notification_reports_non_2xx_without_exposing_content(
+    monkeypatch, logged, fake_sync_client
+):
+    monkeypatch.setattr(settings, "EMAIL_FUNCTION_URL", _ENQUEUE_URL)
+    fake_sync_client.response_status = 503
+
+    queued = email_delivery_service.enqueue_notification_email(
+        title="New confession report",
+        body="A participant reported a confession.",
+        email="staff@example.com",
+        name="Staff Person",
+        regno="22/CS0455",
+    )
+
+    assert queued is False
+    assert "status_code=503" in logged.lines[-1]
+    assert "New confession report" not in logged.lines[-1]
 
 
 @pytest.mark.asyncio
