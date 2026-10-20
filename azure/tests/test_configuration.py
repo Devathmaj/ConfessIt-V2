@@ -123,3 +123,41 @@ def test_validation_rejects_an_invalid_notification_link(link):
                 "type": "notification",
             }
         )
+
+
+@pytest.mark.parametrize("admin_email", [None, "  admin@example.com  "])
+def test_validation_accepts_a_blocked_account_request(admin_email):
+    payload = {
+        "email": "blocked@example.com",
+        "name": "Blocked Person",
+        "regno": "blocked-1",
+        "type": "account_blocked",
+    }
+    if admin_email is not None:
+        payload["admin_email"] = admin_email
+
+    request = validate_email_request(payload)
+
+    assert request.type == "account_blocked"
+    assert request.email == "blocked@example.com"
+    assert request.admin_email == (
+        "admin@example.com" if admin_email is not None else None
+    )
+    assert request.link is None
+
+
+@pytest.mark.parametrize(
+    "admin_email",
+    ["not-an-email", "admin@example", "admin@\nexample.com", 12],
+)
+def test_validation_rejects_an_invalid_administrator_email(admin_email):
+    with pytest.raises(InvalidEmailRequest):
+        validate_email_request(
+            {
+                "email": "blocked@example.com",
+                "name": "Blocked Person",
+                "regno": "blocked-1",
+                "admin_email": admin_email,
+                "type": "account_blocked",
+            }
+        )

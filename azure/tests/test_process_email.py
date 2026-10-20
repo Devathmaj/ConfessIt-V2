@@ -60,6 +60,21 @@ def _notification_payload(**overrides):
     return payload
 
 
+def _blocked_payload(**overrides):
+    payload = {
+        "schema_version": 1,
+        "request_id": "request-3",
+        "email": "blocked@example.com",
+        "name": "Blocked Person",
+        "regno": "blocked-1",
+        "admin_email": "admin@example.com",
+        "type": "account_blocked",
+        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_valid_login_message_is_sent_with_the_original_link(monkeypatch, caplog):
     sent = []
     monkeypatch.setattr(function_app, "send_login_email", lambda request: sent.append(request))
@@ -118,6 +133,25 @@ def test_valid_notification_message_uses_the_notification_sender(monkeypatch, ca
     assert "New confession report" not in logs
     assert "A participant reported a confession." not in logs
     assert "staff@example.com" not in logs
+
+
+def test_blocked_account_message_uses_the_blocked_account_sender(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        function_app,
+        "send_account_blocked_email",
+        lambda request: sent.append(request),
+    )
+
+    function_app.process_email(_FakeQueueMessage(_blocked_payload()))
+
+    assert len(sent) == 1
+    request = sent[0]
+    assert isinstance(request, EmailRequest)
+    assert request.type == "account_blocked"
+    assert request.email == "blocked@example.com"
+    assert request.name == "Blocked Person"
+    assert request.admin_email == "admin@example.com"
 
 
 def test_notification_message_preserves_its_target_link(monkeypatch):

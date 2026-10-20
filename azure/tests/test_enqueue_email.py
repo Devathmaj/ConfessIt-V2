@@ -82,6 +82,18 @@ def _valid_notification_payload(**overrides):
     return payload
 
 
+def _valid_blocked_payload(**overrides):
+    payload = {
+        "email": "blocked@example.com",
+        "name": "Blocked Person",
+        "regno": "blocked-1",
+        "admin_email": "admin@example.com",
+        "type": "account_blocked",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _body(response):
     return json.loads(response.get_body().decode("utf-8"))
 
@@ -136,6 +148,34 @@ def test_notification_link_is_accepted_and_queued(fake_queue):
     queued = json.loads(fake_queue.messages[0])
     assert queued["type"] == "notification"
     assert queued["link"] == "https://app.example.com/admin/reports"
+
+
+def test_blocked_account_request_is_accepted_and_queued(fake_queue):
+    response = function_app.enqueue_email(
+        _FakeRequest(_valid_blocked_payload())
+    )
+
+    assert response.status_code == 202
+    queued = json.loads(fake_queue.messages[0])
+    assert queued["type"] == "account_blocked"
+    assert queued["email"] == "blocked@example.com"
+    assert queued["name"] == "Blocked Person"
+    assert queued["regno"] == "blocked-1"
+    assert queued["admin_email"] == "admin@example.com"
+    assert "link" not in queued
+    assert "title" not in queued
+    assert "body" not in queued
+
+
+def test_blocked_account_request_allows_no_admin_email(fake_queue):
+    payload = _valid_blocked_payload()
+    del payload["admin_email"]
+
+    response = function_app.enqueue_email(_FakeRequest(payload))
+
+    assert response.status_code == 202
+    queued = json.loads(fake_queue.messages[0])
+    assert "admin_email" not in queued
 
 
 def test_queue_success_is_not_reported_as_email_delivery(fake_queue, monkeypatch):
@@ -306,6 +346,18 @@ def test_malformed_json_is_rejected(fake_queue):
             "name": "Staff Person",
             "regno": "staff-1",
             "type": "notification",
+        },
+        {
+            "email": "blocked@example.com",
+            "name": "Blocked Person",
+            "regno": "blocked-1",
+            "admin_email": "not-an-email",
+            "type": "account_blocked",
+        },
+        {
+            "email": "blocked@example.com",
+            "regno": "blocked-1",
+            "type": "account_blocked",
         },
         ["not", "an", "object"],
     ],

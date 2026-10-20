@@ -3,7 +3,8 @@
 Both functions accept the same request shapes, so one validator is the only place
 that can drift. Login requests carry a magic link; notification requests carry
 the already-composed title and body, plus an optional link to the page the
-notification is about. Invalid input is represented by
+notification is about; blocked-account requests optionally carry an
+administrator's email address. Invalid input is represented by
 :class:`InvalidEmailRequest`; callers decide whether that becomes an HTTP 400 or
 a rejected queue message.
 """
@@ -18,7 +19,14 @@ import re
 
 LOGIN_REQUEST_TYPE = "login"
 NOTIFICATION_REQUEST_TYPE = "notification"
-SUPPORTED_REQUEST_TYPES = frozenset({LOGIN_REQUEST_TYPE, NOTIFICATION_REQUEST_TYPE})
+ACCOUNT_BLOCKED_REQUEST_TYPE = "account_blocked"
+SUPPORTED_REQUEST_TYPES = frozenset(
+    {
+        LOGIN_REQUEST_TYPE,
+        NOTIFICATION_REQUEST_TYPE,
+        ACCOUNT_BLOCKED_REQUEST_TYPE,
+    }
+)
 
 # A queue message is capped at 64 KiB. These bounds keep a single request far
 # below that while still accepting every real magic link and registration number.
@@ -66,6 +74,7 @@ class EmailRequest:
     type: str
     title: str | None = None
     body: str | None = None
+    admin_email: str | None = None
 
 
 def _required_string(
@@ -107,13 +116,33 @@ def _optional_link(payload: Mapping[str, Any]) -> str | None:
     return _valid_link(payload)
 
 
+def _optional_admin_email(payload: Mapping[str, Any]) -> str | None:
+    """The administrator contact in a blocked-account email, when one was found."""
+    value = payload.get("admin_email")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidEmailRequest("admin_email must be a valid email address.")
+    admin_email = value.strip()
+    if not admin_email:
+        return None
+    if (
+        len(admin_email) > MAX_EMAIL_LENGTH
+        or _CONTROL_CHARACTER_PATTERN.search(admin_email)
+        or not _EMAIL_PATTERN.fullmatch(admin_email)
+    ):
+        raise InvalidEmailRequest("admin_email must be a valid email address.")
+    return admin_email
+
+
 def validate_email_request(payload: Any) -> EmailRequest:
     """Validate one email request and return its normalised fields.
 
     ``type="login"`` requires an absolute http(s) ``link``. ``type="notification"``
     requires a ``title`` and ``body`` and accepts an optional absolute http(s)
     ``link``; the backend has already decided that this recipient should receive
-    the notification. No other type is accepted.
+    the notification. ``type="account_blocked"`` accepts an optional administrator
+    email to include in the notice. No other type is accepted.
     """
     if not isinstance(payload, Mapping):
         raise InvalidEmailRequest("The request body must be a JSON object.")
@@ -121,7 +150,7 @@ def validate_email_request(payload: Any) -> EmailRequest:
     request_type = payload.get("type")
     if request_type not in SUPPORTED_REQUEST_TYPES:
         raise InvalidEmailRequest(
-            "type must be 'login' or 'notification'."
+            "type must be 'login', 'notification' or 'account_blocked'."
         )
 
     name = _required_string(payload, "name", max_length=MAX_NAME_LENGTH)
@@ -145,6 +174,16 @@ def validate_email_request(payload: Any) -> EmailRequest:
             name=name,
             regno=regno,
             type=LOGIN_REQUEST_TYPE,
+        )
+
+    if request_type == ACCOUNT_BLOCKED_REQUEST_TYPE:
+        return EmailRequest(
+            link=None,
+            email=email,
+            name=name,
+            regno=regno,
+            type=ACCOUNT_BLOCKED_REQUEST_TYPE,
+            admin_email=_optional_admin_email(payload),
         )
 
     title = _required_string(payload, "title", max_length=MAX_TITLE_LENGTH)

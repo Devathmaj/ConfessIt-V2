@@ -181,6 +181,57 @@ async def test_enqueue_posts_the_expected_login_payload(monkeypatch, logged):
     assert "22/CS0455" not in logged.lines[-1]
 
 
+@pytest.mark.asyncio
+async def test_enqueue_blocked_account_posts_the_expected_payload(
+    monkeypatch, logged
+):
+    monkeypatch.setattr(settings, "EMAIL_FUNCTION_URL", _ENQUEUE_URL)
+
+    queued = await email_delivery_service.enqueue_account_blocked_email(
+        email="blocked@example.com",
+        name="Blocked Person",
+        regno="22/CS0455",
+        admin_email="admin@example.com",
+    )
+
+    assert queued is True
+    client = _FakeAsyncClient.instances[-1]
+    assert client.posts == [
+        (
+            _ENQUEUE_URL,
+            {
+                "email": "blocked@example.com",
+                "name": "Blocked Person",
+                "regno": "22/CS0455",
+                "admin_email": "admin@example.com",
+                "type": "account_blocked",
+            },
+        )
+    ]
+    assert "accepted for queueing" in logged.lines[-1]
+    assert "blocked@example.com" not in logged.lines[-1]
+    assert "Blocked Person" not in logged.lines[-1]
+    assert "admin@example.com" not in logged.lines[-1]
+    assert "22/CS0455" not in logged.lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_blocked_account_omits_a_missing_admin_email(
+    monkeypatch, logged
+):
+    monkeypatch.setattr(settings, "EMAIL_FUNCTION_URL", _ENQUEUE_URL)
+
+    queued = await email_delivery_service.enqueue_account_blocked_email(
+        email="blocked@example.com",
+        name="Blocked Person",
+        regno="22/CS0455",
+    )
+
+    assert queued is True
+    payload = _FakeAsyncClient.instances[-1].posts[0][1]
+    assert "admin_email" not in payload
+
+
 def test_enqueue_notification_posts_the_expected_payload(
     monkeypatch, logged, fake_sync_client
 ):
@@ -339,7 +390,9 @@ async def test_enqueue_skips_http_when_url_is_unconfigured(monkeypatch, logged):
 # --- Authentication flow integration -------------------------------------------
 
 
-def _make_user_row(regno: str) -> UserRecord:
+def _make_user_row(
+    regno: str, *, notifications_enabled: bool = True
+) -> UserRecord:
     return UserRecord(
         id="11111111-1111-1111-1111-111111111111",
         regno=regno,
@@ -353,7 +406,7 @@ def _make_user_row(regno: str) -> UserRecord:
         gender="male",
         interests=[],
         matchmaking_enabled=True,
-        notifications_enabled=True,
+        notifications_enabled=notifications_enabled,
         love_notes_receive_enabled=True,
         love_notes_send_enabled=False,
         is_blocked=False,
@@ -411,7 +464,11 @@ class _LinkCatcher:
 
 
 @pytest.mark.asyncio
-async def test_login_flow_preserves_console_link_and_queues_the_same_link(monkeypatch):
+@pytest.mark.parametrize("notifications_enabled", [True, False])
+async def test_login_flow_preserves_console_link_and_queues_the_same_link(
+    monkeypatch, notifications_enabled
+):
+    """Sign-in delivery must ignore the notification preference."""
     monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example.com")
     monkeypatch.setattr(
         auth_service_module,
@@ -441,7 +498,13 @@ async def test_login_flow_preserves_console_link_and_queues_the_same_link(monkey
 
     result = await generate_magic_link_service(
         _FakeRequest("active"),
-        _FakeDatabase({"active": _make_user_row("active")}),
+        _FakeDatabase(
+            {
+                "active": _make_user_row(
+                    "active", notifications_enabled=notifications_enabled
+                )
+            }
+        ),
         AccountType.USERS.value,
     )
 

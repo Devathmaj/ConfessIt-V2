@@ -2,9 +2,9 @@
 
 Two functions share this app:
 
-* ``enqueue_email`` (``POST /api/email``) validates a backend login or
-  notification request and writes it to Azure Storage Queue. It never sends
-  email.
+* ``enqueue_email`` (``POST /api/email``) validates a backend login,
+  notification or blocked-account request and writes it to Azure Storage Queue.
+  It never sends email.
 * ``process_email`` is a Storage Queue trigger that reads one message, validates
   it again, and sends the corresponding email through Azure Communication
   Services. The backend, not this app, decides who may receive a notification.
@@ -35,11 +35,13 @@ from azure.storage.queue import QueueClient
 from email_delivery import (
     PermanentEmailError,
     check_recipient_domain,
+    send_account_blocked_email,
     send_login_email,
     send_notification_email,
 )
 from email_suppression import find_suppression, record_suppression
 from email_validation import (
+    ACCOUNT_BLOCKED_REQUEST_TYPE,
     LOGIN_REQUEST_TYPE,
     NOTIFICATION_REQUEST_TYPE,
     InvalidEmailRequest,
@@ -204,6 +206,9 @@ def enqueue_email(req: func.HttpRequest) -> func.HttpResponse:
     }
     if request.type == LOGIN_REQUEST_TYPE:
         queued_request["link"] = request.link
+    elif request.type == ACCOUNT_BLOCKED_REQUEST_TYPE:
+        if request.admin_email:
+            queued_request["admin_email"] = request.admin_email
     else:
         queued_request["title"] = request.title
         queued_request["body"] = request.body
@@ -313,6 +318,8 @@ def process_email(message: func.QueueMessage) -> None:
     third is recorded when ACS identified the address/domain. Transient send
     failures are re-raised so the Functions runtime retries the message and
     eventually moves it to the queue's poison queue after ``maxDequeueCount``.
+    Blocked-account notices are dispatched here like any other message; their
+    delivery is not a notification preference.
     """
     message_id = _safe_log_value(getattr(message, "id", None))
     dequeue_count = getattr(message, "dequeue_count", None)
@@ -414,6 +421,8 @@ def process_email(message: func.QueueMessage) -> None:
             send_login_email(request)
         elif request.type == NOTIFICATION_REQUEST_TYPE:
             send_notification_email(request)
+        elif request.type == ACCOUNT_BLOCKED_REQUEST_TYPE:
+            send_account_blocked_email(request)
         else:  # validation and this dispatch must stay in step
             raise RuntimeError(f"Unsupported email type: {request.type!r}")
     except PermanentEmailError as exc:

@@ -11,8 +11,9 @@ from typing import Any, Dict, Optional, Tuple
 import jwt
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import OperationalError
-from ..db_models import (ACCOUNT_MODELS, LoginTokenRecord, WebSocketTicketRecord,
-                         find_account_in_table, resolve_account)
+from ..db_models import (ACCOUNT_MODELS, AdminRecord, LoginTokenRecord,
+                         WebSocketTicketRecord, find_account_in_table,
+                         resolve_account)
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ..postgres import Database, is_valid_id
@@ -744,6 +745,11 @@ def _rate_limit_rejection(    verdict: RateLimitVerdict,
 # the same bound the ``regno`` column and the admin account payloads enforce.
 _REGNO_PATTERN = re.compile(rf"^[\w./-]{{1,{USER_REGNO_MAX}}}$")
 
+# An administrator address is about to be placed in an email that the Function
+# App validates again. Keep the same conservative shape here so a malformed
+# legacy row is never chosen as the only contact route.
+_ADMIN_EMAIL_PATTERN = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
+
 
 def _validated_regno(value: Any) -> str:
     """The submitted registration number, narrowed to what a regno may be, or a 400.
@@ -771,6 +777,38 @@ def _validated_regno(value: Any) -> str:
     return candidate
 
 
+def _random_admin_contact_email(db: Database) -> Optional[str]:
+    """One administrator address for a blocked-account appeal, chosen at random.
+
+    The account cannot sign in, so the blocked notice has to name a route back.
+    Any administrator can receive the appeal; choosing one at random avoids
+    hard-coding a person and spreads the mail. The address is only ever placed
+    in the recipient's email, never in the login response or logs. A lookup
+    failure returns None and must not stop the blocked notice from being sent.
+    """
+    try:
+        with db.sessions() as session:
+            emails = session.scalars(
+                select(AdminRecord.email).where(
+                    AdminRecord.is_blocked.is_not(True)
+                )
+            ).all()
+    except Exception as exc:
+        logger.warning(
+            "Blocked-account email could not select an administrator contact "
+            "(error_type=%s)",
+            type(exc).__name__,
+        )
+        return None
+
+    candidates = []
+    for email in emails:
+        text = str(email).strip() if email is not None else ""
+        if text and _ADMIN_EMAIL_PATTERN.fullmatch(text):
+            candidates.append(text)
+    return secrets.choice(candidates) if candidates else None
+
+
 async def generate_magic_link_service(
     request: Request,
     db: Database,
@@ -791,7 +829,9 @@ async def generate_magic_link_service(
     rather than searching for the regno again.
 
     The answer is uniform by design: a link for a real, unblocked account and the
-    identical 200 body for an unknown registration number or a blocked one. The rate
+    identical 200 body for an unknown registration number or a blocked one. A
+    blocked account's own address receives a blocked-account notice instead of a
+    magic link, but that side effect is never visible in the response. The rate
     limits run before the lookup for a reason: they are keyed on the submitted
     registration number, so being cooled down -- and paying the cooldown down --
     happens for an invented registration number exactly as it does for a real one,
@@ -859,6 +899,17 @@ async def generate_magic_link_service(
             f"Login request for blocked {category} account "
             f"(regno_hash={_log_identity_hash(regno)}): answering as if a link was sent"
         )
+        # A blocked account gets no magic link, but it does get a notice to the
+        # address on the account explaining the block and naming an administrator
+        # to contact. This is a sign-in outcome, so it is not gated by the
+        # notifications_enabled preference. The HTTP answer stays uniform, and
+        # the administrator address is never included in it.
+        await email_delivery_service.enqueue_account_blocked_email(
+            email=account.email,
+            name=account.name,
+            regno=account.regno,
+            admin_email=_random_admin_contact_email(db),
+        )
         return _uniform_link_response()
 
     from ..create_token import create_and_store_magic_token
@@ -872,8 +923,11 @@ async def generate_magic_link_service(
     )
 
     # Queue the same link for email delivery; the console copy above is the
-    # development fallback and remains unchanged. A queueing failure is logged
-    # by the service and does not change the uniform login response.
+    # development fallback and remains unchanged. This is deliberately not
+    # gated by ``notifications_enabled``: that preference controls notification
+    # email, while sign-in delivery must work for every real account that can
+    # log in. A queueing failure is logged by the service and does not change
+    # the uniform login response.
     await email_delivery_service.enqueue_login_email(
         link=magic_link,
         email=account.email,

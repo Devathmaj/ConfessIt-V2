@@ -185,6 +185,53 @@ def test_notification_includes_its_target_link(monkeypatch):
     assert 'href="https://app.example.com/love-notes?tab=inbox&amp;note=note-123"' in html_body
 
 
+def _blocked_request(**overrides):
+    payload = {
+        "email": "blocked@example.com",
+        "name": "Blocked Person",
+        "regno": "blocked-1",
+        "admin_email": "admin@example.com",
+        "type": "account_blocked",
+    }
+    payload.update(overrides)
+    return validate_email_request(payload)
+
+
+def test_blocked_account_email_explains_the_block_and_names_an_admin(monkeypatch):
+    monkeypatch.setenv("ACS_EMAIL_CONNECTION_STRING", "endpoint=https://test.example.com/;accessKey=dGVzdA==")
+    monkeypatch.setenv("ACS_SENDER_ADDRESS", "sender@example.com")
+
+    result = email_delivery.send_account_blocked_email(_blocked_request())
+
+    assert result["status"] == "Succeeded"
+    message = _FakeEmailClient.sent_messages[0]
+    assert message["content"]["subject"] == "Your ConfessIt account is blocked"
+    assert message["recipients"] == {"to": [{"address": "blocked@example.com"}]}
+
+    plain_text = message["content"]["plainText"]
+    html_body = message["content"]["html"]
+    assert "Hello Blocked Person," in plain_text
+    assert "currently blocked" in plain_text
+    assert "cannot log in right now" in plain_text
+    assert "contact an administrator at admin@example.com" in plain_text
+    assert "currently <strong>blocked</strong>" in html_body
+    assert "mailto:admin@example.com" in html_body
+    assert "admin@example.com" in html_body
+
+
+def test_blocked_account_email_still_sends_without_an_admin_address(monkeypatch):
+    monkeypatch.setenv("ACS_EMAIL_CONNECTION_STRING", "endpoint=https://test.example.com/;accessKey=dGVzdA==")
+    monkeypatch.setenv("ACS_SENDER_ADDRESS", "sender@example.com")
+    email_delivery.send_account_blocked_email(
+        _blocked_request(admin_email=None)
+    )
+
+    plain_text = _FakeEmailClient.sent_messages[0]["content"]["plainText"]
+    html_body = _FakeEmailClient.sent_messages[0]["content"]["html"]
+    assert "contact an administrator." in plain_text
+    assert "mailto:" not in html_body
+
+
 def test_html_escapes_user_controlled_name_and_link(monkeypatch):
     monkeypatch.setenv("ACS_EMAIL_CONNECTION_STRING", "endpoint=https://test.example.com/;accessKey=dGVzdA==")
     monkeypatch.setenv("ACS_SENDER_ADDRESS", "sender@example.com")

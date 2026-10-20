@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from app import create_token as create_token_module
 from app.accounts import AccountType
-from app.db_models import UserRecord
+from app.db_models import AdminRecord, UserRecord
 from app.services import auth_service as auth_service_module
 from app.services.auth_service import (
     LOGIN_LINK_SENT_MESSAGE,
@@ -62,6 +62,9 @@ class _FakeSession:
 
     def scalar(self, query):
         return self._db.resolve(query)
+
+    def scalars(self, query):
+        return _FakeResult([])
 
     def add(self, row):
         self._db.added.append(row)
@@ -139,6 +142,100 @@ async def test_blocked_account_gets_no_link_but_the_uniform_answer(minted_tokens
     assert datetime.fromisoformat(result["expires_at"]) > datetime.now(timezone.utc)
     assert minted_tokens == []
     assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_blocked_account_gets_a_blocked_notice_instead_of_a_login_mail(
+    monkeypatch, minted_tokens
+):
+    blocked_calls = []
+    login_calls = []
+
+    async def record_blocked(**kwargs):
+        blocked_calls.append(kwargs)
+        return True
+
+    async def record_login(**kwargs):
+        login_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        auth_service_module,
+        "_random_admin_contact_email",
+        lambda db: "admin@example.com",
+    )
+    monkeypatch.setattr(
+        auth_service_module.email_delivery_service,
+        "enqueue_account_blocked_email",
+        record_blocked,
+    )
+    monkeypatch.setattr(
+        auth_service_module.email_delivery_service,
+        "enqueue_login_email",
+        record_login,
+    )
+    db = _FakeDatabase(
+        {
+            "blocked": make_user_row(
+                "blocked", is_blocked=True, notifications_enabled=False
+            )
+        }
+    )
+
+    result = await generate_magic_link_service(
+        _FakeRequest("blocked"), db, AccountType.USERS.value
+    )
+
+    assert result["message"] == LOGIN_LINK_SENT_MESSAGE
+    assert blocked_calls == [
+        {
+            "email": "blocked@example.com",
+            "name": "Blocked",
+            "regno": "blocked",
+            "admin_email": "admin@example.com",
+        }
+    ]
+    assert login_calls == []
+    assert minted_tokens == []
+
+
+def test_admin_contact_is_chosen_from_unblocked_administrator_addresses(
+    db, monkeypatch
+):
+    with db.sessions.begin() as session:
+        session.add(
+            AdminRecord(
+                id="33333333-3333-3333-3333-333333333333",
+                regno="admin-one",
+                name="Admin One",
+                email="admin-one@example.com",
+                notifications_enabled=True,
+                is_blocked=False,
+            )
+        )
+        session.add(
+            AdminRecord(
+                id="44444444-4444-4444-4444-444444444444",
+                regno="admin-two",
+                name="Admin Two",
+                email="admin-two@example.com",
+                notifications_enabled=True,
+                is_blocked=False,
+            )
+        )
+
+    candidates = []
+
+    def choose(options):
+        candidates.extend(options)
+        return options[0]
+
+    monkeypatch.setattr(auth_service_module.secrets, "choice", choose)
+
+    chosen = auth_service_module._random_admin_contact_email(db)
+
+    assert chosen in {"admin-one@example.com", "admin-two@example.com"}
+    assert set(candidates) == {"admin-one@example.com", "admin-two@example.com"}
 
 
 @pytest.mark.asyncio

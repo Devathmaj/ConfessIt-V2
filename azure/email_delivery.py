@@ -1,10 +1,11 @@
 """Azure Communication Services Email delivery for ConfessIt emails.
 
 This module owns the only ACS interaction in the Azure Functions app. It builds
-either a login email or a notification email from the already-validated queue
-payload and sends it through the official ``azure-communication-email`` SDK.
-The backend decides who may receive a notification; this module only renders
-the title, body and optional target link it was given.
+either a login email, a notification email or a blocked-account notice from the
+already-validated queue payload and sends it through the official
+``azure-communication-email`` SDK. The backend decides who may receive a
+notification; this module only renders the title, body and optional target link
+it was given, or the blocked-account wording and administrator contact.
 
 A successful ``begin_send`` poller result is the only evidence of delivery. A
 transient failure raises, which lets the Functions runtime retry the queue
@@ -12,7 +13,8 @@ message. A permanent ACS 400 is translated to :class:`PermanentEmailError` so
 the trigger can acknowledge and suppress the recipient instead of poisoning the
 queue. Delivery is at-least-once: ACS itself can accept a message and a later
 poll can still fail, so a retried message may produce a duplicate email. That is
-preferable to silently losing a login link or notification.
+preferable to silently losing a login link, notification or blocked-account
+notice.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import dns.exception
 import dns.resolver
 
 from email_validation import (
+    ACCOUNT_BLOCKED_REQUEST_TYPE,
     LOGIN_REQUEST_TYPE,
     NOTIFICATION_REQUEST_TYPE,
     EmailRequest,
@@ -37,6 +40,7 @@ from email_validation import (
 # unrelated email features.
 LOGIN_EMAIL_SUBJECT = "Your ConfessIt sign-in link"
 LOGIN_LINK_VALIDITY_MINUTES = 15
+ACCOUNT_BLOCKED_EMAIL_SUBJECT = "Your ConfessIt account is blocked"
 
 
 class EmailDeliveryError(RuntimeError):
@@ -286,6 +290,68 @@ def _notification_fields(request: EmailRequest) -> tuple[str, str]:
     return request.title, request.body
 
 
+def _account_blocked_admin_email(request: EmailRequest) -> str | None:
+    if request.type != ACCOUNT_BLOCKED_REQUEST_TYPE:
+        raise EmailDeliveryError("An account-blocked email request has the wrong type.")
+    return request.admin_email
+
+
+def _account_blocked_plain_text(request: EmailRequest) -> str:
+    admin_email = _account_blocked_admin_email(request)
+    if admin_email:
+        contact = (
+            "If you believe this is a mistake or are having any problem, "
+            f"please contact an administrator at {admin_email}."
+        )
+    else:
+        contact = (
+            "If you believe this is a mistake or are having any problem, "
+            "please contact an administrator."
+        )
+    return (
+        f"Hello {request.name},\n\n"
+        "Your ConfessIt account is currently blocked, so you cannot log in "
+        "right now.\n\n"
+        f"{contact}\n\n"
+        "Thanks,\n"
+        "The ConfessIt Team"
+    )
+
+
+def _account_blocked_html(request: EmailRequest) -> str:
+    admin_email = _account_blocked_admin_email(request)
+    name = html.escape(request.name)
+    if admin_email:
+        safe_admin_email = html.escape(admin_email, quote=True)
+        contact = (
+            "If you believe this is a mistake or are having any problem, "
+            "please contact an administrator at "
+            f'<a href="mailto:{safe_admin_email}" style="color:#1d4ed8;">'
+            f"{safe_admin_email}</a>."
+        )
+    else:
+        contact = (
+            "If you believe this is a mistake or are having any problem, "
+            "please contact an administrator."
+        )
+    return f"""<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f5f5f5;">
+    <div style="max-width:560px;margin:0 auto;padding:32px 24px;
+                font-family:Arial,Helvetica,sans-serif;font-size:16px;
+                line-height:1.6;color:#222222;">
+      <p style="margin:0 0 16px;">Hello {name},</p>
+      <p style="margin:0 0 16px;">
+        Your ConfessIt account is currently <strong>blocked</strong>, so you
+        cannot log in right now.
+      </p>
+      <p style="margin:0 0 24px;">{contact}</p>
+      <p style="margin:0;">Thanks,<br>The ConfessIt Team</p>
+    </div>
+  </body>
+</html>"""
+
+
 def _notification_plain_text(request: EmailRequest) -> str:
     title, body = _notification_fields(request)
     link_line = (
@@ -344,6 +410,22 @@ def build_login_message(request: EmailRequest) -> dict[str, Any]:
             "subject": LOGIN_EMAIL_SUBJECT,
             "plainText": _plain_text(request),
             "html": _html(request),
+        },
+        "recipients": {
+            "to": [{"address": request.email}],
+        },
+        "senderAddress": sender,
+    }
+
+
+def build_account_blocked_message(request: EmailRequest) -> dict[str, Any]:
+    sender = _required_setting("ACS_SENDER_ADDRESS")
+    _account_blocked_admin_email(request)
+    return {
+        "content": {
+            "subject": ACCOUNT_BLOCKED_EMAIL_SUBJECT,
+            "plainText": _account_blocked_plain_text(request),
+            "html": _account_blocked_html(request),
         },
         "recipients": {
             "to": [{"address": request.email}],
@@ -417,3 +499,13 @@ def send_notification_email(request: EmailRequest) -> Mapping[str, Any]:
     sender.
     """
     return _send_message(build_notification_message(request))
+
+
+def send_account_blocked_email(request: EmailRequest) -> Mapping[str, Any]:
+    """Send one blocked-account notice and return the confirmed ACS result.
+
+    This is a sign-in outcome rather than a notification, so it deliberately
+    bypasses notification preferences. The optional administrator address comes
+    from the backend and is rendered as the contact route for an appeal.
+    """
+    return _send_message(build_account_blocked_message(request))
