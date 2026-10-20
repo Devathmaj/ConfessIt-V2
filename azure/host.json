@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "logging": {
+    "logLevel": {
+      "default": "Information",
+      "Host.Results": "Error",
+      "Function": "Information",
+      "Host.Aggregator": "Warning",
+      "Microsoft.Azure.WebJobs.Extensions.Storage": "Warning"
+    }
+  },
+  "extensions": {
+    "queues": {
+      "batchSize": 1,
+      "maxDequeueCount": 5,
+      "messageEncoding": "none",
+      "maxPollingInterval": "00:00:05",
+      "visibilityTimeout": "00:05:00"
+    }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.*, 5.0.0)"
+  }
+}

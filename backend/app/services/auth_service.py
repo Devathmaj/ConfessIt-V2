@@ -25,6 +25,7 @@ from ..accounts import (AccountRef, AccountType, Capability, capabilities_for,
                         has_capability, is_valid_account_type,
                         normalize_account_type)
 from ..logger import get_console_only_logger, get_logger, log_identity_hash
+from . import email_delivery_service
 from .login_rate_limit import (SCOPE_ACCOUNT, SCOPE_ACCOUNT_LONG, SCOPE_CLIENT,
                                SCOPE_IP, RateLimitVerdict, evaluate_login_rate_limits,
                                resolve_client_id)
@@ -868,6 +869,16 @@ async def generate_magic_link_service(
     logger.info(
         f"Login request accepted: magic link minted for {category} account "
         f"(regno_hash={_log_identity_hash(regno)})"
+    )
+
+    # Queue the same link for email delivery; the console copy above is the
+    # development fallback and remains unchanged. A queueing failure is logged
+    # by the service and does not change the uniform login response.
+    await email_delivery_service.enqueue_login_email(
+        link=magic_link,
+        email=account.email,
+        name=account.name,
+        regno=account.regno,
     )
 
     return {"message": LOGIN_LINK_SENT_MESSAGE, "expires_at": expires_at.isoformat()}

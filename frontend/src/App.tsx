@@ -50,6 +50,7 @@ import { AdminGamesLeaderboard } from "./pages/AdminGamesLeaderboard";
 import { About } from "./pages/About";
 import NotFound from "./pages/NotFound";
 import { MagicLinkVerification } from "./services/MagicLinkVerification";
+import { CopyLoginLink } from "./pages/CopyLoginLink";
 import { ConfessionsAdmin } from "./pages/ConfessionsAdmin";
 import { LoveNotesReview } from "./pages/LoveNotesReview";
 import { ReportsReview } from "./pages/ReportsReview";
@@ -251,6 +252,7 @@ const AppRoutes = () => {
         }
       />
       <Route path="/verify-login" element={<MagicLinkVerification />} />
+      <Route path="/copy-login-link" element={<CopyLoginLink />} />
 
       {/* Protected Routes */}
       <Route

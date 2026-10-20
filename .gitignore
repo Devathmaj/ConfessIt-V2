@@ -55,6 +55,13 @@ mongo_data/
 *.sln
 *.sw?
 
+# Azure
+# Azure Functions local environment and generated files
+azure/local.settings.json
+azure/.venv/
+azure/__pycache__/
+azure/.python_packages/
+azure/local.settings.json
 
 # Misc
 admin.md

@@ -1,6 +1,8 @@
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
+
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -125,6 +127,33 @@ class Settings(BaseSettings):
     MAX_CONCURRENCY: int = Field(default=100, ge=1)
     PUBLIC_BASE_URL: str | None = None
     CLOUDINARY_ALLOWED_FORMATS: str | None = None
+
+    # --- Magic-link email queue ---
+    #
+    # The login flow no longer builds or sends email itself. It posts the generated
+    # magic link to the local Azure Functions enqueue endpoint, which validates the
+    # request, writes it to Azure Storage Queue, and lets a queue-triggered function
+    # deliver it through Azure Communication Services Email. Keeping this optional
+    # preserves local runs and tests that do not have the Functions host running:
+    # the existing console link remains the development fallback.
+    EMAIL_FUNCTION_URL: str | None = None
+
+    @field_validator("EMAIL_FUNCTION_URL")
+    @classmethod
+    def _validate_email_function_url(cls, value: str | None) -> str | None:
+        """Accept only a non-blank http(s) URL for the Functions enqueue endpoint."""
+        if value is None:
+            return None
+        text_value = value.strip()
+        if not text_value:
+            return None
+        parsed = urlsplit(text_value)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "EMAIL_FUNCTION_URL must be an http(s) URL "
+                f"(got {text_value[:24]!r}...)."
+            )
+        return text_value
 
     @field_validator(
         "MAX_IMAGE_SIZE_MB",

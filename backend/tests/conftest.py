@@ -94,6 +94,12 @@ settings.ENABLE_DEBUG_ENDPOINTS = False
 # startup hook itself re-enable the flag locally.
 settings.AI_GENERATION_WORKER_ENABLED = False
 
+# Magic-link tests exercise the real mint path. The email hand-off is a separate
+# integration and must never reach the local Functions host from the suite, so
+# the queue URL is cleared by default; the email integration tests set it (and
+# stub the HTTP client) explicitly.
+settings.EMAIL_FUNCTION_URL = None
+
 # The host allowlist is read per request: Starlette's TestClient answers as
 # "testserver", which can never resolve publicly and is not a production name, so the
 # suite admits it here rather than baking a test-only hostname into the default.

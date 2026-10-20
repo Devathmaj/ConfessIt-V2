@@ -1,0 +1,17 @@
+# Azure Functions dependencies for the magic-link email pipeline.
+#
+# Official sources used for the APIs and programming model:
+# - https://github.com/Azure/azure-functions-python-library
+# - https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/storage/azure-storage-queue
+# - https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/communication/azure-communication-email
+#
+# azure-functions 1.25.0 is the current stable line that supports the Python
+# 3.10-3.12 runtime used by this repository and exposes the v2 decorators
+# (FunctionApp, route, queue_trigger). The 2.x line requires Python 3.13+.
+azure-functions==1.25.0
+
+# QueueClient.from_connection_string / create_queue / send_message.
+azure-storage-queue==12.18.0
+
+# EmailClient.from_connection_string / begin_send / poller.result.
+azure-communication-email==1.1.0
