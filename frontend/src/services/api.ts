@@ -4119,7 +4119,7 @@ export const finalizeLeagueOpportunity = async (
 
 /* --- Staff Notifications (admin + moderator) --- */
 
-/** One staff notice: a stored report/love-note row or a live game alert. */
+/** One stored staff notice: a report, love-note, or game event. */
 export interface StaffNotification {
     id: string;
     audience: string;
@@ -4128,7 +4128,10 @@ export interface StaffNotification {
     body: string;
     created_at: string;
     is_read: boolean;
-    /** True for computed game alerts (no read state, clear when fixed). */
+    /**
+     * Retained for API compatibility. Every notice is stored now, so this is
+     * always false and read state applies to game notices like any other.
+     */
     is_live: boolean;
     target_kind: string | null;
     target_id: string | null;

@@ -5,8 +5,6 @@ The official SDK calls used here are ``EmailClient.from_connection_string``,
 real email is sent and no real connection string is needed.
 """
 
-from urllib.parse import parse_qs, urlsplit
-
 import pytest
 
 import email_delivery
@@ -88,7 +86,6 @@ def test_send_uses_configured_connection_sender_and_recipient(monkeypatch):
     assert message["content"]["subject"] == email_delivery.LOGIN_EMAIL_SUBJECT
 
     link = "https://app.example.com/verify-login?token=secret-token"
-    copy_url = email_delivery._copy_link(link)
     plain_text = message["content"]["plainText"]
     html_body = message["content"]["html"]
 
@@ -97,23 +94,17 @@ def test_send_uses_configured_connection_sender_and_recipient(monkeypatch):
     assert "valid for 15 minutes" in plain_text
     assert "can only be used once" in plain_text
     assert f"Open Link: {link}" in plain_text
-    assert f"Copy link: {copy_url}" in plain_text
-    assert link in plain_text
+    assert "Copy link" not in plain_text
     assert "22/CS0455" not in plain_text
 
     assert "Hello Test Person," in html_body
     assert "<strong>15 minutes</strong>" in html_body
     open_button_at = html_body.index(">Open Link</a>")
-    copy_button_at = html_body.index(">Copy link</a>")
     raw_link_at = html_body.index(f">{link}</a>")
-    assert open_button_at < copy_button_at < raw_link_at
+    assert open_button_at < raw_link_at
     assert f'href="{link}"' in html_body
-    assert f'href="{copy_url}"' in html_body
+    assert "Copy link" not in html_body
     assert "22/CS0455" not in html_body
-
-    copy_parts = urlsplit(copy_url)
-    assert copy_parts.path == "/copy-login-link"
-    assert parse_qs(copy_parts.query)["url"] == [link]
 
 
 def test_html_escapes_user_controlled_name_and_link(monkeypatch):

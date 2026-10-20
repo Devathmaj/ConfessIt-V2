@@ -22,13 +22,8 @@ rejected with HTTP 400 by `enqueue_email` and are dropped as invalid if they
 appear in the queue.
 
 The greeting uses the account's full `name`, not the registration number. The
-email states that the link expires in 15 minutes, includes **Open Link** and
-**Copy link** buttons plus the raw URL, and provides a plain-text fallback.
-
-Email clients strip JavaScript, so an email button cannot write to the
-clipboard directly. The copy button opens the frontend's `/copy-login-link`
-page, which copies the exact sign-in URL on load and exposes a manual copy
-button when the browser blocks automatic clipboard access.
+email states that the link expires in 15 minutes, includes an **Open Link**
+button plus the raw URL, and provides a plain-text fallback.
 
 ## Configuration
 

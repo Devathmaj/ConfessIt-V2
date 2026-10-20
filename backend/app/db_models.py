@@ -10,9 +10,10 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary,
-    Numeric, SmallInteger, ARRAY, String, Text, UniqueConstraint, Uuid, func, select, text,
+    Numeric, SmallInteger, ARRAY, String, Text, UniqueConstraint, Uuid, event, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 try:
@@ -2816,9 +2817,10 @@ class GameScoreAwardRecord(Base):
 # * ``love_note`` -- a love note arrived and waits for approval/rejection.
 # * ``game`` -- an admin-feedable game needs its content (a pending manual-mode
 #   session, a Connections puzzle, a Trivia Drop question) or no featured game
-#   is set for today. Game alerts are *computed live* on every read rather than
-#   stored, so they clear themselves the moment an admin fixes them; only
-#   ``report`` and ``love_note`` rows are stored here.
+#   is set for today. These are stored rows too: the scheduler pass records a
+#   pending session and a missing featured pick, and application start-up
+#   records an empty Trivia Drop pipeline. The row's ``dedup_key`` carries the
+#   session id or UTC date, so repeated passes cannot duplicate it.
 #
 # Read state is per account, not per row: ``StaffNotificationReadRecord`` records
 # which staff account has seen which row, so one moderator reading a notice does
@@ -2837,14 +2839,12 @@ class StaffNotificationRecord(Base):
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     # Who this is news to: ``admin``, ``moderator`` or ``all`` (both roles).
     # Report and love-note events are ``all``; the automatic block at the removal
-    # threshold is ``admin`` (only an admin can unblock); game events are
-    # admin-only and are computed live rather than stored (see
-    # staff_notification_service).
+    # threshold and every game event are ``admin`` (only an admin can act on
+    # them).
     audience: Mapped[str] = mapped_column(String(16), index=True)
-    # One of ``report``, ``love_note`` or ``game``. Stored rows only ever carry
-    # the first two; the automatic block notice shares ``report`` with the
-    # filed-report notices, and the ``game`` value exists so a future stored game
-    # event does not need a migration to be writable.
+    # One of ``report``, ``love_note`` or ``game``. The automatic block notice
+    # shares ``report`` with the filed-report notices; game notices are stored
+    # by the scheduler and start-up checks in staff_notification_service.
     category: Mapped[str] = mapped_column(String(16), index=True)
     heading: Mapped[str] = mapped_column(String(120))
     body: Mapped[str] = mapped_column(String(500))
@@ -2903,10 +2903,13 @@ class StaffNotificationReadRecord(Base):
 class StaffNotificationPreferenceRecord(Base):
     """One staff account's notification switches: which categories it wants.
 
-    One row per staff account, created on first write with everything on.
-    ``games_enabled`` is meaningful for admins only; a moderator's row keeps
-    the column so both roles share one shape, and the update path refuses to
-    write it for a moderator rather than the schema forbidding it per role.
+    One row per staff account, created in the same transaction as the account
+    with everything on. ``games_enabled`` is meaningful for admins only; a
+    moderator's row keeps the column so both roles share one shape, and the
+    update path refuses to write it for a moderator rather than the schema
+    forbidding it per role. The stored value is a preference, never an
+    authorisation boundary: delivery code must refuse game notices to a
+    moderator by role, because a row can be edited.
     """
 
     __tablename__ = "staff_notification_preferences"
@@ -2926,6 +2929,47 @@ class StaffNotificationPreferenceRecord(Base):
             name="ck_staff_notification_prefs_account_type_known",
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Staff preference rows are part of staff creation
+# ---------------------------------------------------------------------------
+# The table's columns all default to true, but a default only applies to a row
+# that exists. A new admin or moderator therefore needs its row written beside
+# it, or a delivery path that reads the table sees nothing. An ``after_insert``
+# hook on the two staff mappers is what ties the two rows together: every ORM
+# path that creates a staff account -- the admin API, the seeders, tests -- gets
+# the row in the same transaction, so there is no second creation path that can
+# forget. Raw-SQL inserts bypass mapper events; the boot backfill in
+# ``PostgresClient.backfill_staff_notification_preferences`` repairs those and
+# every account that predates this hook.
+def _staff_notification_preferences_after_insert(account_type: str):
+    def _listener(mapper, connection, target) -> None:
+        connection.execute(
+            pg_insert(StaffNotificationPreferenceRecord)
+            .values(
+                account_type=account_type,
+                account_id=str(target.id),
+                reports_enabled=True,
+                love_notes_enabled=True,
+                games_enabled=True,
+            )
+            .on_conflict_do_nothing(index_elements=["account_type", "account_id"])
+        )
+
+    return _listener
+
+
+event.listen(
+    AdminRecord,
+    "after_insert",
+    _staff_notification_preferences_after_insert(AccountType.ADMIN.value),
+)
+event.listen(
+    ModeratorRecord,
+    "after_insert",
+    _staff_notification_preferences_after_insert(AccountType.MODERATOR.value),
+)
 
 
 # ---------------------------------------------------------------------------

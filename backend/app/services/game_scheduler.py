@@ -34,6 +34,11 @@ Per game, per run, under one transaction-scoped advisory lock:
  The partial unique index on each game table (one active-or-pending row) is the
  backstop behind the lock: a run racing an admin Update past the lock still
  lands one winner and one integrity error, and the loser re-reads the winner.
+
+The pass also writes the admin staff notices for what it observes: one per
+pending manual-mode Wordle/Anagram/Connections session, and one per UTC date on
+which no game is featured. The notice is stamped with the pass time, and a
+failure to write it is logged without changing the reset outcome.
  """
 
 import random
@@ -53,6 +58,7 @@ from ..db_models import (
     CoupleGameRecord,
     CoupleGameSessionQuestionRecord,
     CoupleGameSessionRecord,
+    GameConfigRecord,
     PlotTwistGameRecord,
     ReactionTimeGameRecord,
     ScheduledGameContentRecord,
@@ -681,6 +687,45 @@ def _open_period(
     }
 
 
+def _notify_pending_session(
+    db: Database, game_id: str, moment: datetime
+) -> None:
+    """Record one admin notice when this game's current session is pending.
+
+    Only the scheduler path calls this, so the notice carries the timestamp of
+    the pass rather than an earlier boot that happened to create the session.
+    Repeated passes for the same session are idempotent on the session id.
+    """
+    if game_id not in ("wordle", "anagram", "connections"):
+        return
+    try:
+        with db.sessions() as session:
+            config = session.scalar(
+                select(GameConfigRecord).where(GameConfigRecord.game_id == game_id)
+            )
+            if config is not None and (config.is_hidden or not config.enabled):
+                return
+            if game_id in ("wordle", "anagram"):
+                content_mode = (config.content_mode if config is not None else None) or "manual"
+                if content_mode != "manual":
+                    return
+            current = _current_row(session, _GAME_MODELS[game_id])
+            if current is None or current.status != "pending":
+                return
+            session_id = str(current.id)
+        from .staff_notification_service import notify_game_pending
+
+        notify_game_pending(
+            db, game_id=game_id, session_id=session_id, created_at=moment
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Could not record the pending-session notice for %s", game_id
+        )
+
+
 def ensure_game_sessions(
     db: Database, now: Optional[datetime] = None
 ) -> dict[str, dict]:
@@ -731,6 +776,10 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
     for game_id in GAME_IDS:
         try:
             games[game_id] = ensure_single_game(db, game_id, moment)
+            # The notice is written only from this unattended path, so its
+            # timestamp is the scheduler pass, not an earlier boot that may
+            # have opened the pending session.
+            _notify_pending_session(db, game_id, moment)
         except Exception as exc:
             logging.getLogger(__name__).exception(
                 "Scheduled reset failed for game %s; continuing with the rest",
@@ -741,6 +790,16 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
                 "action": "error",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+    # A featured pick is a date row, so the daily pass is the only place that
+    # can notice today has none. Best-effort: the reset itself has committed.
+    try:
+        from .staff_notification_service import notify_featured_game_missing
+
+        notify_featured_game_missing(db, now=moment)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Could not record the missing-featured-game notice"
+        )
     league: dict = {"action": "ok"}
     try:
         from . import league_finalization

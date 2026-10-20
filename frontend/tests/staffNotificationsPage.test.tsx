@@ -11,7 +11,7 @@ import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
  *
  * One component serves both roles, and the difference is the whole test: a
  * moderator gets two category switches (reports, love notes) while an admin
- * gets three (plus games), and the game alerts never reach a moderator's
+ * gets three (plus games), and game notices never reach a moderator's
  * list. The switches and the master on/off toggle write through to the
  * server but never filter this feed -- every notice stays on screen.
  */
@@ -66,15 +66,15 @@ const loveNoteNotice = {
   target_id: null,
 };
 
-const gameAlert = {
-  id: 'game:featured-missing:2026-10-12',
+const gameNotice = {
+  id: 'notice-3',
   audience: 'admin',
   category: 'game',
   heading: 'No featured game set for today',
   body: 'No game is featured. Open the Games console to feature one.',
   created_at: new Date().toISOString(),
   is_read: false,
-  is_live: true,
+  is_live: false,
   target_kind: null,
   target_id: null,
 };
@@ -138,7 +138,7 @@ describe('StaffNotificationsPage', () => {
 
   it('shows an admin three switches including games', async () => {
     api.getStaffNotifications.mockResolvedValue(
-      pageOf([reportNotice, loveNoteNotice, gameAlert], ['game', 'love_note', 'report']),
+      pageOf([reportNotice, loveNoteNotice, gameNotice], ['game', 'love_note', 'report']),
     );
     renderPage('admin', ADMIN_CAPABILITIES);
 
@@ -168,16 +168,15 @@ describe('StaffNotificationsPage', () => {
     expect(screen.getByText('New confession report')).toBeTruthy();
   });
 
-  it('marks a stored notice as read, but never a live game alert', async () => {
+  it('marks a stored game notice as read', async () => {
     api.getStaffNotifications.mockResolvedValue(
-      pageOf([reportNotice, gameAlert], ['game', 'love_note', 'report']),
+      pageOf([gameNotice], ['game', 'love_note', 'report']),
     );
     renderPage('admin', ADMIN_CAPABILITIES);
 
     fireEvent.click(await screen.findByText('Mark as read'));
-    await waitFor(() => expect(api.markStaffNotificationRead).toHaveBeenCalledWith('notice-1'));
-    // The stored notice is now read, so its button is gone; the live game
-    // alert never had one.
+    await waitFor(() => expect(api.markStaffNotificationRead).toHaveBeenCalledWith('notice-3'));
+    // The game notice is a stored row now, so its button disappears once read.
     await waitFor(() => expect(screen.queryByText('Mark as read')).toBeNull());
   });
 

@@ -17,22 +17,27 @@ notice, it is staged into the caller's transaction rather than written through
 ``create_staff_notification``'s own, because it must commit with the block it
 reports -- see ``notify_user_auto_blocked``.
 
-``game`` alerts are the exception and are *computed live* on every read: a
-missing featured pick or a pending manual-mode session stops being news the
-moment an admin fixes it, and a stored row would linger as a stale alarm (or
-need a sweeper to retract it). The list endpoint merges stored rows with the
-live game alerts and sorts them newest-first.
+``game`` notices are stored like every other category. They are written where
+the condition is discovered rather than computed on read: a pending Wordle,
+Anagram or Connections session is recorded by the scheduler pass that evaluates
+that game's period, a missing featured pick is recorded by the daily scheduler
+pass, and an empty Trivia Drop pipeline is recorded at application start-up.
+The ``dedup_key`` carries the session id or UTC date so repeated passes and
+restarts cannot fan the same condition out into many rows.
 
-Preferences (which categories an account wants) are stored per staff account
-but deliberately *not* wired to delivery: the list returns every notice
-regardless of the switches. The switches are persisted intent for a future
-delivery layer, nothing more.
+Preferences (which categories an account wants) are stored per staff account,
+created with the account, but deliberately *not* wired to the feed: the list
+returns every notice regardless of the switches. The switches are persisted
+intent for a future delivery layer. When that layer arrives it must ask
+:func:`should_deliver_staff_notification`, whose role check comes before the
+stored switches so a moderator can never be sent a game notice even if a
+database row says ``games_enabled = true``.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -41,8 +46,6 @@ from ..accounts import AccountType, normalize_account_type
 from ..db_models import (
     ACCOUNT_MODELS,
     AdminRecord,
-    AnagramGameRecord,
-    ConnectionsGameRecord,
     FeaturedGameRecord,
     GameConfigRecord,
     ModeratorRecord,
@@ -50,7 +53,6 @@ from ..db_models import (
     StaffNotificationReadRecord,
     StaffNotificationRecord,
     TriviaDropQuestionRecord,
-    WordleGameRecord,
 )
 from ..models import AccountDetails
 from ..postgres import Database, is_valid_id
@@ -69,6 +71,15 @@ STAFF_NOTIFICATION_CATEGORIES: tuple[str, ...] = ("report", "love_note", "game")
 MODERATOR_CATEGORIES: frozenset[str] = frozenset({"report", "love_note"})
 ADMIN_CATEGORIES: frozenset[str] = frozenset({"report", "love_note", "game"})
 
+# Which stored switch records consent for each category. This mapping is only
+# consulted after the role has admitted the category: the switch is a
+# preference, not an authorisation boundary.
+CATEGORY_PREFERENCE_COLUMNS: dict[str, str] = {
+    "report": "reports_enabled",
+    "love_note": "love_notes_enabled",
+    "game": "games_enabled",
+}
+
 STAFF_NOTIFICATIONS_MAX_LIMIT = 100
 
 
@@ -84,6 +95,55 @@ def _visible_categories(role: str) -> frozenset[str]:
     return frozenset()
 
 
+def staff_category_allowed_for_role(account_type: str, category: str) -> bool:
+    """Whether this account type may receive this category at all.
+
+    Role first, by design. A moderator's ``games_enabled`` column may say true
+    -- creation writes all three switches on -- but a database row can be edited
+    and must never be what authorises a game delivery. Game notices are admin
+    business; reports and love notes are shared by both staff roles.
+    """
+    return category in _visible_categories(normalize_account_type(account_type))
+
+
+def should_deliver_staff_notification(
+    db: Database,
+    *,
+    account_type: str,
+    account_id: str,
+    category: str,
+) -> bool:
+    """Whether one staff account may be sent one category on any channel.
+
+    This is the gate every delivery channel, including a game-config email
+    sender, has to ask before composing a message. The role check runs first and
+    independently of the preference row, so a moderator is refused ``game`` even
+    when the database says ``games_enabled = true``. Only after the role admits
+    the category are the account's master switch and its stored category switch
+    read. A missing preferences row keeps the historical all-on default rather
+    than silently muting an account; creation and the boot backfill mean a staff
+    account should always have one.
+    """
+    role = normalize_account_type(account_type)
+    if category not in _visible_categories(role):
+        return False
+    model = ACCOUNT_MODELS.get(role)
+    if model not in (AdminRecord, ModeratorRecord):
+        return False
+    if not is_valid_id(account_id):
+        return False
+    with db.sessions() as session:
+        account = session.get(model, str(account_id))
+        if account is None or not bool(account.notifications_enabled):
+            return False
+        row = session.get(
+            StaffNotificationPreferenceRecord, (role, str(account_id))
+        )
+        if row is None:
+            return True
+        return bool(getattr(row, CATEGORY_PREFERENCE_COLUMNS[category]))
+
+
 def create_staff_notification(
     db: Database,
     *,
@@ -91,6 +151,7 @@ def create_staff_notification(
     category: str,
     heading: str,
     body: str,
+    created_at: Optional[datetime] = None,
     target_kind: Optional[str] = None,
     target_id: Optional[str] = None,
     dedup_key: Optional[str] = None,
@@ -103,6 +164,10 @@ def create_staff_notification(
     instead of writing another. Best-effort by contract: notification failure
     must never break the report or note write it annotates, so every failure
     (including a lost dedup race) answers None rather than raising.
+
+    ``created_at`` lets a scheduler event carry the instant the pass ran rather
+    than the instant the insert happened; the two are the same for request-path
+    notices, which leave it unset.
     """
     if audience not in ("admin", "moderator", "all"):
         return None
@@ -110,6 +175,9 @@ def create_staff_notification(
         return None
     if (target_kind is None) != (target_id is None):
         return None
+    moment = created_at or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
     try:
         with db.sessions.begin() as session:
             row = StaffNotificationRecord(
@@ -117,7 +185,7 @@ def create_staff_notification(
                 category=category,
                 heading=heading[:120],
                 body=body[:500],
-                created_at=datetime.now(timezone.utc),
+                created_at=moment,
                 target_kind=target_kind,
                 target_id=target_id,
                 dedup_key=dedup_key,
@@ -248,137 +316,130 @@ def notify_user_auto_blocked(
 
 
 # ---------------------------------------------------------------------------
-# Live game alerts (computed, never stored)
+# Stored game notices
 # ---------------------------------------------------------------------------
 
-def _game_alert(
+# The three games whose sessions can wait on an admin-supplied word/puzzle.
+PENDING_GAME_LABELS: dict[str, str] = {
+    "wordle": "Wordle",
+    "anagram": "Anagram",
+    "connections": "Connections",
+}
+
+
+def notify_game_pending(
+    db: Database,
     *,
-    alert_id: str,
-    heading: str,
-    body: str,
+    game_id: str,
+    session_id: str,
     created_at: datetime,
-) -> Dict[str, Any]:
-    return {
-        "id": alert_id,
-        "audience": "admin",
-        "category": "game",
-        "heading": heading,
-        "body": body,
-        "created_at": isoformat_datetime(created_at),
-        "is_read": False,
-        "is_live": True,
-        "target_kind": None,
-        "target_id": None,
-    }
+) -> Optional[str]:
+    """One admin notice that a session is waiting for its content.
+
+    The session id is the idempotency key: a scheduler pass that finds the same
+    pending session again writes nothing, while the next pending session -- after
+    the admin supplies this one -- gets its own notice.
+    """
+    label = PENDING_GAME_LABELS.get(game_id)
+    if label is None:
+        return None
+    if game_id == "connections":
+        heading = "Connections is waiting for its puzzle"
+        body = (
+            "Connections has no random mode -- every puzzle is fed by an admin -- "
+            "and its session is pending. Open the Games console to supply the "
+            "sixteen words."
+        )
+    else:
+        heading = f"{label} is waiting for its word"
+        body = (
+            f"{label} runs on admin-fed words and its session is pending. "
+            "Open the Games console to supply it."
+        )
+    return create_staff_notification(
+        db,
+        audience="admin",
+        category="game",
+        heading=heading,
+        body=body,
+        created_at=created_at,
+        dedup_key=f"game:pending:{game_id}:{session_id}",
+    )
 
 
-def compute_game_alerts(db: Database, *, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """Every game condition currently needing an admin's hand, newest first.
+def notify_featured_game_missing(
+    db: Database, *, now: Optional[datetime] = None
+) -> Optional[str]:
+    """One admin notice per UTC date on which no game is featured.
 
-    Read-only: no rows are written, so an alert appears when its condition
-    holds and vanishes the moment an admin fixes it, with no sweeper. The
-    conditions mirror what the scheduler and the admin console already know:
-
-    * no featured game set for today (UTC);
-    * a Wordle/Anagram session stuck ``pending`` in ``manual`` content mode --
-      the toggle between admin-fed and random lives in ``game_configs``, and
-      ``manual`` means the admin must supply (or schedule) the word;
-    * a Connections session ``pending`` -- Connections has no random mode, so
-      every puzzle is admin-fed;
-    * Trivia Drop with no live or scheduled question -- questions release
-      individually, so an empty pipeline means nothing will ever play.
+    Called by the daily scheduler pass, after that pass has ensured the day's
+    sessions. The query reads the real ``featured_games`` row for the date, so a
+    pick scheduled ahead of time suppresses the notice; the date is the
+    idempotency key, so repeated or catch-up passes write one row.
     """
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     today = moment.date()
-    alerts: List[Dict[str, Any]] = []
     with db.sessions() as session:
         featured = session.scalar(
-            select(FeaturedGameRecord.id).where(FeaturedGameRecord.game_date == today).limit(1)
+            select(FeaturedGameRecord.id)
+            .where(FeaturedGameRecord.game_date == today)
+            .limit(1)
         )
-        if featured is None:
-            alerts.append(
-                _game_alert(
-                    alert_id=f"game:featured-missing:{today.isoformat()}",
-                    heading="No featured game set for today",
-                    body=(
-                        f"No game is featured for {today.isoformat()}. "
-                        "Open the Games console to feature one."
-                    ),
-                    created_at=moment,
-                )
-            )
-        for game_id, model, label in (
-            ("wordle", WordleGameRecord, "Wordle"),
-            ("anagram", AnagramGameRecord, "Anagram"),
-        ):
-            config = session.get(GameConfigRecord, game_id)
-            content_mode = (config.content_mode if config is not None else None) or "manual"
-            if content_mode != "manual":
-                continue
-            if config is not None and (config.is_hidden or not config.enabled):
-                continue
-            pending = session.scalar(
-                select(model.id).where(model.status == "pending").limit(1)
-            )
-            if pending is not None:
-                alerts.append(
-                    _game_alert(
-                        alert_id=f"game:{game_id}-pending:{today.isoformat()}",
-                        heading=f"{label} is waiting for its word",
-                        body=(
-                            f"{label} runs on admin-fed words and its session "
-                            "is pending. Open the Games console to supply it."
-                        ),
-                        created_at=moment,
-                    )
-                )
-        connections_config = session.get(GameConfigRecord, "connections")
-        if connections_config is None or (
-            not connections_config.is_hidden and connections_config.enabled
-        ):
-            pending_connections = session.scalar(
-                select(ConnectionsGameRecord.id)
-                .where(ConnectionsGameRecord.status == "pending")
-                .limit(1)
-            )
-            if pending_connections is not None:
-                alerts.append(
-                    _game_alert(
-                        alert_id=f"game:connections-pending:{today.isoformat()}",
-                        heading="Connections is waiting for its puzzle",
-                        body=(
-                            "Connections has no random mode -- every puzzle is "
-                            "fed by an admin -- and its session is pending. "
-                            "Open the Games console to supply the sixteen words."
-                        ),
-                        created_at=moment,
-                    )
-                )
-        trivia_config = session.get(GameConfigRecord, "trivia-drop")
-        if trivia_config is None or (
-            not trivia_config.is_hidden and trivia_config.enabled
-        ):
-            pipeline = session.scalar(
-                select(TriviaDropQuestionRecord.id)
-                .where(TriviaDropQuestionRecord.status.in_(("active", "scheduled")))
-                .limit(1)
-            )
-            if pipeline is None:
-                alerts.append(
-                    _game_alert(
-                        alert_id=f"game:trivia-empty:{today.isoformat()}",
-                        heading="Trivia Drop has no live question",
-                        body=(
-                            "Trivia Drop releases questions individually and "
-                            "none is live or scheduled. Open the Games console "
-                            "to add one."
-                        ),
-                        created_at=moment,
-                    )
-                )
-    return alerts
+    if featured is not None:
+        return None
+    return create_staff_notification(
+        db,
+        audience="admin",
+        category="game",
+        heading="No featured game set for today",
+        body=(
+            f"No game is featured for {today.isoformat()}. "
+            "Open the Games console to feature one."
+        ),
+        created_at=moment,
+        dedup_key=f"game:featured-missing:{today.isoformat()}",
+    )
+
+
+def notify_trivia_drop_empty(
+    db: Database, *, now: Optional[datetime] = None
+) -> Optional[str]:
+    """One admin notice, at application start-up, that Trivia Drop has no question.
+
+    Questions release individually, so the pipeline is empty exactly when
+    nothing is live and nothing is scheduled. The UTC date is the idempotency
+    key: several restarts in one day write one row, while a later day on which
+    the pipeline is still empty can raise its own.
+    """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    today = moment.date()
+    with db.sessions() as session:
+        config = session.get(GameConfigRecord, "trivia-drop")
+        if config is not None and (config.is_hidden or not config.enabled):
+            return None
+        pipeline = session.scalar(
+            select(TriviaDropQuestionRecord.id)
+            .where(TriviaDropQuestionRecord.status.in_(("active", "scheduled")))
+            .limit(1)
+        )
+    if pipeline is not None:
+        return None
+    return create_staff_notification(
+        db,
+        audience="admin",
+        category="game",
+        heading="Trivia Drop has no live question",
+        body=(
+            "Trivia Drop releases questions individually and none is live or "
+            "scheduled. Open the Games console to add one."
+        ),
+        created_at=moment,
+        dedup_key=f"game:trivia-empty:{today.isoformat()}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +451,11 @@ def _default_preferences() -> Dict[str, bool]:
 
 
 def get_staff_preferences(db: Database, account: AccountDetails) -> Dict[str, bool]:
-    """This staff account's category switches, defaulting to all-on."""
+    """This staff account's category switches.
+
+    Creation writes the row, but a legacy account without one still reads as
+    all-on rather than being silently muted.
+    """
     with db.sessions() as session:
         row = session.get(
             StaffNotificationPreferenceRecord, (account.account_type, str(account.id))
@@ -411,7 +476,7 @@ def update_staff_preferences(
 
     Admins may toggle all three; moderators only ``reports_enabled`` and
     ``love_notes_enabled`` -- a moderator has no game notices to switch, so
-    writing ``games_enabled`` for one is refused rather than stored.
+    writing ``games_enabled`` for one is refused rather than changed.
     Unknown keys are refused the same way.
     """
     role = _role_of(account)
@@ -512,13 +577,13 @@ def list_staff_notifications(
     category: Optional[str] = None,
     unread_only: bool = False,
 ) -> Dict[str, Any]:
-    """One page of this staff account's notices, newest first, with the total.
+    """One page of this staff account's stored notices, newest first, with the total.
 
-    Stored ``report``/``love_note`` rows addressed to this role (or to
-    ``all``) plus -- for admins -- the live ``game`` alerts, merged and
-    sorted newest-first. Preferences are returned beside the page but never
-    filter it: the switches record intent for a future delivery layer, and
-    the page shows everything regardless.
+    Every category pages in SQL now, including ``game``: the scheduler and
+    start-up checks write real rows, so read state and pagination apply the same
+    way to a game notice as to a report. Preferences are returned beside the
+    page but never filter it: the switches record intent for a future delivery
+    layer, and the page shows everything regardless.
     """
     from fastapi import HTTPException, status
 
@@ -570,7 +635,7 @@ def list_staff_notifications(
             .exists()
         )
     with db.sessions() as session:
-        total_stored = (
+        total = (
             session.scalar(
                 select(func.count())
                 .select_from(StaffNotificationRecord)
@@ -596,31 +661,12 @@ def list_staff_notifications(
                 )
             ).all()
         )
-    stored = [_serialise_stored(row, is_read=str(row.id) in read_ids) for row in rows]
-
-    live: List[Dict[str, Any]] = []
-    if "game" in wanted and role == AccountType.ADMIN.value:
-        live = compute_game_alerts(db)
-        if cleaned:
-            lowered = cleaned.lower()
-            live = [
-                alert
-                for alert in live
-                if lowered in alert["heading"].lower() or lowered in alert["body"].lower()
-            ]
-
-    # Stored rows page in SQL; live game alerts are a handful of computed
-    # conditions, always complete. Merged newest-first by timestamp string
-    # (all ISO-8601 UTC), stored first on ties.
-    merged = sorted(
-        stored + (live if skip == 0 else []),
-        key=lambda entry: str(entry["created_at"]),
-        reverse=True,
-    )
-    total = total_stored + (len(live) if skip == 0 else 0)
+    notifications = [
+        _serialise_stored(row, is_read=str(row.id) in read_ids) for row in rows
+    ]
 
     return {
-        "notifications": merged,
+        "notifications": notifications,
         "total": total,
         "skip": skip,
         "limit": limit,
@@ -635,11 +681,9 @@ def mark_staff_notification_read(
 ) -> None:
     """Record that this staff account has read one stored notice.
 
-    Live game alerts carry synthetic ids and hold no read state -- they clear
-    themselves when fixed -- so reading one is a no-op rather than an error.
+    Game notices are stored rows now, so they carry read state exactly like a
+    report or love-note notice; there is no synthetic id to skip.
     """
-    if notification_id.startswith("game:"):
-        return
     role = _role_of(account)
     visible = _visible_categories(role)
     if not visible:

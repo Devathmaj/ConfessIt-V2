@@ -9,6 +9,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from .accounts import AccountType
 from .config import settings
 from .db_models import Base
 from .logger import get_logger
@@ -406,6 +407,10 @@ class PostgresClient:
         self.apply_widened_columns()
         # After the columns exist, so it can name session_expires_at.
         self.backfill_session_deadlines()
+        # Every staff account needs the preference row that account creation now
+        # writes; this repairs accounts that predate that hook and any staff row
+        # written by raw SQL.
+        self.backfill_staff_notification_preferences()
         # After every additive step, so the session lifecycle converges on old databases.
         self.apply_game_session_convergence()
         # Trivia Drop's single-active-question rule, for the same reason: the
@@ -1074,6 +1079,39 @@ class PostgresClient:
                     "Backfilled session deadlines for %s login token(s)",
                     result.rowcount,
                 )
+
+    def backfill_staff_notification_preferences(self) -> None:
+        """Give every existing staff account the preference row creation writes.
+
+        Admin and moderator rows created by this build get their preference row
+        from the mapper's ``after_insert`` hook, in the same transaction. Rows
+        that predate that hook -- and rows written by raw SQL, which does not
+        fire mapper events -- have none, and a delivery path that reads the table
+        directly would see no preference rather than the all-on default the API
+        synthesizes. This inserts the missing rows once per account with the same
+        all-on values; the conflict clause makes every later boot a no-op.
+        """
+        inserted = 0
+        with self.engine.begin() as connection:
+            for account_type, table in (
+                (AccountType.ADMIN.value, "admin"),
+                (AccountType.MODERATOR.value, "moderator"),
+            ):
+                result = connection.execute(
+                    text(
+                        "INSERT INTO staff_notification_preferences "
+                        "(account_type, account_id, reports_enabled, "
+                        "love_notes_enabled, games_enabled) "
+                        f"SELECT :account_type, id, TRUE, TRUE, TRUE FROM {table} "
+                        "ON CONFLICT (account_type, account_id) DO NOTHING"
+                    ),
+                    {"account_type": account_type},
+                )
+                inserted += result.rowcount or 0
+        if inserted:
+            logger.info(
+                "Backfilled %s staff notification preference row(s)", inserted
+            )
 
     def apply_game_session_convergence(self) -> None:
         """Converge pre-refactor game tables to the session lifecycle.

@@ -17,7 +17,6 @@ from collections.abc import Mapping
 import html
 import os
 from typing import Any
-from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from azure.communication.email import EmailClient
 
@@ -40,36 +39,13 @@ def _required_setting(name: str) -> str:
     return value
 
 
-def _copy_link(login_link: str) -> str:
-    """Build the frontend page that copies the login URL to the clipboard.
-
-    Email clients strip JavaScript, so an HTML button cannot write to the
-    clipboard directly. The copy button opens this same-origin page, which
-    performs the clipboard write with a manual fallback if the browser blocks
-    automatic access.
-    """
-    parsed = urlsplit(login_link)
-    return urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            "/copy-login-link",
-            urlencode({"url": login_link}),
-            "",
-        )
-    )
-
-
 def _plain_text(request: EmailRequest) -> str:
-    copy_link = _copy_link(request.link)
     return (
         f"Hello {request.name},\n\n"
         "You requested a sign-in link for ConfessIt.\n\n"
         f"Your login link is valid for {LOGIN_LINK_VALIDITY_MINUTES} minutes "
         "and can only be used once.\n\n"
-        f"Open Link: {request.link}\n"
-        f"Copy link: {copy_link}\n\n"
-        f"{request.link}\n\n"
+        f"Open Link: {request.link}\n\n"
         "If you didn't request this sign-in link, you can safely ignore this email.\n\n"
         "Thanks,\n"
         "The ConfessIt Team"
@@ -79,7 +55,6 @@ def _plain_text(request: EmailRequest) -> str:
 def _html(request: EmailRequest) -> str:
     name = html.escape(request.name)
     link = html.escape(request.link, quote=True)
-    copy_link = html.escape(_copy_link(request.link), quote=True)
     return f"""<!doctype html>
 <html lang="en">
   <body style="margin:0;padding:0;background:#f5f5f5;">
@@ -96,14 +71,9 @@ def _html(request: EmailRequest) -> str:
       </p>
       <p style="margin:0 0 16px;">
         <a href="{link}" target="_blank" rel="noopener noreferrer"
-           style="display:inline-block;margin:0 10px 10px 0;padding:12px 20px;
-                  background:#1f2937;color:#ffffff;text-decoration:none;
-                  border-radius:6px;font-weight:600;">Open Link</a>
-        <a href="{copy_link}" target="_blank" rel="noopener noreferrer"
-           style="display:inline-block;margin:0 10px 10px 0;padding:12px 20px;
-                  background:#ffffff;color:#1f2937;text-decoration:none;
-                  border:1px solid #cbd5e1;border-radius:6px;
-                  font-weight:600;">Copy link</a>
+           style="display:inline-block;padding:12px 20px;background:#1f2937;
+                  color:#ffffff;text-decoration:none;border-radius:6px;
+                  font-weight:600;">Open Link</a>
       </p>
       <p style="margin:0 0 24px;font-size:14px;word-break:break-all;">
         <a href="{link}" target="_blank" rel="noopener noreferrer"

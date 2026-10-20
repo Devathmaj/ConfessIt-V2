@@ -393,6 +393,17 @@ async def on_startup():
     except Exception as exc:
         logger.warning("Game session boot ensure skipped: %s", exc)
 
+    # Trivia Drop has no period: a question once set stays the pipeline's
+    # content, so start-up is the one moment worth checking that anything is
+    # live or scheduled. Run after the boot ensure so a question due today has
+    # already been released. Best-effort like the game ensure above.
+    try:
+        from .services.staff_notification_service import notify_trivia_drop_empty
+
+        notify_trivia_drop_empty(postgres)
+    except Exception as exc:
+        logger.warning("Trivia Drop boot notification skipped: %s", exc)
+
     # Drain the AI generation queue: Plot Twist and Case Closed sessions are
     # generated asynchronously after the scheduler enqueues a cycle, and this
     # in-process worker is what publishes them (and retries provider

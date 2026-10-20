@@ -4,8 +4,9 @@
 
 One feed per role rather than per person. A moderator sees ``report`` notices
 (every report filed) and ``love_note`` notices (every note awaiting approval);
-an admin sees those plus live ``game`` alerts (a missing featured pick, a
-manual-mode session waiting for its word, an empty Trivia Drop pipeline).
+an admin sees those plus stored ``game`` notices (a missing featured pick, a
+manual-mode session waiting for its word, an empty Trivia Drop pipeline) written
+by the scheduler and start-up checks.
 
 Three endpoints besides the feed: the category switches (three for an admin,
 two for a moderator), the master on/off switch (the account's own
@@ -96,8 +97,7 @@ def get_staff_notifications(
 ) -> Dict[str, Any]:
     """One page of this staff account's notices, newest first, with the total.
 
-    Stored ``report``/``love_note`` rows page in SQL; live ``game`` alerts
-    (admin only) are computed on the read and ride along on the first page.
+    Every category, including admin-only ``game`` notices, pages in SQL.
     ``preferences``, ``notifications_enabled`` and ``categories`` travel beside
     the page so the screen can render its switches without a second round trip.
     """
@@ -158,6 +158,6 @@ def put_notification_read(
     current_user: Annotated[AccountDetails, Depends(_require_staff)],
     db: Database = Depends(get_db),
 ):
-    """Mark one stored notice as read for this account. Live game alerts are a no-op."""
+    """Mark one stored notice as read for this account."""
     mark_staff_notification_read(db, current_user, notification_id=notification_id)
     return {"message": "Notification marked as read"}

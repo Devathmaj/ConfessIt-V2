@@ -444,7 +444,10 @@ def create_user(
     Each of those columns is still populated on the new row, from the default declared in
     ``db_models`` rather than from the request: notifications on, matchmaking on, love notes
     receivable, love notes not yet sendable, no interests, and a NULL picture. A participant
-    edits them through ``PUT /profile/update`` from the moment the account exists.
+    edits them through ``PUT /profile/update`` from the moment the account exists. A staff
+    account also gets its ``staff_notification_preferences`` row in the same transaction,
+    from the mapper hook declared beside the model, so there is no separate creation path to
+    remember here.
     """
 
     account_type = payload.account_type

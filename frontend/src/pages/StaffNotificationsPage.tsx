@@ -157,7 +157,7 @@ export const StaffNotificationsPage = () => {
   };
 
   const handleMarkRead = async (notice: StaffNotification) => {
-    if (notice.is_live || notice.is_read) return;
+    if (notice.is_read) return;
     try {
       await markStaffNotificationRead(notice.id);
       setNotifications((prev) => prev.map((n) => (n.id === notice.id ? { ...n, is_read: true } : n)));
@@ -168,8 +168,8 @@ export const StaffNotificationsPage = () => {
   };
 
   const openTarget = (notice: StaffNotification) => {
-    // Stored report/love-note rows carry no target; the queue behind each
-    // category is the destination. Live game alerts always open the console.
+    // Stored rows carry no target; the queue behind each category is the
+    // destination. Game notices open the games console.
     if (notice.category === 'game') {
       navigate('/admin/games');
     } else if (notice.category === 'love_note') {
@@ -354,7 +354,6 @@ export const StaffNotificationsPage = () => {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="secondary">{CATEGORY_LABELS[notice.category] ?? notice.category}</Badge>
-                      {notice.is_live && <Badge variant="outline">Live</Badge>}
                       {!notice.is_read && <Badge>Unread</Badge>}
                     </div>
                     <span
@@ -374,7 +373,7 @@ export const StaffNotificationsPage = () => {
                           ? 'Open Love Notes review'
                           : 'Open Reports review'}
                     </Button>
-                    {!notice.is_live && !notice.is_read && (
+                    {!notice.is_read && (
                       <Button type="button" variant="ghost" size="sm" onClick={() => void handleMarkRead(notice)}>
                         Mark as read
                       </Button>
