@@ -1,5 +1,4 @@
 fastapi==0.143.0
-pydantic==2.14.0
 uvicorn[standard]==0.54.0
 starlette==1.7.0
 pydantic[email]==2.14.0
@@ -7,14 +6,11 @@ psycopg[binary]==3.3.6
 pydantic-settings==2.15.0
 PyJWT==2.15.1
 python-multipart==0.0.32
-pytest==9.1.1
-pytest-asyncio==1.4.0
 httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
-# Excel workbook parsing and XML entity security for bulk participant onboarding.
+# Excel workbook parsing for bulk participant onboarding.
 openpyxl==3.1.2
-defusedxml==0.7.1
 redis==8.1.0
 # Azure AI Content Safety SDK for text analysis and moderation.
 azure-ai-contentsafety==1.0.0
@@ -28,7 +24,6 @@ groq==1.7.0
 # WebSockets are handled directly by Starlette/FastAPI.
 opentelemetry-api==1.45.1
 opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp==1.45.1
 # OpenTelemetry semantic conventions pinned for instrumentation.
 opentelemetry-semantic-conventions==0.66b1
 opentelemetry-instrumentation-fastapi==0.66b1
@@ -37,8 +32,6 @@ opentelemetry-instrumentation-redis==0.66b1
 opentelemetry-instrumentation-sqlalchemy==0.66b1
 opentelemetry-instrumentation-urllib3==0.66b1
 opentelemetry-exporter-otlp-proto-grpc==1.45.1
-# Build tooling pinned for packaging consistency.
-setuptools==84.0.0
 SQLAlchemy==2.1.4
 # pgvector Python bindings for vector embedding columns.
 pgvector==0.4.2

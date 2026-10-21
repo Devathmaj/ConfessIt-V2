@@ -9,3 +9,9 @@ dist
 .env
 */.env
 .git
+
+# Test and manual check files are not needed in Docker build contexts. The dev
+# Compose bind mount still exposes them locally; production emits only dist/.
+tests/
+bun.lockb
+scripts/contrast-check.mjs

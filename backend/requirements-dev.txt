@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Test runner dependencies; not installed in the API or scheduler images.
+pytest==9.1.1
+pytest-asyncio==1.4.0

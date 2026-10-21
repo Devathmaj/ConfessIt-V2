@@ -7,8 +7,18 @@
 # by the environment.
 .env
 */.env
+requirements-dev.txt
 .git
 my_app.log*
 **/__pycache__/
 *.pyc
 .pytest_cache/
+
+# Not part of the API or scheduler runtime. Exclude test and one-off tooling from
+# images; the development Compose bind mount still exposes these files locally.
+tests/
+app/test.py
+seed_db.py
+scripts/migrate_account_tables.py
+scripts/recreate_chat_schema.py
+app/profile_pictures/
