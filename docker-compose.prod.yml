@@ -2,9 +2,12 @@
 #
 # How this differs from the dev stack, and why each difference exists:
 #
-# * The edge (Nginx) terminates TLS and is the only thing publishing ports. Nothing
-#   else is reachable from outside the Compose network -- no direct Uvicorn, no dev
-#   servers, no database sockets.
+# * The edge (Nginx) terminates TLS and is the only application service
+#   publishing ports. Grafana (inherited from the base file) is the one other
+#   host-published service, on loopback. Nothing else is reachable from outside
+#   the Compose network -- no direct Uvicorn, no dev servers, no database
+#   sockets. The `nginx` service below overrides the dev Nginx service of the
+#   same name, so the combined stack has exactly one edge.
 # * No source bind mounts and no `--reload`: images run what was built, with multiple
 #   API workers sharing one signing key (single-session/rotation semantics already
 #   assume this; see app.config SECRET_KEY).
@@ -41,28 +44,49 @@
 # server-side certificates first (stock images do not serve TLS unconfigured).
 
 services:
-  edge:
+  nginx:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
         VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL to the public https API origin}
+    # Custom tag: the base file uses the stock nginx:alpine image for dev, and a
+    # production build must not overwrite that local image tag.
+    image: confessit-nginx:prod
     environment:
       SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME to the public site name}
       API_ORIGIN: ${API_ORIGIN:?set API_ORIGIN to the bare public API hostname}
-    ports:
+    # !override replaces the base file's dev mappings (127.0.0.1:5173:80 and
+    # 127.0.0.1:8001:8001) instead of merging with them. Compose merges
+    # sequences by appending, so without this the resolved stack would still
+    # publish the dev ports.
+    ports: !override
       - "80:80"
       - "443:443"
-    volumes:
+    # !override drops the base file's development config mount. The production
+    # image renders nginx.prod.conf.example from SERVER_NAME/API_ORIGIN.
+    volumes: !override
       - ./tls:/etc/nginx/tls:ro
     depends_on:
       - backend
     restart: unless-stopped
     read_only: true
-    tmpfs:
-      - /tmp
-      - /var/cache/nginx
-      - /var/run
+    tmpfs: !override
+      - /tmp:mode=1777
+      - /var/cache/nginx:mode=1777
+      - /var/run:mode=1777
+      # The image runs as USER nginx on a read-only root; the entrypoint renders
+      # /etc/nginx/templates/default.conf.template into this directory at start.
+      # mode=1777 (the Docker default is 0755, root-owned) is what lets the
+      # unprivileged nginx user create the rendered file and its cache dirs.
+      - /etc/nginx/conf.d:mode=1777
+    healthcheck:
+      # nginx.prod.conf answers this locally; it never proxies to the backend.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -87,7 +111,10 @@ services:
       "--h11-max-incomplete-event-size",
       "16384"
     ]
-    # No ports: reachable only through the edge and the Compose network.
+    # No ports: reachable only through nginx and the Compose network.
+    # !reset drops the base file's ./backend source bind mount, so production
+    # runs the image that was built rather than the host working tree.
+    volumes: !reset []
     # Bound the host's copy of stdout/stderr. The OTLP path has its own retention
     # in Loki (168h); this stops the Docker daemon from keeping an unbounded second
     # copy of every handshake line on the host.
@@ -138,6 +165,8 @@ services:
     build:
       context: ./backend
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    # Same as the API: drop the dev source bind mount; run the built image.
+    volumes: !reset []
     environment:
       TZ: UTC
       # Same transport acknowledgment as the API (SEC-004): the sidecar enforces
@@ -173,7 +202,9 @@ services:
       POSTGRES_DB: ConfessIt
     # No ports: reachable only over the Compose network. Operator access is
     # `docker compose exec postgres psql`, never a published socket.
-    volumes:
+    # !override replaces the base file's dev volume list instead of merging it
+    # (two data volumes at the same mount point is an invalid merge).
+    volumes: !override
       - postgres_prod_data:/var/lib/postgresql/data
       - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
     restart: unless-stopped
@@ -193,7 +224,9 @@ services:
       --save 900 1
       --save 300 10
       --requirepass "$$REDIS_PASSWORD"'
-    volumes:
+    # !override replaces the base file's dev volume list; Redis persists in the
+    # production-only named volume.
+    volumes: !override
       - redis_prod_data:/data
     restart: unless-stopped
     read_only: true

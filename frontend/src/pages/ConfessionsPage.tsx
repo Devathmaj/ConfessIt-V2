@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -168,6 +168,17 @@ export const ConfessionsPage = () => {
    * more" click appends beneath the posts already read.
    */
   const [confessions, setConfessions] = useState<Confession[]>([]);
+  /**
+   * Where the reader was when a page was appended.
+   *
+   * The "Show more" button sits beneath the feed, so when the next page lands the
+   * browser keeps that button in view and the viewport jumps to the new bottom --
+   * the reader never sees the rows that were just added above it. The position is
+   * captured before the append and restored in a layout effect, before the frame
+   * is painted, so the page grows underneath the reader instead of scrolling them
+   * down.
+   */
+  const feedScrollLock = useRef<{ y: number; from: number } | null>(null);
   /** How many visible confessions the server holds, loaded or not. */
   const [total, setTotal] = useState(0);
   /** False while answers arrive as legacy bare arrays (older servers, unit-test mocks). */
@@ -336,6 +347,16 @@ export const ConfessionsPage = () => {
       cancelled = true;
     };
   }, [sortBy, isAuthenticated, activeSearch]);
+
+  // Undo the scroll anchoring that would otherwise follow the "Show more" button
+  // down as the next page is inserted above it. Runs before paint, so the reader
+  // never sees the jump.
+  useLayoutEffect(() => {
+    const lock = feedScrollLock.current;
+    if (!lock || confessions.length <= lock.from) return;
+    feedScrollLock.current = null;
+    window.scrollTo(0, lock.y);
+  }, [confessions.length]);
 
   const readSearchError = (error: any): string => {
     const status = error?.response?.status;
@@ -550,6 +571,13 @@ export const ConfessionsPage = () => {
         setTotal(reread.total);
         setPagedFeed(page.enveloped);
         return;
+      }
+      // Only a page that actually grows the feed moves the button below it, so
+      // only that case needs the reader's position pinned. The captured offset is
+      // read here rather than at click time so a reader who scrolled while the
+      // request was in flight keeps the place they are looking at.
+      if (appendUnseen(confessions, page.rows).length > confessions.length) {
+        feedScrollLock.current = { y: window.scrollY, from: confessions.length };
       }
       setConfessions((prev) => appendUnseen(prev, page.rows));
       setTotal(page.total);

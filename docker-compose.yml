@@ -1,20 +1,63 @@
+# Host exposure in this stack is deliberately limited to two services:
+#
+#   * nginx   -- loopback-bound on 127.0.0.1:5173 (SPA) and 127.0.0.1:8001
+#                (API/WebSockets); the only application entry point.
+#   * grafana -- loopback-bound on 127.0.0.1:3050; the telemetry read surface.
+#
+# Every other container (frontend, backend, scheduler, Postgres, Redis, the
+# collector, Prometheus, Loki, Tempo) has no published port. They still reach
+# one another by Compose service name over the default network, exactly as
+# before; only host access was removed. Use `docker compose exec <service> ...`
+# for operator access (for example `docker compose exec postgres psql`).
 services:
+
+  nginx:
+    image: nginx:alpine
+    # The one application entry point. Frontend and backend stay internal; Nginx
+    # proxies the SPA (including Vite's HMR WebSocket) and the API/WebSocket
+    # traffic. The dev config rate-limits every request per client address.
+    ports:
+      - "127.0.0.1:5173:80"
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     build:
       context: ./frontend
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
-    ports:
-      # Loopback only: the dev server (with HMR) must never be reachable from the LAN.
-      # The container still binds 0.0.0.0 internally -- a published port cannot forward
-      # into a loopback-bound socket -- so the boundary is enforced here, at publish.
-      - "127.0.0.1:5173:8080"
+    # No host port: this container is reachable only from nginx over the
+    # Compose network. HMR still works through the proxy because nginx forwards
+    # the WebSocket upgrade.
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
+      # The browser talks to nginx, never directly to the API. The edge keeps
+      # the API on its own loopback port (8001), so the existing API URL and
+      # the backend's /auth cookie path stay unchanged.
+      VITE_API_URL: "http://localhost:8001"
 
   backend:
     build:
@@ -36,11 +79,8 @@ services:
       "--h11-max-incomplete-event-size",
       "16384"
     ]
-    ports:
-      # Loopback only, same reasoning as the frontend above: direct Uvicorn access is
-      # for host debugging, never for the LAN. Production serves through the edge
-      # (see docker-compose.prod.yml) with no published app ports at all.
-      - "127.0.0.1:8001:8001"
+    # No host port: every HTTP and WebSocket request arrives through nginx.
+    # Use `docker compose exec backend ...` for host-side debugging.
     volumes:
       - ./backend:/app
     depends_on:
@@ -65,6 +105,11 @@ services:
       # configured. Raising it widens what one process will hold at once, so the request
       # body cap is what should move first if this needs raising.
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
+      # The browser reaches the API through nginx, so the app must trust that
+      # proxy's X-Forwarded-* headers to see the real client IP and scheme.
+      # Without this, the global rate limiter would count every user as the
+      # nginx container and one busy client could exhaust the shared budget.
+      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # Injected so backend/.env can resolve REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379"
       # via python-dotenv, which keeps the root .env the only file the credential is written
       # in. REDIS_URL itself stays out of this file; setting it in the environment overrides.
@@ -191,20 +236,10 @@ services:
     # vector and the confession_embeddings vector(1536) column work. The stock
     # postgres:16-alpine image has no vector extension available.
     image: pgvector/pgvector:pg16
-    # Published to the host on loopback only, so a host-side psql/DBeaver can attach
-    # while nothing on the network can reach the database or the application data in
-    # it. This is the same posture as the observability UIs below, which bind
-    # 127.0.0.1 too. The earlier "5432:5432" mapping bound every host interface and
-    # was the LAN exposure.
-    #
-    # The host port is 5433, not 5432, because an installed PostgreSQL 18 Windows
-    # service (postgresql-x64-18) already holds the host's 5432 on 0.0.0.0:5432, and
-    # two listeners cannot share a port. 5433 is free. The container port is still 5432
-    # and every other service reaches it as postgres:5432 over the Compose network.
-    # If that service is ever removed, change the host side back to 5432 to match the
-    # port clients already expect.
-    ports:
-      - "127.0.0.1:5433:5432"
+    # Internal only: no host-published database socket. Operator access is
+    # `docker compose exec postgres psql -U confessit ConfessIt`, never a port
+    # on the host. The Compose network still resolves this service as
+    # postgres:5432 for the backend and scheduler.
     environment:
       POSTGRES_USER: confessit
       # The image's own init variable keeps its name: DB_PASSWORD is mapped onto it.
@@ -283,9 +318,8 @@ services:
       # needs the basic-auth user in prometheus.yml: an unauthenticated receiver
       # would let any container on this network forge the series the alerts read.
       - "--web.enable-remote-write-receiver"
-    # Loopback only: the metrics contain request rates, error counts and target topology.
-    ports:
-      - "127.0.0.1:9090:9090"
+    # Internal only: Grafana reaches the query API over the Compose network.
+    # There is no host-published metrics UI.
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus-web.yml:/etc/prometheus/web.yml:ro
@@ -363,9 +397,8 @@ services:
   loki:
     image: grafana/loki:2.9.8
     command: ["-config.file=/etc/loki/config.yml"]
-    # Loopback only: the log store holds request payloads and user identifiers.
-    ports:
-      - "127.0.0.1:3100:3100"
+    # Internal only: Grafana queries it over the Compose network, and the
+    # collector writes to it there. No host-published log API.
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
@@ -385,11 +418,10 @@ services:
   tempo:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yml"]
-    # 3200 is the query API (loopback only, like Loki); 4317 is ingestion and is reachable
-    # only from the otel-collector, which forwards traces to tempo:4317.
-    ports:
-      - "127.0.0.1:3200:3200"
+    # 3200 is the query API, reachable only by Grafana on the Compose network;
+    # 4317 is ingestion from otel-collector. Neither is published to the host.
     expose:
+      - "3200"
       - "4317"
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro

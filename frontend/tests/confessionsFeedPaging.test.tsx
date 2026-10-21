@@ -167,6 +167,29 @@ describe('ConfessionsPage: paged feed', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps the reader in place when the next page is appended under them', async () => {
+    db = Array.from({ length: 11 }, (_, index) =>
+      post(`c${index}`, `feed post number ${index}`, { created_at: stamp(index + 1) }),
+    );
+    const scrollY = vi.spyOn(window, 'scrollY', 'get').mockReturnValue(1234);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+    try {
+      await renderFeed();
+      await screen.findByText('feed post number 10');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show more confessions' }));
+      await screen.findByText('feed post number 0');
+
+      // The new page sits below the feed; the viewport does not follow the button
+      // down to the new bottom.
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 1234));
+    } finally {
+      scrollY.mockRestore();
+      scrollTo.mockRestore();
+    }
+  });
+
   it('re-asks from the first page when the sort changes', async () => {
     db = [
       post('c1', 'quiet post', { heart_count: 0, created_at: stamp(3) }),
