@@ -33,12 +33,12 @@ def main() -> int:
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Use TEST_DATABASE_URL instead of DATABASE_URL.",
+        help="Use the derived test database (<PGDATABASE>_Test) instead of PGDATABASE.",
     )
     parser.add_argument(
         "--database-url",
         default=None,
-        help="Explicit SQLAlchemy PostgreSQL URL. Overrides --test/DATABASE_URL.",
+        help="Explicit SQLAlchemy PostgreSQL URL. Overrides --test/PGDATABASE.",
     )
     args = parser.parse_args()
 

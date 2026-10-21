@@ -380,7 +380,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="Database to migrate. Defaults to the application's own DATABASE_URL.",
+        help="Database to migrate. Defaults to the application's PG* connection settings.",
     )
     parser.add_argument(
         "--dry-run",

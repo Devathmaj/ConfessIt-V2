@@ -18,9 +18,10 @@ from ..limits import WORDLE_ANSWER_LENGTH
 from ..models import WordleDraw, WordleGame, WordleGameCreate
 from ..postgres import Database, is_valid_id
 
-# Word data paths for solutions and valid guesses.
-_SOLUTIONS_PATH = Path(__file__).resolve().parent.parent / "data" / "wordle_solutions.json"
-_GUESSES_PATH = Path(__file__).resolve().parent.parent / "data" / "wordle_guesses.json"
+# Committed word lists live with the backend assets.
+_ASSETS_PATH = Path(__file__).resolve().parents[2] / "assets"
+_SOLUTIONS_PATH = _ASSETS_PATH / "wordle_solutions.json"
+_GUESSES_PATH = _ASSETS_PATH / "wordle_guesses.json"
 
 # Cached word lists loaded lazily on first access.
 _solutions: Optional[tuple[str, ...]] = None

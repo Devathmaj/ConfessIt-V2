@@ -1,48 +1,5 @@
-# Production overlay: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-#
-# How this differs from the dev stack, and why each difference exists:
-#
-# * The edge (Nginx) terminates TLS and is the only application service
-#   publishing ports. Grafana (inherited from the base file) is the one other
-#   host-published service, on loopback. Nothing else is reachable from outside
-#   the Compose network -- no direct Uvicorn, no dev servers, no database
-#   sockets. The `nginx` service below overrides the dev Nginx service of the
-#   same name, so the combined stack has exactly one edge.
-# * No source bind mounts and no `--reload`: images run what was built, with multiple
-#   API workers sharing one signing key (single-session/rotation semantics already
-#   assume this; see app.config SECRET_KEY).
-# * `read_only` filesystems with tmpfs where the runtime needs scratch space, resource
-#   ceilings, and `restart: unless-stopped` everywhere.
-# * Data persists in NAMED volumes (never bind mounts, never ephemeral overlay): the
-#   database and Redis snapshots must survive a container replace.
-#   Back these volumes up; losing them loses accounts and sessions.
-#
-# Required environment (all fail closed with `:?`; keep them in a gitignored file --
-# never in this tracked one):
-#   SERVER_NAME, API_ORIGIN  -- public names; API_ORIGIN is the bare API hostname
-#   VITE_API_URL             -- https origin the frontend bundle is built against
-#   DB_PASSWORD, REDIS_PASSWORD, SECRET_KEY, PUBLIC_BASE_URL, CORS_ORIGINS,
-#   ALLOWED_HOSTS, TRUSTED_PROXY_HOSTS
-# TLS certificates go in ./tls/ (gitignored): fullchain.pem + privkey.pem, as expected
-# by frontend/nginx.prod.conf.example. Without them Nginx fails to start rather than
-# serving plain HTTP -- place real certificates (e.g. certbot) before first boot.
-# Telemetry is intentionally unwired here: point OTEL_EXPORTER_OTLP_ENDPOINT at a TLS
-# collector (with OTEL_EXPORTER_OTLP_CERTIFICATE) when one exists; with no endpoint
-# the app simply does not export.
-#
-# Data-transport encryption (SEC-004): the DATABASE_URL/REDIS_URL below are cleartext
-# (`redis://`, no `sslmode`), which is only safe while Postgres and Redis are reachable
-# solely over this host's own Compose network -- the posture this overlay ships, with
-# no published database/cache ports. The backend and scheduler therefore boot with
-# ALLOW_PLAINTEXT_DATA_TRANSPORT=true (see app.config.validate_transport_security):
-# an explicit acknowledgment, not a default. Moving either store off this host (a
-# managed database, a multi-node swarm, a cache anything else can reach) must switch
-# to `rediss://` (the app pins CERT_REQUIRED for it) and `?sslmode=require` (or
-# verify-ca / verify-full) and DROP the acknowledgment -- without it a cloud boot
-# with cleartext transports refuses to start rather than leaking credentials,
-# session hashes and chat content at the network layer. Postgres/Redis TLS needs
-# server-side certificates first (stock images do not serve TLS unconfigured).
 
+# Production overlay; PostgreSQL connection settings come from backend/.env.
 services:
   nginx:
     build:
@@ -50,21 +7,13 @@ services:
       dockerfile: Dockerfile.prod
       args:
         VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL to the public https API origin}
-    # Custom tag: the base file uses the stock nginx:alpine image for dev, and a
-    # production build must not overwrite that local image tag.
     image: confessit-nginx:prod
     environment:
       SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME to the public site name}
       API_ORIGIN: ${API_ORIGIN:?set API_ORIGIN to the bare public API hostname}
-    # !override replaces the base file's dev mappings (127.0.0.1:5173:80 and
-    # 127.0.0.1:8001:8001) instead of merging with them. Compose merges
-    # sequences by appending, so without this the resolved stack would still
-    # publish the dev ports.
     ports: !override
       - "80:80"
       - "443:443"
-    # !override drops the base file's development config mount. The production
-    # image renders nginx.prod.conf.example from SERVER_NAME/API_ORIGIN.
     volumes: !override
       - ./tls:/etc/nginx/tls:ro
     depends_on:
@@ -75,13 +24,8 @@ services:
       - /tmp:mode=1777
       - /var/cache/nginx:mode=1777
       - /var/run:mode=1777
-      # The image runs as USER nginx on a read-only root; the entrypoint renders
-      # /etc/nginx/templates/default.conf.template into this directory at start.
-      # mode=1777 (the Docker default is 0755, root-owned) is what lets the
-      # unprivileged nginx user create the rendered file and its cache dirs.
       - /etc/nginx/conf.d:mode=1777
     healthcheck:
-      # nginx.prod.conf answers this locally; it never proxies to the backend.
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
@@ -96,7 +40,6 @@ services:
   backend:
     build:
       context: ./backend
-    # No --reload, no source mounts: what was built is what serves, on shared workers.
     command: [
       "uvicorn",
       "app.main:app",
@@ -111,45 +54,27 @@ services:
       "--h11-max-incomplete-event-size",
       "16384"
     ]
-    # No ports: reachable only through nginx and the Compose network.
-    # !reset drops the base file's ./backend source bind mount, so production
-    # runs the image that was built rather than the host working tree.
     volumes: !reset []
-    # Bound the host's copy of stdout/stderr. The OTLP path has its own retention
-    # in Loki (168h); this stops the Docker daemon from keeping an unbounded second
-    # copy of every handshake line on the host.
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    env_file:
+      - ./backend/.env
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
-      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
-      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
-      # AES-256-GCM chat-at-rest keys. Required here as in the base compose file: no
-      # plaintext fallback, and the API refuses to boot without the active version.
-      # Deliberately absent from game-scheduler, which only deletes by deadline.
       CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: ${CHAT_ENCRYPTION_ACTIVE_KEY_VERSION:-v1}
       CHAT_ENCRYPTION_KEY_V1: ${CHAT_ENCRYPTION_KEY_V1:?set CHAT_ENCRYPTION_KEY_V1 in the root .env}
       CLOUD: "true"
-      # Single-host acknowledgment for the cleartext Compose-network transports below
-      # (SEC-004): remove once DATABASE_URL carries ?sslmode=require and REDIS_URL is
-      # rediss:// -- see the header comment. Without it a cloud boot refuses to start.
       ALLOW_PLAINTEXT_DATA_TRANSPORT: "true"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public site origin}
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the public frontend origin(s)}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS to the public names this deployment serves}
-      # Must cover the edge's address (the Compose network lives in 172.16/12): without it
-      # the app sees the proxy-to-app hop as http and mints auth cookies without Secure
-      # (SEC-005 -- a cloud boot with neither this nor COOKIE_SECURE=true refuses to start).
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-    # Read-only root means bytecode caches cannot be written back; disable them so
-    # imports never try (the image ships compiled-clean and runs identically).
     depends_on:
-      - postgres
       - redis
     restart: unless-stopped
     read_only: true
@@ -165,26 +90,16 @@ services:
     build:
       context: ./backend
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
-    # Same as the API: drop the dev source bind mount; run the built image.
     volumes: !reset []
+    env_file:
+      - ./backend/.env
     environment:
       TZ: UTC
-      # Same transport acknowledgment as the API (SEC-004): the sidecar enforces
-      # the identical posture at tick time rather than assuming the API's boot
-      # covered it.
       ALLOW_PLAINTEXT_DATA_TRANSPORT: "true"
-      # Every setting the tick needs, because cron(8) runs its jobs with a
-      # near-empty environment: the entrypoint bakes these into the wrapper the
-      # schedule calls, and the tick builds the same Settings object the API
-      # does. A required field missing here aborts the 00:01 pass before it
-      # evaluates a single game. TOKEN_HASH_PEPPER is inherited from the base
-      # compose file, like the API's.
-      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt"
-      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?set DB_PASSWORD}@postgres:5432/ConfessIt_Test"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
     depends_on:
-      - postgres
+      - redis
     restart: unless-stopped
     deploy:
       resources:
@@ -192,27 +107,21 @@ services:
           cpus: "0.50"
           memory: 512M
 
-  postgres:
-    # Same pgvector requirement as dev (see docker-compose.yml): the
-    # confession_embeddings vector(1536) column needs the vector extension.
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: confessit
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
-      POSTGRES_DB: ConfessIt
-    # No ports: reachable only over the Compose network. Operator access is
-    # `docker compose exec postgres psql`, never a published socket.
-    # !override replaces the base file's dev volume list instead of merging it
-    # (two data volumes at the same mount point is an invalid merge).
-    volumes: !override
-      - postgres_prod_data:/var/lib/postgresql/data
-      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 2G
+  # postgres:
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     POSTGRES_USER: confessit
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+  #     POSTGRES_DB: ConfessIt
+  #   volumes: !override
+  #     - postgres_prod_data:/var/lib/postgresql/data
+  #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "2"
+  #         memory: 2G
 
   redis:
     image: redis:7-alpine
@@ -224,8 +133,6 @@ services:
       --save 900 1
       --save 300 10
       --requirepass "$$REDIS_PASSWORD"'
-    # !override replaces the base file's dev volume list; Redis persists in the
-    # production-only named volume.
     volumes: !override
       - redis_prod_data:/data
     restart: unless-stopped

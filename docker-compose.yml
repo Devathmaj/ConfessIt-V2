@@ -1,21 +1,8 @@
-# Host exposure in this stack is deliberately limited to two services:
-#
-#   * nginx   -- loopback-bound on 127.0.0.1:5173 (SPA) and 127.0.0.1:8001
-#                (API/WebSockets); the only application entry point.
-#   * grafana -- loopback-bound on 127.0.0.1:3050; the telemetry read surface.
-#
-# Every other container (frontend, backend, scheduler, Postgres, Redis, the
-# collector, Prometheus, Loki, Tempo) has no published port. They still reach
-# one another by Compose service name over the default network, exactly as
-# before; only host access was removed. Use `docker compose exec <service> ...`
-# for operator access (for example `docker compose exec postgres psql`).
+# Development stack; PostgreSQL connection settings come from backend/.env.
 services:
 
   nginx:
     image: nginx:alpine
-    # The one application entry point. Frontend and backend stay internal; Nginx
-    # proxies the SPA (including Vite's HMR WebSocket) and the API/WebSocket
-    # traffic. The dev config rate-limits every request per client address.
     ports:
       - "127.0.0.1:5173:80"
       - "127.0.0.1:8001:8001"
@@ -45,18 +32,12 @@ services:
     build:
       context: ./frontend
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
-    # No host port: this container is reachable only from nginx over the
-    # Compose network. HMR still works through the proxy because nginx forwards
-    # the WebSocket upgrade.
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
-      # The browser talks to nginx, never directly to the API. The edge keeps
-      # the API on its own loopback port (8001), so the existing API URL and
-      # the backend's /auth cookie path stay unchanged.
       VITE_API_URL: "http://localhost:8001"
 
   backend:
@@ -72,203 +53,74 @@ services:
       "--reload",
       "--reload-dir",
       "app",
-      # Bound how many request bodies can be in flight at once, and how many bytes are
-      # buffered for an unfinished request. Per-body size is capped in app.main.
       "--limit-concurrency",
       "${MAX_CONCURRENCY:-100}",
       "--h11-max-incomplete-event-size",
       "16384"
     ]
-    # No host port: every HTTP and WebSocket request arrives through nginx.
-    # Use `docker compose exec backend ...` for host-side debugging.
     volumes:
       - ./backend:/app
+    env_file:
+      - ./backend/.env
     depends_on:
       - redis
-      - postgres
-    # Keep host-side Docker logs bounded even in local development; production has
-    # the same limit in docker-compose.prod.yml, and Loki has its own retention.
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
     environment:
-      # Auto-reload uses uvicorn's StatReload (mtime polling), not watchfiles: the
-      # Dockerfile uninstalls watchfiles, whose Rust-backed watcher crash-loops with
-      # `WatchfilesRustInternalError: os error 5` on this host's bind-mounted
-      # filesystem. `WATCHFILES_FORCE_POLLING`/`WATCHFILES_POLL_DELAY` used to force
-      # polling on that watcher and were removed once it was gone -- they no longer do
-      # anything, and StatReload needs no configuration to trust the mount.
-      # Read by both the --limit-concurrency flag above and the app's own settings, so
-      # the ceiling cannot differ between how the server is started and how it is
-      # configured. Raising it widens what one process will hold at once, so the request
-      # body cap is what should move first if this needs raising.
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
-      # The browser reaches the API through nginx, so the app must trust that
-      # proxy's X-Forwarded-* headers to see the real client IP and scheme.
-      # Without this, the global rate limiter would count every user as the
-      # nginx container and one busy client could exhaust the shared budget.
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      # Injected so backend/.env can resolve REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379"
-      # via python-dotenv, which keeps the root .env the only file the credential is written
-      # in. REDIS_URL itself stays out of this file; setting it in the environment overrides.
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
-      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt"
-
-      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt_Test"
-      # The HMAC/JWT signing key, identical in every worker and replica. There is no
-      # default: a random-per-process key meant restarts invalidated all sessions and
-      # workers 401'd each other's tokens. Generate once with
-      # python -c "import secrets; print(secrets.token_hex(32))", keep it out of git,
-      # and rotate knowingly -- rotation invalidates all outstanding JWTs at once.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
-      # Pepper for stored login-token hashes, shared by every worker and replica like the
-      # key above. Without it a database dump turns stored hashes into an offline search;
-      # rotating it invalidates all sessions and unredeemed links, so rotate deliberately.
       TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
-      # AES-256-GCM keys for chat bodies at rest, Base64-encoded 32 bytes. Required:
-      # there is no plaintext fallback, and app startup refuses to run without the
-      # active version. The active version selects new writes; historical versions
-      # stay configured so rows written before a rotation remain readable. These are
-      # injected here only -- game-scheduler deletes by indexed deadline and must
-      # never receive key material.
       CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: ${CHAT_ENCRYPTION_ACTIVE_KEY_VERSION:-v1}
       CHAT_ENCRYPTION_KEY_V1: ${CHAT_ENCRYPTION_KEY_V1:?set CHAT_ENCRYPTION_KEY_V1 in the root .env}
-      # Retention defaults are also declared in app.config; passing them here means
-      # an operator can change one in the root .env without rebuilding the image.
       MATCHMAKING_CHAT_RETENTION_HOURS: ${MATCHMAKING_CHAT_RETENTION_HOURS:-24}
       REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS: ${REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS:-30}
       CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
-      # The bundled collector serves plaintext gRPC on the Compose network only, so the
-      # local stack opts back into insecure explicitly. Anything beyond this network --
-      # and every production collector -- must use TLS, which is now the default when
-      # this variable is unset.
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: "confessit-backend"
-      # Hostnames this deployment answers for, on top of the loopback default. `backend`
-      # is the Compose-network DNS name Prometheus scrapes for liveness
-      # (`up{job="confessit-backend"}` feeds the ConfessItBackendDown rule): without it
-      # the host allowlist 400s every scrape and the backend reads as down while
-      # serving. Production adds its public names here the same way.
       ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],backend"
-      # Report only the current (1.21+) HTTP semantic conventions. Unset, or set to
-      # "http/dup", the instrumentation also emits the pre-1.20 names; "http" is the
-      # mode that retires them outright.
-      #
-      # This is a clean break, not a compatibility layer: nothing in this stack needs
-      # to read old telemetry, and carrying both generations only doubled the
-      # attribute count on every span and data point. The consequences were migrated
-      # with it rather than worked around:
-      #   * http.server.duration (ms) is gone, replaced by
-      #     http.server.request.duration (s), so the PromQL in
-      #     observability/alerting-rules.yml and README.md was rewritten and the
-      #     latency threshold moved from 1000ms to 1s to match the new unit and
-      #     bucket boundaries.
-      #   * http_status_code -> http_response_status_code, http_method ->
-      #     http_request_method, http_target -> http.route.
-      #   * BOUNDED_HTTP_METRIC_ATTRIBUTES in main.py now allowlists only the
-      #     current names, so it no longer needs the pre-1.20 ones to keep the
-      #     method/status dimensions alive.
-      # Query-string redaction in app.telemetry deliberately still covers the
-      # pre-1.20 URL attributes; see the note on _URL_ATTRIBUTES for why that is
-      # defence in depth against a span from another source rather than
-      # compatibility handling for our own emission.
-      #
-      # Only the HTTP signal is opted in. database and gen_ai exist too and are
-      # deliberately left off: SQLAlchemy and Redis spans keep the pre-1.20 db.*
-      # names, which is a separate migration and would change the H4 spanmetrics
-      # labels at the same time as this one.
       OTEL_SEMCONV_STABILITY_OPT_IN: "http"
   game-scheduler:
     build:
       context: ./backend
-    # Same image as the API; only the command differs. This process never
-    # serves traffic: its entrypoint runs one catch-up reset pass at start,
-    # then hands PID 1 to cron for the daily 00:01 UTC tick
-    # (backend/scripts/game-scheduler-entrypoint.sh). Each tick runs
-    # backend/scripts/run_game_resets.py, which calls the same per-game entry
-    # points as boot and POST /admin/games/run-resets -- advisory locks,
-    # terminate-then-create updates, pending activation, hidden skips and the
-    # league due scan all hold here exactly as they do there. No ports: the
-    # only observable output is the per-game summary in `docker compose logs`.
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
     volumes:
       - ./backend:/app
+    env_file:
+      - ./backend/.env
     depends_on:
-      - postgres
+      - redis
     environment:
       TZ: UTC
-      DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt"
-      # Unused by the scheduler, but Settings builds (and validates) as a whole, so a
-      # required field must resolve in every process that imports the app.
-      TEST_DATABASE_URL: "postgresql+psycopg://confessit:${DB_PASSWORD:?}@postgres:5432/ConfessIt_Test"
-      # Same image and settings as the API, so the same signing key: the scheduler
-      # imports the app and must verify (and mint, via game HMACs) with the key the
-      # API uses, or its resets disagree with live traffic. The token pepper travels
-      # with it for the same reason: any worker hashing tokens must agree, and
-      # rotating it invalidates all sessions and unredeemed links, so rotate
-      # deliberately.
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
       TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
-      # Cleanup tuning, not key material: the scheduler deletes by indexed deadline
-      # and must never receive CHAT_ENCRYPTION_*. Keeping the batch size here in
-      # step with the API means one root .env setting controls the purge.
       CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
-      # Explicit here, not resolved from backend/.env as the API does: the cron
-      # job runs with a near-empty environment, so the generated wrapper has to
-      # export every setting the tick needs -- and the wrapper is what the
-      # 00:01 tick actually reads. Relying on a file that is excluded from the
-      # production image (.dockerignore) left the daily tick dying on a missing
-      # REDIS_URL.
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
-      # The password the URL above carries, injected separately so it stays in
-      # one place (the root .env) rather than in a tracked file. Telemetry
-      # rides the plaintext local collector like the API does.
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     restart: unless-stopped
 
-  postgres:
-    # pgvector image (PostgreSQL 16 + pgvector extension) so CREATE EXTENSION
-    # vector and the confession_embeddings vector(1536) column work. The stock
-    # postgres:16-alpine image has no vector extension available.
-    image: pgvector/pgvector:pg16
-    # Internal only: no host-published database socket. Operator access is
-    # `docker compose exec postgres psql -U confessit ConfessIt`, never a port
-    # on the host. The Compose network still resolves this service as
-    # postgres:5432 for the backend and scheduler.
-    environment:
-      POSTGRES_USER: confessit
-      # The image's own init variable keeps its name: DB_PASSWORD is mapped onto it.
-      # Only read on first initialisation of an empty data volume -- rotating the
-      # password later means ALTER USER inside the database, not just this line.
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
-      POSTGRES_DB: ConfessIt
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+  # postgres:
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     POSTGRES_USER: confessit
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+  #     POSTGRES_DB: ConfessIt
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
   redis:
     image: redis:7-alpine
     container_name: confessit_redis
     restart: unless-stopped
-    # Chat traffic rides on conversation:<id> pub/sub channels, so an open Redis lets
-    # anyone on the network read every live message and publish forged ones. The port is
-    # internal only (expose, not ports) and the server refuses commands without a password.
-    # The password arrives as an env var and the shell below expands it, keeping the secret
-    # out of the process arguments where `ps` inside the container would expose it. Compose
-    # resolves ${REDIS_PASSWORD} from the shell environment or the gitignored root .env, so
-    # the value is injected at start-up and no credential is stored in this tracked file.
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
-    # maxmemory is kept as a hard ceiling but the eviction policy is not set. The
-    # application only ever issues PING, PUBLISH and SUBSCRIBE, and never writes a
-    # key, so there is nothing for any policy to evict and allkeys-lru could never
-    # engage; it only implied Redis was a cache. With the policy left at the
-    # noeviction default, a future feature that does start writing keys fails loudly
-    # at the ceiling instead of silently discarding entries.
     command: >
       sh -c 'exec redis-server
       --maxmemory 128mb
@@ -281,23 +133,14 @@ services:
       - redis_data:/data
 
   otel-collector:
-    # The Docker Hub org is otel/, not opentelemetry/; the latter is not a pullable
-    # repository, so this service could not start at all.
     image: otel/opentelemetry-collector-contrib:0.99.0
     command: ["--config=/etc/otel-collector-config.yml"]
-    # Ingestion and scrape ports are reachable only on the Compose network: the backend
-    # pushes to otel-collector:4317 and Prometheus scrapes otel-collector:8889, neither of
-    # which needs a host socket. Nothing here should be exposed beyond the host.
     expose:
       - "4317"
       - "4318"
       - "8889"
     volumes:
       - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
-    # Ordered on readiness, not merely on start. Both exporters in the config point
-    # at these two services, and a bare depends_on only waits for the container to
-    # be created, so a slow Loki comes up first and the collector spends the first
-    # seconds failing to export until BatchSpanProcessor's retry papers over it.
     depends_on:
       loki:
         condition: service_healthy
@@ -309,17 +152,8 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      # Web-layer config (TLS/basic-auth live here, not in prometheus.yml).
       - "--web.config.file=/etc/prometheus/web.yml"
-      # Tempo 2.5's metrics-generator delivers the RED and service-graph series it
-      # derives from traces by remote write; it has no local scrape endpoint. This
-      # flag is the receiver for that. The endpoint stays bound to loopback, and
-      # every request to it (like to the UI, the query API and /-/ready) now
-      # needs the basic-auth user in prometheus.yml: an unauthenticated receiver
-      # would let any container on this network forge the series the alerts read.
       - "--web.enable-remote-write-receiver"
-    # Internal only: Grafana reaches the query API over the Compose network.
-    # There is no host-published metrics UI.
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus-web.yml:/etc/prometheus/web.yml:ro
@@ -327,11 +161,6 @@ services:
       - ./observability/.rw-password:/etc/prometheus/rw-password:ro
       - ./observability/prometheus-healthcheck.sh:/etc/prometheus/healthcheck.sh:ro
       - prometheus_data:/prometheus
-    # Grafana health-checks every datasource on start-up, so it needs a readiness
-    # signal of its own to wait on. /-/ready is the endpoint Prometheus exposes for
-    # exactly this. A script rather than an inline flag: busybox wget has no
-    # --user/--password, and the password must be read out of the mounted file --
-    # never passed on argv, where `docker inspect` and `ps` would retain it.
     healthcheck:
       test: ["CMD", "/bin/sh", "/etc/prometheus/healthcheck.sh"]
       interval: 10s
@@ -341,51 +170,19 @@ services:
 
   grafana:
     image: grafana/grafana:10.4.3
-    # Loopback only: Grafana is the read surface for every log, metric and trace in the
-    # stack, so it must not be reachable from the LAN.
     ports:
       - "127.0.0.1:3050:3050"
     environment:
-      # The image listens on 3000, but the port mapping above targets 3050, so without
-      # this the host port forwards to a port nothing is listening on.
       GF_SERVER_HTTP_PORT: "3050"
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      # Required, from the gitignored root .env. Note Grafana applies this only when it
-      # initialises an empty database, so an existing grafana_data volume keeps the old
-      # password until it is reset.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the root .env}
-      # Anonymous read access is off by default; pinned so a future image default cannot
-      # quietly open the dashboards. Setting the org role as well was inert: Grafana
-      # never consults it while anonymous access is disabled, and its startup log
-      # reported only the line above as applied.
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
-      # Provisioned from the repository at every start, so the datasources are
-      # recreated rather than configured once by hand. Read-only: Grafana must not be
-      # able to rewrite the definitions that make the stack reproducible.
-      #
-      # Only the datasources subdirectory is overlaid, not the whole provisioning
-      # path. Grafana also reads plugins/, notifiers/, alerting/ and dashboards/ from
-      # there, and replacing the directory root hides the copies in the image, so it
-      # logs a read error for each of the four. Overlaying the one directory that is
-      # actually provisioned leaves the rest intact.
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      # The Prometheus basic-auth password (see prometheus.yml): Grafana reads
-      # Prometheus through it via a `$__file{}` pointer in datasources.yml, so the
-      # secret itself never lands in a tracked file.
       - ./observability/.rw-password:/etc/grafana/rw-password:ro
-      # The operator dashboard, overlaid the same way. Without this a fresh
-      # `docker compose up` yields a connected but blank Grafana and someone has to
-      # rebuild the panels by hand. The directory is empty in the image, so adding a
-      # provider to it costs nothing until a file is actually written.
       - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-    # Grafana health-checks each datasource on start-up, so it must not begin before
-    # the stores it points at are listening, or it logs a connection error per
-    # datasource and shows them red until something restarts it. Waiting on the
-    # health checks rather than on container start is what makes that true after a
-    # restart, not just on a first run when everything happened to be slow.
     depends_on:
       prometheus:
         condition: service_healthy
@@ -397,44 +194,26 @@ services:
   loki:
     image: grafana/loki:2.9.8
     command: ["-config.file=/etc/loki/config.yml"]
-    # Internal only: Grafana queries it over the Compose network, and the
-    # collector writes to it there. No host-published log API.
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
-    # The collector pushes to this, so it has to be answering before the
-    # collector starts. The image ships busybox wget and no curl, and wget exits
-    # non-zero on an HTTP error, so this cannot pass merely because the port is
-    # open while Loki is still initialising.
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
-      # Checks that fail inside this window do not count towards retries, which is
-      # what absorbs a slow first start without loosening the probe afterwards.
       start_period: 30s
 
   tempo:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yml"]
-    # 3200 is the query API, reachable only by Grafana on the Compose network;
-    # 4317 is ingestion from otel-collector. Neither is published to the host.
     expose:
       - "3200"
       - "4317"
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
-      # The remote-write password for Prometheus (see prometheus.yml): Tempo is
-      # the only writer, and the receiver answers 401 without it.
       - ./observability/.rw-password:/etc/tempo/rw-password:ro
       - tempo_data:/var/tempo
-    # Tempo answers /ready only once its ingester has joined its own memberlist
-    # ring, and the startup log shows it logging "auto-joining cluster after
-    # timeout" before settling, so it reports 503 for a stretch after the port is
-    # already open. The longer start_period is what keeps that transient from
-    # being read as a failure, and the retries are what stop a single later 503
-    # from flipping an otherwise working container to unhealthy.
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
       interval: 10s

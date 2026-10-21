@@ -148,6 +148,37 @@ def pending_opportunities(session, game_id: str, known: set[str]) -> list[str]:
     return []
 
 
+EVENT_MODELS = {
+    "wordle": WordleGameRecord,
+    "anagram": AnagramGameRecord,
+    "connections": ConnectionsGameRecord,
+    "trivia-drop": TriviaDropQuestionRecord,
+    "reaction-time": ReactionTimeGameRecord,
+    "couple-questionnaire": CoupleGameRecord,
+    "two-key-escape": TwoKeyEscapeGameRecord,
+    "plot-twist": PlotTwistGameRecord,
+    "case-closed": CaseClosedGameRecord,
+}
+
+
+def closed_opportunities(session, game_id: str, opportunity_ids: list[str]) -> list[str]:
+    """Return only candidate opportunities whose native event has ended."""
+    if not opportunity_ids:
+        return []
+    try:
+        model = EVENT_MODELS[game_id]
+    except KeyError:
+        competition_type_for(game_id)
+        return []
+    rows = session.scalars(
+        select(model.id).where(
+            model.id.in_(opportunity_ids),
+            model.status == "ended",
+        )
+    ).all()
+    return [str(row_id) for row_id in rows]
+
+
 def opportunity_info(session, game_id: str, opportunity_id: str) -> Optional[OpportunityInfo]:
     """Canonical identity for one event, or None when it does not exist."""
     competition_type = competition_type_for(game_id)
@@ -210,16 +241,7 @@ def is_event_closed(session, game_id: str, opportunity_id: str) -> bool:
     info = opportunity_info(session, game_id, opportunity_id)
     if info is None:
         return False
-    model = {
-        "wordle": WordleGameRecord,
-        "anagram": AnagramGameRecord,
-        "connections": ConnectionsGameRecord,
-        "reaction-time": ReactionTimeGameRecord,
-        "couple-questionnaire": CoupleGameRecord,
-        "two-key-escape": TwoKeyEscapeGameRecord,
-        "plot-twist": PlotTwistGameRecord,
-        "case-closed": CaseClosedGameRecord,
-    }[game_id]
+    model = EVENT_MODELS[game_id]
     row = session.get(model, opportunity_id)
     return row is not None and row.status == "ended"
 

@@ -3,6 +3,8 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
+from sqlalchemy.engine import URL
+
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -58,20 +60,40 @@ def _require_positive_int_or_none(value: int | None, *, field: str) -> int | Non
 
 
 class Settings(BaseSettings):
-    # No defaults on purpose: a baked-in fallback would ship in the image and silently point a
-    # misconfigured deployment at whatever answers that address.
-    DATABASE_URL: str = Field(...)
-    TEST_DATABASE_URL: str = Field(...)
-    DATABASE_NAME: str = "ConfessIt"
+    # Keep connection details as separate environment variables so credentials with
+    # URL-reserved characters are escaped safely when SQLAlchemy builds the DSN.
+    PGHOST: str = Field(...)
+    PGUSER: str = Field(...)
+    PGPORT: int = 5432
+    PGDATABASE: str = Field(...)
+    PGPASSWORD: str = Field(...)
+    PGSSLMODE: str = "require"
 
-    @field_validator("DATABASE_URL", "TEST_DATABASE_URL")
-    @classmethod
-    def _validate_database_url(cls, value: str, info: ValidationInfo) -> str:
-        """Only the driver this app speaks: anything else fails at connect time
-        with a driver error that names nothing about configuration."""
-        return _require_url_scheme(
-            value, field=info.field_name, schemes=("postgresql+psycopg",)
-        )
+    @property
+    def DATABASE_URL(self) -> str:
+        """SQLAlchemy URL assembled from the standard PG* settings."""
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.PGUSER,
+            password=self.PGPASSWORD,
+            host=self.PGHOST,
+            port=self.PGPORT,
+            database=self.PGDATABASE,
+            query={"sslmode": self.PGSSLMODE},
+        ).render_as_string(hide_password=False)
+
+    @property
+    def TEST_DATABASE_URL(self) -> str:
+        """Conventional isolated test database on the same PostgreSQL server."""
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.PGUSER,
+            password=self.PGPASSWORD,
+            host=self.PGHOST,
+            port=self.PGPORT,
+            database=f"{self.PGDATABASE}_Test",
+            query={"sslmode": self.PGSSLMODE},
+        ).render_as_string(hide_password=False)
 
     # One engine per process (see app.postgres), so the worst-case Postgres connection
     # count is (POOL_SIZE + MAX_OVERFLOW) * WEB_WORKERS; keep that under max_connections.

@@ -45,7 +45,7 @@ read_setting() {
 }
 
 # Settings required by app.config.Settings to bake into the cron wrapper.
-REQUIRED_SETTINGS="DATABASE_URL TEST_DATABASE_URL REDIS_URL SECRET_KEY TOKEN_HASH_PEPPER"
+REQUIRED_SETTINGS="PGHOST PGUSER PGPORT PGDATABASE PGPASSWORD REDIS_URL SECRET_KEY TOKEN_HASH_PEPPER"
 
 # All validation happens before any file is written, so a refused value leaves
 # no half-generated wrapper behind.

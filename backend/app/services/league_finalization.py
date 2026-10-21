@@ -315,7 +315,7 @@ def finalize_due_opportunities(
                     )
                     continue
         with db.sessions() as session:
-            missing = [
+            unfinalized = [
                 str(opportunity_id)
                 for (opportunity_id,) in session.execute(
                     select(GameScoreOpportunityRecord.opportunity_id).where(
@@ -324,14 +324,17 @@ def finalize_due_opportunities(
                     )
                 ).all()
             ]
+            # Snapshots are created when events open. Finalization is only due
+            # after the native event has ended; filtering here avoids retrying
+            # every active opportunity and logging the expected 409 each pass.
+            missing = adapters.closed_opportunities(session, game_id, unfinalized)
         for opportunity_id in missing:
             try:
                 finalize_opportunity(db, game_id, opportunity_id)
                 finalized += 1
             except HTTPException as exc:
-                # Same visibility contract as the snapshot loop above: an event
-                # that is still open (or otherwise unrankable) is retried on a
-                # later pass, and each pass says so rather than swallowing it.
+                # A state change after the closed-event scan, or another
+                # unrankable event, is retried on a later pass with its reason.
                 import logging
 
                 logging.getLogger(__name__).warning(

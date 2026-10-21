@@ -57,11 +57,10 @@ def _sanitize_failure(text: str) -> str:
     redacted = re.sub(r"://[^@\s]+@", "://***@", text)
     for secret_name in (
         "DB_PASSWORD",
+        "PGPASSWORD",
         "SECRET_KEY",
         "TOKEN_HASH_PEPPER",
         "REDIS_PASSWORD",
-        "DATABASE_URL",
-        "TEST_DATABASE_URL",
         "REDIS_URL",
     ):
         secret = os.getenv(secret_name)
