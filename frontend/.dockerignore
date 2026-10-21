@@ -2,7 +2,7 @@
 # .dockerignore does not apply to this build. `COPY . .` would otherwise bake the host's
 # node_modules (565 MB, installed for the host platform and already shadowed by the npm
 # install layer) and .env into the image. Vite reads .env from /app at run time, where the
-# bind mount in docker-compose.yml supplies it.
+# bind mount in docker-compose.dev.yml supplies it.
 node_modules
 **/node_modules
 dist

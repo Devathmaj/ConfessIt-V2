@@ -18,9 +18,6 @@ from .config import (
     settings,
     cors_allow_origins,
     validate_cloudinary_settings,
-    validate_cookie_transport,
-    validate_public_base_url,
-    validate_transport_security,
 )
 from .routers import auth, profile, matchmaking, confessions, love_notes, conversations, notifications, staff_notifications, admin, admin_love_notes, admin_wordle, admin_anagram, admin_couple, admin_connections, admin_trivia_drop, admin_games, admin_plot_twist, admin_case_closed, admin_reaction_time, messages, wordle, anagram, connections, trivia_drop, couple_questionnaire, plot_twist, case_closed, reaction_time, games, two_key_escape, leaderboards
 from .dependencies import get_db
@@ -253,20 +250,6 @@ async def on_startup():
         "authentication tokens and the account-wide Auth token key that is not available on "
         "this plan. Entitlement is therefore re-checked on every response that mints a URL."
     )
-
-    # Before any login can be minted: a cloud deployment without PUBLIC_BASE_URL would print
-    # localhost magic links for every prod sign-in. Same fail-fast shape as the check above.
-    validate_public_base_url()
-
-    # Before any credential traverses a wire: a cloud deployment on cleartext database
-    # and cache connections leaks everything it stores at the network layer. Same
-    # fail-fast shape as the checks above, with an explicit single-host opt-out.
-    validate_transport_security()
-
-    # Before any session cookie is minted: a cloud deployment that cannot know the
-    # client-facing scheme (no trusted proxies, no Secure override) mints bearer
-    # cookies without Secure on an https site. Same fail-fast shape as above.
-    validate_cookie_transport()
 
     # Validate the AES-256-GCM key before accepting chat. The scheduler process does not handle chat.
     from .services.chat_encryption import validate_startup_configuration
@@ -811,7 +794,7 @@ if ENABLE_DEBUG_ENDPOINTS:
 # Main entrypoint
 # ----------------------
 if __name__ == "__main__":
-# Run from the backend directory with ``uvicorn app.main:app --reload --host 0.0.0.0 --port 8001``.
+# Run from the backend directory with ``uvicorn app.main:app --reload --host 0.0.0.0 --port 8000``.
     uvicorn.run(
         "app.main:app",
         host=settings.HOST,

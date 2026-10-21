@@ -1,21 +1,40 @@
-# Development stack; PostgreSQL connection settings come from backend/.env.
+# Production stack; deploy with `docker compose up -d` on the host that terminates
+# TLS (see nginx/nginx.prod.conf.example).
+#
+# Only two services are published to the host: nginx (80/443) and Grafana
+# (127.0.0.1:3000, loopback only). Everything else -- API, Redis, Prometheus,
+# Loki, Tempo, the OTel collector -- is reachable only on the Compose network.
+#
+# Development is docker-compose.dev.yml, which keeps the bind mounts and the Vite
+# dev server; this file is standalone and inherits nothing from it.
+#
+# PostgreSQL connection settings come from backend/.env.
 services:
 
   nginx:
-    image: nginx:alpine
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL to the public https API origin}
+    image: confessit-nginx:prod
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME to the public site name}
+      API_ORIGIN: ${API_ORIGIN:?set API_ORIGIN to the bare public API hostname}
     ports:
-      - "127.0.0.1:5173:80"
-      - "127.0.0.1:8001:8001"
+      - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./tls:/etc/nginx/tls:ro
     depends_on:
-      - frontend
       - backend
+    restart: unless-stopped
     read_only: true
     tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /tmp
+      - /tmp:mode=1777
+      - /var/cache/nginx:mode=1777
+      - /var/run:mode=1777
+      - /etc/nginx/conf.d:mode=1777
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
       interval: 30s
@@ -27,85 +46,100 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  frontend:
-    build:
-      context: ./frontend
-    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
-      VITE_API_URL: "http://localhost:8001"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
   backend:
     build:
       context: ./backend
+      dockerfile: Dockerfile
     command: [
       "uvicorn",
       "app.main:app",
       "--host",
       "0.0.0.0",
       "--port",
-      "8001",
-      "--reload",
-      "--reload-dir",
-      "app",
+      "8000",
+      "--workers",
+      "${WEB_WORKERS:-2}",
       "--limit-concurrency",
-      "${MAX_CONCURRENCY:-100}",
+      "100",
       "--h11-max-incomplete-event-size",
       "16384"
     ]
-    volumes:
-      - ./backend:/app
-    env_file:
-      - ./backend/.env
-    depends_on:
-      - redis
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - redis
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
-      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public site origin}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to the public frontend origin(s)}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS to the public names this deployment serves}
+      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: "confessit-backend"
-      ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],backend"
       OTEL_SEMCONV_STABILITY_OPT_IN: "http"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+
   game-scheduler:
     build:
       context: ./backend
+      dockerfile: Dockerfile
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
-    volumes:
-      - ./backend:/app
-      - ./backend/.scheduler.env:/app/.env:ro
     env_file:
       - ./backend/.scheduler.env
-    depends_on:
-      - redis
     environment:
       TZ: UTC
-      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       OTEL_EXPORTER_OTLP_INSECURE: "true"
+    depends_on:
+      - redis
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
 
   # postgres:
   #   image: pgvector/pgvector:pg16
   #   environment:
   #     POSTGRES_USER: confessit
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
   #     POSTGRES_DB: ConfessIt
   #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
+  #     - postgres_prod_data:/var/lib/postgresql/data
   #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "2"
+  #         memory: 2G
+
   redis:
     image: redis:7-alpine
     container_name: confessit_redis
@@ -121,7 +155,15 @@ services:
     expose:
       - "6379"
     volumes:
-      - redis_data:/data
+      - redis_prod_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.99.0
@@ -162,9 +204,9 @@ services:
   grafana:
     image: grafana/grafana:10.4.3
     ports:
-      - "127.0.0.1:3050:3050"
+      - "127.0.0.1:3000:3000"
     environment:
-      GF_SERVER_HTTP_PORT: "3050"
+      GF_SERVER_HTTP_PORT: "3000"
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the root .env}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
@@ -213,11 +255,9 @@ services:
       start_period: 60s
 
 volumes:
-  postgres_data:
-    name: confessit_postgres_data
-  redis_data:
+  postgres_prod_data:
+  redis_prod_data:
   prometheus_data:
   grafana_data:
   loki_data:
   tempo_data:
-

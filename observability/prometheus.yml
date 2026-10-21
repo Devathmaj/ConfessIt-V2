@@ -66,9 +66,9 @@ scrape_configs:
   # exported_job. The application metrics stay on the OTLP path, where they already
   # arrive via the "otel-collector" job above.
   #
-  # The scrape reuses the port the server already binds, so no new listener is involved.
-  # Prometheus reaches it over the Compose network; note that 8001 is separately
-  # published to the host, which is finding M7's problem and not fixed here.
+  # The scrape reuses the port the server already binds (8000 in both stacks), so
+  # no new listener is involved. That port is never published to the host: the
+  # backend is reachable only on the Compose network and through the edge.
   - job_name: "confessit-backend"
     static_configs:
-      - targets: ["backend:8001"]
+      - targets: ["backend:8000"]

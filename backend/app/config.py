@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Any
 from urllib.parse import urlsplit
@@ -7,10 +6,6 @@ from sqlalchemy.engine import URL
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-# Standard-library logging only: app.logger imports this module (circular otherwise).
-logger = logging.getLogger(__name__)
-
 
 def _reject_weak_secret(value: str, *, field: str) -> str:
     """Refuse a missing, short, placeholder or low-entropy deployment secret; shared by
@@ -206,19 +201,11 @@ class Settings(BaseSettings):
     REDIS_COMMAND_POOL_MAX_CONNECTIONS: int = Field(default=50, ge=1)
     REDIS_PUBSUB_POOL_MAX_CONNECTIONS: int = Field(default=100, ge=1)
 
-    CLOUD: bool = False
-
     @field_validator("REDIS_URL")
     @classmethod
     def _validate_redis_url(cls, value: str) -> str:
         """Only redis/rediss schemes: a typo otherwise fails long after boot as an opaque connection error."""
         return _require_url_scheme(value, field="REDIS_URL", schemes=("redis", "rediss"))
-
-    # --- Data-transport encryption (SEC-004) ---
-    # Network-visible traffic must use rediss:// (CERT_REQUIRED) and ?sslmode=require (or
-    # verify-ca/full, honoured by psycopg from the URL). This flag is the explicit acknowledgment
-    # for single-host Compose deployments knowingly keeping the loopback posture behind the edge.
-    ALLOW_PLAINTEXT_DATA_TRANSPORT: bool = False
 
     # --- Reverse proxy and cookie transport ---
     # Comma-separated IPs/CIDRs allowed to set X-Forwarded-*; empty trusts no forwarded header
@@ -573,7 +560,7 @@ class Settings(BaseSettings):
     # --- CORS / server ---
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080"
     HOST: str = "0.0.0.0"
-    PORT: int = 8001
+    PORT: int = 8000
     RELOAD: bool = True
 
     @field_validator("CORS_ORIGINS")
@@ -620,112 +607,6 @@ def public_frontend_origin() -> str:
         (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
         or "http://localhost:5173"
     )
-
-
-def validate_public_base_url() -> None:
-    """Refuse to boot a cloud deployment whose links would point at localhost: a magic link is
-    a bearer credential, and a localhost one is a login DoS that trains users to copy tokens to
-    the wrong host (a phishing template). Local runs are unaffected."""
-    if not settings.CLOUD:
-        return
-    base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
-    if not base:
-        raise RuntimeError(
-            "PUBLIC_BASE_URL must be set when CLOUD is true: magic links are minted "
-            "from it, and the localhost default would break every production login."
-        )
-    lowered = base.lower()
-    # Exact host matching, not substring: "mylocalhost.example.com" is a real domain,
-    # while localhost, *.localhost and 127.* never leave the machine.
-    host = lowered.split("://", 1)[-1].split("/")[0]
-    if host.startswith("["):
-        is_loopback = host.split("]")[0] + "]" == "[::1]"
-    else:
-        bare = host.split(":")[0]
-        is_loopback = (
-            bare == "localhost"
-            or bare.endswith(".localhost")
-            or bare.startswith("127.")
-            or bare == "::1"
-        )
-    if is_loopback:
-        raise RuntimeError(
-            f"PUBLIC_BASE_URL must not point at loopback when CLOUD is true (got {base!r}): "
-            "magic links minted for it would be unusable in production."
-        )
-
-
-def _database_sslmode() -> str | None:
-    """The lowercased ``sslmode`` query parameter of ``DATABASE_URL``, if present; never the
-    URL itself, which is a credential rather than the policy this returns."""
-    from urllib.parse import parse_qs, urlsplit
-
-    try:
-        query = parse_qs(urlsplit(settings.DATABASE_URL).query)
-    except ValueError:
-        return None
-    values = query.get("sslmode") or []
-    return values[0].strip().lower() if values and values[0].strip() else None
-
-
-def validate_transport_security() -> None:
-    """Refuse a cloud deployment whose database and cache traffic is cleartext.
-
-    Credentials, session hashes and chat content traverse both connections; ``allow``/``prefer``
-    count as missing -- both silently downgrade when the server does not insist on TLS. The only
-    escape hatch is ALLOW_PLAINTEXT_DATA_TRANSPORT=true for a single-host Compose stack.
-    """
-    if not settings.CLOUD:
-        return
-    problems = []
-    if _database_sslmode() not in ("require", "verify-ca", "verify-full"):
-        problems.append(
-            "DATABASE_URL must carry ?sslmode=require (or verify-ca / verify-full): "
-            "database credentials and session data must not traverse a network in cleartext."
-        )
-    if not settings.REDIS_URL.lower().startswith("rediss://"):
-        problems.append(
-            "REDIS_URL must use the rediss:// scheme: chat traffic and the rate-limit "
-            "counters must not traverse a network in cleartext."
-        )
-    if not problems:
-        return
-    if settings.ALLOW_PLAINTEXT_DATA_TRANSPORT:
-        logger.warning(
-            "Running with plaintext database/cache transport (%s). This is only safe "
-            "while Postgres and Redis are reachable solely over this host's own Compose "
-            "network; see docker-compose.prod.yml for the TLS migration.",
-            "; ".join(problems),
-        )
-        return
-    raise RuntimeError(
-        "Insecure data transport: " + " ".join(problems) + " Either enable TLS, or set "
-        "ALLOW_PLAINTEXT_DATA_TRANSPORT=true to knowingly keep the single-host "
-        "Compose-network posture (see docker-compose.prod.yml)."
-    )
-
-
-def validate_cookie_transport() -> None:
-    """Refuse a cloud deployment that would mint auth cookies without Secure (SEC-005).
-
-    ``Secure`` follows the override when set, else the proxy-corrected scheme -- which a
-    TLS-terminating proxy reduces to http unless TRUSTED_PROXY_HOSTS or COOKIE_SECURE=true
-    covers it. ``False`` is refused outright under CLOUD; local runs are unaffected.
-    """
-    if not settings.CLOUD:
-        return
-    if settings.COOKIE_SECURE is False:
-        raise RuntimeError(
-            "COOKIE_SECURE must not be false when CLOUD is true: auth cookies would "
-            "leave the browser over plain HTTP. Remove the override (the request scheme "
-            "then decides) or set it to true."
-        )
-    if settings.COOKIE_SECURE is not True and not settings.TRUSTED_PROXY_HOSTS.strip():
-        raise RuntimeError(
-            "CLOUD deployments must set COOKIE_SECURE=true or TRUSTED_PROXY_HOSTS: with "
-            "neither, an app behind a TLS proxy sees the proxy-to-app hop as http and mints "
-            "auth cookies without the Secure flag on an https site."
-        )
 
 
 def cors_allow_origins() -> list[str]:

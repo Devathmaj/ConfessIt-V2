@@ -3,7 +3,7 @@
 # backend/Dockerfile ends in `COPY . .`, so anything not excluded here is baked into an
 # image layer. That includes the gitignored .env holding the Cloudinary, Supabase and Redis
 # credentials, and the my_app.log* files, which carry request and user data. Both are
-# supplied at run time instead: .env by the bind mount in docker-compose.yml, credentials
+# supplied at run time instead: .env by the bind mount in docker-compose.dev.yml, credentials
 # by the environment.
 .env
 .scheduler.env

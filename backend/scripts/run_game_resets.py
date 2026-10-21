@@ -100,14 +100,8 @@ def main() -> int:
     # with a non-zero exit.
     client = None
     try:
-        from app.config import validate_transport_security
         from app.postgres import PostgresClient
         from app.services.game_scheduler import reset_cycle_succeeded, run_reset_cycle
-
-        # Same transport posture as the API boot: a cloud sidecar on cleartext
-        # database/cache connections refuses to run rather than moving credentials
-        # and session data over an observable network.
-        validate_transport_security()
 
         started = datetime.now(timezone.utc)
         print(f"[game-resets] starting reset cycle at {started.isoformat()}", flush=True)

@@ -1,0 +1,231 @@
+# Development stack; run with `docker compose -f docker-compose.dev.yml up`.
+#
+# Source trees are bind-mounted over the dev images (frontend/Dockerfile.dev,
+# backend/Dockerfile.dev) so edits reload live. The production stack is the
+# standalone docker-compose.yml, which inherits nothing from this file.
+#
+# PostgreSQL connection settings come from backend/.env.
+services:
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:5173:80"
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      VITE_API_URL: "http://localhost:8001"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    command: [
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--reload",
+      "--reload-dir",
+      "app",
+      "--limit-concurrency",
+      "${MAX_CONCURRENCY:-100}",
+      "--h11-max-incomplete-event-size",
+      "16384"
+    ]
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
+      TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+      OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_SERVICE_NAME: "confessit-backend"
+      ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],backend"
+      OTEL_SEMCONV_STABILITY_OPT_IN: "http"
+  game-scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    volumes:
+      - ./backend:/app
+      - ./backend/.scheduler.env:/app/.env:ro
+    env_file:
+      - ./backend/.scheduler.env
+    depends_on:
+      - redis
+    environment:
+      TZ: UTC
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+    restart: unless-stopped
+
+  # postgres:
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     POSTGRES_USER: confessit
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+  #     POSTGRES_DB: ConfessIt
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+  redis:
+    image: redis:7-alpine
+    container_name: confessit_redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
+    command: >
+      sh -c 'exec redis-server
+      --maxmemory 128mb
+      --save 900 1
+      --save 300 10
+      --requirepass "$$REDIS_PASSWORD"'
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.99.0
+    command: ["--config=/etc/otel-collector-config.yml"]
+    expose:
+      - "4317"
+      - "4318"
+      - "8889"
+    volumes:
+      - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.config.file=/etc/prometheus/web.yml"
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus-web.yml:/etc/prometheus/web.yml:ro
+      - ./observability/alerting-rules.yml:/etc/prometheus/alerting-rules.yml:ro
+      - ./observability/.rw-password:/etc/prometheus/rw-password:ro
+      - ./observability/prometheus-healthcheck.sh:/etc/prometheus/healthcheck.sh:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/etc/prometheus/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the root .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/.rw-password:/etc/grafana/rw-password:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+
+  loki:
+    image: grafana/loki:2.9.8
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yml"]
+    expose:
+      - "3200"
+      - "4317"
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yml:ro
+      - ./observability/.rw-password:/etc/tempo/rw-password:ro
+      - tempo_data:/var/tempo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  postgres_data:
+    name: confessit_postgres_data
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  tempo_data:

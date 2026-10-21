@@ -1,9 +1,9 @@
 # Production Nginx front for the ConfessIt SPA.
 #
 # Used two ways: read it as the documented production edge, and used verbatim by
-# frontend/Dockerfile.prod, which copies it as the container's Nginx template --
+# frontend/Dockerfile, which copies it as the container's Nginx template --
 # nginx:alpine renders `${...}` from the environment at container start, so
-# SERVER_NAME/API_ORIGIN arrive as container env (see docker-compose.prod.yml), not
+# SERVER_NAME/API_ORIGIN arrive as container env (see docker-compose.yml), not
 # edits. Do NOT serve production from `vite dev`.
 #
 # What this enforces that the dev server cannot: TLS with HSTS, the full
@@ -127,7 +127,7 @@ server {
     # and list this host in the backend's TRUSTED_PROXY_HOSTS.
     location /api/ {
         limit_req zone=edge burst=100 nodelay;
-        proxy_pass http://backend:8001/;
+        proxy_pass http://backend:8000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         # Overwrite rather than append: this edge is the public hop, so a

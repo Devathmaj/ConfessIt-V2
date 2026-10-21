@@ -144,7 +144,7 @@ below, deduped so a row never appears twice.
   `EMBEDDING_SEARCH_RATE_LIMIT_PER_MINUTE="30"` (public bucket) and
   `EMBEDDING_ADMIN_SEARCH_RATE_LIMIT_PER_MINUTE="60"` (staff bucket, `0` disables).
 - PostgreSQL requirement: the `pgvector/pgvector:pg16` image (see
-  `docker-compose.yml` / `docker-compose.prod.yml` and `postgres-init.sql`
+  `docker-compose.yml` / `docker-compose.dev.yml` and `postgres-init.sql`
   `CREATE EXTENSION IF NOT EXISTS vector`). Keyword search reuses the existing
   pg_trgm GIN indexes on `confessions(body)` / `confessions(recipient_name)`
   (`ix_trgm_confessions_body`, `ix_trgm_confessions_recipient_name`, created at

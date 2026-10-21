@@ -192,32 +192,36 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     # A fresh checkout has no .env, and .env is gitignored so it cannot be committed. The
-    # compose file interpolates these at start-up and fails fast when they are missing, so
-    # the build needs them from here. Dev-only values, matching the local .env.
+    # compose files interpolate these at start-up and fail fast when they are missing, so
+    # the builds need them from here. Production-only names get CI placeholders; they are
+    # parsed, never baked in -- VITE_API_URL only has to be https:// to pass the
+    # build-time check.
     env:
       DB_PASSWORD: ConfessItLocalPassword
       REDIS_PASSWORD: ConfessItLocalRedisPassword
       GRAFANA_ADMIN_PASSWORD: ConfessItLocalGrafanaPassword
-      # Parsed, not run, by `docker compose build`: the `:?` interpolation fails closed
-      # when a variable is missing, so the build carries the same names a real start
-      # needs. The value is irrelevant at build time -- nothing bakes it into the image.
-      SECRET_KEY: compose-build-placeholder-not-a-real-key-00000000
-      TOKEN_HASH_PEPPER: compose-build-placeholder-not-a-real-pepper-0000
+      SERVER_NAME: ci.example.com
+      API_ORIGIN: api.ci.example.com
+      VITE_API_URL: https://ci.example.com
+      PUBLIC_BASE_URL: https://ci.example.com
+      CORS_ORIGINS: https://ci.example.com
+      ALLOWED_HOSTS: ci.example.com
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Verify Docker Compose Build
+      - name: Create placeholder env files
+        # backend/.env and backend/.scheduler.env are gitignored, but `docker compose
+        # config` refuses to resolve a service whose env_file is absent. Copies of the
+        # tracked templates are enough to parse and build; nothing here starts a service.
+        run: |
+          cp backend/.env.example backend/.env
+          cp backend/.scheduler.env.example backend/.scheduler.env
+      - name: Verify production compose build
         run: docker compose build
-      - name: Verify production compose file parses
-        # No build: validates names, structure and required variables against dev-only
-        # stand-ins. A missing `:?` variable or bad YAML fails here, not at 3am.
-        env:
-          SERVER_NAME: ci.example.com
-          API_ORIGIN: api.ci.example.com
-          VITE_API_URL: https://ci.example.com
-          DB_PASSWORD: ConfessItLocalPassword
-          REDIS_PASSWORD: ConfessItLocalRedisPassword
-          SECRET_KEY: compose-prod-placeholder-not-a-real-key-00000000
-          PUBLIC_BASE_URL: https://ci.example.com
-          CORS_ORIGINS: https://ci.example.com
-          ALLOWED_HOSTS: ci.example.com
-        run: docker compose -f docker-compose.prod.yml config --quiet
+      - name: Verify dev compose build
+        run: docker compose -f docker-compose.dev.yml build
+      - name: Verify compose files parse
+        # No build: validates names, structure and required variables against the
+        # stand-ins above. A missing `:?` variable or bad YAML fails here, not at 3am.
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.dev.yml config --quiet

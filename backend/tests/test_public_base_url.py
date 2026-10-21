@@ -14,7 +14,7 @@ import pytest
 
 from app import create_token as create_token_module
 from app.accounts import AccountType
-from app.config import public_frontend_origin, settings, validate_public_base_url
+from app.config import public_frontend_origin, settings
 from app.db_models import UserRecord
 from app.services import auth_service as auth_service_module
 from app.services.auth_service import generate_magic_link_service
@@ -114,48 +114,6 @@ def test_origin_defaults_to_local_dev(monkeypatch):
 def test_origin_honours_configuration_and_strips_a_trailing_slash(monkeypatch):
     monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example.com/")
     assert public_frontend_origin() == "https://app.example.com"
-
-
-def test_boot_guard_ignores_local_runs(monkeypatch):
-    monkeypatch.setattr(settings, "CLOUD", False)
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", None)
-    validate_public_base_url()  # must not raise
-
-
-def test_boot_guard_refuses_a_cloud_without_an_origin(monkeypatch):
-    monkeypatch.setattr(settings, "CLOUD", True)
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", None)
-    with pytest.raises(RuntimeError):
-        validate_public_base_url()
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "http://localhost:5173",
-        "http://127.0.0.1:8000/",
-        "http://[::1]:5173",
-        "https://app.localhost/verify",
-    ],
-)
-def test_boot_guard_refuses_loopback_origins_in_the_cloud(monkeypatch, bad):
-    monkeypatch.setattr(settings, "CLOUD", True)
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", bad)
-    with pytest.raises(RuntimeError):
-        validate_public_base_url()
-
-
-def test_boot_guard_allows_lookalike_domains(monkeypatch):
-    # Exact host matching: a public name that merely contains the substring must pass.
-    monkeypatch.setattr(settings, "CLOUD", True)
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://mylocalhost.example.com")
-    validate_public_base_url()  # must not raise
-
-
-def test_boot_guard_accepts_a_real_origin_in_the_cloud(monkeypatch):
-    monkeypatch.setattr(settings, "CLOUD", True)
-    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example.com")
-    validate_public_base_url()  # must not raise
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,5 @@
+# Production image for the ConfessIt API and the game-scheduler cron sidecar.
+# Development uses Dockerfile.dev (bind mount + uvicorn --reload).
 # Use an official Python runtime as a parent image
 FROM python:3.12-slim
 
@@ -15,14 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends cron \
 RUN pip install --no-cache-dir --upgrade pip wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Remove watchfiles so uvicorn falls back to StatReload on mounted volumes.
+# No reloader runs here, so the reload-only watcher is not shipped.
 RUN pip uninstall -y watchfiles
 
 # Unprivileged user for cron execution.
 RUN useradd -r -m appuser
 
 # Expose the port the app runs on
-EXPOSE 8001
+EXPOSE 8000
 
 # Copy the rest of the application code
 COPY . .
@@ -30,6 +32,6 @@ COPY . .
 # Grant ownership of app tree to appuser.
 RUN chown -R appuser:appuser /app
 
-# Run FastAPI with reload and bounded concurrency.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", \
+# Run FastAPI with bounded concurrency, no reload.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--limit-concurrency", "100", "--h11-max-incomplete-event-size", "16384"]
