@@ -93,11 +93,8 @@ def regenerate_love_note_redaction(
         raise pii_error_to_http(exc)
 
 
-# The report queue carries the reporting capabilities rather than the love-note ones, so
-# reading reports and ruling on them stay separately grantable from approving a note.
-# Nothing here shadows a handler above (FastAPI matches on method first, and no literal
-# "/{note_id}" reader exists), but they are still declared last so that adding a
-# ``GET /{note_id}`` later cannot silently swallow ``/reports`` as a note id.
+# Report permissions are separate from note approval. Keep these routes last so a future
+# ``GET /{note_id}`` route cannot capture ``/reports``.
 
 
 @router.get("/reports")

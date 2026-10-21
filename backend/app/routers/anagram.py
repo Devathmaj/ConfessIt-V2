@@ -17,11 +17,8 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/anagram", tags=["Anagram"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a participant
-# and reads and writes only that caller's own participation: no leaderboard, no way to
-# play another player's scramble, and no way to ask what the answer is -- it is revealed
-# only by a completed participation. The clock is banked server-side on every transition,
-# so the one thing a client can do with the timer is ask for the current numbers.
+# Routes expose only the caller's participation. The answer appears on completion, and
+# the server tracks elapsed time across each transition.
 
 
 @router.get("", response_model=AnagramCurrentGame)

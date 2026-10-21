@@ -15,11 +15,8 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/reaction-time", tags=["Reaction Time"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and reads and writes only that caller's own submissions: no leaderboard,
-# no submitting for another player, no rewriting a settled attempt. The attempt number
-# is assigned server-side from the stored count, and best/average derive from stored
-# rows -- nothing the client sends can mint a sixth attempt or invent a statistic.
+# Routes use the caller's stored attempts. The server assigns attempt numbers and
+# derives best and average times from those rows.
 
 
 @router.get("", response_model=ReactionTimeState)

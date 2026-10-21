@@ -1,25 +1,9 @@
 # app/services/staff_notification_service.py
 
-"""Role-based staff notifications: reports, love notes awaiting review, games.
+"""Store role-addressed staff notices and apply role and preference rules to email.
 
-Participant notices (``notifications``) are addressed to one regno. Staff notices are
-addressed to a *role*: ``report`` and ``love_note`` events are stored once with
-``audience='all'`` and read by whichever role asks, rather than fanned out per staff account.
-
-``game`` notices are stored like every other category, written where the condition is
-discovered rather than computed on read -- a pending Wordle/Anagram/Connections session by the
-scheduler pass evaluating that game's period, a missing featured pick by the daily pass, an
-empty Trivia Drop pipeline at start-up. The ``dedup_key`` carries the session id or UTC date so
-repeats and restarts cannot fan the same condition out.
-
-The one admin-alone event is the automatic block (``notify_user_auto_blocked``): clearing a
-block is admin-only, so the notice is stored with ``audience='admin'`` and -- uniquely -- staged
-into the caller's transaction, because it must commit with the block it reports.
-
-Preferences (which categories an account wants) are stored per staff account but deliberately
-*not* wired to the feed: the list returns every notice. They gate email delivery, which asks
-the same role-first rules as :func:`should_deliver_staff_notification`, so a moderator can
-never be sent a game notice even when a database row says ``games_enabled = true``.
+Categories cover reports, love notes, and games. Deduplication keys prevent repeated
+scheduler notices; account preferences affect email delivery, not the feed or authorization.
 """
 
 from __future__ import annotations
@@ -51,11 +35,7 @@ from .notification_links import staff_notification_link
 
 logger = get_logger(__name__)
 
-# The whole category vocabulary. ``report`` covers every report queue
-# (confession/comment, love-note and chat-message reports) and the automatic
-# block at the removal threshold, which shares the category because it leaves no
-# queue entry of its own; ``love_note`` is a note awaiting approval; ``game`` is
-# anything an admin must feed.
+# Categories cover moderation reports/blocks, love-note review, and admin game work.
 STAFF_NOTIFICATION_CATEGORIES: tuple[str, ...] = ("report", "love_note", "game")
 
 # What each role may see. Moderators rule on content, so reports and the

@@ -31,11 +31,7 @@ from ..postgres import Database
 
 logger = get_logger(__name__)
 
-# Bound on rows iterated from the sheet/file, including blank rows. A file with 1000 data
-# rows plus a handful of separators is ordinary; thousands of blank rows before the data is
-# not, and iterating them is work an operator can still be tricked into paying for with an
-# enormous file. The row limit above is the product rule; this one is the parser's own safety
-# bound and is deliberately more generous.
+# Bound physical rows, including blanks, to prevent oversized sparse files from wasting work.
 _MAX_PHYSICAL_ROWS = app_limits.BULK_UPLOAD_MAX_ROWS * 2 + 100
 
 # The XLSX container is a ZIP, so its advertised sizes are attacker-controlled and the
@@ -892,11 +888,7 @@ def _reconcile_departments(
             existing_by_norm.setdefault(value.strip().lower(), value.strip())
 
     existing_norms = set(existing_by_norm)
-    # Seeded with the existing spellings and then extended as the file is read, so
-    # "CSE" and "cse" in one upload become one department with the first spelling seen --
-    # exactly as they would if they had been created one at a time through an edit that
-    # joined the existing value. Without this the upload could store two spellings of one
-    # department while the distinct count treated them as one.
+    # Reuse the first spelling for each normalized department, including duplicates in the upload.
     planned_by_norm: dict[str, str] = dict(existing_by_norm)
     new_norms: set[str] = set()
     reconciled: list[ParticipantUploadRow] = []
@@ -1033,12 +1025,8 @@ def create_participants_bulk(
             "by another request while it was being checked. Nothing was uploaded; try again.",
         ) from None
 
-    # The admin list caches its totals for a few seconds. A successful upload is a write the
-    # operator is about to look at, so the next list read must not answer with the count from
-    # before it. Imported here rather than at module scope to keep the upload service
-    # independent of the admin listing module until a write actually succeeds. Failures are
-    # logged rather than raised: the rows are already committed, and a cache that could not
-    # be cleared must not turn a successful upload into a response that says it failed.
+    # Clear cached totals after commit. Keep the import local and treat failures as
+    # best-effort because the uploaded rows are already durable.
     try:
         from .admin_service import invalidate_admin_user_count_cache
 

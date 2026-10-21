@@ -15,11 +15,8 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/connections", tags=["Connections"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and reads and writes only that caller's own submission: no leaderboard,
-# no way to play another player's board, and no way to ask what the answer key is --
-# the tiles are display spellings in the caller's own shuffled order, and the submit
-# response is a confirmation carrying no score, no correctness and no membership.
+# Routes access only the caller's submission. The answer key and correctness stay
+# hidden until results are available.
 
 
 @router.get("", response_model=ConnectionsCurrentGame)

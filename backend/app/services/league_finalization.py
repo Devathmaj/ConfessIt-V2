@@ -1,27 +1,7 @@
-"""League finalization: snapshots, awards, and the idempotent due scan.
+"""Snapshot scoring opportunities and finalize league awards idempotently.
 
-An official scoring opportunity flows through two durable steps:
-
-1. **Snapshot** (at activation): one ``game_score_opportunities`` row records
-   the canonical timestamp and whether the game held the featured spotlight
-   that day. Later featured changes never touch this row.
-2. **Finalize** (at closure): eligible finalized native results are ranked
-   with the game's own comparison (ranks and participant counts, kept for
-   display and audit), scored for the ``game`` half (placement-relative for
-   Wordle, Anagram and Reaction Time; the absolute profiles for Trivia
-   Drop, Connections, Couple Questionnaire and Two-Key Escape, whose
-   board rules are absolute), and independently scored against the
-   absolute global profiles (the ``global`` half: native result to 0-100).
-   The snapshotted multiplier is applied once to each half, and one award
-   row per subject is written carrying both halves with their versions.
-
-Finalization is idempotent: an advisory lock serializes concurrent runs on
-one opportunity, and partial unique indexes refuse a second live award for
-the same subject. Retried requests and repeated scheduler runs settle on
-the same rows.
-
-Corrections never overwrite: ``reprocess_opportunity`` marks the live
-awards superseded and issues replacements, so history stays auditable.
+Finalization ranks native results, applies snapshotted scoring profiles, and writes versioned
+awards under an advisory lock. Reprocessing supersedes awards to preserve audit history.
 """
 
 from datetime import datetime, timezone

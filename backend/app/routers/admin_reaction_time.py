@@ -17,12 +17,8 @@ from ..services.authorization import require_capability
 
 router = APIRouter(prefix="/admin/reaction-time", tags=["Admin - Reaction Time"])
 
-# Every route below is gated on the one capability that means "may publish a game", and
-# the read routes are gated too: the featured schedule is the administrator's own until
-# the player-facing surface serves it. The payload is one field -- the day -- because
-# there is nothing else to configure: sessions roll on the game's own cadence with a
-# fresh five-submission budget per player per session, there is no Update action, and
-# timing, attempts, difficulty and thresholds are fixed by the application -- no knob.
+# Routes require game-management access; the featured schedule stays admin-only until
+# exposed to players. Only the feature day is configurable; session rules are fixed.
 
 
 @router.post("", response_model=ReactionTimeGame, status_code=status.HTTP_201_CREATED)

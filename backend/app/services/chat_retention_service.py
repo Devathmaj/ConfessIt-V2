@@ -1,20 +1,7 @@
-"""Daily physical retention cleanup for chat messages and moderation evidence.
+"""Purge expired chat messages and moderation evidence on the daily schedule.
 
-Logical expiry is enforced by every read and send path using the same
-``delete_after``/``expires_at`` columns this module uses. This service is only
-the physical purge that runs as part of the existing 00:01 UTC game scheduler;
-it never decides a deadline from the run time.
-
-* Matchmaking: ``messages.delete_after = match.expires_at +
-  MATCHMAKING_CHAT_RETENTION_HOURS``.
-* Case Closed: ``case_closed_messages.delete_after = session.expires_at``, the
-  pinned event's exclusive end. A chat lock does not touch it.
-* Reported evidence: ``chat_message_evidence.expires_at = reported_at +
-  REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``.
-
-Deleting a chat message does not delete its report: the report foreign key is
-``ON DELETE SET NULL`` and the separately encrypted evidence row is keyed by
-report id. Game sessions, results, partners and accounts are never touched.
+Read and send paths enforce logical expiry; this service performs physical deletion using
+stored deadlines. Reports and separately retained evidence survive message deletion.
 """
 
 from __future__ import annotations

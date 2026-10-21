@@ -1,12 +1,6 @@
-"""Queue login, notification and blocked-account emails through the Functions endpoint.
+"""Submit composed email requests to the Functions endpoint for async delivery.
 
-The backend deliberately knows nothing about Azure Storage Queue or Azure
-Communication Services: it posts the composed request (login link, or
-notification title/body/link, or the blocked-account administrator contact,
-plus recipient name and type) to ``EMAIL_FUNCTION_URL`` (``POST /api/email``
-by default) and trusts the Function App to enqueue it. A successful response
-therefore means "accepted for asynchronous delivery", never "the recipient
-has the email".
+A successful response means the request was accepted, not that the recipient received it.
 """
 
 from __future__ import annotations

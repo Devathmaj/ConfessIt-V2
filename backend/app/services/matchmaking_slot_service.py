@@ -254,11 +254,8 @@ def create_matchmaking_slot_service(
             text("SELECT pg_advisory_xact_lock(:key)"),
             {"key": _SLOT_WRITE_LOCK_KEY},
         )
-        # Order-independent: A-B and B-A are the same rule, and an operator who adds the second
-        # is told it exists. Pair *and* box matched in one query rather than fetching a row and
-        # comparing its group in Python -- the fetched row would be whichever the planner
-        # returned, so a pair stored in two boxes could be reported as duplicate or new
-        # depending on the query plan.
+        # Match the unordered pair and group together, so duplicate detection is stable
+        # even if the pair appears in multiple boxes.
         existing = session.scalar(
             select(MatchmakingSlotRecord).where(and_(pair_matches, group_matches)).limit(1)
         )

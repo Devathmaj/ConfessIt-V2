@@ -1,19 +1,7 @@
-"""Per-game adapters: finalized native results in, rankable league entries out.
+"""Adapt finalized game results into rankable league entries.
 
-Each adapter exposes, for one game, the information the central scoring
-service needs:
-
-* the official scoring opportunity identifier (a session id, or a question
-  id for Trivia Drop);
-* the finalized result records for one opportunity;
-* the game-native comparison that orders them;
-* the ranking subject (one user, or one canonical pair);
-* the canonical opportunity timestamp for period attribution;
-* whether the opportunity was featured (read from the snapshot row).
-
-Adapters never change native results and never expose secrets: answers,
-words, scrambles, guesses, question text, options, maze layouts and
-selections stay out of ``raw_metrics``. Only performance numbers travel.
+Adapters preserve native ordering and expose only performance metrics, never answers,
+content, or other game secrets.
 """
 
 from dataclasses import dataclass, field

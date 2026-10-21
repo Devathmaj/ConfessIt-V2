@@ -1,29 +1,7 @@
-"""Configuring the day's Anagram puzzle: which word the day runs on, and where it came from.
+"""Configure the daily Anagram answer and its source.
 
-The table this writes is the *word* and nothing else -- a day, a word, how the word was
-chosen, and who chose it. No scramble, attempt, guess or result exists here: every write
-below is an administrator publishing something, never a participant.
-
-**The stored answer is canonical and uppercase, and it is never scrambled here.** Each
-player later receives their own permutation of this same word, so a scrambled copy in
-``anagram_games`` would be a second, conflicting spelling of one puzzle. Uppercase
-normalisation happens once, on the way in, so ``elephant``, ``ElePhAnT`` and
-`` ELEPHANT `` are one answer rather than three.
-
-**The word list is data, not a dependency.** ``backend/assets/anagram_words.txt`` is
-committed and read from disk, loaded once for the process's life -- never the Wordle
-vocabulary, never a word API. It is cleaned rather than trusted on the way in: entries
-are stripped and uppercased, empty lines dropped, and non-letter entries (the list holds
-contractions such as ``I'd``) excluded from the draw because an anagram answer is a bag
-of letters. A missing or empty file is a loud error on first use, never a silent
-fall back to some other dictionary.
-
-**The draw is previewed, not saved sight unseen.** ``GET /admin/anagram/preview`` picks a
-word and signs it together with the date; ``POST /admin/anagram`` re-derives the signature
-before storing. The admin sees the answer *before* saving and saving cannot produce a
-different one, while the choice stays on the server: the client echoes a word back only
-alongside a signature it cannot forge. The minimum applies only to the draw -- a custom
-answer of any length is legal, which is why the filter lives here rather than on the column.
+Answers are stored uppercase; player scrambles and attempts live elsewhere. Draws use the
+committed word list and are signed for preview before an administrator saves them.
 """
 
 import hashlib

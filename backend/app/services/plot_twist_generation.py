@@ -1057,11 +1057,7 @@ def publish_package(db: Database, package_id: str) -> dict:
         row.validation_errors = []
         row.published_at = _now()
     published = get_package(db, package_id)
-    # Publishing rotates the event onto this package (terminate-then-create).
-    # Rotation errors propagate -- unlike a scheduler fault, a failed rotation
-    # would leave the new story unpublished-in-effect -- and retrying the
-    # publish is safe: the package stays published and the rotation converges
-    # on the surviving live row.
+    # Propagate rotation failures; retrying publication safely converges on the new live row.
     _rotate_event_to_package(db, package_id)
     return published
 

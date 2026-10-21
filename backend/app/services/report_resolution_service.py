@@ -45,25 +45,15 @@ from .report_counters import (
 logger = get_logger(__name__)
 
 
-# The three closable statuses. Written into the routers as a ``Query(regex=...)`` so a fourth
-# one cannot be invented by a client, and re-asserted here so a caller that is not a router
-# still cannot reach the branches below with something unhandled.
-#
-# ``removed`` and ``dismissed`` are the two the screen offers. ``reviewed`` is the older word
-# for the same thing as ``dismissed`` -- a human looked and the content stays -- and it is
-# still accepted so a caller holding a stale id and a stale vocabulary is not met with a 422,
-# and so rows closed before this change still read back. The branch below treats it as a
-# dismissal, which is exactly what it meant.
+# Accepted report outcomes. ``reviewed`` remains a legacy alias for dismissal.
 RESOLUTION_STATUSES: tuple[str, ...] = ("reviewed", "dismissed", "removed")
 
 # The one status that takes content down. Everything else is a judgement that the content
 # stays. Spelled once so the branch in each of the three resolvers cannot drift.
 REMOVAL_STATUS = "removed"
 
-# ``reviewed`` and ``dismissed`` are one outcome written two ways, so a filter for one of them
-# has to return the other too. A row closed out under the old spelling is stored as ``reviewed``,
-# but every screen labels it Dismissed -- so filtering on ``dismissed`` and leaving it out would
-# hide exactly the rows the moderator is looking for, under the filter that names them.
+# ``reviewed`` is the legacy spelling of ``dismissed``; either filter must include both
+# stored values so older rows remain visible in the moderator queue.
 _DISMISSAL_STATUSES: tuple[str, ...] = ("reviewed", "dismissed")
 
 
@@ -89,12 +79,7 @@ _REMOVAL_HEADINGS: Dict[str, str] = {
     "love_note": "Love note removed",
 }
 
-# What the author is told when a removal came out of a **report queue**.
-#
-# Here a participant put the content in front of a moderator, a moderator read it and ruled
-# that it broke a rule, and the author is being told which rule. Citing the policy is the
-# whole point: it is what makes the ruling answerable by the person it was made about, and
-# what lets them know it was a decision rather than a fault in the app.
+# Policy copy for removals upheld from the report queue.
 _POLICY_BODIES: Dict[str, str] = {
     "confession": "Your confession was removed because it violated our community policies.",
     "comment": (
@@ -104,18 +89,7 @@ _POLICY_BODIES: Dict[str, str] = {
     "love_note": "Your love note was removed because it violated our community policies.",
 }
 
-# What the author is told when a moderator removed the content **directly**, with no report
-# behind it.
-#
-# Deliberately not the policy copy, and the distinction is not cosmetic. A moderator hiding a
-# post from the review screen has not cited a rule against it and no participant has
-# complained about it, so asserting a policy violation would be the application making a claim
-# about a ruling that was never made -- and doing so about a rule nobody can point to is not
-# something an author can act on. This says the thing that actually happened and stops there.
-#
-# The split is by **path**, not by whether reports happen to exist. A confession that has three
-# reports on it and is hidden from the review screen still got no ruling, so it still gets this
-# copy. Only ``resolve_*_report`` cites the policy.
+# Neutral copy for direct hides, where no report ruling or policy finding was made.
 _NEUTRAL_BODIES: Dict[str, str] = {
     "confession": "We removed your confession from ConfessIt.",
     "comment": "We removed your comment from ConfessIt.",
@@ -134,17 +108,8 @@ _REPORTER_DISMISSED_BODY = (
     "violate our community policies, so it was not removed."
 )
 
-# None of the four helpers below writes a navigation target, and that is the design rather than
-# an omission. Each of these notices is about something the reader can no longer open: the
-# content a removal speaks for has already stopped being visible to its author, and a report is
-# only ever visible on the staff review queue, which a participant cannot reach and which would
-# tell them nothing they were not already told in the body. A target on any of them would send
-# the reader to a page that cannot answer the notification -- so the removal notices land on the
-# confession feed, the message box and the love notes page respectively, and the two report
-# notices go nowhere at all.
-#
-# Recorded here rather than left implicit because the next removal path added will also be
-# tempted to pass an id, and the reason it must not is not obvious from the call site.
+# Resolution notices omit navigation targets because removed content and staff reports
+# are not accessible from participant-facing links.
 
 
 def _assert_resolution_status(status_value: str) -> str:
@@ -295,13 +260,7 @@ def _stamp_removal(session, row, reviewer_regno: str) -> bool:
         # update itself: it was read before the write, so it still says the content is live.
         .execution_options(synchronize_session=False)
     )
-    # The row's removal columns are read back from the database rather than from the copy
-    # this session loaded before the write, and that copy is stale by construction: for the
-    # racer that lost, it says the content is live when the winner has already taken it
-    # down, and reporting that back would tell a moderator their own decision removed
-    # nothing *and* that nothing was removed at all. Expiring makes the next read come from
-    # the database, which is the only copy that can be trusted about a row another
-    # transaction may have touched.
+    # Expire the ORM copy so subsequent reads reflect the winning transaction's removal state.
     session.expire(row, ["removed_at", "removed_by_regno"])
     return result.rowcount == 1
 
@@ -475,13 +434,8 @@ def resolve_confession_report(
         report.reviewed_at = datetime.now(timezone.utc)
         report.reviewed_by_regno = reviewer_regno
 
-    # Written after the commit, as everywhere else in this app: a notification failure must
-    # not undo a decision the moderator has been told was applied. No wall-clock time goes in
-    # the body -- the row's own created_at renders in the reader's local time.
-    #
-    # The reporter is told whatever the outcome was asked for: re-deciding an already-removed
-    # report still has to tell the reporter where it stands. The author is told only when this
-    # call was the one that took the content down -- one removal is one notice.
+    # Notify after commit so delivery failures cannot undo moderation. Reporters receive
+    # the ruling; authors are notified only by the call that performed the removal.
     if status_value == REMOVAL_STATUS:
         _notify_removal(
             db,

@@ -76,67 +76,29 @@ from .accounts import (
 _ACCOUNT_TYPE_SQL_LIST = ", ".join(f"'{value}'" for value in ACCOUNT_TYPE_VALUES)
 _GENDER_SQL_LIST = ", ".join(f"'{value}'" for value in USER_GENDER_VALUES)
 
-# The interest vocabulary as a SQL array literal, for the containment check on
-# ``users.interests``. Built the same way and for the same reason as the lists above.
-#
-# The ``::varchar[]`` cast is not decoration. PostgreSQL types a bare ``ARRAY['a', 'b']`` as
-# ``text[]``, and there is no ``varchar[] <@ text[]`` operator -- the run fails at startup with
-# "operator does not exist" on the very first boot against a fresh database. Casting to
-# ``varchar[]`` matches the column, which SQLAlchemy maps to ``VARCHAR(80)[]``; an unconstrained
-# ``varchar[]`` is the same family, so the containment resolves.
+# SQL array literal for the interests CHECK; cast to ``varchar[]`` to match the column type.
 _INTEREST_SQL_ARRAY = (
     "ARRAY[" + ", ".join(f"'{value}'" for value in INTEREST_VALUES) + "]::varchar[]"
 )
 
-# NULL is excluded explicitly wherever a CHECK would otherwise be trivially satisfied by it.
-# In SQL a CHECK passes when it evaluates to NULL, so ``gender IN (...)`` alone accepts a
-# NULL gender -- which is precisely the value the constraint exists to prevent. ``gender IS NOT
-# NULL AND gender IN (...)`` is the form that actually refuses it.
+# Exclude NULL explicitly because PostgreSQL CHECK constraints accept unknown results.
 _GENDER_CHECK_SQL = (
     f"gender IS NOT NULL AND gender IN ({_GENDER_SQL_LIST})"
 )
 
-# The same form for a participant's year of study. It is a CHECK rather than a plain column because
-# year is a *grouping*, not a description: the matchmaking slot configuration pairs cohorts by it,
-# so "2" and "02" would be two cohorts that can never match each other and an operator who typed the
-# second would get no error and a silently empty pool. Same reason, same three enforcement points,
-# same generated-from-limits.py rule as the gender list above.
-#
-# A range rather than an ``IN (...)`` list, because the column is an integer now: the bounds are
-# interpolated as bare numbers so the constraint reads as the range it is, and a value outside it
-# is caught by the same NOT NULL-excluding form used for gender.
+# Years are bounded integers because matchmaking groups by numeric cohort; bounds come from limits.
 _YEAR_RANGE_SQL = f"BETWEEN {USER_YEAR_MIN} AND {USER_YEAR_MAX}"
 _YEAR_CHECK_SQL = f"year IS NOT NULL AND year {_YEAR_RANGE_SQL}"
 
 def _non_character_code_points() -> list[int]:
-    """Every code point Unicode reserves forever, in ascending order.
-
-    Two families, and the second is the one that gets forgotten. Sixty-six of them sit in one
-    contiguous block at U+FDD0-U+FDEF; the rest are the last two code points of every plane, so
-    U+FFFE and U+FFFF in the BMP but also U+1FFFE, U+2FFFE and so on up to U+10FFFE and U+10FFFF.
-    Testing only the BMP pair accepts text that a strict reader is entitled to replace with
-    U+FFFD, silently.
-
-    Generated rather than written out because the plane-end entries are exactly the kind of long
-    list that gets one entry dropped by accident, and a missing entry fails by accepting text
-    rather than by erroring.
-    """
+    """Return Unicode non-characters: U+FDD0–U+FDEF and each plane's final two points."""
     return (
         list(range(0xFDD0, 0xFDEF + 1))
         + [code_point for plane in range(17) for code_point in (plane << 16 | 0xFFFE, plane << 16 | 0xFFFF)]
     )
 
 
-# The same set, as a PostgreSQL regular expression character class, built from the code points
-# rather than written as escapes. That is deliberate and it is the whole reason this is a
-# function call instead of a string literal: PostgreSQL's ``\u`` escape takes exactly four hex
-# digits, so ``\u1FFFE`` is U+1FFF followed by a literal ``E`` rather than U+1FFFE, and a pattern
-# written with escapes looks correct while matching the wrong characters. Interpolating real
-# characters sidesteps the escape width entirely.
-#
-# The constraint text therefore carries invisible code points. That is why it is generated here
-# rather than written by hand -- there is nothing readable to write, and a hand-written version
-# would be the version that quietly does not match.
+# Build the regex from actual code points; PostgreSQL's ``\u`` escape cannot represent all planes.
 _NON_CHARACTERS_PATTERN = "[" + "".join(chr(code_point) for code_point in _non_character_code_points()) + "]"
 
 
@@ -196,32 +158,11 @@ class UserRecord(AccountColumns, Base):
 
     __tablename__ = "users"
 
-    # Every element must be one of the twelve values in ``limits.INTEREST_VALUES``, expressed as
-    # array containment. Interests used to be free text typed into a comma-separated box, which
-    # made "music", "Music" and "musics" three interests that never matched each other and no
-    # screen could tell apart; matchmaking scores on them, so a typo is not cosmetic.
-    #
-    # ``<@`` is "is contained by", so this is the one operator that reads the way the rule
-    # does. NULL is excluded explicitly because a CHECK passes when it evaluates to NULL, and
-    # ``NULL <@ ARRAY[...]`` is NULL rather than false.
-    #
-    # ``ck_users_year_known_{USER_YEAR_MAX}`` follows the same NULL-excluding form for the same
-    # reason, but it exists for the different reason that year is a grouping key rather than a
-    # description -- see ``_YEAR_CHECK_SQL`` above.
-    # The ``_12`` suffix is not decoration: it is what makes this constraint supersede the one it
-    # replaced. ``apply_check_constraints`` drops an installed constraint when the models declare
-    # one in the same numeric family, and it recognises the old ``ck_users_year_known`` -- the name
-    # the four-ordinal-vocabulary check carried -- as the unsuffixed member of the
-    # ``ck_users_year_known`` family. Without the suffix the name is unchanged, the old check is
-    # still "installed" under the name the model declares, and it is silently kept: a database
-    # would go on enforcing ``year IN ('1st Year', ...)`` against a column the models call an
-    # integer, with nothing to report it. Raising USER_YEAR_MAX to 13 renames this to ``_13`` and
-    # supersedes it by the same rule.
+    # Interests must be a subset of the canonical vocabulary; the explicit NULL check matters
+    # because PostgreSQL CHECK constraints accept unknown results. The year constraint name
+    # includes its upper bound so schema reconciliation replaces older versions.
     __table_args__ = (
-        # Gender is a *filter* -- matchmaking pairs candidates by it -- so "Male" and "male"
-        # being different people to that query is not untidiness, it is a participant who never
-        # appears in a single pool. Held to the three values in ``limits.USER_GENDER_VALUES``,
-        # and to a value at all, by the same NULL-excluding form the other two checks use.
+        # Matchmaking filters by gender, so enforce the canonical non-null values.
         CheckConstraint(_GENDER_CHECK_SQL, name="ck_accounts_gender"),
         CheckConstraint(
             f"interests IS NOT NULL AND interests <@ {_INTEREST_SQL_ARRAY}",
@@ -234,29 +175,12 @@ class UserRecord(AccountColumns, Base):
 
     bio: Mapped[Optional[str]] = mapped_column(String(500))
 
-    # The *identity* of the picture, never a URL. A profile picture is a public Cloudinary
-    # object served straight from the CDN, so nothing about it needs to be authorised at
-    # fetch time and nothing about it can be revoked by re-signing anything here; the only
-    # question a stored URL answered -- "which object is this?" -- is what these two columns
-    # answer directly. ``profile_picture_format`` is stored separately rather than appended to
-    # the public_id because Cloudinary's own ``public_id`` never carries the extension, and
-    # folding it in here would put a dot in the middle of the identifier for no gain.
-    # The delivery URL is derived on the way out by ``storage_service.profile_delivery_url``.
-    #
-    # On ``users`` alone: the upload route (``POST /profile/upload-picture``) is participant-only,
-    # so a staff table's copy of these two columns could only ever hold NULL. Both columns move
-    # together -- a row with a public_id and no format would render a broken image.
+    # Store Cloudinary identity, not a URL; delivery URLs are derived on read. These
+    # participant-only fields move together because staff cannot upload profile pictures.
     profile_picture_public_id: Mapped[Optional[str]] = mapped_column(Text)
     profile_picture_format: Mapped[Optional[str]] = mapped_column(String(16))
-    # When this participant last replaced the picture the two columns above name. The whole
-    # state of the "one change every three days" rule, and nullable in the same sense
-    # ``last_confession_at`` is: an account that has never uploaded may change its picture
-    # now, so "no value" is eligibility rather than a missing answer. Claimed by a
-    # conditional UPDATE rather than read-then-written, so two simultaneous uploads cannot
-    # both pass the check -- see ``profile_service.upload_profile_picture_service``.
-    #
-    # On ``users`` alone for the same reason as the picture columns: the upload route is
-    # participant-only, so a staff table's copy could only ever hold NULL.
+    # Nullable until the first upload; claimed with a conditional update to enforce cooldowns
+    # under concurrent requests. This participant-only state belongs on ``users``.
     last_profile_picture_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # NOT NULL and closed to ``USER_GENDER_VALUES`` by ``ck_accounts_gender`` above. Staff rows
     # deliberately have none: a moderator is never a matchmaking candidate, so a gender on
@@ -264,25 +188,8 @@ class UserRecord(AccountColumns, Base):
     # to invent an answer for.
     gender: Mapped[str] = mapped_column(String(24))
 
-    # Which year of study this participant is in, and which department or division they belong to.
-    #
-    # These two used to be one column called ``class_name``, holding whatever a person or an
-    # admin typed -- "CSE 2nd Year", "2nd Year CSE", "cse-2". Splitting them is not cosmetic:
-    # matchmaking groups by both, and a single free-text column cannot be grouped by either,
-    # because "CSE 2nd Year" and "2nd Year CSE" are the same cohort to a human and two unrelated
-    # strings to a query. The three fields are indexed because all three are now real lookup
-    # values rather than decoration.
-    #
-    # ``year`` is an ``Integer`` bounded by ``limits.USER_YEAR_MIN``/``USER_YEAR_MAX`` and held to
-    # that range by ``ck_users_year_known_{USER_YEAR_MAX}``. It is a number and not a name on
-    # purpose: an
-    # undergraduate programme and a school both need a "which year is this person in" field, they
-    # simply spell it differently and the school one runs to twelve, so storing "2nd Year" would
-    # have baked one institution's vocabulary into the column and needed a second column to serve
-    # the other. ``department`` is deliberately free text for the mirror-image reason: the
-    # departments that exist are a property of the institution, not of this schema, so a closed
-    # list here would be a guess that goes stale the moment a new one is introduced. Both are NOT
-    # NULL -- a participant with neither is not a participant this app can place in a cohort.
+    # Matchmaking groups by indexed year and department. Year is a bounded integer;
+    # department remains institution-defined free text. Both are required cohort fields.
     year: Mapped[int] = mapped_column(Integer, index=True)
     department: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True)
     # The element width is the length of the longest entry in the vocabulary, and it is derived
@@ -298,12 +205,7 @@ class UserRecord(AccountColumns, Base):
     love_notes_receive_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     love_notes_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     last_matchmaking_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # When this participant last got a confession of their own into the feed. Nullable, and
-    # that is the whole state: a participant who has never confessed may confess now, so
-    # "no value" is eligibility rather than an uninitialised row. The same shape as
-    # ``last_matchmaking_at`` for the same reason -- a cooldown is a comparison against a
-    # stored instant, and it is claimed by a conditional UPDATE rather than read-then-written,
-    # so two simultaneous posts cannot both pass the check.
+    # Nullable until the first confession; conditional updates enforce the cooldown safely.
     last_confession_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     confession_report_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     confession_removal_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
@@ -318,24 +220,8 @@ class AdminRecord(AccountColumns, Base):
 
     __tablename__ = "admin"
 
-    # An admin row can never be blocked, and that is a fact about the *table* rather than about
-    # any one code path -- so it is a CHECK constraint and not a guard in a route. A route-level
-    # check is only as good as the number of routes that remember it: `set_user_block_state`
-    # resolves its target by id across all three tables, and a raw UPDATE, a future endpoint, a
-    # script or an operator at a psql prompt would all walk straight past an `if` statement. The
-    # rule that an administrator cannot be silenced by another administrator is exactly the kind
-    # of rule that must not depend on everybody remembering it, because the day it is forgotten
-    # is the day the last admin who can undo it locks everyone out of account recovery.
-    #
-    # ``IS NOT TRUE`` rather than ``= false`` because ``is_blocked`` is nullable and a CHECK
-    # passes when it evaluates to NULL. ``= false`` would therefore also let a NULL through
-    # without saying so; this states the actual rule -- the value may not be true -- and lets a
-    # legacy NULL stay put instead of failing a boot over it.
-    #
-    # Added ``NOT VALID`` on a pre-existing database by ``PostgresClient.apply_check_constraints``,
-    # which enforces it on every insert and update from that point on while leaving already-stored
-    # rows alone. A blocked admin left over from before this rule therefore survives boot and is
-    # reported rather than being silently repaired, and the first write to that row fails loudly.
+    # Enforce non-blockable admins at the database layer. ``IS NOT TRUE`` rejects true
+    # while allowing legacy NULLs under PostgreSQL's CHECK semantics.
     __table_args__ = (
         CheckConstraint("is_blocked IS NOT TRUE", name="ck_admin_not_blockable"),
     )
@@ -358,35 +244,7 @@ ACCOUNT_MODELS: dict[str, type[Base]] = {
 
 
 class RemovedContentColumns:
-    """The columns every *content* table carries so a row can be taken down but kept.
-
-    A reported post is not deleted when a moderator rules on it: it is marked removed. The
-    row survives, the report that is about it survives, and the content itself disappears from
-    every participant-facing read. Deleting would cascade the report away with it and leave
-    nobody able to answer "why was this taken down, and who decided" six months later.
-
-    Three things read these columns, and the split between them is the point:
-
-    * every participant-facing query filters on ``removed_at IS NULL``;
-    * staff surfaces do not filter, and carry the flag instead, because a moderator deciding
-      whether to remove something has to be able to see what is already removed;
-    * ``love_note_service.may_view_love_note_image`` uses them to stop handing out a delivery
-      token for a removed love note's image, which closing the inbox query alone would not do.
-      That check has become the load-bearing one: the image is fetched from Cloudinary's CDN
-      rather than from this application, so a URL already given out cannot be withdrawn by us --
-      it can only be given a short life and not be re-issued.
-
-    No index on either column. Every read that matters filters ``removed_at IS NULL``, and this is
-    a small table whose rows are added as content arrives rather than by retro-fitting a backlog;
-    an index on the ``IS NULL`` side of a low-selectivity predicate costs writes on every insert
-    and buys nothing the planner can use. ``removed_by_regno`` is never filtered at all -- it is
-    read to answer "who did this", which is a per-report lookup by id. Add indexes here if the feed
-    ever grows enough for the planner to want them.
-
-    ``removed_by_regno`` is plain text, like every ``reviewed_by_regno`` in this schema: the
-    reviewer is a staff account whose regno lives in ``admin`` or ``moderator`` and never in
-    ``users``, so a foreign key could only ever reject a moderator's decision.
-    """
+    """Soft-removal fields shared by content tables; rows remain for report audit history."""
 
     removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     removed_by_regno: Mapped[Optional[str]] = mapped_column(String(100))
@@ -418,21 +276,10 @@ class ConfessionRecord(RemovedContentColumns, Base):
     __table_args__ = (
         CheckConstraint(
             f"length(body) <= {CONFESSION_BODY_MAX}",
-            # Named for the limit, not just "the length". apply_check_constraints only adds
-            # what is missing, so tightening CONFESSION_BODY_MAX while keeping this name would
-            # leave every deployed database enforcing the old number forever, with nothing
-            # anywhere reporting that the constraint and the model now disagree. The suffix is
-            # the new ceiling; dropping a limit means adding a third name beside this one.
+            # Include the limit in the name so schema reconciliation replaces older ceilings.
             name=f"ck_confessions_body_length_{CONFESSION_BODY_MAX}",
         ),
-        # The database half of "only storable characters", covering the half the model cannot:
-        # these still hold for writes that never pass through the API.
-        #
-        # Two characters the model rejects are not this constraint's problem to solve. A NUL byte
-        # cannot be inside a row at all, and a lone surrogate has no UTF-8 encoding, so both fail
-        # before a CHECK is ever consulted. Control characters, DEL, the C1 block and the Unicode
-        # non-characters are the opposite case -- PostgreSQL stores every one of them without
-        # complaint, which is exactly why they need to be forbidden explicitly.
+        # Reject stored control characters and Unicode non-characters, including raw SQL writes.
         CheckConstraint(
             "body !~ '[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]'",
             name="ck_confessions_body_characters",
@@ -467,11 +314,7 @@ class ConfessionCommentRecord(RemovedContentColumns, Base):
     __table_args__ = (
         CheckConstraint(
             f"length(body) <= {COMMENT_BODY_MAX}",
-            # The limit is part of the name, as ``ck_confessions_body_length_500`` does it. It
-            # has to be: reconciliation works by name, so a constraint called
-            # ``ck_confession_comments_body_length`` is added once and then never checked again.
-            # Changing ``COMMENT_BODY_MAX`` afterwards would leave the old ceiling in force
-            # forever, and the API would reject a length the database still permitted.
+# Include the limit in the constraint name so schema reconciliation replaces older ceilings.
             name=f"ck_confession_comments_body_length_{COMMENT_BODY_MAX}",
         ),
     )
@@ -486,26 +329,7 @@ EMBEDDING_DIMENSIONS = 1536
 
 
 class ConfessionEmbeddingRecord(Base):
-    """Exactly one current embedding per eligible confession.
-
-    Confessions are immutable: the searchable content never changes after creation,
-    so there is exactly one embedding row per confession, written once when an
-    eligible confession is created through the normal creation workflow. No
-    edit-triggered regeneration, no historical versions, no content hashes, no
-    backfill, and never an embedding for comments, replies, likes, or reports.
-
-    The embedding input is the confession's own public text only (body plus the
-    optional public recipient name). Comments, usernames, emails, author ids,
-    reports, moderation notes, and engagement counts are never embedded.
-
-    Deletion follows the confession: the foreign key cascades, so a hard delete
-    (DELETE /admin/confessions/{id}) removes the embedding with the row. A soft
-    removal (removed_at, via moderation) keeps the row but search filters it out
-    with the confession itself (removed_at IS NULL).
-
-    A failed generation is never a searchable row: no row is written until a
-    validated 1536-dimensional finite vector is available.
-    """
+    """One validated embedding of a confession's public text for semantic search."""
 
     __tablename__ = "confession_embeddings"
 
@@ -601,14 +425,8 @@ class ReportRecord(Base):
 class LoginTokenRecord(Base):
     __tablename__ = "login_tokens"
 
-    # A magic link is minted for an account in whichever of the three tables that account
-    # lives in, so there is no single table this id can point at and the old ``users.id``
-    # foreign key had to go. The pair below replaces it: the id identifies the row, and
-    # ``account_type`` says which table to read it from. The CHECK keeps the two in step --
-    # a row id without a resolvable table would be a login that cannot be redeemed.
-    #
-    # NULL is excluded explicitly for the same reason as in a bare ``IN``: NULL would
-    # evaluate to NULL, which a CHECK constraint treats as passing.
+    # Account ID is table-local, so ``account_type`` selects its table. Exclude NULL
+    # explicitly because PostgreSQL CHECK constraints accept unknown results.
     __table_args__ = (
         CheckConstraint(
             f"account_type IS NOT NULL AND account_type IN ({_ACCOUNT_TYPE_SQL_LIST})",
@@ -646,43 +464,17 @@ class LoginTokenRecord(Base):
     # holder that they were signed out by a login on another device.
     superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     superseded_by: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False))
-    # The absolute ceiling on this session's life, written once at redemption to
-    # ``consumed_at + LOGIN_SESSION_EXPIRE_HOURS`` and never moved forward. A refresh
-    # rotates the refresh token but inherits this deadline, so refreshing extends the
-    # access token, not the session. Read on every request (access and refresh alike), so
-    # a token minted before the deadline cannot outlive it either. NULL for a row that
-    # never became a session (``consumed_at`` NULL); the boot path backfills a deadline
-    # for sessions that predate the column so existing logins are not cut off at deploy.
+    # Fixed session deadline set at redemption; refresh rotates credentials but cannot
+    # extend the session. Startup backfills existing sessions.
     session_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # SHA-256 hash of the session's current refresh token. The raw value is minted at
-    # redemption, hashed before storage, and rotated on every refresh; it is unique so a
-    # token is found and consumed by hash alone (the unique index is what makes rotation a
-    # conditional UPDATE that exactly one racing caller can win). NULL for a session that
-    # predates this column, which then cannot refresh and simply lapses with its access
-    # token.
+    # Hash of the current refresh token; uniqueness lets one concurrent refresh win.
     refresh_token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
-    # Hash of the refresh token value this session most recently rotated *away from*.
-    # Never a credential itself: it is kept so a replayed old token -- a second use of an
-    # already-consumed value -- is recognisable in the logs as a replay rather than as
-    # random noise, and so a refused refresh can tell a stale copy (the browser that lost
-    # a rotation race, which may still be holding the newer value) from a value no
-    # session ever held (a dead cookie, which is cleared). Only the most recent value is
-    # kept, which is the only one a racing tab can still be holding. Indexed by
-    # ``PostgresClient.apply_refresh_replay_index``: the lookup sits on the refusal path.
+    # Hash of the prior refresh token, used to identify replayed values after rotation.
     refresh_token_replaced_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
 
 class WebSocketTicketRecord(Base):
-    """A one-use, short-lived ticket for opening a live WebSocket.
-
-    The long-lived access token must not travel in the socket URL: Uvicorn logs the
-    accepted handshake path with its query string at INFO, so anything there is written
-    to stdout and can outlive the connection. A ticket is minted over the authenticated
-    HTTP API immediately before connecting, expires in under a minute, and is consumed
-    atomically by the handshake. The raw value is never stored, only its peppered hash,
-    and binding the row to the session id means a ticket cannot outlive logout,
-    supersede, expiry, or a block even if its own deadline has not passed yet.
-    """
+    """One-use, short-lived socket ticket stored as a hash and bound to its login session."""
 
     __tablename__ = "websocket_tickets"
 
@@ -703,19 +495,7 @@ class WebSocketTicketRecord(Base):
 
 
 class LoginRateLimitRecord(Base):
-    """One fixed-window counter for the passwordless-login request limits.
-
-    The whole of the rate-limit state is this table: one row per key, where the key names
-    the scope it counts (account cooldown, client id, source ip). A row is born with the
-    window it belongs to and ``expires_at`` set to the end of that window, so state that
-    is no longer being hit ages out on the next sweep instead of accumulating forever.
-
-    The window is reset by the increment itself rather than by a separate job: the
-    upsert in ``login_rate_limit`` compares ``window_started_at`` against the window it
-    is applying, and writes a fresh window when the stored one has run out. That keeps
-    read-modify-write in a single statement, so concurrent requests serialise on the row
-    lock and cannot both observe "one more request allowed" from the same snapshot.
-    """
+    """Fixed-window login counter, atomically incremented and expired after its window."""
 
     __tablename__ = "login_rate_limits"
 
@@ -731,31 +511,12 @@ class LoveNoteRecord(RemovedContentColumns, Base):
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
     sender_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     recipient_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    # The authenticated Cloudinary object behind this note. Not a URL: a usable URL for a
-    # love note image is a *derived, short-lived, signed* string, so storing one would bake a
-    # credential into the database and into every row that ever read it. What is durable is
-    # the object identity -- ``image_public_id`` (which is ``love_notes/{note_id}/image``, so
-    # it cannot outlive or be re-pointed at another note) plus the format needed to build the
-    # delivery URL. Permanent deletion reads this column to know what to destroy; see
-    # ``storage_service.delete_love_note_asset``.
+    # Store Cloudinary object identity, not a signed URL; derive delivery URLs when needed.
     image_public_id: Mapped[str] = mapped_column(Text)
     image_format: Mapped[str] = mapped_column(String(16))
-    # ``Text`` rather than ``String(LOVE_NOTE_BODY_MAX)``, like every other body column in this
-    # file. A length-bounded ``varchar`` refuses an over-long write during input, before any
-    # CHECK is evaluated, so ``ck_love_notes_body_length_1000`` below could never reject
-    # anything -- the database would raise ``StringDataRightTruncation`` instead, and the rule
-    # that is supposed to be the enforcement path would be unreachable dead weight. The CHECK is
-    # the enforcement path here, exactly as it is for confessions and messages.
+    # Use Text so the named CHECK constraint, rather than varchar truncation, enforces the limit.
     body: Mapped[str] = mapped_column(Text)
-    # The privacy-safe rendering of ``body`` that every admin-facing love-note read
-    # hands out. Azure AI Language's PII detection produces it once, when the note is
-    # created (see ``pii_detection_service.redact_love_note_body``); reviewer retries
-    # for failed previews are written by ``regenerate_love_note_moderation_body``.
-    # Nullable on purpose: a failed or not-yet-run redaction stores nothing at all,
-    # and the moderation screen renders an explicit "preview unavailable" state rather
-    # than ever being handed ``body`` as a fallback. ``body`` itself is never modified
-    # -- the image the sender rasterised and the copy the recipient receives are both
-    # built from it.
+    # Redacted preview for moderation; nullable on failure, with no fallback to raw body.
     moderation_body: Mapped[Optional[str]] = mapped_column(Text)
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str] = mapped_column(String(24), default="pending_review", server_default=text("'pending_review'"), index=True)
@@ -765,12 +526,7 @@ class LoveNoteRecord(RemovedContentColumns, Base):
     __table_args__ = (
         CheckConstraint(
             f"length(body) <= {LOVE_NOTE_BODY_MAX}",
-            # Value in the name, for the reason ``ck_confessions_body_length_500`` does it:
-            # apply_check_constraints only adds what is missing, so a stable name here would
-            # leave every deployed database enforcing the 2000 this column used to hold, with
-            # nothing anywhere reporting that the constraint and the model now disagree. The
-            # suffix is the new ceiling and this name supersedes
-            # ``ck_love_notes_body_length_2000`` on the next boot.
+            # Include the limit in the name so startup replaces the previous ceiling.
             name=f"ck_love_notes_body_length_{LOVE_NOTE_BODY_MAX}",
         ),
     )
@@ -847,11 +603,7 @@ class MatchRecord(Base):
     user_2_regno: Mapped[str] = mapped_column(String(100), ForeignKey("users.regno", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    # Canonical "lower|upper" form of the two regnos, so a pair is identified the same way
-    # regardless of who initiated. Unique, which is what stops two concurrent requests
-    # from matching the same two people. Cleared to NULL when the match lapses, and NULLs
-    # are not compared by a unique index, so an expired match frees the pair for good
-    # without needing a background job to sweep it.
+    # Canonical unique pair key; expiration clears it so the pair can match again.
     pair_key: Mapped[Optional[str]] = mapped_column(String(201), unique=True, index=True)
     __table_args__ = (CheckConstraint("user_1_regno <> user_2_regno", name="ck_matches_distinct_users"),)
 
@@ -868,13 +620,7 @@ class ConversationRecord(Base):
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # The conversation list's preview is a copy of the newest visible message's
-    # first 100 characters. It is encrypted exactly like the body it came from:
-    # storing it in plaintext would be a second durable copy of message content
-    # outside the encrypted column. ``last_message_preview_message_id`` and
-    # ``last_message_preview_sender_regno`` are bound into the preview's AAD, so
-    # a preview cannot be moved to another conversation or attributed to another
-    # sender without failing authentication.
+    # Encrypted latest-message preview; AAD binds it to the message and sender.
     last_message_preview_ciphertext: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
     last_message_preview_nonce: Mapped[Optional[bytes]] = mapped_column(LargeBinary(length=12))
     last_message_preview_key_version: Mapped[Optional[str]] = mapped_column(String(16))
@@ -885,12 +631,7 @@ class ConversationRecord(Base):
     last_message_preview_delete_after: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), index=True
     )
-    # The participant who closed this conversation, and the only one who may reopen
-    # it. An array for compatibility with the rows already written, but it holds a
-    # single regno: blocking a conversation is closing it, and a chat has one
-    # closer at a time. There is no mutual-blocking state -- two participants each
-    # holding a chat shut is not something this application models, and the
-    # service refuses a second close rather than adding a second entry.
+    # Sole participant allowed to reopen the conversation; array shape is legacy.
     blocked_by: Mapped[list[str]] = mapped_column(ARRAY(String(100)), default=list, server_default=text("'{}'"))
     terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
@@ -931,20 +672,7 @@ class MessageRecord(RemovedContentColumns, Base):
 
 
 class NotificationRecord(Base):
-    """Something worth telling a participant, and -- when there is one -- what to open.
-
-    ``target_kind`` and ``target_id`` are what a click on the notification resolves to. They
-    are nullable and always null together, because a good share of notices have nothing to
-    point at: a match that was drawn, a report that was reviewed, content that was taken down.
-    The item those notices describe either does not exist any more or was never the
-    participant's to open, so a target would send them somewhere that cannot answer the
-    notification. The honest answer for those rows is "nothing to open", and a null pair says
-    that without the client having to re-guess it from the heading text.
-
-    Nullable also matters for how they arrive: ``apply_missing_columns`` skips a NOT NULL
-    column that has no server default, so a non-nullable pair would leave every already-deployed
-    database without the columns and silently non-clickable notifications forever.
-    """
+    """Participant notice with an optional target to open."""
 
     __tablename__ = "notifications"
 
@@ -954,58 +682,16 @@ class NotificationRecord(Base):
     body: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    # The kind names the table the id belongs to, so a client never has to guess how to read
-    # the id. Deliberately plain text rather than a foreign key, and deliberately not one
-    # column per kind: the target of a message-removal notice does not exist, the target of a
-    # conversation notice is a match rather than a conversation, and the set of things a
-    # notification can point at is exactly the set of kinds the client knows how to open.
+# Target kind and ID identify the linked entity without per-kind foreign-key columns.
     target_kind: Mapped[Optional[str]] = mapped_column(String(40))
     target_id: Mapped[Optional[str]] = mapped_column(String(100))
 
 
 class MatchmakingSlotRecord(Base):
-    """A pair of participant cohorts, naming the slot they belong to.
+    """A pair of cohorts belonging to a matchmaking slot.
 
-    The row carries no pairing rule of its own. What it means is fixed once, in
-    ``matchmaking_slot_service``, and it is this: a cohort is *in a slot* when some row names it on
-    either side, and two cohorts may match when some row names both of them. A row therefore
-    describes a clique that includes self-pairs -- the editor's slot box holding A, B and C permits
-    A->A, A->B, A->C, B->B, B->C and C->C -- and a pair of rows is the smallest thing that can
-    hold that fact about two or three cohorts at once.
-
-    Overlapping rows compose by union and **not** by transitivity. A-B together with B-C permits
-    A->A, A->B, B->B, B->C and C->C, and still not A->C, which needs its own row. That is a
-    property of the storage, not an oversight in the rule: a row names two cohorts, so nothing in
-    it can name a third, and a rule that inferred A->C from A->B->C would let two operators
-    combining two boxes they each meant to keep separate produce a pairing neither asked for.
-
-    A row whose two sides are identical (A-A) is consequently **not** what permits self-matching --
-    any row naming A already does that. It is written for one narrow reason: the editor stores a
-    box holding a single cohort, and a box that produces no row cannot be read back, so saving one
-    would silently delete it from the screen the operator is looking at.
-
-    **Each side is a ``(year, department)`` pair, not a name.** This used to be two string columns
-    holding a ``class_name`` the operator had typed, which made the grouping exactly as precise as
-    their typing: "CSE 2nd Year" and "2nd Year CSE" are one cohort to a person and two unrelated
-    strings to a query, so an operator could configure a rule that silently matched nobody. Four
-    columns rather than one composite string, because a composite would have to be re-parsed to
-    answer "who is in the 2nd year" and there is no separator that cannot appear in a department
-    name.
-
-    ``year_a``/``year_b`` are ``Integer`` and held to the ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX``
-    range by a CHECK constraint for the same reason ``users.year`` is: a year outside the range is a
-    cohort that can never match anybody, and an operator deserves to be told rather than left
-    wondering. ``department_a`` and ``department_b`` are free text, because departments are a
-    property of the institution rather than of this schema.
-
-    There is no uniqueness constraint on the pair, and that is structural rather than
-    cautious: the duplicate rule is order-independent (A-B equals B-A) and NULL-sensitive
-    (a NULL group matches only NULL), neither of which a unique index expresses -- NULLs
-    never compare equal, so legacy unboxed rows could duplicate freely under one. The
-    service checks for a duplicate before inserting and answers 409, which is the
-    behaviour a caller can rely on, and slot writes serialise on a dedicated advisory
-    lock (see ``matchmaking_slot_service._SLOT_WRITE_LOCK_KEY``) so the promised 409
-    also holds for two simultaneous requests rather than landing both rows.
+    Rows permit only named pairs; overlapping rows do not imply transitive matches. The
+    group key preserves editor boxes, while year and department remain separate cohort fields.
     """
 
     __tablename__ = "matchmaking_slots"
@@ -1015,41 +701,15 @@ class MatchmakingSlotRecord(Base):
     department_a: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
     year_b: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     department_b: Mapped[str] = mapped_column(String(USER_DEPARTMENT_MAX), index=True, nullable=False)
-    # Which editor slot box this pair was written from. Every pair in one box carries the same value,
-    # so the box can be put back together on load.
-    #
-    # This column exists because the box is an entity the operator reasons about and the row is not.
-    # A box holding A, B and C is stored as three pairs, and from those three pairs alone there is no
-    # way to tell that box apart from three separate two-cohort boxes -- different intentions,
-    # identical stored state. The grouping was being *guessed* on load by keying on each pair's first
-    # cohort, which is wrong in both directions at once: it split one box apart (B-C's first cohort
-    # is B, so it started a box of its own) and merged unrelated boxes that shared a first cohort.
-    # Re-saving the result wrote pairs that already existed, the server answered 409, and because
-    # the editor deletes the old configuration before writing the new one, the operator was left with
-    # a truncated configuration and an error.
-    #
-    # Matchmaking does not read this column and must not: the pairing rule is defined on pairs, so
-    # two boxes that happen to name the same pair permit exactly what one of them would. It is
-    # bookkeeping about how to *display* a configuration, and it is deliberately the one column here
-    # that no filter depends on.
-    #
-    # Nullable, because a deployed table has rows written before this existed and
-    # ``apply_missing_columns`` will not invent a value for them. A NULL means "this pair was not
-    # saved as part of a named box", and the editor falls back to its old grouping for those rather
-    # than scattering every legacy row into a box of its own.
+    # Identifies the editor box that grouped this pair; matchmaking does not use it.
+    # Nullable for legacy rows, which retain the editor's fallback grouping.
     group_key: Mapped[Optional[str]] = mapped_column(Uuid(as_uuid=False), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 
-    # A self-pair (year_a, department_a) == (year_b, department_b) is allowed, and deliberately so:
-    # it is how a box holding one cohort is written at all. Nothing here forbids the two sides
-    # differing, and nothing forbids them agreeing -- the pairing rule needs neither, and the only
-    # constraint worth stating is that each half is a whole year inside the known range.
-    # Same numeric-suffix reasoning as ``ck_users_year_known_{USER_YEAR_MAX}``: these two replaced
-    # text-equality checks that carried these exact unsuffixed names, so the bound has to be in the
-    # name for them to be recognised as superseded rather than silently kept.
+# Self-pairs represent single-cohort slots; bounded names replace the legacy year checks.
     __table_args__ = (
         CheckConstraint(
             f"year_a {_YEAR_RANGE_SQL}", name=f"ck_matchmaking_slot_year_a_known_{USER_YEAR_MAX}"
@@ -1098,20 +758,7 @@ class MessageReportRecord(Base):
 
 
 class ChatMessageEvidenceRecord(Base):
-    """One separately encrypted copy of a reported/flagged chat message.
-
-    Ordinary chat history is deleted on its own retention schedule; moderation
-    evidence follows a different one. This table holds only the individual
-    message a report names -- never a conversation -- encrypted again with its
-    own AAD binding the original message/chat/sender, the report id/kind, and
-    the evidence id. It deliberately
-    has no foreign key to ``messages`` or ``case_closed_messages``: those rows
-    are purged first, and the evidence must outlive them for its own window.
-
-    ``expires_at`` is ``report time + REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``
-    and is the deadline the daily cleanup uses. Decryption is exposed only
-    through the authorised report-review path, which audits each access.
-    """
+    """Separately encrypted report evidence retained after ordinary chat cleanup."""
 
     __tablename__ = "chat_message_evidence"
 
@@ -1204,11 +851,7 @@ class AnagramGameRecord(Base):
 
     __table_args__ = (
         CheckConstraint("mode IN ('custom', 'random')", name="ck_anagram_games_mode_known"),
-        # A length *range* rather than an equality, because unlike Wordle's five-letter
-        # answer this one is bounded at both ends only by the column: at least one letter
-        # (an empty answer is not a puzzle) and at most the ceiling the payload is refused
-        # against. The five-letter minimum for a random draw is a rule about the *draw*,
-        # not about the column, so it is not here -- a three-letter custom answer is legal.
+# Custom answers may be shorter than random draws; enforce only the valid stored range.
         CheckConstraint(
             f"length(answer) BETWEEN 1 AND {ANAGRAM_ANSWER_MAX}",
             name=f"ck_anagram_games_answer_length_{ANAGRAM_ANSWER_MAX}",
@@ -1870,11 +1513,7 @@ class TwoKeyEscapeGameRecord(Base):
     exit_col: Mapped[int] = mapped_column(Integer, default=11, server_default=text("11"))
     walls: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     locked_cells: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
-    # Which locked cell each key actually opens, as indexes into
-    # ``locked_cells``: key ``i`` opens ``locked_cells[key_mapping[i]]``,
-    # always a *different* cell, so players must discover which lock opens
-    # the one they need. A derangement dealt with the maze, never
-    # client-supplied and never exposed on reads.
+# Server-generated key-to-lock derangement, never exposed to clients.
     key_mapping: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     # Which entries of ``locked_cells`` are chamber gates (as opposed to
     # flavor locks): the doors progress must pass through. Read by the
@@ -1969,11 +1608,7 @@ class TwoKeyEscapeSessionRecord(Base):
     # ``postgres.RETIRED_COLUMNS``.)
     total_moves: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     total_keys: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    # Seconds from the first valid move to completion, settled once at the
-    # exit. NULL until then. The single number couples are ranked by.
-    # There is no score column: no other game carries a score. (An earlier
-    # revision kept one here; it is retired in
-    # ``postgres.RETIRED_COLUMNS``.)
+# Elapsed completion time used for ranking; NULL until the exit is reached.
     elapsed_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -2452,12 +2087,7 @@ class TriviaDropSubmissionRecord(Base):
 # ---------------------------------------------------------------------------
 # Game configuration, featured games and scheduled content
 # ---------------------------------------------------------------------------
-# The three concepts the refactor separates. ``game_configs`` owns per-game
-# availability and cadence, ``featured_games`` owns the one-spotlight-per-day
-# schedule, and ``scheduled_game_contents`` owns future manual words inside the
-# finite horizon. Sessions themselves live on the per-game tables above
-# (``wordle_games``, ``anagram_games``, ``couple_games``), which now carry the
-# active/pending/ended lifecycle rather than a one-row-per-day puzzle.
+# Configuration, featured dates, scheduled content, and active sessions use separate tables.
 
 
 class GameConfigRecord(Base):
@@ -2503,18 +2133,9 @@ class GameConfigRecord(Base):
     reset_cadence: Mapped[str] = mapped_column(
         String(16), default="daily", server_default=text("'daily'")
     )
-    # The Two-Key Escape maze edge length, owned by that game alone. NULL for
-    # every other game: it is not a second content mode and must not be read
-    # as one. Written only through the game-config update path, which refuses
-    # it for any other game id, and defaulted to 12 on first read of the
-    # two-key-escape row so the game is playable before any admin opens it.
+    # Two-Key Escape grid size; NULL for other games and defaulted on first read.
     grid_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    # The difficulty the automated generation pipeline uses for the next
-    # Plot Twist / Case Closed cycle. NULL for every other game (and for the
-    # two AI games until an administrator picks one, where the scheduler
-    # falls back to ``medium``). Snapshot into the cycle's generation job at
-    # enqueue time, so a change between sessions applies from the next cycle
-    # and never rewrites content already being generated.
+    # Snapshotted into the next AI generation job; existing jobs are unchanged.
     difficulty: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -2572,23 +2193,8 @@ class ScheduledGameContentRecord(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# League scoring ledger
-# ---------------------------------------------------------------------------
-# Native game results stay where they are, in each game's own tables. These
-# two tables are the common layer that converts finalized native results into
-# comparable league points without touching gameplay:
-#
-# * ``game_score_opportunities`` records each official scoring opportunity
-#   (one session, one question, one period) once, snapshotting whether it was
-#   featured when it became active. Featured status is read from
-#   ``featured_games`` at activation time, never re-derived later, so a later
-#   admin change cannot silently rewrite history.
-# * ``game_score_awards`` records one immutable row per ranked subject per
-#   opportunity, carrying base points, the featured multiplier and the final
-#   awarded points separately. Corrections never overwrite: the original row
-#   is marked superseded and a replacement row is issued, so the ledger stays
-#   auditable.
+# League ledger: snapshot each scoring opportunity and persist immutable awards.
+# Corrections supersede prior rows; featured status is captured at activation.
 
 class GameScoreOpportunityRecord(Base):
     """One official scoring opportunity, snapshotted at activation.
@@ -2630,29 +2236,10 @@ class GameScoreOpportunityRecord(Base):
 
 
 class GameScoreAwardRecord(Base):
-    """One subject's league award for one opportunity -- the immutable ledger.
+    """Immutable league award with separate game/global scores and version stamps.
 
-    Individual awards carry ``user_id``; couple awards carry the canonical
-    ordered pair (``member_a_id`` <= ``member_b_id``). Points use NUMERIC so
-    persisted values are exact decimals, never floats. ``superseded_at`` is
-    NULL on live awards; a correction marks the original row and issues a
-    replacement, and leaderboard queries read live rows only.
-
-    Split scores (absolute-global vs placement-relative game paths):
-
-    * ``global_base_points`` / ``global_points``: the absolute-performance
-      award (policy v2, see ``league_global_scoring``) feeding the combined
-      global boards. Never uses rank, field size, or other subjects.
-    * ``game_base_points`` / ``game_points``: the placement-relative award
-      (policy v1, unchanged behavior) feeding per-game boards.
-    * ``global_scoring_version`` / ``game_scoring_version`` stamp which
-      policy produced each half, so history stays explainable.
-    * Legacy ``base_points`` / ``awarded_points`` / ``scoring_version`` are
-      retained for backward compatibility and now mirror the *global* path
-      on newly written rows. Rows predating the split (both new version
-      columns NULL) hold v1-relative values in the legacy columns; board
-      aggregation falls back to them, documented as the cutover in
-      ``league_boards``.
+    Corrections supersede rows rather than overwrite them. Legacy score columns remain for
+    compatibility; couple subjects use a canonical member order.
     """
 
     __tablename__ = "game_score_awards"
@@ -2727,36 +2314,8 @@ class GameScoreAwardRecord(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Staff notifications (role-based, categorized)
-# ---------------------------------------------------------------------------
-# Participant notices live in ``notifications`` and are addressed to one regno.
-# Staff notices are different in exactly one way: they are addressed to a *role*,
-# not to a person. A report filed at 2am is news to every moderator on duty, not
-# to whoever happened to be signed in when it was filed, so the row names the
-# audience (``admin``, ``moderator`` or ``all``) instead of a recipient regno.
-#
-# Three categories, and they are the whole vocabulary:
-#
-# * ``report`` -- a confession/comment, love-note or chat-message report was filed,
-#   or a participant was automatically blocked at the removal threshold (an
-#   admin-only notice -- it appears in the same category because it is moderation
-#   news that leaves no report row to open, not a fourth kind of queue).
-# * ``love_note`` -- a love note arrived and waits for approval/rejection.
-# * ``game`` -- an admin-feedable game needs its content (a pending manual-mode
-#   session, a Connections puzzle, a Trivia Drop question) or no featured game
-#   is set for today. These are stored rows too: the scheduler pass records a
-#   pending session and a missing featured pick, and application start-up
-#   records an empty Trivia Drop pipeline. The row's ``dedup_key`` carries the
-#   session id or UTC date, so repeated passes cannot duplicate it.
-#
-# Read state is per account, not per row: ``StaffNotificationReadRecord`` records
-# which staff account has seen which row, so one moderator reading a notice does
-# not mark it read for the next one. Preferences are per account too -- three
-# boolean switches (reports, love notes, games) for an admin, two for a
-# moderator -- and are deliberately *not* wired to delivery: the list endpoint
-# returns every notice regardless, and the switches are stored intent for a
-# future delivery layer.
+# Staff notices target roles and use report, love-note, or game categories.
+# Read state and email preferences are per account; preferences do not filter the feed.
 
 
 class StaffNotificationRecord(Base):
@@ -2797,14 +2356,7 @@ class StaffNotificationRecord(Base):
 
 
 class StaffNotificationReadRecord(Base):
-    """Which staff account has marked which stored staff notice as read.
-
-    The account is named by table plus primary key, because a regno alone is
-    not an identity across the three account tables and a staff row has no row
-    in ``users`` to point at. No foreign keys for the same reason the report
-    tables carry reviewer regnos as plain text: the row may live in ``admin``
-    or ``moderator``, and a key into one table would reject the other.
-    """
+    """Read state for a notice, keyed by the staff account table and primary key."""
 
     __tablename__ = "staff_notification_reads"
 
@@ -2829,16 +2381,7 @@ class StaffNotificationReadRecord(Base):
 
 
 class StaffNotificationPreferenceRecord(Base):
-    """One staff account's notification switches: which categories it wants.
-
-    One row per staff account, created in the same transaction as the account
-    with everything on. ``games_enabled`` is meaningful for admins only; a
-    moderator's row keeps the column so both roles share one shape, and the
-    update path refuses to write it for a moderator rather than the schema
-    forbidding it per role. The stored value is a preference, never an
-    authorisation boundary: delivery code must refuse game notices to a
-    moderator by role, because a row can be edited.
-    """
+    """Per-account email preferences; role checks remain the authorization boundary."""
 
     __tablename__ = "staff_notification_preferences"
 
@@ -2859,18 +2402,8 @@ class StaffNotificationPreferenceRecord(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Staff preference rows are part of staff creation
-# ---------------------------------------------------------------------------
-# The table's columns all default to true, but a default only applies to a row
-# that exists. A new admin or moderator therefore needs its row written beside
-# it, or a delivery path that reads the table sees nothing. An ``after_insert``
-# hook on the two staff mappers is what ties the two rows together: every ORM
-# path that creates a staff account -- the admin API, the seeders, tests -- gets
-# the row in the same transaction, so there is no second creation path that can
-# forget. Raw-SQL inserts bypass mapper events; the boot backfill in
-# ``PostgresClient.backfill_staff_notification_preferences`` repairs those and
-# every account that predates this hook.
+# Staff preference rows are created with ORM staff accounts; startup backfills
+# legacy and raw-SQL-created accounts.
 def _staff_notification_preferences_after_insert(account_type: str):
     def _listener(mapper, connection, target) -> None:
         connection.execute(
@@ -2900,35 +2433,11 @@ event.listen(
 )
 
 
-# ---------------------------------------------------------------------------
-# Cross-table account lookup
-# ---------------------------------------------------------------------------
-# A regno or an id is unique *within* one account table, not across all three. Login says
-# which table it means, so the resolution that matters at request time is
-# :func:`find_account_in_table`, which reads exactly one named table and never has to break
-# a tie.
-#
-# :func:`resolve_account_by_regno` and :func:`resolve_account_by_id` still exist and still
-# search all three, but they are only for the places where no table is known and none is
-# needed to be right: showing an admin which conversations a regno is attached to, and
-# refusing a create that would reuse a regno on a table where it would be ambiguous to a
-# human. Nothing that decides *who is calling* uses them -- a caller is always identified by
-# the table and primary key their credential recorded, never by a search.
+# Account identifiers are table-local. Login resolves only the selected account table;
+# cross-table lookup helpers are reserved for display and duplicate checks.
 
 def find_account_in_table(session, account_type: Optional[str], regno: Optional[str]) -> Optional[tuple[str, Any]]:
-    """Find the account holding ``regno`` in one named table, as ``(account_type, row)``.
-
-    The lookup behind login. The table is supplied by the caller -- by the page the person
-    chose to sign in through -- so a regno that exists in two tables resolves to the one
-    that page was for, and a regno that exists only in a different table is simply not
-    found rather than quietly resolving to somebody else's account.
-
-    An unrecognised ``account_type`` returns None instead of falling back to a default
-    table. :func:`normalize_account_type` would answer such a value with ``users``, which is
-    the right fail-closed answer for a *stored* discriminator whose privileges are being
-    read, and exactly the wrong one here: a request that named no real account table must
-    not be answered out of the participant table.
-    """
+    """Resolve a regno only in the named account table; invalid types fail closed."""
     if not regno or not is_valid_account_type(account_type):
         return None
     model = ACCOUNT_MODELS[normalize_account_type(account_type)]
@@ -3293,11 +2802,7 @@ class CaseClosedSessionRecord(Base):
     locked_culprit_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     first_investigation_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     accusation_locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # The authoritative end of this couple's Case Closed session, copied from
-    # the pinned global event's exclusive ``period_end_date`` (UTC midnight at
-    # the start of that date) when the session is created. Chat messages carry
-    # this same instant in ``delete_after``; locking the thread after a guess
-    # never moves it. Nullable only for rows created before the column existed.
+# Copied event boundary; investigation chat expires with the case, not activity.
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     elapsed_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)

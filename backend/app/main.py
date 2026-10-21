@@ -245,11 +245,7 @@ async def on_startup():
                 raise
             await asyncio.sleep(2)
 
-    # Before any schema work: a deployment that cannot deliver love note images should not come up
-    # looking healthy and then 503 in the inbox of the person who was sent one. The failure is
-    # raised, not logged and continued past, because there is no degraded mode for a private image
-    # store -- serving love notes from anywhere weaker than a private signed-delivery object is not
-    # a fallback this application has.
+    # Validate private image delivery before schema work so the app cannot start in a broken mode.
     validate_cloudinary_settings()
     logger.info(
         "Cloudinary image delivery validated; love note images are private signed-delivery "
@@ -272,37 +268,22 @@ async def on_startup():
     # cookies without Secure on an https site. Same fail-fast shape as above.
     validate_cookie_transport()
 
-    # Before a single chat message can be accepted: the active AES-256-GCM key
-    # must exist, decode as Base64 and be exactly 32 bytes. There is no plaintext
-    # fallback, so a missing or malformed key must stop the process here rather
-    # than surface as an insert failure after a user has typed a message. The
-    # scheduler process deliberately does not call this and receives no keys.
+    # Validate the AES-256-GCM key before accepting chat. The scheduler process does not handle chat.
     from .services.chat_encryption import validate_startup_configuration
 
     validate_startup_configuration()
     logger.info("Chat message encryption configuration validated.")
 
     postgres.initialize()
-    # No accounts are created here. Booting the application used to seed a test participant
-    # and a test admin, which meant a fresh deployment -- or a dropped-and-recreated
-    # development database -- came up holding a ``Test Admin`` account whose regno is
-    # guessable, and it fought the seed script for the same regnos. Seeding is a deliberate
-    # act with a deliberate owner, so it lives in app/test.py and runs when asked for.
-    #
-    # The Couple Prediction question bank is the deliberate exception: fifty static
-    # templates the game cannot run without, seeded idempotently from the committed
-    # list. The database remains the source of truth after the first boot -- the
-    # seed inserts only what is missing, never a duplicate and never an overwrite.
+    # Account seeding is explicit via app/test.py. Couple Prediction's required
+    # question bank is the exception and is seeded idempotently at startup.
     from .services.couple_service import seed_couple_questions
     seeded = seed_couple_questions(postgres)
     logger.info("Couple game questions seeded: %s inserted.", seeded)
     logger.info("PostgreSQL storage initialized.")
 
-    # Open today's game sessions idempotently, so a fresh boot is playable
-    # without waiting for the 00:01 UTC cron. The same function backs
-    # POST /admin/games/run-resets, which is what a daily 00:01 UTC cron calls
-    # to roll each game into its next calendar period. Best-effort at boot: a
-    # scheduler failure must not take the whole application down.
+    # Ensure sessions at boot using the same idempotent reset path as the daily cron.
+    # Best-effort so scheduler failures do not prevent the app from starting.
     try:
         from .services.game_scheduler import ensure_game_sessions
 
@@ -322,12 +303,7 @@ async def on_startup():
     except Exception as exc:
         logger.warning("Trivia Drop boot notification skipped: %s", exc)
 
-    # Drain the AI generation queue: Plot Twist and Case Closed sessions are
-    # generated asynchronously after the scheduler enqueues a cycle, and this
-    # in-process worker is what publishes them (and retries provider
-    # failures). Safe on every process: the shared Postgres advisory lock and
-    # the SKIP LOCKED claim serialise generation across games, threads and
-    # replicas. Best-effort like the boot ensure above.
+    # Start the shared-lock AI worker for queued Plot Twist and Case Closed generation.
     global _ai_generation_worker
     if settings.AI_GENERATION_WORKER_ENABLED:
         try:
@@ -351,21 +327,8 @@ async def on_startup():
     # Last, so the schema work above is not traced against no request.
     _init_dependency_instrumentation(postgres)
 
-    # Keep the game-reset heartbeat metric fresh.
-    #
-    # The 00:01 UTC reset tick runs in the scheduler sidecar and records its outcome
-    # in the database; this is what turns that record into a series an alert can
-    # watch. Without it a tick that stopped running is invisible: the games stop
-    # rolling over and nothing says so until a leaderboard is days stale.
-    #
-    # A background task rather than a scrape-time read, because the value has to
-    # travel the OTLP path the other application metrics travel -- that is where
-    # the alerting rules and the dashboards already look. Started here rather than
-    # at import because it needs the database client, which exists only after
-    # start-up.
-    #
-    # Only where something is exported: with no collector to export to, the gauge
-    # would be a no-op and the task would be a query every minute for nothing.
+# Refresh and export the reset heartbeat gauge after database startup.
+# Skip polling when no metrics exporter is configured.
     global _reset_heartbeat_task
     if _reset_heartbeat_task is None and settings.OTEL_EXPORTER_OTLP_ENDPOINT:
         _reset_heartbeat_task = asyncio.create_task(_publish_reset_heartbeat_forever(postgres))
@@ -394,44 +357,12 @@ def on_shutdown():
     except Exception as exc:
         logger.warning("Redis close on shutdown failed: %s", exc)
 
-# ----------------------
 # Request body size limit
-# ----------------------
-# A request body is buffered by the framework, not by the handler, so a per-handler size
-# check runs only after the memory has already been spent. This refuses the body at the
-# edge instead. It is deliberately a raw ASGI middleware rather than BaseHTTPMiddleware:
-# the check is on a single header, and wrapping every request in an extra task and
-# response cycle to read one integer would cost more than it saves.
-#
-# Two bounds, because either one alone is bypassable. The declared Content-Length turns
-# away an oversize body before a byte of it is read, and the receive wrapper counts what
-# actually arrives, which is the only bound a chunked request -- which declares no
-# length at all -- can be caught by. Counting also bounds the multipart spool, which
-# otherwise writes an unbounded body to a temp file before any handler sees it.
-#
-# The counted path answers 413 itself, as pure ASGI, rather than raising for a handler
-# to translate: the raise happens inside `receive`, which downstream body parsers call
-# outside the endpoint's own call -- an exception handler registered for it is never
-# reliably reached there, and the client gets a 500 for a request the server had
-# already correctly refused. Answering inline also keeps the status honest under every
-# server, and the disconnect returned to the parser makes it stop pulling instead of
-# failing halfway through a form it will never finish.
+# Enforced before framework buffering; Content-Length and receive counting cover fixed and chunked bodies.
 
 
-# ----------------------
 # Unencodable input in a 422
-# ----------------------
-# A validation error quotes the offending value back to the caller, and that value is
-# arbitrary user input. If it is not valid UTF-8 -- an unpaired surrogate, which a JSON
-# ``\udXXX`` escape can produce and which ``str.encode('utf-8')`` refuses -- then rendering
-# the 422 itself raises UnicodeEncodeError and the client gets a 500 for a request the
-# server had already correctly rejected. The rejection was right; only the way it was
-# reported was broken.
-#
-# So the 422 is rendered with backslashreplace, which is already the escape these
-# characters use on the wire. The response keeps FastAPI's usual shape and the message is
-# still legible; only the unencodable bytes change representation. This is not a place to
-# sanitize the request itself -- by the time this runs the value has been refused.
+# Escape invalid UTF-8 in validation errors so refused requests still return 422.
 
 
 def _make_encodable(value):
@@ -452,18 +383,8 @@ def _request_validation_response(request: Request, exc: RequestValidationError) 
     )
 
 
-# ----------------------
 # A draw that was refused
-# ----------------------
-# A matchmaking refusal is a 404 whose ``detail`` is a sentence written for a person, and the
-# page has to decide what to *show* as well as what to say in a toast. Those are different
-# sentences: a draw refused because nobody was available and a draw refused because the cohort has
-# no slot are both "no match", but only the second one is permanent, and telling that user to try
-# again would be as wrong as telling them they are on a cooldown.
-#
-# So the code travels beside the sentence rather than inside it. ``detail`` stays a plain string,
-# which keeps ``describeApiError`` and the toast exactly as they were; the client branches on
-# ``code`` and falls back to the sentence alone if it meets a server that does not send one.
+# Keep the human-readable detail and a stable code for client branching.
 def _matchmaking_refusal_response(request: Request, exc: MatchmakingRefusal) -> Response:
     return JSONResponse(
         {"detail": exc.detail, "code": exc.code},
@@ -688,11 +609,7 @@ class RequestBodyLimitMiddleware:
                         "Refused undeclared body past %s bytes for %s %s",
                         self.max_bytes, scope.get("method"), scope.get("path"),
                     )
-                    # Answered here, not raised for a handler: the 413 goes out on `send`
-                    # directly, and the disconnect below tells the downstream parser the
-                    # request is over so it stops pulling instead of failing mid-form.
-                    # It travels back out through every outer middleware, so CORS and
-                    # security headers still apply to it exactly as to any refusal.
+# Send 413 directly, stop body parsing, and let outer middleware add standard headers.
                     response = PlainTextResponse(
                         "Request body too large", status_code=413
                     )
@@ -756,13 +673,7 @@ app.add_middleware(
     # its multipart form on uploads), and the default Accept. Anything else fails
     # preflight instead of reaching a handler.
     allow_headers=["Authorization", "Content-Type", "Accept"],
-    # `Retry-After` is a plain response header, so a cross-origin fetch cannot read it
-    # unless it is named here: the browser withholds non-safelisted response headers
-    # from JS unless the server publicly lists them. The login page turns the value it
-    # carries into "You can try again in about N minutes", so without this line that
-    # toast could never know how long the wait is. One name is listed, not a wildcard:
-    # the `*` value is not honoured with credentials, and this is the one header the
-    # client actually reads.
+# Expose Retry-After to browser clients so the login screen can show cooldown timing.
     expose_headers=["Retry-After"],
     # Cache a successful preflight for ten minutes so browsers do not re-ask on every
     # call. The answer only changes on redeploy, which restarts the process anyway.
@@ -776,12 +687,8 @@ app.add_middleware(
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(TrustedHostMiddleware)
 
-# Added last so it runs outermost: every middleware and handler below sees the
-# client-facing scheme and host the proxy reported, not the proxy-to-app hop. Only
-# added when TRUSTED_PROXY_HOSTS names the proxies -- trusting X-Forwarded-* from
-# anyone would let a direct client declare its own scheme as https (upgrading its own
-# cookies to Secure) or spoof its address. With no proxies configured the app is
-# reached directly and the socket already tells the truth, so nothing is added.
+# Trust forwarded scheme and host only from configured proxies; spoofed headers could
+# otherwise affect secure-cookie decisions and client identity.
 _proxy_hosts = [h.strip() for h in settings.TRUSTED_PROXY_HOSTS.split(",") if h.strip()]
 if _proxy_hosts:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_proxy_hosts)
@@ -825,29 +732,8 @@ app.include_router(two_key_escape.router)
 app.include_router(games.router)
 app.include_router(leaderboards.router)
 
-# The hook drops the query string from the span's URL attributes before the span is
-# exported, because the middleware's http.url otherwise carries the raw query string
-# and the asset delivery routes below authenticate on a scoped token passed as `t`.
-# See app.telemetry for why the hook is used rather than a span processor.
-#
-# excluded_urls keeps /metrics out of both the spans and the HTTP server metrics. That
-# endpoint is Prometheus's own liveness probe and Prometheus scrapes it every 15s, so
-# instrumenting it makes the scrape the loudest thing in the application: measured at
-# 92% of all request rate and ~3,800 spans/day, and it filled Tempo's search results
-# with nothing but `GET /metrics`. Every "top routes" and "request rate" view is then
-# dominated by the monitoring system measuring itself, which is the opposite of useful.
-# The series that matter for liveness are served from that endpoint and scraped
-# directly as the `confessit-backend` job, so nothing is lost by not tracing it.
-#
-# The pattern is anchored to the authority rather than to the start of the string on
-# purpose. 0.66b0 does not match this against the path: it splits the argument on
-# commas, joins the parts into one alternation, and `re.search`es the result against the
-# full `scheme://host:port/path?query` string. So `^/metrics$` matches nothing at all,
-# and an unanchored `/metrics$` is nearly as bad in the other direction -- it also
-# swallows `/api/metrics`. `://[^/]+` consumes the authority and then requires
-# `/metrics` to be the entire remaining path. tests/test_metrics_endpoint.py asserts
-# this against real requests, because a pattern that silently stops matching leaves the
-# scrape noise behind with nothing to indicate it.
+# Redact URL queries before export because asset tokens use a query parameter. Exclude
+# Prometheus's self-scrape from tracing and HTTP metrics; the regex matches its full URL.
 EXCLUDED_INSTRUMENTED_URLS = r"://[^/]+/metrics/?(?:\?.*)?$"
 
 FastAPIInstrumentor.instrument_app(
@@ -856,37 +742,9 @@ FastAPIInstrumentor.instrument_app(
     excluded_urls=EXCLUDED_INSTRUMENTED_URLS,
 )
 
-# ----------------------
-# Image delivery
-# ----------------------
-# There are no image routes here, and that is the design rather than a gap.
-#
-# Profile pictures are served straight from Cloudinary's CDN as ordinary public HTTPS URLs, and
-# love note images are served from the same CDN as ``authenticated`` objects behind a signed
-# delivery URL that this application mints only after deciding the viewer is entitled. In both
-# cases the bytes never pass through this process: there is no origin fetch, no per-request
-# entitlement re-check on an image GET, and no second copy of every picture in this process's
-# memory.
-#
-# The signature is *not* short-lived: Cloudinary's expiring mechanism is the authentication
-# token, which needs an account-wide Auth token key that is not available on this plan (see
-# ``config``). An issued love note URL is therefore a durable bearer capability, and the
-# mitigations live around that fact rather than pretending otherwise:
-#
-# * the responses that mint URLs carry ``Cache-Control: no-store`` plus
-#   ``Referrer-Policy: no-referrer``, and the frontend renders them through ``<img>``
-#   with ``referrerpolicy="no-referrer"``, so the capability is neither cached nor
-#   leaked sideways into referrers;
-# * taking a note down destroys its image at the store (report removal and permanent
-#   delete alike), so previously minted URLs stop resolving;
-# * blocking an account rotates its live notes' images (destroy plus re-upload under the
-#   same name), which bumps the object version old signatures were minted against, so
-#   those URLs stop verifying while entitled viewers keep working through fresh ones.
-#
-# What moved here instead of out of the codebase is the *authorisation*, and it moved to the point
-# where a URL is minted -- inside the services that build these responses. That is the only place
-# it can be enforced now: a love note delivery URL is a capability, and unlike a URL naming this
-# API it is consumed by somebody else's server, so nothing on our side can later re-check it.
+# Images are served directly by Cloudinary. Love-note URLs are durable bearer capabilities,
+# so mint them only for entitled readers, disable caching/referrers, and delete or rotate
+# assets when access is revoked.
 
 
 # ----------------------
@@ -953,11 +811,7 @@ if ENABLE_DEBUG_ENDPOINTS:
 # Main entrypoint
 # ----------------------
 if __name__ == "__main__":
-    # To run this app correctly, use the command:
-    # uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
-    # This should be run from the parent directory containing the 'app' package.
-    # The same body/concurrency limits the container image sets are applied here, so a
-    # developer running this entrypoint is not testing a less protected configuration.
+# Run from the backend directory with ``uvicorn app.main:app --reload --host 0.0.0.0 --port 8001``.
     uvicorn.run(
         "app.main:app",
         host=settings.HOST,

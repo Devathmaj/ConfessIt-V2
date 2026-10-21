@@ -20,12 +20,8 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/couple-questionnaire", tags=["Couple Questionnaire"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and reads and writes only that caller's own place in the game -- nothing
-# on someone else's behalf and no reading of others' originals before the completed
-# result. The session belongs to the caller's own id on every request, never a
-# client-supplied one. Choosing a partner sends no notification: mutual selection is
-# discovery-based, and a choice is visible only to its chooser until both have chosen.
+# Routes use the caller's own session and reveal shared answers only after completion.
+# Partner selection is mutual and sends no notification.
 
 
 @router.get("", response_model=CoupleCurrentState)

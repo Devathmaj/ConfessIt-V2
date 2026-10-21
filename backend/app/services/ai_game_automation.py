@@ -1,32 +1,7 @@
-"""Automated, schedule-driven session generation for the two AI-powered games.
+"""Queue and publish scheduled Plot Twist and Case Closed sessions.
 
-Plot Twist and Case Closed ride the game scheduler that already runs at 00:01 UTC
-(and at boot, and from ``POST /admin/games/run-resets``), but the scheduler only
-*enqueues* a cycle: one ``game_generation_jobs`` row. A background worker --
-in-process, safe on every uvicorn worker and replica -- claims the job under one
-shared advisory lock, runs the existing two-stage generation pipeline, validates
-the result, and only then opens the playable session, all inside the game's own
-lifecycle lock.
-
-Why it is shaped this way:
-
-* **00:01 UTC is a checkpoint, not a deadline.** Queueing is a fast database write;
-  the model calls happen later and never block the scheduling pass.
-* **One cycle per game per boundary.** ``(game_id, cycle_start_date)`` is unique
-  and the window is fixed at enqueue, so repeated scheduler runs find the existing
-  job instead of starting a second generation, and slow generation can never shift
-  the configured frequency.
-* **One protected pipeline.** Every worker runs under the single
-  ``AI_GENERATION_LOCK_KEY`` advisory lock, so the two games can never call the
-  provider concurrently, in one process or across replicas.
-* **Publication is atomic with completion.** The package's ``published`` status,
-  the old session's end, the new session's start and the job's terminal update
-  commit in one transaction under the game lock: a crash can leave an unpublished
-  (retryable) package, but never a published session without its job or vice versa.
-* **Revocation wins races.** ``game_session_revocations`` ends the live session,
-  suppresses replacement generation until the next boundary, cancels a running job
-  in the same locked transaction, and is re-checked inside the publish transaction
-  so a stale job can never resurrect a revoked session.
+Workers claim unique game-boundary jobs, serialize generation, and publish atomically
+under lifecycle locks. Revocations suppress replacement sessions until the next cycle.
 """
 
 from __future__ import annotations

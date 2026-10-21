@@ -21,11 +21,8 @@ from ..services.trivia_service import TRIVIA_QUESTIONS_MAX_LIMIT
 
 router = APIRouter(prefix="/admin/trivia-drop", tags=["Admin - Trivia Drop"])
 
-# Every route below is gated on the one capability that means "may publish a
-# question", and the read routes are gated too for the reason the other games'
-# are: the correct-option set is the thing the whole feature exists to keep out
-# of the player-facing surface while a question is live, and a list endpoint
-# open to any caller would be that key, exposed.
+# All routes require question-management access; read routes protect the answer key
+# while a question is live.
 
 
 @router.post("", response_model=TriviaDropQuestion, status_code=status.HTTP_201_CREATED)

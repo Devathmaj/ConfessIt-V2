@@ -1,19 +1,7 @@
-"""Deterministic validation for Case Closed case packages.
+"""Validate Case Closed package structure, consistency, and clue coverage.
 
-AI reviews may supplement these checks but never replace them: a package is
-publishable only when this module reports ``ok=True``. Every error names the
-offending lead (or package level) and the exact problem, so the admin screen
-and the repair loop can act on it.
-
-Covers prompt.md Section 9:
-- Structural: dup ids, missing fields/types (via Pydantic), bad refs,
-  unreachable nodes, cycles, depth, budget, solution suspect.
-- Mystery consistency: unique culprit, timeline order, solution support,
-  no culprit leak via ids/ordering, reachable evidence for solution,
-  branch depth.
-- Board completeness: no sequence of investigations inside the couple's
-  budget can reveal every reachable clue -- some clues must always stay
-  hidden, whatever choices the partners make.
+These deterministic checks gate publication; AI review may supplement but cannot replace
+them. Errors identify the offending lead or package rule.
 """
 
 from collections import deque

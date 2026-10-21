@@ -1,11 +1,6 @@
-"""The one place a request is checked against a privilege.
+"""Centralize capability checks for staff and participant routes.
 
-Two gates answer two questions. ``require_capability`` names the one capability a route
-needs; ``require_participant`` names the account table a participant route requires.
-The table gate replaced per-route role checks: staff have no ``users`` row, so a feature
-that reads ``users`` cannot see, match or accept them. Both resolve the caller through
-``get_current_user``, which re-reads PostgreSQL on every request, so account changes
-take effect on the next call rather than at token expiry.
+Both dependencies resolve the current account from PostgreSQL on each request.
 """
 
 from typing import Optional

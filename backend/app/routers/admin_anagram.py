@@ -29,11 +29,8 @@ from datetime import date as _date
 
 router = APIRouter(prefix="/admin/anagram", tags=["Admin - Anagram"])
 
-# Every route below is gated on the one capability that means "may publish a puzzle", and
-# the read routes are gated too for the reason the Wordle ones are: the configured answer is
-# the thing the whole feature exists to keep out of the player-facing surface until an
-# administrator publishes it, and a list endpoint open to any caller would be that answer,
-# exposed.
+# All routes require puzzle-management access; read routes protect the answer until
+# publication.
 
 
 @router.get("/preview", response_model=AnagramDraw)

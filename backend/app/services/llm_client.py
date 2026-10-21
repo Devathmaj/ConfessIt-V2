@@ -14,35 +14,19 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
-# Reasoning effort for Groq reasoning models, matching the provider's own
-# documented usage. Fixed, not configurable: story determinism comes from
-# the schema and validation, not from sampling knobs.
+# Provider defaults are fixed; schema validation governs generated story structure.
 _GROQ_REASONING_EFFORT = "medium"
 
 
 def _groq_sampling_params(model: Optional[str]) -> dict[str, Any]:
-    """Decoding params for one Groq model id.
-
-    ``qwen/qwen3.8-27b`` (and Qwen chat models generally) use their documented
-    setup -- temperature 0.6, top_p 0.95, reasoning_effort "default" -- while
-    gpt-oss reasoning models take reasoning_effort "medium" with provider
-    defaults otherwise. Token budget and timeout always come from the caller,
-    never from here: a fixed 2048-token cap would truncate story packages.
-    Streaming is likewise not used: generation must return one parsed JSON
-    document for local validation, so the equivalent non-streaming call is
-    made with the same sampling params.
-    """
+    """Return model-specific sampling options; caller supplies token budget and timeout."""
     name = (model or "").strip().lower()
     if name == "qwen/qwen3.8-27b" or name.startswith("qwen/"):
         return {"temperature": 0.6, "top_p": 0.95, "reasoning_effort": "default"}
     return {"reasoning_effort": _GROQ_REASONING_EFFORT}
 
 
-# Reasoning effort for Foundry deployments whose names say reasoning model.
-# Hidden reasoning counts against max_completion_tokens: one live gpt-5-mini
-# story-package run spent the whole 16k budget thinking and returned empty
-# content, so a fixed low effort keeps room for the JSON document. The
-# parameter only travels for reasoning deployments; others reject it.
+# Keep reasoning effort low so Foundry leaves completion tokens for the JSON output.
 _FOUNDRY_REASONING_EFFORT = "low"
 
 

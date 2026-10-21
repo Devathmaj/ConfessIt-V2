@@ -1,27 +1,7 @@
-"""Application-level AES-256-GCM encryption for persisted chat bodies.
+"""Encrypt persisted chat bodies with versioned AES-256-GCM keys.
 
-Design notes
-------------
-* One 32-byte key per environment, selected by a version label (``v1`` today).
-  The active version is used for new writes; every record stores the version it
-  was encrypted with so historical rows remain readable after a rotation.
-* ``cryptography``'s ``AESGCM`` is used directly. ``encrypt()`` returns the
-  ciphertext with the 16-byte authentication tag appended, and ``decrypt()``
-  expects that combined representation. A row stores one ``body_ciphertext``
-  field plus a 12-byte nonce and the key version.
-* A fresh 12-byte nonce from ``secrets.token_bytes`` per encryption; never
-  derived from message content or reused.
-* Stable record metadata (chat type, message id, chat/session id, sender id and
-  key version) is authenticated as AES-GCM AAD via the same deterministic
-  serialization rebuilt on decryption, so swapping a ciphertext between rows or
-  editing the bound metadata fails authentication.
-* Keys come from ``CHAT_ENCRYPTION_KEY_V<n>`` environment variables through the
-  settings object, Base64-encoded. The provider seam is small so a future
-  Azure Key Vault-backed provider can return the same mapping. No key is ever
-  logged or returned to a client.
-
-Errors are sanitized only: callers log the error code and record identifiers,
-never plaintext, keys, nonces or ciphertext.
+Each record stores its key version and fresh nonce; stable message metadata is authenticated
+as AAD. Errors must never expose plaintext, keys, nonces, or ciphertext.
 """
 
 from __future__ import annotations

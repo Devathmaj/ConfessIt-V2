@@ -17,11 +17,8 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/trivia-drop", tags=["Trivia Drop"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and reads and writes only that caller's own submission: no way to answer
-# another player's question and no way to ask what the key is -- the live question
-# carries display options plus the derived mode only, and the submit response carries
-# no correctness and no time. Both surface on the ended question's results, never live.
+# Routes expose the live question and the caller's submission only. Correctness and
+# response times appear with results after the question ends.
 
 
 @router.get("", response_model=TriviaDropCurrentQuestion)

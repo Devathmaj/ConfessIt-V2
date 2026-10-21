@@ -294,12 +294,8 @@ def unhide_comment(
     return unhide_comment_service(db, comment_id, reviewer.regno)
 
 
-# Declared after ``/confessions/{confession_id}`` on purpose. FastAPI matches on method
-# first and the only sibling is a DELETE, so nothing is shadowed today; keeping the
-# literal path last means a later ``GET /{confession_id}`` cannot swallow it, and the
-# literal ``reports`` segment is matched first so a report id is never read as a
-# confession id. These two carry the reporting capabilities so ruling on reports stays
-# separately grantable from reviewing the posts themselves.
+# Keep the literal reports route before any future catch-all confession route; report
+# review permissions remain separate from ordinary post review.
 
 
 @router.get("/confessions/reports")
@@ -404,15 +400,8 @@ def create_user(
                 detail="An account with this email already exists for this account type.",
             )
 
-    # ``notifications_enabled`` and ``is_blocked`` are not written here: both have server
-    # defaults in ``db_models.AccountColumns`` (true and false), so the new row takes them
-    # whether or not this dict mentions them, and blocking an existing account is the
-    # separate ``PUT /admin/users/{id}/block`` route.
-    #
-    # Only the fields the target table actually has are passed to the constructor, built
-    # from the payload rather than branched into two constructors: a field added to
-    # AccountColumns lands in all three tables, and a participant-only field can never
-    # reach a staff row.
+    # Shared flags use model defaults. Build only fields supported by the target
+    # table so participant-only data cannot reach staff account rows.
     account_fields: Dict[str, Any] = {
         "regno": normalized_regno,
         "name": payload.name.strip(),
@@ -434,15 +423,8 @@ def create_user(
 
 
     with db.sessions.begin() as session:
-        # The cap is checked inside the same transaction as the insert, behind an
-        # advisory lock -- not with the duplicate checks above, which cannot cover the
-        # race. A SELECT count(*) then INSERT is not atomic: N simultaneous creates all
-        # read "499 of 500" and all insert, exceeding the cap by as many requests as the
-        # deployment can serve at once. `pg_advisory_xact_lock` serialises creation
-        # *per account table* for the rest of the transaction (released by commit or
-        # rollback, different keys per table, so participants never wait on admins).
-        # This is the only place a row is added through the API, which is what makes
-        # the lock sufficient -- there is no second writer that could slip past it.
+        # Count and insert under a per-table advisory lock so concurrent requests
+        # cannot exceed the account cap.
         session.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": account_cap_lock_key(account_type.value)},
@@ -611,12 +593,7 @@ def update_user_details(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="An admin can edit only their own profile.",
                 )
-            # ``gender``, ``year`` and ``department`` are dropped for a staff account: the
-            # participant-shaped form submits every field, and an edit to a moderator's
-            # name must not write a cohort onto tables without such columns.
-            #
-            # ``email`` is *not* dropped -- a shared, required column on every account,
-            # so a moderator's address is edited exactly as a participant's is.
+            # Drop participant-only fields for staff; email is shared across account tables.
             participant_only = ("gender", "year", "department")
             if account_type != AccountType.USERS.value:
                 update_payload = {

@@ -22,11 +22,8 @@ from ..services.connections_service import CONNECTIONS_GAMES_MAX_LIMIT
 
 router = APIRouter(prefix="/admin/connections", tags=["Admin - Connections"])
 
-# Every route below is gated on the one capability that means "may publish a
-# puzzle", and the read routes are gated too for the reason the Wordle ones
-# are: the configured groups are the thing the whole feature exists to keep out
-# of the player-facing surface, and a list endpoint open to any caller would
-# be that answer key, exposed.
+# All routes require puzzle-management access; read routes protect the answer key
+# until publication.
 
 
 @router.post("", response_model=ConnectionsGame, status_code=status.HTTP_201_CREATED)

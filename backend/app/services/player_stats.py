@@ -1,9 +1,6 @@
-"""Player activity across every game, read from each game's participation tables.
+"""Collect immediate player activity from each game's participation tables.
 
-The League ledger holds only finalized events, while this module answers
-dashboard questions immediately. Player and console views share collectors so
-"finished" means the same thing in both. These are performance figures, not
-scores or league awards; only native performance numbers travel outward.
+Player and console views share collectors; these metrics are separate from league awards.
 """
 
 from dataclasses import dataclass

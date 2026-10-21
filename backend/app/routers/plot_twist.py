@@ -20,11 +20,8 @@ from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 
 router = APIRouter(prefix="/games/plot-twist", tags=["Plot Twist"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and reads and writes only that caller's own place in the story:
-# their selection, their couple's session, their assigned turns. Pairing reuses
-# the questionnaire's mutual selection, and the story executes a published,
-# versioned package deterministically -- the model is never called during gameplay.
+# Routes use the caller's own pairing and story turns. Gameplay runs the published
+# package deterministically without calling the model.
 
 
 @router.get("", response_model=PlotTwistCurrentState)

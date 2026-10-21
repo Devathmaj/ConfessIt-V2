@@ -23,12 +23,8 @@ MESSAGE = "message"
 
 REPORT_KINDS: tuple[str, ...] = (CONFESSION, LOVE_NOTE, MESSAGE)
 
-# Above how many upheld removals, summed across the three kinds, a participant is blocked
-# automatically by the next removal. Strictly more than this, so five removals leave the
-# account alone and the sixth takes it away. This is the same line the admin flagged queue
-# draws (``admin_service`` reads the constant from here), and deliberately so: the queue
-# exists to surface the participants at the line, and an operator reading it sees them in
-# the state the rule put them in -- not a second threshold that could disagree.
+# Block after more than five upheld removals across all content kinds. The admin queue
+# reads this same threshold so its flagged list matches enforcement.
 REMOVAL_AUTO_BLOCK_THRESHOLD = 5
 
 # kind -> (total reports filed, reports that were upheld by a removal).

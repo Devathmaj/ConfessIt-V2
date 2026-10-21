@@ -1,21 +1,7 @@
-"""Case Closed mystery schemas: versioned, structured representation of a case.
+"""Versioned Pydantic schemas for Case Closed mysteries and packages.
 
-Mirrors the Plot Twist pattern: AI-generated prose is never executed as game
-logic. Every generated blueprint/package is parsed into these Pydantic models
-first; anything that does not parse is rejected before validation. The same
-models produce the strict JSON Schemas sent to the provider as Structured
-Outputs (via the shared ``llm_client``), so the contract the model is asked
-to honour and the contract the backend enforces are one definition, not two.
-
-Gameplay is deterministic and never calls the LLM: it executes an immutable,
-published ``CaseClosedPackage``.
-
-Conventions (prompt.md Sections 8-9):
-- String identifiers for suspects, leads, facts, evidence.
-- DAG of leads: edges explicit via ``next_lead_ids``.
-- Three initial leads, ~15-20 nodes, depth ~5, up to 3 follow-ups.
-- Budgets enforced server-side (default 5 per partner).
-- Player-facing models never carry the hidden solution or unrevealed graph.
+These models validate generated content and define provider output schemas. Published
+packages run deterministically; player-facing models omit hidden solutions and clues.
 """
 
 from datetime import datetime

@@ -23,12 +23,8 @@ from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 
 router = APIRouter(prefix="/games/two-key-escape", tags=["Two-Key Escape"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a
-# participant and derives the couple from the caller's own mutual-selection session --
-# never a client-supplied id -- so an unrelated user can neither join, modify nor view
-# another couple's game. Reads never create anything; the screen polls after every
-# write and on an interval while waiting (no game owns a WebSocket; only chat streams
-# over Redis).
+# The caller's mutual-selection session determines the couple; client IDs are ignored.
+# Reads are passive, and the client polls for updates after writes and while waiting.
 
 
 @router.get("", response_model=TwoKeyEscapeState)

@@ -1,25 +1,7 @@
-"""Playing Case Closed: deterministic async cooperative mystery.
+"""Deterministic cooperative Case Closed gameplay.
 
-Pairing reuses the Couple Questionnaire's mutual-selection storage (never
-reimplemented here). The case belongs to a published, versioned package
-pinned by the current global Case Closed event. Gameplay executes that
-package deterministically and never calls the LLM.
-
-Rules enforced here (prompt.md Sections 3-6, 11):
-- One mystery per event; sessions pin the package version they started.
-- Five actions per partner, tracked independently; only new discoveries
-  charge; revisits to globally-known leads are free navigation.
-- Three initial leads; DAG with explicit edges; cycles rejected at publish.
-- Shared evidence board; messaging reuses existing conversations (no new chat).
-- Joint accusation: both partners explicitly confirm the same suspect to
-  lock; single confirmation never locks; lock is immutable; no correctness
-  feedback before event finalization.
-- Timer starts on first successful investigation (atomic), stops on joint
-  lock; server timestamps only.
-- Scoring: correct -> time-decay positive; wrong/incomplete -> zero;
-  deterministic per event frozen config; idempotent finalization.
-- Concurrency: advisory lock + SELECT FOR UPDATE + state_version optimistic
-  concurrency; retries replay stored results instead of double-charging.
+Sessions use the event's published package and mutual-selection pairing. Actions, evidence,
+accusations, timing, and scoring are enforced server-side with transactional locking.
 """
 
 import logging

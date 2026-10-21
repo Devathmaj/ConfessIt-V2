@@ -1129,14 +1129,8 @@ def use_key(db: Database, user: UserDetails, key_index: int) -> TwoKeyEscapeStat
         # old ones shut again. Blocking is chosen against it, so the
         # solvability proof covers the revert as well.
         locked_result = (locked - {target}) | relock
-        # Every ever-locked cell is ineligible for blocking -- including the
-        # one this action opens -- so a key's progress is never undone by a
-        # later block. Gate shoulders and the exit's approaches are excluded
-        # too: crossings must always land on open ground and the exit must
-        # keep an ordinary approach, or later keys could seal what earlier
-        # keys proved walkable. The reachability proof reads
-        # ``locked_result`` exactly as the board will hold it: the opened
-        # cell traversable, the re-locked ones shut again.
+        # Never block gates, shoulders, or exit approaches; validate reachability
+        # against the resulting board with the prior lock relocked.
         never_block = _as_set(game.locked_cells)
         gates = _gate_cells(game)
         staging = _staging_cells(game)
