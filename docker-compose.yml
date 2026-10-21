@@ -73,13 +73,6 @@ services:
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
-      TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
-      CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: ${CHAT_ENCRYPTION_ACTIVE_KEY_VERSION:-v1}
-      CHAT_ENCRYPTION_KEY_V1: ${CHAT_ENCRYPTION_KEY_V1:?set CHAT_ENCRYPTION_KEY_V1 in the root .env}
-      MATCHMAKING_CHAT_RETENTION_HOURS: ${MATCHMAKING_CHAT_RETENTION_HOURS:-24}
-      REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS: ${REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS:-30}
-      CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
       OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_EXPORTER_OTLP_INSECURE: "true"
@@ -92,15 +85,13 @@ services:
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
     volumes:
       - ./backend:/app
+      - ./backend/.scheduler.env:/app/.env:ro
     env_file:
-      - ./backend/.env
+      - ./backend/.scheduler.env
     depends_on:
       - redis
     environment:
       TZ: UTC
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in the root .env}
-      TOKEN_HASH_PEPPER: ${TOKEN_HASH_PEPPER:?set TOKEN_HASH_PEPPER in the root .env}
-      CHAT_CLEANUP_BATCH_SIZE: ${CHAT_CLEANUP_BATCH_SIZE:-500}
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
       OTEL_EXPORTER_OTLP_INSECURE: "true"

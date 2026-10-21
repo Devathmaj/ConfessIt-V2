@@ -46,6 +46,7 @@ read_setting() {
 
 # Settings required by app.config.Settings to bake into the cron wrapper.
 REQUIRED_SETTINGS="PGHOST PGUSER PGPORT PGDATABASE PGPASSWORD REDIS_URL SECRET_KEY TOKEN_HASH_PEPPER"
+OPTIONAL_SETTINGS="CHAT_CLEANUP_BATCH_SIZE"
 
 # All validation happens before any file is written, so a refused value leaves
 # no half-generated wrapper behind.
@@ -58,6 +59,19 @@ for _setting in $REQUIRED_SETTINGS; do
   fi
   reject_line_breaks "$_setting_value" "$_setting"
 done
+
+# This optional value controls the scheduler's bounded chat cleanup batches.
+# Keep the app's default when it is absent; reject malformed values before any
+# wrapper or cron file is written.
+read_setting CHAT_CLEANUP_BATCH_SIZE
+if [ -n "$_setting_value" ]; then
+  case "$_setting_value" in
+    *[!0-9]*)
+      echo "[game-scheduler] refusing to start: CHAT_CLEANUP_BATCH_SIZE must be digits" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 reject_line_breaks "${TZ:-}" "TZ"
 reject_line_breaks "$APP_DIR" "APP_DIR"
@@ -92,6 +106,14 @@ esac
     printf 'export %s=%s\n' \
       "$_setting" \
       "'$(escape_single_quotes "$_setting_value")'"
+  done
+  for _setting in $OPTIONAL_SETTINGS; do
+    read_setting "$_setting"
+    if [ -n "$_setting_value" ]; then
+      printf 'export %s=%s\n' \
+        "$_setting" \
+        "'$(escape_single_quotes "$_setting_value")'"
+    fi
   done
   if [ -n "${TZ:-}" ]; then
     printf 'export TZ=%s\n' "'$(escape_single_quotes "$TZ")'"

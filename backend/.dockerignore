@@ -6,6 +6,7 @@
 # supplied at run time instead: .env by the bind mount in docker-compose.yml, credentials
 # by the environment.
 .env
+.scheduler.env
 */.env
 requirements-dev.txt
 .git
