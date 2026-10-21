@@ -1,5 +1,6 @@
-# Production stack; deploy with `docker compose up -d` on the host that terminates
-# TLS (see nginx/nginx.prod.conf.example).
+# Production stack; Nginx terminates TLS and publishes host ports 80/443
+# (see nginx/nginx.prod.conf.example). Replace the empty PEM placeholders in
+# nginx/tls/ before starting the stack.
 #
 # Only two services are published to the host: nginx (80/443) and Grafana
 # (127.0.0.1:3000, loopback only). Everything else -- API, Redis, Prometheus,
@@ -12,9 +13,11 @@
 services:
 
   nginx:
+    networks: [edge]
+    pids_limit: 128
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL to the public https API origin}
     image: confessit-nginx:prod
@@ -22,13 +25,18 @@ services:
       SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME to the public site name}
       API_ORIGIN: ${API_ORIGIN:?set API_ORIGIN to the bare public API hostname}
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     volumes:
-      - ./tls:/etc/nginx/tls:ro
+      - ./nginx/tls:/etc/nginx/tls:ro
     depends_on:
       - backend
     restart: unless-stopped
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp:mode=1777
@@ -36,7 +44,7 @@ services:
       - /var/run:mode=1777
       - /etc/nginx/conf.d:mode=1777
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -53,6 +61,8 @@ services:
           memory: 256M
 
   backend:
+    networks: [edge, app, observability]
+    pids_limit: 256
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -80,6 +90,11 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
@@ -104,14 +119,34 @@ services:
           memory: 1G
 
   game-scheduler:
+    networks: [app, observability]
+    pids_limit: 64
     build:
       context: ./backend
       dockerfile: Dockerfile
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    # The entrypoint writes a system cron file and cron switches to appuser for
+    # each job. It needs root plus only the UID/GID switching capabilities.
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /etc/cron.d
     env_file:
       - ./backend/.scheduler.env
     environment:
       TZ: UTC
+      CRON_FILE: /etc/cron.d/game-resets
+      WRAPPER: /tmp/run-game-resets
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       OTEL_EXPORTER_OTLP_INSECURE: "true"
@@ -141,7 +176,9 @@ services:
   #         memory: 2G
 
   redis:
-    image: redis:7-alpine
+    networks: [app]
+    pids_limit: 128
+    image: redis:7.2.16-alpine
     container_name: confessit_redis
     restart: unless-stopped
     environment:
@@ -157,6 +194,10 @@ services:
     volumes:
       - redis_prod_data:/data
     read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     tmpfs:
       - /tmp
     deploy:
@@ -166,6 +207,8 @@ services:
           memory: 256M
 
   otel-collector:
+    networks: [observability]
+    pids_limit: 256
     image: otel/opentelemetry-collector-contrib:0.99.0
     command: ["--config=/etc/otel-collector-config.yml"]
     expose:
@@ -174,6 +217,13 @@ services:
       - "8889"
     volumes:
       - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     depends_on:
       loki:
         condition: service_healthy
@@ -181,6 +231,8 @@ services:
         condition: service_healthy
 
   prometheus:
+    networks: [observability]
+    pids_limit: 256
     image: prom/prometheus:v2.52.0
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -194,6 +246,13 @@ services:
       - ./observability/.rw-password:/etc/prometheus/rw-password:ro
       - ./observability/prometheus-healthcheck.sh:/etc/prometheus/healthcheck.sh:ro
       - prometheus_data:/prometheus
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD", "/bin/sh", "/etc/prometheus/healthcheck.sh"]
       interval: 10s
@@ -202,6 +261,8 @@ services:
       start_period: 30s
 
   grafana:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/grafana:10.4.3
     ports:
       - "127.0.0.1:3000:3000"
@@ -216,6 +277,13 @@ services:
       - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./observability/.rw-password:/etc/grafana/rw-password:ro
       - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     depends_on:
       prometheus:
         condition: service_healthy
@@ -225,11 +293,20 @@ services:
         condition: service_healthy
 
   loki:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/loki:2.9.8
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
       interval: 10s
@@ -238,6 +315,8 @@ services:
       start_period: 30s
 
   tempo:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yml"]
     expose:
@@ -247,6 +326,13 @@ services:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
       - ./observability/.rw-password:/etc/tempo/rw-password:ro
       - tempo_data:/var/tempo
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
       interval: 10s
@@ -261,3 +347,11 @@ volumes:
   grafana_data:
   loki_data:
   tempo_data:
+
+# Scope east-west traffic to the peers each workload needs. The networks are
+# bridge networks (not `internal`) so the backend can still reach its external
+# providers; no data or observability port is published on the host.
+networks:
+  edge:
+  app:
+  observability:

@@ -33,7 +33,8 @@ observability/.rw-password
 
 # Production TLS certificates for the edge (see docker-compose.yml). Private key
 # material must never be committed; without these files Nginx refuses to start.
-tls/
+/tls/
+nginx/tls/*.pem
 
 # Python cache
 __pycache__/

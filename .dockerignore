@@ -10,6 +10,8 @@ venv
 **/.env
 my_app.log*
 **/__pycache__/
+frontend/tests/
+frontend/bun.lockb
 *.pyc
 .pytest_cache/
 .git

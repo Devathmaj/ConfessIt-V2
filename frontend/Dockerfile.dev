@@ -1,8 +1,8 @@
 # Dev-only image for the ConfessIt SPA (HMR via bind mount; see
 # docker-compose.dev.yml). Production uses Dockerfile (multi-stage npm ci +
-# build + nginx:alpine, USER nginx).
+# build + nginx:1.31.8-alpine, USER nginx).
 # Use an official Node.js runtime as a parent image (22: the minimum line Vite 7 supports)
-FROM node:22-slim
+FROM node:22.23.2-bookworm-slim
 
 # Set the working directory in the container
 WORKDIR /app
@@ -14,12 +14,17 @@ COPY package.json package-lock.json ./
 # Reproducible dev install from the lockfile (not `npm install`, which can drift it).
 RUN npm ci
 
+# Keep the npm cache writable when the dev server runs without root.
+RUN chown -R node:node /app
+
 # Copy the rest of the application's code
 COPY . .
 
 # The Vite dev server listens on 8080 (see vite.config.ts); compose publishes it as
 # 127.0.0.1:5173:8080, so EXPOSE names the container port, not the host one.
 EXPOSE 8080
+
+USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8080/').then(()=>process.exit(0)).catch(()=>process.exit(1))"

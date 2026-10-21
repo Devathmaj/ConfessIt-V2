@@ -1,7 +1,7 @@
 # Dev-only image for the ConfessIt API and the game-scheduler sidecar over a bind
 # mount; production uses Dockerfile.
 # Use an official Python runtime as a parent image
-FROM python:3.12-slim
+FROM python:3.12.15-slim-bookworm
 
 # Set the working directory in the container
 WORKDIR /app
@@ -31,6 +31,8 @@ COPY . .
 
 # Grant ownership of app tree to appuser.
 RUN chown -R appuser:appuser /app
+
+USER appuser
 
 # Run FastAPI with reload and bounded concurrency.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", \

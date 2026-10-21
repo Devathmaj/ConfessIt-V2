@@ -58,12 +58,18 @@ map $http_upgrade $connection_upgrade {
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
+    listen [::]:8443 ssl;
     http2 on;
     server_name ${SERVER_NAME};
 
     ssl_certificate /etc/nginx/tls/fullchain.pem;
     ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_prefer_server_ciphers off;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -148,21 +154,38 @@ server {
     }
 }
 
+# Reject requests for unknown names instead of serving the SPA or reflecting an
+# arbitrary Host header in a redirect. The same certificate paths let the TLS
+# listener reject unknown SNI names without exposing the application.
+server {
+    listen 8443 ssl default_server;
+    listen [::]:8443 ssl default_server;
+    server_name _;
+    ssl_certificate /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    return 444;
+}
+
 # Plain HTTP exists only to leave it: every request moves to https without being served.
 server {
-    listen 80;
-    server_name ${SERVER_NAME};
+    listen 8080 default_server;
+    listen [::]:8080 default_server;
+    server_name _;
 
-    # Compose healthcheck: it must answer on plain HTTP even though every
-    # other request is redirected, otherwise the probe follows a redirect into
-    # TLS and fails on the certificate/hostname it cannot validate locally.
     location = /healthz {
         access_log off;
         add_header Content-Type text/plain;
         return 200 "ok\n";
     }
+    location / { return 444; }
+}
+
+server {
+    listen 8080;
+    listen [::]:8080;
+    server_name ${SERVER_NAME};
 
     location / {
-        return 301 https://$host$request_uri;
+        return 308 https://$host$request_uri;
     }
 }

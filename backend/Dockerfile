@@ -1,7 +1,7 @@
 # Production image for the ConfessIt API and the game-scheduler cron sidecar.
 # Development uses Dockerfile.dev (bind mount + uvicorn --reload).
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# Use a versioned official Python runtime as a parent image.
+FROM python:3.12.15-slim-bookworm
 
 # Set the working directory in the container
 WORKDIR /app
@@ -26,11 +26,10 @@ RUN useradd -r -m appuser
 # Expose the port the app runs on
 EXPOSE 8000
 
-# Copy the rest of the application code
-COPY . .
+# Copy only runtime code, owned by the unprivileged runtime account.
+COPY --chown=appuser:appuser . .
 
-# Grant ownership of app tree to appuser.
-RUN chown -R appuser:appuser /app
+USER appuser
 
 # Run FastAPI with bounded concurrency, no reload.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \

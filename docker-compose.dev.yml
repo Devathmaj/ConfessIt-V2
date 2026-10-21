@@ -8,22 +8,30 @@
 services:
 
   nginx:
-    image: nginx:alpine
+    networks: [edge]
+    pids_limit: 128
+    image: nginx:1.31.8-alpine
+    user: nginx
     ports:
-      - "127.0.0.1:5173:80"
-      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:5173:8080"
+      - "127.0.0.1:8001:8101"
     volumes:
       - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - frontend
       - backend
     read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
     tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /tmp
+      - /var/cache/nginx:mode=1777
+      - /var/run:mode=1777
+      - /tmp:mode=1777
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -35,19 +43,32 @@ services:
         max-file: "3"
 
   frontend:
+    networks: [edge]
+    pids_limit: 256
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8080", "--strictPort"]
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
+      NPM_CONFIG_CACHE: /tmp/npm-cache
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
       VITE_API_URL: "http://localhost:8001"
 
   backend:
+    networks: [edge, app, observability]
+    pids_limit: 256
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
@@ -68,6 +89,14 @@ services:
     ]
     volumes:
       - ./backend:/app
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     env_file:
       - ./backend/.env
     depends_on:
@@ -78,6 +107,7 @@ services:
         max-size: "10m"
         max-file: "3"
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-100}
       TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
@@ -88,10 +118,26 @@ services:
       ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],backend"
       OTEL_SEMCONV_STABILITY_OPT_IN: "http"
   game-scheduler:
+    networks: [app, observability]
+    pids_limit: 64
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /etc/cron.d
     volumes:
       - ./backend:/app
       - ./backend/.scheduler.env:/app/.env:ro
@@ -101,6 +147,8 @@ services:
       - redis
     environment:
       TZ: UTC
+      CRON_FILE: /etc/cron.d/game-resets
+      WRAPPER: /tmp/run-game-resets
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}@redis:6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the root .env}
       OTEL_EXPORTER_OTLP_INSECURE: "true"
@@ -116,7 +164,9 @@ services:
   #     - postgres_data:/var/lib/postgresql/data
   #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
   redis:
-    image: redis:7-alpine
+    networks: [app]
+    pids_limit: 128
+    image: redis:7.2.16-alpine
     container_name: confessit_redis
     restart: unless-stopped
     environment:
@@ -131,8 +181,17 @@ services:
       - "6379"
     volumes:
       - redis_data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   otel-collector:
+    networks: [observability]
+    pids_limit: 256
     image: otel/opentelemetry-collector-contrib:0.99.0
     command: ["--config=/etc/otel-collector-config.yml"]
     expose:
@@ -148,6 +207,8 @@ services:
         condition: service_healthy
 
   prometheus:
+    networks: [observability]
+    pids_limit: 256
     image: prom/prometheus:v2.52.0
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -169,6 +230,8 @@ services:
       start_period: 30s
 
   grafana:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/grafana:10.4.3
     ports:
       - "127.0.0.1:3000:3000"
@@ -192,6 +255,8 @@ services:
         condition: service_healthy
 
   loki:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/loki:2.9.8
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
@@ -205,6 +270,8 @@ services:
       start_period: 30s
 
   tempo:
+    networks: [observability]
+    pids_limit: 256
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yml"]
     expose:
@@ -229,3 +296,10 @@ volumes:
   grafana_data:
   loki_data:
   tempo_data:
+
+# Keep UI, data and observability traffic on separate bridge networks while
+# allowing the backend to join the networks it needs for upstream providers.
+networks:
+  edge:
+  app:
+  observability:

@@ -5,23 +5,25 @@
 # `npm run build:prod` -- a build without it fails instead of shipping a bundle
 # that guesses its API. Pass it as a build arg (see docker-compose.yml).
 # The running container needs no Node, no source and no secrets: only the dist
-# output, and SERVER_NAME/API_ORIGIN for the Nginx template below.
-FROM node:22-slim AS build
+# output, and SERVER_NAME/API_ORIGIN for the Nginx template below. Production
+# builds use the repository root as context so the shared config in nginx/ is
+# copied into the image.
+FROM node:22.23.2-bookworm-slim AS build
 WORKDIR /app
-COPY package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci
-COPY . .
+COPY frontend/ ./
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build:prod
 
-FROM nginx:alpine
+FROM nginx:1.31.8-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 # Rendered at container start from SERVER_NAME/API_ORIGIN (nginx:alpine envsubst).
-COPY nginx.prod.conf.example /etc/nginx/templates/default.conf.template
-EXPOSE 80 443
+COPY nginx/nginx.prod.conf.example /etc/nginx/templates/default.conf.template
+EXPOSE 8080 8443
 # Drop privileges: serve static files as nginx, not root. The dist output and the
 # rendered template must be world-readable for this to hold (they are: COPY defaults).
 USER nginx
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
