@@ -28,11 +28,7 @@ def get_notifications(
     limit: int = Query(50, ge=1, le=NOTIFICATIONS_MAX_LIMIT, description="How many matching notices to return. Clamped so one request can never serialise years of notices at once."),
     q: Optional[str] = Query(None, max_length=100, description="Case-insensitive substring match on the heading and body."),
 ):
-    """One page of the reader's notifications, newest first, with the total beside it.
-
-    The search is a SQL WHERE and every page a SQL LIMIT/OFFSET, so the inbox loads
-    downwards without ever holding the notices it is not showing.
-    """
+    """One page of the reader's notifications, newest first, with the total count."""
     return get_user_notifications_service(current_user.regno, db, limit, skip=skip, query=q)
 
 @router.put("/{notification_id}/read")
@@ -41,9 +37,7 @@ def mark_notification_read(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Mark a notification as read.
-    """
+    """Mark a notification as read."""
     mark_notification_read_service(notification_id, current_user.regno, db)
     return {"message": "Notification marked as read"}
 
@@ -53,8 +47,6 @@ def delete_notification(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Delete a notification.
-    """
+    """Delete a notification."""
     delete_notification_service(notification_id, current_user.regno, db)
     return {"message": "Notification deleted"}

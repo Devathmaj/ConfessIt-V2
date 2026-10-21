@@ -1,25 +1,4 @@
-"""Per-game configuration: availability, content mode and reset cadence.
-
-One row per game in ``game_configs``. The games never share a setting:
-Wordle can reset daily while Anagram resets every five days and the Couple
-Questionnaire resets weekly, and each game is enabled/hidden independently.
- Reaction Time owns a row for the same availability switches; its sessions are
- featured dates created by an administrator rather than rolled by the
- scheduler, so its reset cadence is stored but never read. Connections owns a
- row for the availability switches and the reset cadence; its content mode is
- always ``manual`` -- Connections has no random-content mode, and every
- session needs an administrator to supply its own sixteen words. Trivia Drop
- owns a row for the availability switches only: questions release
- individually rather than on any cadence, so both the content mode and the
- reset cadence are refused and the stored cadence is never read.
-
-``enabled`` and ``is_hidden`` are separate facts with separate consequences:
-
-* disabled + visible: shown in selection but marked temporarily unavailable,
-  direct play refused, session lifecycle continues;
-* hidden (regardless of ``enabled``): absent from selection, direct play
-  refused, and the scheduler creates no new sessions.
-"""
+"""Per-game availability, content mode, and reset cadence settings."""
 
 from datetime import datetime, timezone
 from typing import Optional
@@ -31,18 +10,8 @@ from ..db_models import GameConfigRecord
 from ..limits import GAME_CONTENT_MODES, GAME_IDS, RESET_CADENCE_VALUES
 from ..postgres import Database
 
-# Advisory-lock keys serialising one game's lifecycle transitions (scheduler run
-# vs admin Update) *and* the gameplay writes made against its live session.
-# Arbitrary but fixed; no other lock namespace may reuse these values.
-#
-# The scheduler holds a game's key across end-old/open-new, so a gameplay write
-# that holds the same key across liveness-check/write cannot interleave a stale
-# play into the session being ended: either the play commits first and the
-# rollover ends a session that already holds it, or the rollover commits first
-# and the play's liveness check (re-read under the lock) 409s. Gameplay
-# transactions hold at most one game key; the couple/two-key-escape pair locks
-# (``_COUPLE_SESSION_LOCK_KEY``/``_ESCAPE_SESSION_LOCK_KEY``) are always acquired
-# *after* the game key, so no lock cycle is possible.
+# Shared per-game locks serialize scheduler transitions and gameplay writes.
+# Acquire couple and escape pair locks after the game lock to prevent deadlocks.
 _GAME_LOCK_KEYS: dict[str, int] = {
     "wordle": 7_260_001,
     "anagram": 7_260_002,
@@ -115,11 +84,11 @@ def default_content_mode(game_id: str) -> Optional[str]:
 def get_config(session, game_id: str) -> GameConfigRecord:
     """Read ``game_id``'s row, creating it with defaults when absent.
 
-    Called inside the caller's transaction: the row is born enabled, visible,
+    Called inside the caller's transaction: the row is born enabled, visible
     and on the game's default mode/cadence, so a game works before any admin
-    has ever opened its settings. The insert is insert-or-nothing on the
-    primary key, so two requests racing the first read of a game serialize on
-    the row instead of one of them failing with a duplicate key.
+    has ever opened its settings. Insert-or-nothing on the primary key, so two
+    requests racing the first read of a game serialize on the row instead of
+    one of them failing with a duplicate key.
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -305,13 +274,8 @@ def update_config(
             row.grid_size = TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE
         session.flush()
         result = _as_dict(row)
-    # A multi-day cadence redefines every future window, so switching one on
-    # re-anchors the live session immediately (new window, eligible scheduled
-    # entry consumed, the rest silently discarded) rather than leaving the old
-    # rhythm's schedules to misfire. Silent by design: no warnings or dialogs.
-    # The re-anchor runs after this patch commits because it reads the stored
-    # cadence; both steps are atomic on their own, and the per-game lock keeps
-    # a racing scheduler tick from duplicating anything.
+    # Re-anchor multi-day sessions after the new cadence commits; the game lock
+    # serializes this with any concurrent scheduler tick.
     if (
         game_id in ("wordle", "anagram", "connections")
         and reset_cadence is not None

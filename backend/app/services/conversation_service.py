@@ -39,10 +39,8 @@ def _user_data(row):
         "last_matchmaking_at": row.last_matchmaking_at,
         "last_confession_at": row.last_confession_at,
         "last_profile_picture_at": row.last_profile_picture_at,
-        # Rows here come from ``users`` and only from ``users``, so the table is fixed. It is
-        # stated rather than left to the model default so that if a caller ever feeds this a
-        # row from another table it fails validation instead of being silently relabelled as
-        # a participant.
+        # Stated rather than left to the model default so a row fed from another table fails
+        # validation instead of being silently relabelled a participant.
         "account_type": "users",
     }
 
@@ -56,10 +54,10 @@ def _match_data(row):
 def _conversation_preview(row):
     """Decrypt the stored preview only while its own retention deadline is open.
 
-    The preview is message content, encrypted under the same policy as the body
-    it copies. Once ``last_message_preview_delete_after`` passes it must stop
-    being readable even if the daily cleanup has not cleared the columns yet.
-    A row that fails authentication is omitted rather than shown stale.
+    The preview is message content under the same policy as the body it copies; once
+    ``last_message_preview_delete_after`` passes it must stop being readable even if the daily
+    cleanup has not cleared the columns yet. A row that fails authentication is omitted rather
+    than shown stale.
     """
     delete_after = getattr(row, "last_message_preview_delete_after", None)
     if delete_after is None:
@@ -89,18 +87,16 @@ def _conversation_data(row):
             "last_message_at": row.last_message_at,
             "last_message_preview": _conversation_preview(row),
             "is_blocked": bool(row.blocked_by),
-            # The participant who closed the chat, and the only one who may reopen
-            # it. One closer at a time: the block is a close, not a mute, so there
-            # is nothing a list of closers would add.
+            # The participant who closed the chat, and the only one who may reopen it: the
+            # block is a close, not a mute, so there is nothing a list of closers would add.
             "blocked_by": row.blocked_by[0] if row.blocked_by else None}
 
 def _get_match(db, match_id):
     """The match, or None when the id names no match at all.
 
-    A malformed id must not reach the database: it goes straight into a uuid
-    column, and PostgreSQL raises ``invalid input syntax for type uuid`` on a
-    value that is not a uuid. A malformed id names no match, which is what every
-    caller here already answers 404 for.
+    A malformed id must not reach the database: it goes into a uuid column, and PostgreSQL
+    raises ``invalid input syntax for type uuid`` on a non-uuid. A malformed id names no
+    match, which is what every caller here already answers 404 for.
     """
     with db.sessions() as session:
         return _match_data(get_row(session, MatchRecord, match_id))
@@ -118,11 +114,10 @@ def _get_user_by_regno(db, regno):
 def _terminated_match_exists():
     """Whether the match row in scope has a conversation a moderator has closed.
 
-    A terminated conversation outlives the match's four-hour window on purpose: the thread
-    is the only place either participant can read what was said before it was shut, and the
-    status is the record of that, not the clock. Matched on status rather than on
-    ``terminated_at`` so rows terminated by an older build -- which rewrote ``expires_at``
-    and so look lapsed -- are picked up by the same query.
+    A terminated conversation outlives the match's four-hour window on purpose: the thread is
+    the only place either participant can read what was said before it was shut. Matched on
+    status rather than ``terminated_at`` so rows terminated by an older build -- which rewrote
+    ``expires_at`` and so look lapsed -- are picked up by the same query.
     """
     return (
         select(ConversationRecord.id)
@@ -140,10 +135,10 @@ def _partner_regno(match, regno: str) -> str:
 def _ensure_partner_available(db, match, regno: str) -> bool:
     """Refuse a matchmaking surface when the other participant has been blocked.
 
-    A match drawn before the block still sits in the table, so every place that hands a
-    partner back to a client has to ask again: the draw query filters blocked accounts,
-    but an existing match does not disappear when one of them is blocked. Returns True
-    when the partner is blocked, for the callers that hide the row instead of raising.
+    A match drawn before the block still sits in the table, so every surface that hands a
+    partner back to a client re-asks: the draw query filters blocked accounts, but an existing
+    match does not disappear when one of them is blocked. Returns True when the partner is
+    blocked, for callers that hide the row instead of raising.
     """
     partner_doc = _get_user_by_regno(db, _partner_regno(match, regno))
     return bool(partner_doc and partner_doc.get("is_blocked"))
@@ -162,41 +157,32 @@ def _save_conversation(db, conversation_id, **changes):
             return False
         for name, value in changes.items():
             if name == "is_blocked":
-                # The closed flag and the closer are one fact, not two. Closing a
-                # chat names the participant who closed it, and opening it again
-                # clears that name with it -- a chat nobody closed is not closed.
+                # The closed flag and the closer are one fact: closing names the closer,
+                # and opening again clears that name with it.
                 if value and changes.get("blocked_by"):
                     row.blocked_by = [changes["blocked_by"]]
                 elif not value:
                     row.blocked_by = []
             elif name == "blocked_by":
-                # The one closer. The column is an array for compatibility with the
-                # rows already written, but it holds a single regno: the
-                # participant who closed the chat. A second block replaces it
-                # rather than joining it -- see ``block_conversation_service``,
-                # which refuses a second close outright.
+                # The one closer. The column is an array for compatibility with rows already
+                # written, but holds a single regno; a second block replaces it rather than
+                # joining (``block_conversation_service`` refuses a second close outright).
                 row.blocked_by = [value] if value else []
             elif name in {"status", "requested_at", "accepted_at", "terminated_at"}:
-                # This write is unconditional, so it cannot decide a race. The decision
-                # paths no longer come here -- they go through
-                # :func:`_transition_conversation`, whose UPDATE carries the status it
-                # expects to leave -- and a new caller must not either.
+                # Unconditional write, so it cannot decide a race -- decisions go through
+                # :func:`_transition_conversation`, and a new caller must not come here either.
                 setattr(row, name, value)
         return True
 
 def _transition_conversation(db, conversation_id, *, from_status: str, **changes) -> bool:
     """Move a conversation out of ``from_status``, and report whether this call moved it.
 
-    Every status change here used to be a read followed by a write: read the row, check
-    ``status``, then set it. Two requests that read before either wrote both pass the check
-    and both write, so a double-clicked accept -- or an accept racing a reject -- let the
-    second decision silently overwrite the first and the initiator was told both things.
-    The predicate is re-checked by PostgreSQL after the row lock is taken, so of two racers
-    exactly one sees ``rowcount == 1``; the other knows it decided nothing and answers 409
-    instead of pretending otherwise.
-
-    The callers keep their own status checks: those give a retry the answer it deserves
-    (409 "already accepted") without a write. This is only the part that has to be atomic.
+    Every status change here used to be a read followed by a write, so a double-clicked accept
+    -- or an accept racing a reject -- let the second decision silently overwrite the first.
+    The UPDATE's predicate is re-checked by PostgreSQL after the row lock is taken, so of two
+    racers exactly one sees ``rowcount == 1``; the other knows it decided nothing and answers
+    409. Callers keep their own status checks, which give a retry its answer (409 "already
+    accepted") without a write; this is only the part that has to be atomic.
 
     Returns False when the row does not exist or is no longer in ``from_status``.
     """
@@ -215,20 +201,12 @@ def _transition_conversation(db, conversation_id, *, from_status: str, **changes
 def _notify_best_effort(db, *, recipient_regno, heading, body, match_id):
     """Tell the other participant about a conversation decision, without being able to undo it.
 
-    The conversation status is committed before this runs -- by
-    ``_transition_conversation``, in its own transaction -- and it is the state the request
-    is actually about. A notice that cannot be written is a missing inbox entry; it is not
-    a failed request.
-
-    Letting the write raise would answer 500 for an action that has already been applied, and
-    the initiator would be left believing the request never went out: the retry is refused as
-    "already requested", so the thread sits in a state neither participant can move. The same
-    holds for any other database failure here -- a full pool, a deadlock -- which is why this
-    is a blanket guard rather than a special case for one long name.
-
-    The target is the match, not the conversation. Every conversation route in the API is keyed
-    by match -- there is at most one conversation per match -- so the match id is the one the
-    client needs to reach the thing being announced.
+    The status is committed before this runs and is the state the request is actually about,
+    so a notice that cannot be written is a missing inbox entry, not a failed request.
+    Letting the write raise would answer 500 for an applied action whose retry is refused as
+    "already requested", leaving the thread stranded -- hence a blanket guard for any database
+    failure. The target is the match id, not the conversation: every conversation route in the
+    API is keyed by match.
     """
     from ..services.notification_service import create_notification_service
 
@@ -255,7 +233,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
     This is called when the initiator clicks "Send Message Request".
     """
     try: # <--- FIX: Added main try block
-        try: # Indented this block
+        try:
             match_id = str(match_id_str)
         except Exception:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Match ID format.")
@@ -265,7 +243,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         if not match_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
         
-        try: # Indented this block
+        try:
             match = Match(**match_doc)
         except Exception as e:
             logger.error(f"Error parsing match document: {e}")
@@ -303,10 +281,8 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
         if conversation.status != "pending":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Message request has already been sent.")
 
-        # 7. Take the transition. Two clicks -- or a retry of a request that timed out --
-        # can both read 'pending' before either writes, and both would then create a
-        # request and a notice. The UPDATE re-checks the status after PostgreSQL takes the
-        # row lock, so exactly one call moves the row and only that call tells the receiver.
+        # Conditional transition rechecks status under the row lock; only one
+        # concurrent request can notify the receiver.
         requested_at = datetime.now(timezone.utc)
         if not _transition_conversation(
             db,
@@ -325,8 +301,7 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
                 db,
                 recipient_regno=conversation.receiver_regno,
                 # The name is shortened rather than the heading: the wording is what
-                # says what happened, and the client matches the heading on it to
-                # tell a conversation notice from a standalone one.
+                # says what happened, and the client matches headings on it.
                 heading=build_notification_heading(
                     "Message request from {name}", current_user.name
                 ),
@@ -338,9 +313,9 @@ def request_conversation_service(current_user: UserDetails, match_id_str: str, d
 
         return {"status": "success", "message": "Message request sent."}
     except HTTPException:
-        # Deliberate rejections (expired match, blocked partner, wrong participant)
-        # carry a status the client can act on. Letting the blanket handler below
-        # swallow them would report every one of them as a server fault.
+        # Deliberate rejections (expired match, blocked partner, wrong participant) carry a
+        # status the client can act on; the blanket handler below would report them all as a
+        # server fault.
         raise
     except Exception as e: # <--- FIX: This except block is now correctly placed
         logger.error(f"Error creating conversation: {e}")
@@ -462,12 +437,8 @@ def accept_conversation_service(current_user: UserDetails, match_id_str: str, db
         if conversation.status != "requested":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Conversation must be in 'requested' status to accept.")
 
-        # 7. Take the transition. The checks above answer a plain retry, but they cannot
-        # decide between two requests that both read 'requested' before either wrote: both
-        # pass, both write, and the second contradicts the first -- an accept and a reject
-        # racing would tell the initiator both things. The UPDATE re-checks the status
-        # after PostgreSQL takes the row lock, so exactly one call moves the row and only
-        # that call sends its notice.
+        # Recheck status under the row lock so racing accept/reject requests
+        # cannot both transition the conversation or send conflicting notices.
         accepted_at = datetime.now(timezone.utc)
         if not _transition_conversation(
             db,
@@ -587,10 +558,8 @@ def reject_conversation_service(current_user: UserDetails, match_id_str: str, db
 
         return {"status": "success", "message": "Conversation rejected successfully."}
     except HTTPException:
-        # Keep deliberate rejections (expired match, wrong participant, wrong
-        # receiver, non-requested status) as themselves -- see
-        # accept_conversation_service above -- instead of reporting every one
-        # of them as a server fault.
+        # Keep deliberate rejections (expired match, wrong participant/receiver, non-requested
+        # status) as themselves, as in accept_conversation_service, rather than server faults.
         raise
     except Exception as e:
         logger.error(f"Error in reject_conversation_service: {e}")
@@ -615,11 +584,8 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         current_match = _match_data(active_match_row)
 
     if not current_match:
-        # No live or terminated match where user is initiator — fall back to the most
-        # recent one of any state, so a lapsed conversation still has somewhere to be read
-        # from. Ordered by when the match was drawn rather than by when it lapses: a
-        # moderator-closed match used to be stamped as expiring immediately, which sorted
-        # it behind older matches instead of in front of them.
+        # Fall back to the latest conversation if no live match exists, ordered by
+        # match creation so moderation closure does not distort recency.
         with db.sessions() as session:
             recent_match_row = session.scalar(select(MatchRecord).where(
                 MatchRecord.user_1_regno == current_user.regno
@@ -656,10 +622,9 @@ def get_current_conversation_service(current_user: UserDetails, db: Database):
         other_user_doc = _get_user_by_regno(db, other_user_regno)
         other_user = UserDetails(**other_user_doc) if other_user_doc else None
 
-        # ``_user_data`` already derived this from the row's stored identity. ``UserDetails``
-        # carries the delivery URL, not the Cloudinary identity -- the identity columns exist
-        # only on the database row -- so there is nothing to recompute here, and reaching for
-        # them on the model would be reading an attribute that has never existed there.
+        # ``_user_data`` already derived the delivery URL from the row's stored identity;
+        # ``UserDetails`` carries the URL, not the identity columns (which exist only on the
+        # database row), so there is nothing to recompute here.
         profile_picture_url = other_user.profile_picture_url if other_user else None
 
         return {
@@ -951,21 +916,12 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
     """
     Block a conversation: close it. Updates PostgreSQL only.
 
-    **Blocking a conversation is closing it.** The thread stays readable and
-    neither participant can send into it again, until the participant who closed
-    it reopens it. There is one closer at a time, and there is no mutual-blocking
-    semantics: a chat is not something two participants each hold shut, so there
-    is no list of closers to keep.
-
-    Which is why a second close is refused rather than accepted. The chat is
-    already shut, so the close the caller asked for has already happened; what a
-    second one could add is a second entry in the closers list, and then the
-    question of who may reopen it stops being a fact about the chat and starts
-    being a question about list order -- the second closer is refused the reopen
-    that is theirs, and the first closer's reopen undoes the second one's close.
-
-    Refusing it also keeps the close from becoming a lock the other participant
-    can put on: whoever closed the chat is the one who may reopen it.
+    Blocking *is* closing: the thread stays readable, neither participant can send into it
+    again, and the participant who closed it may reopen it. There is one closer at a time and
+    no mutual-blocking semantics. Which is why a second close is refused rather than accepted:
+    what it could add is a second entry in the closers list, after which who may reopen stops
+    being a fact about the chat and becomes a question of list order -- and the close would
+    become a lock the other participant could put on the chat.
     """
     try:
         try:
@@ -989,10 +945,9 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
         if not conversation_doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
 
-        # Already closed: by the caller or by the other participant. Either way the
-        # chat is shut, and the participant who closed it keeps the right to reopen
-        # it. The bundled UI never gets here -- it hides the block button on a
-        # closed chat -- so this is the API answering a close of a closed chat.
+        # Already closed, by the caller or the other participant -- the closer keeps the
+        # reopen right. The bundled UI hides the block button on a closed chat, so this is
+        # the API answering a close of a closed chat.
         if conversation_doc.get("is_blocked"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1019,11 +974,8 @@ def block_conversation_service(current_user: UserDetails, match_id_str: str, db:
 
 def unblock_conversation_service(current_user: UserDetails, match_id_str: str, db: Database):
     """
-    Unblock a conversation: reopen it. Only the user who closed it can reopen it.
-
-    The closer is the one participant whose regno is on the conversation, and the
-    payload carries exactly that one -- so this is a plain identity check against
-    the participant who closed the chat, not a question about list order.
+    Unblock a conversation: reopen it. Only the user who closed it can reopen it: the closed
+    conversation carries exactly one closer's regno, so this is a plain identity check.
     """
     try:
         try:

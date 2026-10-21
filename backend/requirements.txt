@@ -12,76 +12,36 @@ pytest-asyncio==1.4.0
 httpx==0.28.1
 cloudinary==1.46.3
 Pillow==12.3.0
-# Admin bulk participant onboarding reads .xlsx workbooks (POST /admin/users/bulk-upload).
-# openpyxl is the parser; defusedxml is installed alongside it because openpyxl only enables
-# its hardened XML parser when that package is present. Without it, a crafted workbook can
-# reach the standard library's XML parser with entity-expansion payloads. Both are bounded by
-# the endpoint's ZIP-container checks (size, entry count, compression ratio, forbidden parts)
-# before openpyxl sees the bytes.
+# Excel workbook parsing and XML entity security for bulk participant onboarding.
 openpyxl==3.1.2
 defusedxml==0.7.1
 redis==8.1.0
-# Azure AI Content Safety (Batch 1: confessions; central dispatcher in
-# app/services/content_safety_service.py). Official SDK per
-# https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/contentsafety/azure-ai-contentsafety
-# (ContentSafetyClient + AnalyzeTextOptions, api-version 2024-09-01).
-# Sync client runs in the existing sync service path (threadpool), so no
-# event-loop blocking beyond the current httpx usage.
+# Azure AI Content Safety SDK for text analysis and moderation.
 azure-ai-contentsafety==1.0.0
 azure-core==1.41.0
 isodate==0.7.2
-# Azure AI Language PII detection for the love-note moderation preview
-# (app/services/pii_detection_service.py). Official SDK per
-# https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/textanalytics/azure-ai-textanalytics
-# (TextAnalyticsClient + detect_language/recognize_pii_entities,
-# api-version 2023-04-01). 5.4.0 is the latest stable line; it reuses the
-# azure-core/isodate pins above and adds only azure-common as a transitive
-# dependency, so no existing pin is moved.
+# Azure AI Language text analytics SDK for PII detection.
 azure-ai-textanalytics==5.4.0
-# Plot Twist and Case Closed story generation talk to the configured provider
-# through one of these SDKs: Groq's own SDK when LLM_PROVIDER=groq (Strict
-# Structured Outputs), the official OpenAI SDK when LLM_PROVIDER=foundry
-# (Microsoft Foundry's OpenAI-compatible v1 surface). Gameplay never touches
-# either. Pinned like the rest of the tree.
+# LLM provider SDKs for story generation.
 openai==1.99.5
 groq==1.7.0
-# websockets removed: never imported -- WebSockets are served by Starlette/FastAPI
-# (see routers/messages.py websocket_endpoint), so the pin was dead weight.
+# WebSockets are handled directly by Starlette/FastAPI.
 opentelemetry-api==1.45.1
 opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp==1.45.1
-# Pinned explicitly rather than left transitive. Both opentelemetry-sdk 1.45.1 and
-# every opentelemetry-instrumentation-* 0.66b1 require this exact version, so the
-# pin matches what the resolver would pick anyway; naming it keeps the semconv set
-# that the rest of this file targets visible in one place.
+# OpenTelemetry semantic conventions pinned for instrumentation.
 opentelemetry-semantic-conventions==0.66b1
 opentelemetry-instrumentation-fastapi==0.66b1
-# opentelemetry-instrumentation-logging was previously pinned here and never
-# imported. Trace context reaches log records without it: the SDK's own
-# LoggingHandler in opentelemetry.sdk._logs._internal sets trace_id and span_id
-# on every OTel LogRecord from the current span, which is what the collector
-# writes out as the traceid field that M1 parses. Dropping the pin therefore
-# removes a package that was never activated rather than any log context.
+# OpenTelemetry instrumentation libraries.
 opentelemetry-instrumentation-redis==0.66b1
 opentelemetry-instrumentation-sqlalchemy==0.66b1
 opentelemetry-instrumentation-urllib3==0.66b1
 opentelemetry-exporter-otlp-proto-grpc==1.45.1
-# Build tooling, pinned and audited like the rest of the tree -- not a
-# pkg_resources provider. Nothing here imports pkg_resources (only docstring
-# mentions and a guarded pytest fallback reference it), and the pinned
-# 84.0.0 is past the PYSEC-2026-3447 fix (83.0.0), so CI audits it with no
-# exceptions. DEP-001: this pin used to contradict the Dockerfile's
-# `setuptools<81` install step, which the image build immediately overrode.
+# Build tooling pinned for packaging consistency.
 setuptools==84.0.0
 SQLAlchemy==2.1.4
-# pgvector Python bindings for the vector(1536) confession-embedding column.
-# The package alone does not install the server extension; PostgreSQL still needs
-# CREATE EXTENSION vector (see app.postgres.apply_vector_extension and
-# docker-compose.yml pgvector/pgvector:pg16 image).
+# pgvector Python bindings for vector embedding columns.
 pgvector==0.4.2
 numpy==2.2.6
-# AES-256-GCM for chat bodies at rest (app/services/chat_encryption.py). Used
-# directly for AESGCM rather than through a higher-level wrapper so the stored
-# format (combined ciphertext+tag, explicit 12-byte nonce, AAD) is fully
-# controlled here. 50.0.2 is the current stable release of the line.
+# Cryptography library for AES-256-GCM chat encryption.
 cryptography==50.0.2

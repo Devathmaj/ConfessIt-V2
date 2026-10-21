@@ -2,35 +2,24 @@
 
 """Role-based staff notifications: reports, love notes awaiting review, games.
 
-Participant notices (``notifications``) are addressed to one regno. Staff
-notices are addressed to a *role* -- every moderator on duty is owed the same
-news about a fresh report, and every admin the same news about a game that
-needs feeding -- so ``report`` and ``love_note`` events are stored once with
-``audience='all'`` and read by whichever role asks, rather than fanned out
-into one row per staff account.
+Participant notices (``notifications``) are addressed to one regno. Staff notices are
+addressed to a *role*: ``report`` and ``love_note`` events are stored once with
+``audience='all'`` and read by whichever role asks, rather than fanned out per staff account.
 
-One event is news for admins alone: a participant blocked automatically at the
-removal threshold (``notify_user_auto_blocked``). Clearing a block is an
-admin-only capability, so the notice is stored with ``audience='admin'`` and a
-moderator has no route on which it could be acted on. Unlike every other stored
-notice, it is staged into the caller's transaction rather than written through
-``create_staff_notification``'s own, because it must commit with the block it
-reports -- see ``notify_user_auto_blocked``.
+``game`` notices are stored like every other category, written where the condition is
+discovered rather than computed on read -- a pending Wordle/Anagram/Connections session by the
+scheduler pass evaluating that game's period, a missing featured pick by the daily pass, an
+empty Trivia Drop pipeline at start-up. The ``dedup_key`` carries the session id or UTC date so
+repeats and restarts cannot fan the same condition out.
 
-``game`` notices are stored like every other category. They are written where
-the condition is discovered rather than computed on read: a pending Wordle,
-Anagram or Connections session is recorded by the scheduler pass that evaluates
-that game's period, a missing featured pick is recorded by the daily scheduler
-pass, and an empty Trivia Drop pipeline is recorded at application start-up.
-The ``dedup_key`` carries the session id or UTC date so repeated passes and
-restarts cannot fan the same condition out into many rows.
+The one admin-alone event is the automatic block (``notify_user_auto_blocked``): clearing a
+block is admin-only, so the notice is stored with ``audience='admin'`` and -- uniquely -- staged
+into the caller's transaction, because it must commit with the block it reports.
 
-Preferences (which categories an account wants) are stored per staff account,
-created with the account, but deliberately *not* wired to the feed: the list
-returns every notice regardless of the switches. They gate email delivery,
-which asks the same role-first rules as :func:`should_deliver_staff_notification`
-so a moderator can never be sent a game notice even if a database row says
-``games_enabled = true``.
+Preferences (which categories an account wants) are stored per staff account but deliberately
+*not* wired to the feed: the list returns every notice. They gate email delivery, which asks
+the same role-first rules as :func:`should_deliver_staff_notification`, so a moderator can
+never be sent a game notice even when a database row says ``games_enabled = true``.
 """
 
 from __future__ import annotations
@@ -115,10 +104,9 @@ def _visible_categories(role: str) -> frozenset[str]:
 def staff_category_allowed_for_role(account_type: str, category: str) -> bool:
     """Whether this account type may receive this category at all.
 
-    Role first, by design. A moderator's ``games_enabled`` column may say true
-    -- creation writes all three switches on -- but a database row can be edited
-    and must never be what authorises a game delivery. Game notices are admin
-    business; reports and love notes are shared by both staff roles.
+    Role first, by design: a moderator's ``games_enabled`` column may say true -- creation
+    writes all three switches on -- but a database row is editable and must never be what
+    authorises a game delivery.
     """
     return category in _visible_categories(normalize_account_type(account_type))
 
@@ -132,14 +120,11 @@ def should_deliver_staff_notification(
 ) -> bool:
     """Whether one staff account may be sent one category on any channel.
 
-    This is the gate every delivery channel, including a game-config email
-    sender, has to ask before composing a message. The role check runs first and
-    independently of the preference row, so a moderator is refused ``game`` even
-    when the database says ``games_enabled = true``. Only after the role admits
-    the category are the account's master switch and its stored category switch
-    read. A missing preferences row keeps the historical all-on default rather
-    than silently muting an account; creation and the boot backfill mean a staff
-    account should always have one.
+    The gate every delivery channel -- including a game-config email sender -- asks before
+    composing a message. The role check runs first and independently of the preference row,
+    so a moderator is refused ``game`` even when the database says ``games_enabled = true``;
+    only then are the master switch and stored category switch read. A missing preferences row
+    keeps the historical all-on default rather than silently muting an account.
     """
     role = normalize_account_type(account_type)
     if category not in _visible_categories(role):
@@ -166,11 +151,9 @@ def staff_notification_email_recipients(
 ) -> list[dict[str, str]]:
     """The staff accounts an email for this stored notice may be sent to.
 
-    The role check runs first, so ``game`` has no moderator recipients even when
-    the database row says ``games_enabled = true``. For each permitted role the
-    account's master switch is read, followed by its category preference. A
-    missing preference row is all-on, matching the historical default and the
-    backfill.
+    The role check runs first, so ``game`` has no moderator recipients even when the database
+    row says ``games_enabled = true``; then master switch, then category preference (missing
+    preference row is all-on, matching the historical default and the backfill).
     """
     roles = STAFF_AUDIENCE_ROLES.get(audience, ())
     if category not in CATEGORY_PREFERENCE_COLUMNS:
@@ -222,13 +205,11 @@ def deliver_staff_notification_email(
 ) -> None:
     """Best-effort email fan-out for one freshly stored staff notice.
 
-    Called only after the notice transaction commits and only for a newly
-    inserted row, so retries and dedup winners do not send duplicate emails.
-    Every recipient is attempted independently; one failing address or HTTP
-    request must not suppress another recipient's notification.
+    Called only after the notice transaction commits and only for a newly inserted row, so
+    retries and dedup winners do not send duplicate emails. Every recipient is attempted
+    independently; one failing address or HTTP request must not suppress another.
 
-    The email carries the review queue or game console the in-app notice is
-    about. ``game_id`` narrows a game notice to its exact manage screen.
+    ``game_id`` narrows a game notice's link to its exact manage screen.
     """
     link = staff_notification_link(category, game_id=game_id)
     try:
@@ -276,11 +257,9 @@ def _schedule_staff_notification_email(
 ) -> None:
     """Send a staged staff notice after its transaction commits, never before.
 
-    ``notify_user_auto_blocked`` writes into the caller's transaction because the
-    alert must live or die with the block. Email is not transactional, so the
-    payload is queued on the session and released by ``after_commit``; a rollback
-    drops it. This keeps an admin from being told about a block that never
-    happened while still covering the one direct-row insertion path.
+    Email is not transactional, so the payload is queued on the session and released by
+    ``after_commit``; a rollback drops it. This keeps an admin from being told about a block
+    that never happened while still covering the one direct-row insertion path.
     """
     pending = session.info.setdefault(_PENDING_EMAILS_KEY, [])
     pending.append(
@@ -334,22 +313,17 @@ def create_staff_notification(
 ) -> Optional[str]:
     """Store one staff notice. Idempotent on ``dedup_key``; never raises.
 
-    A retried report filing must not double-notify the whole staff, so an
-    event with a natural identity (a report id, a note id) carries it as
-    ``dedup_key`` and a second insert for the same key returns the first row
-    instead of writing another. Best-effort by contract: notification failure
-    must never break the report or note write it annotates, so every failure
-    (including a lost dedup race) answers None rather than raising.
+    An event with a natural identity (a report id, a note id) carries it as ``dedup_key`` so a
+    retried filing does not double-notify the whole staff. Best-effort by contract: a
+    notification failure must never break the report or note write it annotates, so every
+    failure (including a lost dedup race) answers None rather than raising.
 
-    ``created_at`` lets a scheduler event carry the instant the pass ran rather
-    than the instant the insert happened; the two are the same for request-path
-    notices, which leave it unset.
+    ``created_at`` lets a scheduler event carry the instant the pass ran rather than the insert.
 
-    A newly inserted notice is also offered to the email delivery layer after
-    the row commits. The dedup winner path returns before that call, so a retry
-    cannot email the same staff twice. ``game_id`` only picks the email link's
-    destination; it is not stored, because the in-app feed opens the games
-    dashboard for every game notice.
+    A newly inserted notice is offered to the email layer after the row commits; the dedup
+    winner path returns before that call, so a retry cannot email the same staff twice.
+    ``game_id`` only picks the email link's destination -- it is not stored, because the in-app
+    feed opens the games dashboard for every game notice.
     """
     if audience not in ("admin", "moderator", "all"):
         return None
@@ -447,11 +421,10 @@ def notify_profile_picture_rejected(
 ) -> Optional[str]:
     """One ``report``-category notice to all staff that an image was rejected.
 
-    A rejected profile picture leaves no report row to open, so this notice is
-    the whole trace a moderator gets: which account tried, and that Azure
-    Content Safety refused the upload. ``occurred_at`` names the refused
-    attempt (the consumed cooldown window), so a replayed rejection cannot
-    notify the staff twice.
+    A rejected profile picture leaves no report row to open, so this notice is the whole trace
+    a moderator gets: which account tried, and that Azure Content Safety refused the upload.
+    ``occurred_at`` names the refused attempt (the consumed cooldown window), so a replayed
+    rejection cannot notify the staff twice.
     """
     return create_staff_notification(
         db,
@@ -471,28 +444,19 @@ def notify_user_auto_blocked(
 ) -> None:
     """Stage one admin-only ``report`` notice about an automatic block.
 
-    *Staged into the caller's session*, unlike every ``notify_*`` above: this
-    notice must commit with the block it reports, or not at all. A block whose
-    transaction rolls back must not leave an alert behind, and a committed
-    block must not be able to lose its alert, so the row joins the same
-    transaction as the ``is_blocked`` write and the session retirement (see
-    ``report_counters._block_if_over_threshold``) -- the same reasoning that
-    puts ``retire_account_sessions`` in the caller's transaction.
+    *Staged into the caller's session*, unlike every ``notify_*`` above: this notice must
+    commit with the block it reports or not at all, joining the same transaction as the
+    ``is_blocked`` write and the session retirement (see
+    ``report_counters._block_if_over_threshold``).
 
-    Addressed to ``admin`` rather than ``all``: the block is the one moderation
-    outcome a moderator cannot act on -- clearing it is ``users:update``, an
-    admin-only capability -- so the notice is actionable for one role and
-    noise for the other. It carries ``report`` all the same, like
-    :func:`notify_profile_picture_rejected`: it is moderation news that leaves
-    no report row of its own to open, not a fourth category.
+    Addressed to ``admin`` rather than ``all``: clearing the block is ``users:update``, an
+    admin-only capability, so the notice is actionable for one role and noise for the other.
+    It carries ``report`` all the same, like :func:`notify_profile_picture_rejected` --
+    moderation news that leaves no report row of its own.
 
-    No ``dedup_key``: the block is written only on the ``is_blocked``
-    transition, and a re-removal after an admin unblocks the account is a
-    second, equally worth-notifying event rather than a duplicate of this one.
-
-    ``removal_total`` is the participant's upheld-removal total as the blocking
-    update left it, so the reader sees the figure that crossed the line without
-    opening anything.
+    No ``dedup_key``: the block is written only on the ``is_blocked`` transition, so a
+    re-removal after an admin unblocks the account is a second, equally worth-notifying event.
+    ``removal_total`` is the total as the blocking update left it.
     """
     heading = "Participant automatically blocked"
     body = (
@@ -784,11 +748,10 @@ def list_staff_notifications(
 ) -> Dict[str, Any]:
     """One page of this staff account's stored notices, newest first, with the total.
 
-    Every category pages in SQL now, including ``game``: the scheduler and
-    start-up checks write real rows, so read state and pagination apply the same
-    way to a game notice as to a report. Preferences are returned beside the
-    page but never filter it: the switches gate email delivery, while the page
-    shows every stored notice regardless.
+    Every category pages in SQL now, including ``game``: the scheduler and start-up checks
+    write real rows, so read state and pagination apply to a game notice like a report.
+    Preferences are returned beside the page but never filter it: the switches gate email
+    delivery, while the page shows every stored notice regardless.
     """
     from fastapi import HTTPException, status
 

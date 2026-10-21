@@ -17,42 +17,21 @@ from .logger import get_logger
 logger = get_logger(__name__)
 
 
-# The advisory lock that serialises the schema convergence across the processes that
-# share this database.
-#
-# Every worker that boots runs ``PostgresClient.initialize()``, and the convergence
-# sequence is a series of "read the catalogue, then ALTER" steps. Two workers doing that
-# at the same moment on a database that still has work to do -- a first boot, or a deploy
-# that adds a CHECK constraint -- both see the constraint missing and both issue
-# ``ADD CONSTRAINT``; the loser is refused with ``duplicate_object`` and that worker dies
-# during startup, leaving the schema half-converged and the deploy flapping.
-#
-# A session-scoped ``pg_advisory_lock`` settles it. The second worker waits for the first
-# to finish and then finds the work already done: every step in the sequence is written to
-# be a no-op against a converged database, so the second pass costs a catalogue read and
-# changes nothing.
-#
-# The key is arbitrary but fixed, and it sits in a range of its own. An advisory lock is
-# a number the callers agree on, so reusing one for an unrelated lock would make the two
-# block each other for no reason: the account-cap keys are 7_240_xxx (``app.accounts``)
-# and the game-session keys are 7_250_xxx (``app.limits``).
+# Advisory lock serialising schema convergence across workers: the convergence is a series of
+# "read the catalogue, then ALTER" steps, two booting workers would both issue ADD CONSTRAINT
+# and the loser dies on duplicate_object with a half-converged schema. The fixed key sits in a
+# range of its own (account caps are 7_240_xxx, game sessions 7_250_xxx) so no lock blocks it.
 SCHEMA_INIT_LOCK_KEY = 7_260_001
 
-# The PostgreSQL error codes the convergence sequence treats as "somebody else got there
-# first" rather than as a failure. Spelled out rather than matched on the message text,
-# because the message is localised and the code is not.
+# SQLSTATE codes treated as "somebody else got there first", read from the code rather
+# than the message: the message is localised, the code is not.
 PG_DUPLICATE_TABLE = "42P07"        # duplicate_table
 PG_DUPLICATE_OBJECT = "42710"      # duplicate_object -- a constraint or index is there
 PG_UNDEFINED_OBJECT = "42704"       # undefined_object -- it is not there after all
 
 
 def _postgres_error_code(exc: BaseException) -> str | None:
-    """The ``SQLSTATE`` behind a database error, or None if it is not one.
-
-    psycopg puts the code on the exception's ``sqlstate``; SQLAlchemy wraps it, and the
-    wrapper keeps the original as ``orig``. Both are checked, because the error can reach
-    the caller as either.
-    """
+    """The ``SQLSTATE`` behind a database error, or None; checked on ``exc`` and its wrapped ``orig`` because it can arrive as either."""
     original = getattr(exc, "orig", None)
     for candidate in (original, exc):
         code = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
@@ -75,35 +54,14 @@ def is_valid_id(value: Any) -> bool:
 
 
 def get_row(session, record, row_id: Any):
-    """The row named by ``row_id``, or None when the id names no row at all.
-
-    A malformed id must never reach a typed column. It goes straight into a uuid
-    column, and PostgreSQL raises ``invalid input syntax for type uuid`` on a
-    value that is not a uuid -- an unhandled 500 for a request that named nothing
-    at all, on a route anybody can call.
-
-    A malformed id names no row, which is what every endpoint that takes one
-    already answers "not found" for, so refusing it here changes no answer except
-    turning a 500 into that one.
-
-    This is the one place the rule is written down, so a route added later
-    inherits it rather than having to remember it. Where the id reaches a column
-    through a WHERE rather than a primary-key lookup, guard it with
-    :func:`is_valid_id` instead: the same rule, applied before the query.
-    """
+    """The row named by ``row_id``, or None when the id names no row at all (a malformed id must never reach a uuid column)."""
     if not is_valid_id(row_id):
         return None
     return session.get(record, str(row_id))
 
 
 def _server_default_sql(column, dialect) -> str | None:
-    """Render a column's server default as a SQL fragment, or None if it has none.
-
-    Needed because ``ALTER TABLE ... ADD COLUMN`` has to repeat the default inline. The
-    three shapes a model can declare -- a bare string, a ``text()`` clause, and a SQL
-    function such as ``func.now()`` -- render differently, and each is handled here rather
-    than by string-formatting whatever ``.arg`` happens to hold.
-    """
+    """Render a column's server default as an inline ``ADD COLUMN`` fragment, handling the three shapes a model can declare."""
     default = column.server_default
     if default is None:
         return None
@@ -117,21 +75,10 @@ def _server_default_sql(column, dialect) -> str | None:
     return None
 
 
-# The SQL expression that turns a row's ``regno`` into the placeholder address written by
-# :meth:`PostgresClient.apply_not_null_constraints`. Named and module-level so it can be read,
-# reviewed and tested as one thing rather than found inline in a long f-string.
-#
-# It has to be injective in ``regno``, because ``email`` carries a unique index per table and a
-# collision would abort the UPDATE -- taking the application down on boot, the one outcome that
-# method exists to avoid. A plain sanitise is not injective: it maps every illegal character to
-# ``-``, so ``a/b`` and ``a?b`` both become ``a-b``, and truncating to 64 characters collides on
-# anything longer.
-#
-# So a regno that is already a legal local part is used verbatim -- which keeps the ordinary case
-# readable, ``22CS0455@unassigned.invalid`` -- and anything that sanitising or truncating would
-# alter gets a hash of the *original* regno appended. Distinct regnos therefore cannot produce the
-# same address. 47 + 1 + 16 is the 64-character local-part ceiling, and 16 hex digits of md5 is
-# 64 bits, which is not a birthday-bound risk at any plausible row count.
+# Placeholder address written by apply_not_null_constraints. Must be injective in regno:
+# email carries a unique index per table, a collision would abort the UPDATE and the boot
+# the method exists to avoid (a plain sanitise is not injective: a/b and a?b both map to
+# a-b). Legal local parts pass verbatim; others get sanitise(47) + '+' + 16 md5 hex chars.
 PLACEHOLDER_EMAIL_SQL = (
     "CASE WHEN regno ~ '^[A-Za-z0-9._%+-]{1,64}$' "
     "THEN regno || '@unassigned.invalid' "
@@ -141,39 +88,18 @@ PLACEHOLDER_EMAIL_SQL = (
 )
 
 
-# Columns the models no longer declare, on the tables that used to carry them.
-#
-# The counterpart to :meth:`PostgresClient.apply_missing_columns`, and far more restricted on
-# purpose. Adding a column is always safe -- the model declares it, so every write that reaches
-# the table knows about it -- while removing one is a decision about data, which is why this is
-# a named list rather than "anything the models do not mention": a column created by a script or
-# an operator is not the application's to delete.
-#
-# The entries below are two groups of one kind: columns that were once on every account table
-# and are now participant-only, and a column the model dropped altogether. ``gender`` is the
-# load-bearing one of the first group: it is NOT NULL with no server default, so a deployed
-# ``admin`` table that kept it would reject every ORM insert the application makes into it,
-# because the model no longer writes the column. Dropping ``gender`` also drops
-# ``ck_accounts_gender`` with it -- PostgreSQL removes any CHECK constraint involving a dropped
-# column -- which is the whole reason the staff side of that constraint needs no entry here.
-# ``emoji`` is the second group on its own: the profile-emoji option was removed entirely, so
-# the ``users`` column that held it has no reader and no writer left.
+# Columns the models no longer declare, on the tables that still carry them. A named list,
+# not "anything the models omit": removing a column is a decision about data, and one a
+# script or operator created is not the application's to delete. ``gender`` is load-bearing:
+# NOT NULL with no default would reject every ORM staff insert; dropping it drops ck_accounts_gender.
 RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "admin": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "moderator": ("gender", "profile_picture_public_id", "profile_picture_format"),
     "users": ("emoji",),
-    # Conversation previews used to be stored as plaintext. They are now an
-    # encrypted copy of the newest visible message (see ConversationRecord), so
-    # the old text column is both unreadable by the model and a second durable
-    # copy of chat content the encryption change exists to remove.
+    # Previews are now an encrypted copy of the newest visible message (see ConversationRecord).
     "conversations": ("last_message_preview",),
-    # The failed-move counter Two-Key Escape kept briefly: scoring counts
-    # start-to-finish elapsed time only, so the column has no reader left.
-    # The consumed-charges list it kept even more briefly: keys are
-    # reusable, so per-key consumption was retired with it. The movement
-    # gate went the same way: keys never required a Navigator move between
-    # uses, so its two counters have no reader left either. The display
-    # score went last of all: no other game carries a score.
+    # Two-Key Escape columns with no reader left: scoring counts start-to-finish elapsed
+    # time only (``failed_moves``), keys are reusable, and no other game carries a score.
     "two_key_escape_sessions": (
         "failed_moves",
         "used_key_indexes",
@@ -183,28 +109,20 @@ RETIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Columns whose type widened after deployment, which ``create_all`` cannot apply:
-# it only creates tables that do not exist. Each entry maps (table, column) to the
-# SQL type the models now declare. Widening is always safe to apply (every stored
-# value still fits), and narrowing never appears here -- that would need a decision
-# about values that no longer fit, not a boot step.
+# Columns whose type widened after deployment, which ``create_all`` cannot apply to
+# existing tables. Widening is always safe (every stored value still fits); narrowing
+# never appears here -- that would need a decision about data, not a boot step.
 WIDENED_COLUMNS: dict[tuple[str, str], str] = {
     # Mismatched-network redemptions increment this on every refusal while SQL bounds
     # it at 2^31-1; a 16-bit column would overflow into a 500 under sustained probing.
     ("login_tokens", "attempt_count"): "integer",
 }
 
-# Free-text columns the staff queues and the notification inbox search with
-# ILIKE '%...%' substring matches (see utils.ilike_contains). A leading wildcard
-# defeats every btree index, so without these each keystroke is a sequential scan
-# over the whole table; a trigram GIN index is what makes '%substring%' plannable.
-# Declared here rather than as Index() in db_models because the index method needs
-# the pg_trgm extension, which plain model metadata cannot install -- and a model
-# declaring an index the database cannot build would fail every boot instead of
-# degrading to a scan. Entries are (table, column); names derive as ix_trgm_<table>_<column>.
+# Free-text columns the staff queues and notification inbox search with ILIKE '%...%' (see
+# utils.ilike_contains): a leading wildcard defeats every btree index, so a trigram GIN
+# index is what makes the search plannable. Declared here rather than as Index() in
+# db_models because the pg_trgm extension must be installed first, which metadata cannot.
 TRGM_INDEX_COLUMNS: tuple[tuple[str, str], ...] = (
-    # ``messages.body`` is gone: the body is ciphertext now, so a trigram index
-    # could not answer a text search and the report queue no longer searches it.
     ("message_reports", "reason"),
     ("message_reports", "reporter_regno"),
     ("message_reports", "reported_user_regno"),
@@ -236,9 +154,9 @@ TRGM_INDEX_COLUMNS: tuple[tuple[str, str], ...] = (
 class PostgresClient:
     """Own the PostgreSQL engine and provide SQLAlchemy sessions.
 
-    A client owns exactly one connection pool, so a process must create at most one of
-    them and share it. Use :func:`get_postgres_client` for application code; the
-    constructor stays public for one-shot scripts and tests that need an isolated engine.
+    A client owns exactly one pool, so a process must create at most one and share it via
+    :func:`get_postgres_client`; the constructor stays public for one-shot scripts/tests
+    that need an isolated engine.
     """
 
     def __init__(
@@ -262,18 +180,10 @@ class PostgresClient:
                 f"x {settings.WEB_WORKERS} workers), which exceeds the default max_connections "
                 "of 100. Lower DATABASE_POOL_SIZE/DATABASE_MAX_OVERFLOW, or raise the server limit."
             )
-        # create_engine is lazy: it opens no sockets until a connection is first checked
-        # out, so a single shared instance costs nothing until the app actually serves.
-        #
-        # The session timezone is pinned to UTC rather than inherited from whatever the
-        # database image or cluster happens to default to. Every timestamp column is
-        # TIMESTAMPTZ, so a stored instant is always correct, but a non-UTC session changes
-        # how a value is *read back* -- aware, so the instant survives, yet the text in logs
-        # and the values an operator sees in psql would stop matching what the app wrote.
-        # The application is UTC end to end, so the session is told so.
-        #
-        # Kept on the instance because :meth:`schema_lock` connects the same way from an
-        # engine of its own.
+        # create_engine is lazy (no sockets until a first checkout), and the session
+        # timezone is pinned to UTC: every column is TIMESTAMPTZ so the instant is always
+        # correct, but a non-UTC session changes how values are read back in logs/psql.
+        # Kept on the instance for :meth:`schema_lock`, which connects the same way.
         self._connect_args = {"options": "-c timezone=UTC", "connect_timeout": 10}
         self.engine = create_engine(
             database_url or settings.DATABASE_URL,
@@ -282,19 +192,15 @@ class PostgresClient:
             max_overflow=max_overflow if max_overflow is not None else settings.DATABASE_MAX_OVERFLOW,
             pool_timeout=pool_timeout if pool_timeout is not None else settings.DATABASE_POOL_TIMEOUT,
             pool_recycle=pool_recycle if pool_recycle is not None else settings.DATABASE_POOL_RECYCLE,
-            # Bound the TCP/TLS handshake itself: without this a dead endpoint
-            # stalls each new connection on the OS retransmit schedule (~130 s on
-            # Windows) instead of failing fast like an exhausted pool does. Seen
-            # when several connections race to a host that resolves to both ::1
-            # and 127.0.0.1 while only IPv4 is listening.
+            # Bound the TCP/TLS handshake itself: a dead endpoint would otherwise stall
+            # each new connection on the OS retransmit schedule (~130 s on Windows)
+            # instead of failing fast like an exhausted pool does.
             connect_args=self._connect_args,
         )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
-        # The engine the schema-initialisation lock connection comes from. It is built
-        # here rather than inside :meth:`schema_lock` so that initialising a running
-        # process never builds an engine, and it uses a ``NullPool`` so that the lock
-        # connection is never returned to a pool while it is still holding the lock.
+        # Engine for the schema-initialisation lock connection only: NullPool so the
+        # lock connection is never returned to a pool while it may hold the lock.
         self._lock_engine = create_engine(
             database_url or settings.DATABASE_URL,
             poolclass=NullPool,
@@ -302,44 +208,18 @@ class PostgresClient:
         )
 
     def initialize(self) -> None:
-        """Bring the database schema in line with the models, and keep it that way.
-
-        Serialised across every process that shares this database: the convergence
-        sequence is a series of "read the catalogue, then ALTER" steps, and two of them
-        running at once is how a deploy ends with half the workers up. See
-        :data:`SCHEMA_INIT_LOCK_KEY` and :meth:`schema_lock`.
-        """
+        """Bring the database schema in line with the models, serialised by :meth:`schema_lock` (see :data:`SCHEMA_INIT_LOCK_KEY`)."""
         with self.schema_lock():
             self._converge_schema()
 
     @contextmanager
     def schema_lock(self):
-        """Hold the schema-initialisation advisory lock for the duration of the block.
+        """Hold the schema-initialisation advisory lock (session-scoped) for the block.
 
-        A **session-scoped** ``pg_advisory_lock``, taken on one connection of its own and
-        released explicitly before that connection is closed. The lock is session-scoped
-        because it has to outlive the individual transactions the convergence runs in, and
-        it is released by hand because a session-scoped lock outlives those transactions
-        too: a connection that was discarded without unlocking would hold it until the
-        backend died, and the symptom of that -- a deploy that hangs on start-up with
-        nothing in the log -- is far harder to read than the one this prevents.
-
-        The connection comes from a small engine of its own (:attr:`_lock_engine`), not from
-        the application's pool. It is checked out for the whole convergence, and the
-        convergence steps each check out a connection of their own, so taking this one from
-        the pool would deadlock any deployment whose pool is a single connection wide --
-        which is exactly what ``scripts/recreate_chat_schema.py`` asks for (``pool_size=1,
-        max_overflow=0``). The ``NullPool`` keeps the lock connection outside that
-        accounting and closes it, rather than returning it, when the block ends.
-
-        The lock is *blocking* on purpose. The second worker waits for the first to finish
-        and then finds the work already done, which is what "converged" means; refusing
-        the lock instead would only move the crash to the next boot.
-
-        The implicit transaction the lock statement opens is committed straight away, so
-        the connection sits idle rather than "idle in transaction". A session-scoped lock
-        survives the commit, but an open snapshot would hold the database's vacuum back
-        for the whole of the convergence.
+        Taken on a ``NullPool`` connection of its own -- pooled, it would deadlock the
+        convergence steps' own checkouts -- and released by hand: a connection discarded
+        unlocked holds the lock until the backend dies. Blocking on purpose; the lock
+        statement commits so the connection is never idle-in-transaction, holding vacuum.
         """
         connection = self._lock_engine.connect()
         try:
@@ -357,8 +237,7 @@ class PostgresClient:
                     )
                     connection.commit()
                 except Exception:
-                    # The lock belongs to the session, so it dies with the session. Closing
-                    # the backend is what releases it, so the connection must not be
+                    # The lock dies with its session, so the connection must not be
                     # returned anywhere it could be reused while still holding it.
                     logger.error(
                         "Could not release the schema-initialisation advisory lock; "
@@ -369,24 +248,17 @@ class PostgresClient:
 
     def _converge_schema(self) -> None:
         """The convergence sequence itself. Serialised by :meth:`schema_lock`."""
-        # Refuse to boot against the old plaintext chat tables. The encrypted
-        # schema changes NOT NULL columns and drops the body column, which
-        # create_all cannot apply to an existing table. This repository has no
-        # Alembic (schema converges through this method); the migration is the
-        # one-shot, explicitly destructive script in scripts/recreate_chat_schema.py
-        # because the old rows are disposable demo data and a data-preserving
-        # backfill would be far more code than the schema is worth.
+        # Refuse to boot against the old plaintext chat tables: the encrypted schema drops
+        # the body column, which create_all cannot apply to an existing table. There is no
+        # Alembic; the migration is the destructive one-shot scripts/recreate_chat_schema.py.
         self.assert_no_legacy_plaintext_chat_schema()
-        # pgvector must exist before any table using vector(1536) is created.
-        # Without this, create_all fails on a fresh database with "type vector
-        # does not exist". Requires the pgvector extension package on the
-        # server (pgvector/pgvector:pg16 image); see docker-compose.yml.
+        # pgvector must exist before any vector(1536) table is created, else create_all
+        # fails on a fresh database with "type vector does not exist".
         self.apply_vector_extension()
         self._create_tables()
-        # Columns before constraints: a CHECK added to an already-created table can name a
-        # column that only exists in the models, and PostgreSQL refuses the constraint if the
-        # column is not there yet. Adding the columns first is what lets a partially-migrated
-        # database reach a consistent state in one boot.
+        # Columns before constraints: a CHECK naming a column only the models declare is
+        # refused until the column exists; adding columns first lets a partially-migrated
+        # database converge in one boot.
         self.apply_missing_columns()
         self.apply_retired_columns()
         self.apply_unique_indexes()
@@ -407,9 +279,7 @@ class PostgresClient:
         self.apply_widened_columns()
         # After the columns exist, so it can name session_expires_at.
         self.backfill_session_deadlines()
-        # Every staff account needs the preference row that account creation now
-        # writes; this repairs accounts that predate that hook and any staff row
-        # written by raw SQL.
+        # Repairs staff rows that predate the preference after_insert hook and any raw-SQL writes.
         self.backfill_staff_notification_preferences()
         # After every additive step, so the session lifecycle converges on old databases.
         self.apply_game_session_convergence()
@@ -421,16 +291,7 @@ class PostgresClient:
         self.apply_report_source_convergence()
 
     def _create_tables(self) -> None:
-        """Create the tables the models declare.
-
-        ``create_all`` is a check-then-create: it asks the catalogue whether a table is
-        there and creates it if not, so two creators on a fresh database both see it
-        missing and both create it, and the loser is refused with ``duplicate_table``.
-        The schema lock keeps the workers of this build apart; this is for the one that is
-        not taking it -- a rolling deploy, where the previous build is still up while
-        the new one boots. The retry finds the tables the other worker created and
-        creates the rest.
-        """
+        """Create the tables the models declare, retrying once on a concurrent worker's ``duplicate_table`` (a rolling deploy races the schema lock)."""
         try:
             Base.metadata.create_all(self.engine)
         except ProgrammingError as exc:
@@ -442,16 +303,7 @@ class PostgresClient:
             Base.metadata.create_all(self.engine)
 
     def assert_no_legacy_plaintext_chat_schema(self) -> None:
-        """Fail clearly when an old plaintext chat schema is still installed.
-
-        ``create_all`` only creates missing tables, and ``apply_missing_columns``
-        cannot turn the old NOT NULL ``body`` text column into the encrypted
-        columns without inventing data. Rather than silently starting with a
-        table the models cannot write to, point the operator at the one-shot
-        reset. The detection is narrow: only these two chat tables are checked,
-        so a clean database or one already on the encrypted schema boots
-        normally.
-        """
+        """Fail clearly when a legacy plaintext chat schema is still installed (no convergence step can migrate it; point the operator at the one-shot reset)."""
         with self.engine.connect() as connection:
             legacy = connection.execute(
                 text(
@@ -473,26 +325,7 @@ class PostgresClient:
             )
 
     def apply_missing_columns(self) -> None:
-        """Add columns declared in the models but missing from an already-created table.
-
-        ``create_all`` is ``CREATE TABLE IF NOT EXISTS``: on a database that already has
-        ``users``, it does nothing at all, so a column added to a model is never applied to
-        a deployed database. The account split depends on this -- ``created_at`` and
-        ``updated_at`` are new on all three account tables, and without them an existing
-        deployment would fail every insert with a column that the model writes and the table
-        does not have.
-
-        Each column is added on its own with ``IF NOT EXISTS``, so a partially-migrated
-        database converges rather than aborting the boot. What this deliberately does *not*
-        do is drop anything: a column the models no longer declare is left in place, because
-        removing one is a decision about data rather than about schema shape. Those live in
-        ``RETIRED_COLUMNS`` and are removed by :meth:`apply_retired_columns` -- deliberately a
-        named list rather than "everything the models stopped mentioning", so a column written
-        by a script or an operator is never the application's to delete. The one-off removal of
-        the retired ``users.role`` and ``users.reported_count`` columns is in
-        ``scripts/migrate_account_tables.py``, which has to run before the boot path can even
-        see those tables in their new shape.
-        """
+        """Add model-declared columns missing from an already-created table (``create_all`` never touches existing tables)."""
         with self.engine.begin() as connection:
             for table in Base.metadata.sorted_tables:
                 existing = {
@@ -515,9 +348,8 @@ class PostgresClient:
                     extra = ""
                     default_sql = _server_default_sql(column, connection.dialect)
                     if not column.nullable and default_sql is None:
-                        # A NOT NULL column with no default cannot be added to a table that
-                        # has rows. Refuse to guess a value: skipping it leaves a clear
-                        # error on first write, where inventing one would fabricate data.
+                        # NOT NULL with no default cannot be added to a table that has
+                        # rows; refuse to guess a value rather than fabricate data.
                         logger.warning(
                             "Not adding NOT NULL column %s.%s: it has no server default",
                             table.name,
@@ -537,25 +369,7 @@ class PostgresClient:
                     )
 
     def apply_retired_columns(self) -> None:
-        """Drop the columns in ``RETIRED_COLUMNS`` from tables that still have them.
-
-        Run on every boot and idempotent: each column is looked up first, so an already
-        converged database costs one catalogue query per table and changes nothing.
-
-        Dropping the column is the whole migration in each case. PostgreSQL removes any
-        CHECK constraint involving a dropped column, so ``ck_accounts_gender`` leaves ``admin``
-        and ``moderator`` with the ``gender`` they were holding, while ``users`` -- which keeps
-        the column -- keeps the constraint. Nothing reads the dropped values: the picture columns
-        were always NULL on staff (the upload route is participant-only), gender was only ever
-        read by matchmaking, which queries ``users``, and ``emoji`` had every reader deleted
-        with the profile-emoji option itself.
-
-        The values are logged as dropped rather than silently discarded, because this is the one
-        step in :meth:`initialize` that destroys stored data. It cannot be made conditional on
-        the data being empty -- a non-null ``gender`` on a staff row, or a profile emoji anybody
-        chose, is exactly the state these changes declare invalid -- but an operator watching the
-        boot log should be able to see that it happened.
-        """
+        """Drop the columns in ``RETIRED_COLUMNS`` from tables that still have them (dropped values are logged before they go)."""
         with self.engine.begin() as connection:
             for table_name, columns in RETIRED_COLUMNS.items():
                 present = {
@@ -583,20 +397,10 @@ class PostgresClient:
                     )
 
     def apply_unique_indexes(self) -> None:
-        """Add unique indexes declared in the models but missing from the database.
+        """Add model-declared unique indexes missing from the database (``create_all`` never touches existing tables).
 
-        The same gap as :meth:`apply_missing_columns`, one level up: ``create_all`` does
-        nothing to a table that already exists, so a ``unique=True`` added to a column on a
-        deployed database is never applied and the constraint the models claim is enforced
-        simply is not. That is not hypothetical here -- ``email`` is declared unique on all
-        three account tables, and ``admin`` and ``moderator`` predate that, so without this
-        two staff rows could claim one address while the model says they cannot.
-
-        Added per index rather than as a table constraint so the failure mode is a named
-        index PostgreSQL will refuse to create over existing duplicates, instead of a
-        constraint that reports the same conflict less legibly. Existing rows are *not*
-        deduplicated first: picking a winner among two rows claiming one address is a
-        decision about data, and this is the wrong place to make it silently.
+        Added per index so duplicates give a named refusal, not a vague constraint error;
+        existing rows are never deduped first -- picking a winner is a data decision.
         """
         with self.engine.begin() as connection:
             installed = {
@@ -629,19 +433,7 @@ class PostgresClient:
                     )
 
     def apply_refresh_replay_index(self) -> None:
-        """Index the hashes of refresh tokens that were rotated away.
-
-        A refused refresh looks the presented token up by the hash it replaced, to
-        tell a stale copy -- the browser that lost a rotation race -- from a value
-        no session ever held. Without an index that lookup is a sequential scan of
-        the session table, and it sits on the refusal path: exactly the path a
-        caller probing for live tokens produces.
-
-        Partial, because only a session that has rotated at least once has a value
-        there: the index then holds one row per rotating session rather than one
-        per session. ``IF NOT EXISTS`` and outside any data decision, so it is safe
-        to retry on every boot.
-        """
+        """Index rotated-away refresh token hashes: the refusal-path lookup must not scan the session table (partial, since only rotated sessions have a value)."""
         with self.engine.begin() as connection:
             connection.execute(
                 text(
@@ -652,17 +444,7 @@ class PostgresClient:
             )
 
     def apply_trgm_indexes(self) -> None:
-        """Install pg_trgm GIN indexes for the ILIKE-searched columns.
-
-        ``create_all`` cannot do this one: the index method needs the pg_trgm
-        extension, and model metadata has nowhere to put ``CREATE EXTENSION``.
-        Installing the extension needs superuser (or rds_superuser); the bundled
-        Postgres image grants it to the app role, but a managed database may not.
-        So a missing privilege degrades to a warning and sequential scans -- search
-        stays correct, only slower -- rather than refusing to boot. Each index is
-        ``IF NOT EXISTS`` and the whole step runs outside any data decision, so it
-        is safe to retry on every boot.
-        """
+        """Install pg_trgm GIN indexes for the ILIKE-searched columns (CREATE EXTENSION needs superuser; a refusal degrades to sequential scans, not a boot failure)."""
         try:
             with self.engine.begin() as connection:
                 connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
@@ -687,15 +469,7 @@ class PostgresClient:
             logger.warning("Skipping trigram indexes: %s", e)
 
     def apply_vector_extension(self) -> bool:
-        """Install the pgvector extension so vector(1536) columns can exist.
-
-        Installing the extension needs superuser (or rds_superuser); the bundled
-        pgvector image grants it to the app role, but a managed database may not.
-        Returns True when the extension is installed. A missing extension is a
-        warning here rather than a boot refusal so the failure surfaces where it
-        belongs (table creation / embedding writes); the README and compose files
-        document the pgvector/pgvector:pg16 image requirement.
-        """
+        """Install the pgvector extension so vector(1536) columns can exist; True when installed, a warning (not a boot refusal) when not."""
         try:
             with self.engine.begin() as connection:
                 connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -714,15 +488,7 @@ class PostgresClient:
             return False
 
     def apply_embedding_vector_index(self) -> None:
-        """Best-effort HNSW cosine index on confession_embeddings.embedding.
-
-        Exact nearest-neighbor search is correct without it on a small corpus;
-        the index only speeds retrieval as the corpus grows. Visibility filters
-        (removed_at IS NULL) still apply in the query itself, so approximate
-        recall is filtered after ranking rather than assumed. Unsupported
-        servers (old pgvector, missing extension) degrade to exact search with
-        a warning instead of refusing to boot.
-        """
+        """Best-effort HNSW cosine index on confession_embeddings.embedding (exact search stays correct without it; unsupported servers degrade)."""
         try:
             with self.engine.begin() as connection:
                 installed = connection.scalar(
@@ -750,36 +516,12 @@ class PostgresClient:
             logger.warning("Skipping embedding HNSW index (exact search remains): %s", e)
 
     def apply_check_constraints(self) -> None:
-        """Bring the database's CHECK constraints in line with the models.
+        """Bring the database's CHECK constraints in line with the models: add absent, drop superseded.
 
-        ``create_all`` only creates tables that do not exist, so on an already-deployed
-        database a constraint added to a model is silently never applied. Walking the
-        metadata here and adding whatever is absent keeps the running schema in step with the
-        models without needing a migration framework or hand-written DDL that can drift
-        from them.
-
-        Constraints are added ``NOT VALID``: PostgreSQL then enforces them on every new or
-        updated row while leaving already-stored rows alone. That matters for a limit added
-        to a column that was previously unbounded, where existing rows may predate the
-        limit. Validating them is a separate, deliberate step so that tightening a limit
-        cannot take the app down on boot, and so the decision about what to do with
-        over-length history stays explicit rather than silent.
-
-        Superseded constraints are dropped, which is the other half of the job. Adding only
-        means a limit that changes value leaves its predecessor behind holding the same
-        column to the old number. That is worse than looking untidy: the two constraints are
-        independent, so a direct write that skips the model has to satisfy both, and the
-        *looser* ceiling stops being a limit on anything. Dropping the old name is what makes
-        the new number the only rule in force. Dropping is safe to do at boot precisely
-        because the replacement is added in the same transaction -- there is no window in
-        which the column is unguarded.
-
-        Two workers converging the same database at once used to be able to collide here:
-        both read the catalogue, both saw a constraint missing, and the loser was refused
-        with ``duplicate_object`` and died during start-up. The schema lock keeps this
-        build's workers apart; each statement also tolerates that error and its
-        ``undefined_object`` counterpart, which covers a rolling deploy where the previous
-        build is still converging the same database without taking the lock.
+        Added ``NOT VALID`` so pre-existing rows cannot take the app down on boot
+        (validating stays a separate, explicit decision); superseded drops are safe
+        because the replacement is added in the same transaction, and each statement
+        tolerates a rolling-deploy worker's duplicate_object/undefined_object.
         """
         with self.engine.begin() as connection:
             installed = {
@@ -839,21 +581,10 @@ class PostgresClient:
 
     @staticmethod
     def _run_constraint_ddl(connection, sql: str, *, tolerate: str) -> bool:
-        """Run one constraint DDL statement, tolerating a concurrent worker.
+        """Run one constraint DDL statement under its own SAVEPOINT, tolerating one SQLSTATE.
 
-        Returns whether this process was the one that applied the statement. The
-        ``tolerate`` code is the ``SQLSTATE`` that means somebody else got there first --
-        ``duplicate_object`` for an ``ADD`` and ``undefined_object`` for a ``DROP``.
-
-        The schema lock (:meth:`schema_lock`) already keeps the workers of this build
-        apart, so this is for the one that is not taking it: a rolling deploy, where the
-        previous build is still up and converging the same database while this one boots.
-
-        Each statement gets its own SAVEPOINT, and that is the load-bearing part. A DDL
-        error aborts the whole PostgreSQL transaction, so without one the tolerated
-        failure would take the rest of the batch down with it and the boot would fail on
-        a line that had nothing to do with the race. Rolling back to the savepoint leaves
-        the outer transaction usable and the batch running.
+        A DDL error aborts the whole transaction, so without the SAVEPOINT the tolerated
+        failure would take the rest of the batch down with it.
         """
         try:
             with connection.begin_nested():
@@ -865,36 +596,8 @@ class PostgresClient:
         return True
 
     def apply_not_null_constraints(self) -> None:
-        """Tighten a column the models declare NOT NULL but the table still allows to be null.
-
-        The same gap as :meth:`apply_check_constraints`, and the one thing it cannot do on its
-        own. ``create_all`` skips a table that exists, and the ``NOT NULL`` in ``db_models``
-        is a fact about a *newly created* table; on a database that predates it the column
-        stays nullable forever while the models claim otherwise. Nothing warns about that gap,
-        because a CHECK constraint is satisfied by NULL and so cannot express "and not null"
-        without the awkward ``col IS NOT NULL`` arm -- which would be wrong anyway: it would
-        leave already-stored NULLs in place and only block new ones.
-
-        So the two halves are done together, per column, in the order that makes both succeed:
-
-        1. **Backfill.** Every row where the column is NULL is given a placeholder derived
-           from the row's own ``regno``. Nothing is fabricated that looks like real data --
-           ``.invalid`` is a reserved TLD (RFC 2606) that can never resolve, so a placeholder
-           is visibly a placeholder rather than quietly becoming somebody's real inbox -- and
-           the address is unique per table, so the ``email`` unique index still holds. The
-           count is logged, because a row that had to be invented an address is something an
-           operator should go and fix.
-        2. **Set the constraint.** Only once no NULL remains.
-
-        The alternative to step 1 is refusing to boot and naming the offending rows, which
-        keeps every byte of real data and costs a deploy until somebody has done it by hand.
-        That was the other option and it was not taken: the failure mode of an account with a
-        placeholder address is an admin correcting one field, while the failure mode of a boot
-        loop is an application that does not start at all.
-        """
-        # Which column on which table gets a regno-derived placeholder. Every column being
-        # tightened here is on an account table, so ``regno`` is always available to derive
-        # one from.
+        """Tighten model-declared NOT NULL columns a table still allows to be null (backfill a regno-derived placeholder first; see ``PLACEHOLDER_EMAIL_SQL``)."""
+        # Columns that get a regno-derived placeholder (always available: account tables only).
         backfills: dict[str, tuple[str, ...]] = {
             "users": ("email",),
             "admin": ("email",),
@@ -919,9 +622,7 @@ class PostgresClient:
                     if column_name not in present:
                         continue
 
-                    # Is the column already NOT NULL? information_schema reports it, and
-                    # asking first means the common case -- an already-migrated database --
-                    # costs one catalogue lookup and no table scan.
+                    # Ask first: an already-migrated database costs one lookup, no scan.
                     already_not_null = connection.execute(
                         text(
                             "SELECT is_nullable FROM information_schema.columns "
@@ -965,16 +666,7 @@ class PostgresClient:
                     )
 
     def apply_widened_columns(self) -> None:
-        """Widen a column whose model type outgrew the deployed one.
-
-        The same gap as :meth:`apply_missing_columns`, one level deeper: ``create_all``
-        skips tables that exist, so a column declared ``SmallInteger`` at deploy time
-        stays 16-bit forever while the models claim ``Integer``. Each entry in
-        :data:`WIDENED_COLUMNS` is checked against the catalogue and altered only when
-        it differs, so an already-converged database costs one lookup and changes
-        nothing. Only widenings are listed -- every stored value still fits, so no
-        decision about data is involved.
-        """
+        """Widen columns whose model type outgrew the deployed one (only widenings -- every stored value still fits, so no data decision)."""
         with self.engine.begin() as connection:
             for (table_name, column_name), target in WIDENED_COLUMNS.items():
                 current = connection.execute(
@@ -1001,28 +693,7 @@ class PostgresClient:
     def _superseded_constraints(
         table: Table, installed: set[tuple[str, str]]
     ) -> list[str]:
-        """Names of installed CHECK constraints on ``table`` that a model has replaced.
-
-        A constraint counts as superseded when the models declare a constraint on the same
-        table whose name is the same string with a different numeric suffix. That is what
-        makes a limit encode its own value -- ``ck_confessions_body_length_500`` supersedes
-        ``ck_confessions_body_length_2000`` -- and it needs no registry of old names to
-        forget: tightening the constant and restarting is the whole migration.
-
-        The unsuffixed name is superseded too, because it is the shape this convention is
-        replacing. A constraint called ``ck_messages_body_length`` cannot be detected as stale
-        by the numeric rule alone -- it has no numeric suffix -- so on any database that already
-        has one, renaming the model to ``ck_messages_body_length_100`` would *add* the tight rule
-        and leave the loose one beside it. Both would then apply to the same column, and
-        PostgreSQL enforces each independently: the 2000 ceiling would keep permitting writes
-        the API rejects, which is exactly the drift this method exists to prevent. Dropping it
-        is safe because the replacement is added in the same transaction.
-
-        Only a *numeric* suffix qualifies for the value-bearing rule, and only an exact
-        family-key match qualifies for the unsuffixed one. Matching on arbitrary prefixes would
-        be worse than not cleaning up at all, since it would eventually drop an unrelated
-        constraint.
-        """
+        """Names of installed CHECK constraints on ``table`` that a model has replaced (same family, different numeric suffix -- the name encodes the limit)."""
         families: dict[str, set[str]] = {}
         for constraint in table.constraints:
             if not isinstance(constraint, CheckConstraint) or not constraint.name:
@@ -1042,29 +713,14 @@ class PostgresClient:
             if known and suffix.isdigit() and name not in known:
                 superseded.append(name)
             elif name in families:
-                # The whole installed name is a family declared by this table, e.g.
-                # "ck_messages_body_length" against a declared family "ck_messages_body_length"
-                # (from ``ck_messages_body_length_100``). Its own suffix is the word "length"
-                # rather than a number, so the rule above cannot see it -- and leaving it in place
-                # is how a 2000-character ceiling survives alongside a 100-character one.
+                # The unsuffixed installed name is a family declared by this table, but its
+                # "suffix" is a word, not a digit, so the rule above cannot see it -- leaving
+                # it is how a 2000-char ceiling survives beside a 100-char one.
                 superseded.append(name)
         return superseded
 
     def backfill_session_deadlines(self) -> None:
-        """Give sessions that predate the deadline column the deadline their age implies.
-
-        ``login_tokens.session_expires_at`` is written at redemption
-        (``consumed_at + LOGIN_SESSION_EXPIRE_HOURS``) and never moved, but a session
-        redeemed by an earlier build has no value yet. Without this, the first request
-        after deploy would read "no deadline" as "already past" and sign out every
-        currently-logged-in account the moment the new build ships. Instead the deadline
-        is derived once, from the login time the row already records, so a session minted
-        less than a day ago keeps its remaining time and one older than that ends as it
-        should.
-
-        Idempotent by construction: it only touches rows whose deadline is still NULL,
-        so re-running on later boots does nothing.
-        """
+        """Backfill ``session_expires_at`` for sessions predating the column (a NULL deadline reads as "already past", signing out every account at deploy)."""
         with self.engine.begin() as connection:
             result = connection.execute(
                 text(
@@ -1081,16 +737,7 @@ class PostgresClient:
                 )
 
     def backfill_staff_notification_preferences(self) -> None:
-        """Give every existing staff account the preference row creation writes.
-
-        Admin and moderator rows created by this build get their preference row
-        from the mapper's ``after_insert`` hook, in the same transaction. Rows
-        that predate that hook -- and rows written by raw SQL, which does not
-        fire mapper events -- have none, and a delivery path that reads the table
-        directly would see no preference rather than the all-on default the API
-        synthesizes. This inserts the missing rows once per account with the same
-        all-on values; the conflict clause makes every later boot a no-op.
-        """
+        """Insert the all-on preference row for staff accounts that predate the after_insert hook or were written by raw SQL."""
         inserted = 0
         with self.engine.begin() as connection:
             for account_type, table in (
@@ -1114,23 +761,11 @@ class PostgresClient:
             )
 
     def apply_game_session_convergence(self) -> None:
-        """Converge pre-refactor game tables to the session lifecycle.
+        """Converge pre-refactor game tables to the session lifecycle (drop per-day uniqueness, backfill lifecycle columns, one active session per table).
 
-        Three jobs, all idempotent, all safe to re-run on every boot:
-
-        1. Drop the old one-row-per-day uniqueness on ``wordle_games``,
-           ``anagram_games``, ``couple_games`` and ``reaction_time_games``.
-           History now shares days, so the unique index/constraint would refuse
-           the second session of a day that the lifecycle legitimately creates.
-           (Reaction Time shipped that uniqueness briefly before joining the
-           shared lifecycle; a database from those days converges here.)
-        2. Backfill the new lifecycle columns on legacy rows: ``status`` defaults
-           to ``'ended'`` at the column level, and ``period_start_date`` mirrors
-           ``game_date`` where it is still NULL, so old rows read as history.
-        3. Install one partial unique index per game table so at most one
-           active-or-pending session exists per game. The index (not a CHECK, not
-           application code) is what serializes a scheduler run racing an admin
-           Update: the loser gets an integrity error instead of a second active.
+        The single-active partial unique index -- not application code -- is what
+        serializes a scheduler run racing an admin update: the loser gets an integrity
+        error instead of a second active session.
         """
         with self.engine.begin() as connection:
             for table in (
@@ -1155,8 +790,7 @@ class PostgresClient:
                 }
                 if not present:
                     continue
-                # 1. Drop legacy uniqueness on game_date: the auto index from
-                # ``unique=True`` plus the lingering key constraint name.
+                # 1. Drop legacy game_date uniqueness: the ``unique=True`` auto index plus the key constraint.
                 connection.execute(
                     text(f'DROP INDEX IF EXISTS "ix_{table}_game_date"')
                 )
@@ -1195,12 +829,9 @@ class PostgresClient:
                         f'ON "{table}" ((1)) WHERE status IN (\'active\', \'pending\')'
                     )
                 )
-            # 4. A pending (manual, not yet configured) session holds no word, so
-            # the answer columns must accept NULL. Adding a column is convergent
-            # but relaxing an existing NOT NULL is not -- without this, every
-            # pending insert fails and the scheduler mistakes the failure for a
-            # race. Idempotent: dropping a constraint that is already gone is a
-            # no-op.
+            # 4. A pending (not yet configured) session holds no word, so ``answer`` must
+            # accept NULL -- adding a column converges, relaxing an existing NOT NULL
+            # does not, and without this every pending insert fails on such databases.
             for table in ("wordle_games", "anagram_games"):
                 present = {
                     row[0]
@@ -1219,14 +850,7 @@ class PostgresClient:
             logger.info("Game session lifecycle converged")
 
     def apply_trivia_drop_convergence(self) -> None:
-        """Install Trivia Drop's at-most-one-active-question rule.
-
-        One partial unique index on ``trivia_drop_questions``: at most one row
-        may hold ``status = 'active'``. The index (not application code) is
-        what serializes an admin Deploy racing a scheduled release past the
-        advisory lock: the loser gets an integrity error instead of a second
-        live question. Idempotent, like every other convergence step.
-        """
+        """Install Trivia Drop's at-most-one-active-question rule via a partial unique index (the database, not application code, backs the advisory lock)."""
         with self.engine.begin() as connection:
             present = {
                 row[0]
@@ -1250,21 +874,10 @@ class PostgresClient:
             logger.info("Trivia Drop session lifecycle converged")
 
     def apply_report_source_convergence(self) -> None:
-        """Converge the reports tables for automated moderation.
+        """Converge the reports tables for automated moderation (system actor: nullable reporter + ``source`` discriminator).
 
-        Automated confession/comment/message reports reuse the same table as
-        manual ones with a system actor: ``reported_by_id`` (``reports``) or
-        ``reporter_regno`` (``message_reports``) becomes nullable (NULL means
-        no users row behind the report) and ``source`` discriminates
-        ``"user"`` from ``"azure_content_safety"``. History backfills to
-        ``"user"`` via the column default; ``apply_missing_columns`` adds the
-        column itself, this step relaxes nullability and installs the
-        idempotency backstops.
-
-        Partial unique indexes allow at most one automated report per
-        confession, per comment and per message while leaving manual reports
-        untouched: multiple users may still report the same target, each under
-        their own reporter id. Idempotent and safe to re-run on every boot.
+        Partial unique indexes allow one automated report per confession/comment/message
+        while manual reports keep their own uniqueness. Idempotent.
         """
         try:
             with self.engine.begin() as connection:
@@ -1280,10 +893,7 @@ class PostgresClient:
                 }
                 if not present:
                     return
-                # Backfill + relax: existing manual rows always carry a reporter,
-                # new automated rows carry NULL. Fresh tables created from the
-                # models are already nullable; this only affects databases that
-                # predate the change.
+                # Backfill + relax: manual rows always carry a reporter, automated ones NULL.
                 if "source" in present:
                     connection.execute(
                         text(
@@ -1309,8 +919,7 @@ class PostgresClient:
                         logger.info(
                             "Relaxed reports.reported_by_id to NULL for system-actor reports"
                         )
-                # One automated report per confession and per comment. Manual
-                # reports keep their own (target, reported_by_id) uniqueness.
+                # One automated report per confession/comment; manual reports keep their own uniqueness.
                 connection.execute(
                     text(
                         "CREATE UNIQUE INDEX IF NOT EXISTS "
@@ -1327,9 +936,7 @@ class PostgresClient:
                         "WHERE source = 'azure_content_safety'"
                     )
                 )
-                # Chat messages keep their own report table; the same system-actor
-                # shape is converged here so an automated message report needs no
-                # receiver. Manual message reports always carry a reporter.
+                # message_reports gets the same system-actor shape: automated reports need no receiver.
                 message_columns = {
                     row[0]
                     for row in connection.execute(
@@ -1393,18 +1000,11 @@ _client_lock = threading.Lock()
 def validate_postgres_budget(
     pool_size: int | None = None, max_overflow: int | None = None
 ) -> int:
-    """Validate the worst-case connection budget before any engine is built.
-
-    Fail-closed at startup rather than under load: Postgres ships with
-    max_connections=100, so a budget above that is a hard outage, not tuning.
-    Returns the computed budget for callers that need it.
-    """
+    """Validate the worst-case connection budget (pool + overflow x workers) against Postgres' default max_connections=100 before any engine is built."""
     size = settings.DATABASE_POOL_SIZE if pool_size is None else pool_size
     overflow = settings.DATABASE_MAX_OVERFLOW if max_overflow is None else max_overflow
     max_conns = (size + overflow) * max(settings.WEB_WORKERS, 1)
     if max_conns > 100:
-        # Postgres ships with max_connections=100, so this is a hard outage, not a
-        # tuning nit. Fail loudly at startup rather than under load.
         raise RuntimeError(
             f"Postgres connection budget is {max_conns} "
             f"({size} pool + {overflow} overflow "
@@ -1415,13 +1015,7 @@ def validate_postgres_budget(
 
 
 def get_postgres_client() -> PostgresClient:
-    """Return the process-wide client, creating it on first use.
-
-    Lazy rather than import-time so that a test (or a script) can point
-    ``settings.DATABASE_URL`` at its own database before the engine is built.
-    Thread-safe with double-checked locking; the connection budget is validated
-    before the engine is created so a misconfigured pool fails fast.
-    """
+    """Return the process-wide client, creating it on first use (lazy so tests can repoint DATABASE_URL first; double-checked locking)."""
     global _client
     if _client is not None:
         return _client

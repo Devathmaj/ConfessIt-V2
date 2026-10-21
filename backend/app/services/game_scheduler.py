@@ -1,45 +1,4 @@
-"""The automatic session reset loop: calendar-driven, idempotent, UTC.
-
-Runs at (or just after) 00:01 UTC and may safely run as often as wanted: every
-game is evaluated against its own period boundary, and a run that finds the
-current session still inside its period changes nothing. Creating is never
-lazy -- user visits validate defensively, but this loop is what opens periods.
-
-Per game, per run, under one transaction-scoped advisory lock:
-
-* hidden game -> create nothing (existing rows are left alone; play is refused
-  by the availability check even if an old session lingers);
-* current session still inside its period -> keep it (a second run for the same
-  boundary is a no-op, never a duplicate);
-* current session is pending and its word has arrived (scheduled content for its
-  period start, or the game now runs ``random``) -> end it and open a configured
-  session for the *same* period;
- * boundary reached or no current session -> end the old one and open the next
-   period starting today: random draws a word immediately, manual consumes a
-   scheduled word when one waits for today and otherwise opens pending, the
-   questionnaire opens a new global period and deals every existing couple a
-   fresh set of questions, and Reaction Time opens a new bare period (no
-   content to configure, so it is playable the moment it opens).
- * Trivia Drop has no period at all: the same run releases due scheduled
-   questions through ``trivia_service.release_due_questions`` -- at most one
-   activation per run, ending the live question in the same transaction --
-   so one background path serves every game and no second scheduler exists.
- * Plot Twist and Case Closed delegate to ``ai_game_automation.ensure_cycle``:
-   the boundary closes the expired session exactly as here, but the new
-   session is *generated* by the asynchronous AI pipeline instead of being
-   opened inline. The scheduler only enqueues one idempotent cycle per
-   boundary; a later worker publishes the validated content and opens the
-   session.
-
- The partial unique index on each game table (one active-or-pending row) is the
- backstop behind the lock: a run racing an admin Update past the lock still
- lands one winner and one integrity error, and the loser re-reads the winner.
-
-The pass also writes the admin staff notices for what it observes: one per
-pending manual-mode Wordle/Anagram/Connections session, and one per UTC date on
-which no game is featured. The notice is stamped with the pass time, and a
-failure to write it is logged without changing the reset outcome.
- """
+"""The automatic session reset loop: calendar-driven, idempotent, UTC."""
 
 import random
 from datetime import date, datetime, timezone
@@ -107,14 +66,7 @@ def _end_row(row, now: datetime) -> None:
 
 
 def _snapshot_league_opportunity(session, game_id: str, outcome: dict) -> None:
-    """Snapshot a freshly opened session's league opportunity, same transaction.
-
-    Opening the session and recording its featured designation commit
-    together, so the multiplier later awards reflect the spotlight in force
-    when play opened -- never a designation changed afterwards. Best-effort
-    by design: league bookkeeping must never break the session lifecycle,
-    and the due scan backfills any snapshot this misses.
-    """
+    """Snapshot a freshly opened session's league opportunity, same transaction."""
     session_id = outcome.get("session_id") if isinstance(outcome, dict) else None
     if not session_id:
         return
@@ -142,13 +94,7 @@ def _random_anagram_answer() -> str:
 
 
 def _window_scheduled_words(session, game_id: str, start: date, end: date) -> list:
-    """Pending scheduled words whose dates fall in ``[start, end)``, earliest first.
-
-    A scheduled date does not need to equal the session's start date: any date
-    inside the half-open window being created qualifies. Ordering is by
-    scheduled date with the row id as the stable tie-break, so selection is
-    deterministic no matter how many entries share the window.
-    """
+    """Pending scheduled words whose dates fall in ``[start, end)``, earliest first."""
     return session.scalars(
         select(ScheduledGameContentRecord)
         .where(
@@ -164,13 +110,7 @@ def _window_scheduled_words(session, game_id: str, start: date, end: date) -> li
 
 
 def _discard_scheduled_words_before(session, game_id: str, cutoff: date) -> int:
-    """Delete pending scheduled words dated before ``cutoff``. Returns the count.
-
-    Used after a window takes its content: past entries and in-window entries
-    that lost the earliest-date selection can never fire in a later window,
-    so they are removed rather than left to linger. Entries on or after the
-    cutoff belong to future windows and are preserved.
-    """
+    """Delete pending scheduled words dated before ``cutoff``. Returns the count."""
     rows = session.scalars(
         select(ScheduledGameContentRecord).where(
             ScheduledGameContentRecord.game_id == game_id,
@@ -243,13 +183,7 @@ def _discard_all_scheduled_puzzles(session) -> int:
 
 
 def _consume_earliest_word(session, game_id: str, start: date, end: date) -> Optional[str]:
-    """Activate the window's word: earliest in ``[start, end)``, then discard the rest.
-
-    Returns the selected word (its row is deleted), or None when the window
-    holds nothing. Non-selected rows dated before the window end can never
-    fire later and are discarded; rows on or after the end belong to future
-    windows and are preserved.
-    """
+    """Activate the window's word: earliest in ``[start, end)``, then discard the rest."""
     rows = _window_scheduled_words(session, game_id, start, end)
     if not rows:
         return None
@@ -403,29 +337,9 @@ def _roll_couple_pairs(session, previous_global_id: str, new_global_id: str) -> 
 
 
 def ensure_single_game(
-    db: Database, game_id: str, now: Optional[datetime] = None
+    db: Database, game_id: str, now: Optional[datetime] = None, *, startup: bool = False
 ) -> dict:
-    """Evaluate one game's boundary and open the next period when due.
-
-    The defensive entry point the request paths use: cheap when the current
-    session is still inside its period (one locked read), decisive when the
-    boundary has passed. Never creates a session for a hidden game.
-
-    Reaction Time shares the session lifecycle: its sessions carry no
-    content (no word to draw or schedule), so a new period simply opens an
-    empty active session -- the questionnaire's global period without the
-    per-couple dealing.
-
-    Trivia Drop releases individually rather than on any cadence, so it
-    delegates to its own release entry point instead of the period logic
-    below. The delegation keeps one background path -- this function, called
-    by boot and by the run-resets trigger -- serving every game.
-
-    Plot Twist and Case Closed delegate to the AI automation for the same
-    reason: their new content is generated asynchronously, so the boundary
-    closes the expired session and enqueues one idempotent generation cycle
-    instead of opening a session inline.
-    """
+    """Evaluate one game's boundary and open the next period when due."""
     if game_id == "trivia-drop":
         from . import trivia_service
 
@@ -433,7 +347,7 @@ def ensure_single_game(
     if game_id in ("plot-twist", "case-closed"):
         from . import ai_game_automation
 
-        return ai_game_automation.ensure_cycle(db, game_id, now)
+        return ai_game_automation.ensure_cycle(db, game_id, now, startup=startup)
     moment = _now_utc(now)
     today = moment.date()
     model = _GAME_MODELS[game_id]
@@ -479,7 +393,6 @@ def ensure_single_game(
         # Update won the insert past the lock, and the partial unique index
         # refused the duplicate -- re-read the winner. Any other integrity
         # failure (a NOT NULL, a CHECK, a foreign key) is a real bug and must
-        # surface loudly rather than masquerading as "nothing to do".
         from psycopg.errors import UniqueViolation
 
         if not isinstance(exc.orig, UniqueViolation):
@@ -727,21 +640,15 @@ def _notify_pending_session(
 
 
 def ensure_game_sessions(
-    db: Database, now: Optional[datetime] = None
+    db: Database, now: Optional[datetime] = None, *, startup: bool = False
 ) -> dict[str, dict]:
-    """Evaluate every game's boundary; the 00:01 UTC reset entry point.
-
-    After rolling sessions, closed events still missing league awards are
-    finalized as a side effect (best-effort, logged, never reflected in the
-    returned summary): awards belong to ended opportunities only, so the
-    boundary run is the existing closure signal rather than a new timer.
-
-    Strict by design: an unexpected failure in one game aborts the pass, so a
-    bug surfaces loudly at boot, on the manual trigger, and in tests. The
-    unattended cron path uses :func:`run_reset_cycle` instead, which isolates
-    per-game failures so one game's bug can never starve the rest.
-    """
-    summary = {game_id: ensure_single_game(db, game_id, now) for game_id in GAME_IDS}
+    """Evaluate every game's boundary; the 00:01 UTC reset entry point."""
+    summary = {}
+    for game_id in GAME_IDS:
+        if startup and game_id in ("plot-twist", "case-closed"):
+            summary[game_id] = ensure_single_game(db, game_id, now, startup=True)
+        else:
+            summary[game_id] = ensure_single_game(db, game_id, now)
     try:
         from . import league_finalization
 
@@ -754,21 +661,7 @@ def ensure_game_sessions(
 
 
 def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
-    """One full reset pass with per-game failure isolation, for the cron path.
-
-    Calls the same per-game entry point as boot and the manual trigger
-    (:func:`ensure_single_game`), so every update-handling rule holds here:
-    per-game advisory locks serialize a tick racing an admin Update, the
-    partial unique index refuses a duplicate active session, pending sessions
-    activate in-period, hidden games are skipped, Trivia Drop releases through
-    its own entry point, and closed league events are finalized afterwards.
-
-    The one deliberate difference from :func:`ensure_game_sessions`: an
-    unexpected failure in one game is logged and recorded as
-    ``action: "error"`` while the pass continues with the remaining games and
-    the league scan, instead of aborting them. An unattended 00:01 tick must
-    never let one game's bug starve the other six.
-    """
+    """One full reset pass with per-game failure isolation, for the cron path."""
     import logging
 
     moment = _now_utc(now)
@@ -776,9 +669,8 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
     for game_id in GAME_IDS:
         try:
             games[game_id] = ensure_single_game(db, game_id, moment)
-            # The notice is written only from this unattended path, so its
-            # timestamp is the scheduler pass, not an earlier boot that may
-            # have opened the pending session.
+            # Notice timestamp is this pass, not an earlier boot (see
+            # _notify_pending_session).
             _notify_pending_session(db, game_id, moment)
         except Exception as exc:
             logging.getLogger(__name__).exception(
@@ -813,7 +705,6 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
     # the indexed deadlines already stored on each row -- never the encryption
     # keys -- so the scheduler can run it without being a trusted decryptor.
     # Failure is isolated like a game failure: the rest of the pass already
-    # committed, and the next run retries the remaining batch.
     chat_cleanup: dict = {"action": "ok"}
     try:
         from .chat_retention_service import cleanup_expired_chat_messages
@@ -830,19 +721,10 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
         "at": moment.isoformat(),
     }
 
-    # The pass records its own outcome, so that a tick which stops running is
-    # visible rather than silent.
-    #
-    # This is the cron path, and it is the only one that records: the tick runs in a
-    # process that comes and goes, so a pass that never happened leaves no trace
-    # anywhere -- the games simply stop rolling over and nobody is watching. The
-    # recorded heartbeat is what the backend publishes as a metric, and what the
-    # "the daily reset has not succeeded" alert reads.
-    #
-    # Best-effort, and deliberately so: the pass has already done its work by the
-    # time this runs, and a heartbeat that could not be written must not turn a
-    # successful rollover into a failed one. A missing heartbeat is itself a
-    # signal -- the alert fires on an absent series too.
+    # The pass records its own heartbeat (see reset_heartbeat), so a tick that
+    # stops running leaves a trace instead of silently stalling the rollovers.
+    # The cron path is the only writer. Best-effort: the work is already
+    # committed here, and a heartbeat that cannot be written must not fail a
     try:
         from .reset_heartbeat import record_reset_outcome
 
@@ -861,10 +743,8 @@ def run_reset_cycle(db: Database, now: Optional[datetime] = None) -> dict:
 def _reset_cycle_error(summary: dict) -> Optional[str]:
     """A short description of why a pass failed, for the heartbeat row.
 
-    Every failure the pass isolated, in one line: which game, which stage, and
-    what it said. Clipped to the width of the column by the writer, because a
-    column that is too narrow for the text is the writer's business and not this
-    one's.
+    Every failure the pass isolated, in one line: which game or stage, and
+    what it said. The writer clips to the column's width.
     """
     parts = []
     for game_id, info in (summary.get("games") or {}).items():
@@ -908,26 +788,7 @@ def has_current_session(db: Database, game_id: str) -> bool:
 def reanchor_for_cadence_change(
     db: Database, game_id: str, *, now: Optional[datetime] = None
 ) -> Optional[dict]:
-    """Forced re-anchor after an admin switched ``game_id`` to a multi-day cadence.
-
-    Ends the live session (if any) and opens a fresh window under the new
-    cadence starting now, consuming the earliest scheduled entry inside that
-    window -- or opening pending when the window holds none. Every *other*
-    pending scheduled entry is silently discarded, including ones dated after
-    the new window: the rhythm they were planned under no longer exists, so
-    carrying any of them forward would let a stale word activate unexpectedly
-    in a later session.
-
-    Returns the new session summary, or None when no re-anchor applies: games
-    without scheduled words or puzzles keep the old behavior (the new cadence
-    simply takes effect at the next boundary), as do hidden games (which must
-    not open sessions at all), random-mode games (whose draws never consult
-    schedules), and games with no live session to re-anchor.
-
-    The session work itself delegates to the game's Update operation with no
-    supplied content, so locking, terminate-then-create, league snapshots and
-    duplicate protection are identical to a manual reset.
-    """
+    """Forced re-anchor after an admin switched ``game_id`` to a multi-day cadence."""
     if game_id not in ("wordle", "anagram", "connections"):
         return None
     moment = _now_utc(now)

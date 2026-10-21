@@ -5,23 +5,23 @@ Design notes
 * One 32-byte key per environment, selected by a version label (``v1`` today).
   The active version is used for new writes; every record stores the version it
   was encrypted with so historical rows remain readable after a rotation.
-* ``cryptography``'s ``AESGCM`` is used directly. Its ``encrypt()`` returns the
+* ``cryptography``'s ``AESGCM`` is used directly. ``encrypt()`` returns the
   ciphertext with the 16-byte authentication tag appended, and ``decrypt()``
-  expects that same combined representation. The database therefore stores one
-  ``body_ciphertext`` field plus a 12-byte nonce and the key version.
-* A fresh 12-byte nonce is generated with ``secrets.token_bytes`` for every
-  encryption operation. It is never derived from message content or reused.
+  expects that combined representation. A row stores one ``body_ciphertext``
+  field plus a 12-byte nonce and the key version.
+* A fresh 12-byte nonce from ``secrets.token_bytes`` per encryption; never
+  derived from message content or reused.
 * Stable record metadata (chat type, message id, chat/session id, sender id and
-  key version) is authenticated as AES-GCM additional authenticated data. The
-  same deterministic serialization is rebuilt on decryption, so swapping a
-  ciphertext between rows or editing the bound metadata fails authentication.
+  key version) is authenticated as AES-GCM AAD via the same deterministic
+  serialization rebuilt on decryption, so swapping a ciphertext between rows or
+  editing the bound metadata fails authentication.
 * Keys come from ``CHAT_ENCRYPTION_KEY_V<n>`` environment variables through the
-  settings object, Base64-encoded. The provider seam is deliberately small so a
-  future Azure Key Vault-backed provider can return the same mapping without
-  changing callers. No key is ever logged or returned to a client.
+  settings object, Base64-encoded. The provider seam is small so a future
+  Azure Key Vault-backed provider can return the same mapping. No key is ever
+  logged or returned to a client.
 
-This module raises sanitized errors only: callers log the error code and record
-identifiers, never plaintext, keys, nonces or ciphertext.
+Errors are sanitized only: callers log the error code and record identifiers,
+never plaintext, keys, nonces or ciphertext.
 """
 
 from __future__ import annotations
@@ -41,22 +41,22 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from ..config import settings
 
 # 12 bytes is the nonce size AES-GCM is defined around. Larger nonces are legal
-# but are hashed internally by the primitive; pinning 12 keeps the stored format
-# unambiguous and is what every record uses.
+# but hashed internally by the primitive; pinning 12 keeps the stored format
+# unambiguous.
 NONCE_BYTES = 12
 # AES-256 has exactly one legal key size. Anything else is a configuration error.
 KEY_BYTES = 32
-# AESGCM.encrypt appends the 16-byte tag to the ciphertext. A shorter payload can
-# never authenticate, so rejecting it early keeps malformed rows away from the
+# AESGCM.encrypt appends the 16-byte tag to the ciphertext, so a shorter payload
+# can never authenticate; rejecting it early keeps malformed rows away from the
 # primitive.
 GCM_TAG_BYTES = 16
 
 KEY_ENV_PATTERN = re.compile(r"^CHAT_ENCRYPTION_KEY_V(\d+)$")
 
-# Chat-type labels are part of the authenticated metadata. They are stored as
-# part of the AAD, not as their own column: the table already identifies the
-# kind of thread, and accepting a caller-supplied value would make it easier to
-# authenticate a different label than the one the row actually represents.
+# Chat-type labels are authenticated as part of the AAD, not stored as their
+# own column: the table already identifies the thread kind, and accepting a
+# caller-supplied value would make it easier to authenticate a different label
+# than the one the row actually represents.
 CHAT_TYPE_MATCHMAKING = "matchmaking"
 CHAT_TYPE_MATCHMAKING_PREVIEW = "matchmaking_preview"
 CHAT_TYPE_CASE_CLOSED = "case_closed"
@@ -119,11 +119,11 @@ def _decode_key(version: str, encoded: str) -> bytes:
 def configured_keys() -> dict[str, bytes]:
     """Every key version available to this process, validated.
 
-    Settings declares V1..V8 so the values can live in the backend's dotenv file
-    without tripping ``extra="forbid"``. The environment is scanned as well, so
-    a deployment that exports a higher version (V9, V10, ...) is picked up
-    without a code change. Environment values win over the dotenv source, which
-    is the same precedence pydantic-settings itself uses.
+    Settings declares V1..V8 so the values can live in the backend's dotenv
+    file without tripping ``extra="forbid"``. The environment is scanned as
+    well, so a deployment that exports a higher version (V9, V10, ...) is
+    picked up without a code change. Environment values win, matching
+    pydantic-settings' own precedence.
     """
     raw: dict[str, str] = {}
     for name, value in settings.model_dump().items():
@@ -169,9 +169,9 @@ def validate_startup_configuration() -> None:
     and never receives the keys: it only deletes rows by their indexed deadline.
     """
     version, _key = active_key()
-    # Validate every configured historical key too. A malformed V1 would only
-    # surface later, as an unreadable message, long after the operator could
-    # connect it to the environment change. Failing at boot is the honest point.
+    # Validate every configured historical key too: a malformed V1 would
+    # otherwise surface only later, as an unreadable message, long after the
+    # operator could connect it to the environment change.
     configured_keys()
     # No key material or length is logged; only the version label.
     _ = version
@@ -188,15 +188,14 @@ def _aad(
 ) -> bytes:
     """Deterministic authenticated metadata.
 
-    A JSON array (rather than a delimiter-joined string) removes any ambiguity
-    from IDs that might contain punctuation, and ``ensure_ascii=True`` makes the
-    bytes identical on every platform. The order is fixed and documented here so
+    A JSON array (rather than a delimiter-joined string) removes ambiguity
+    from IDs that might contain punctuation, and ``ensure_ascii=True`` makes
+    the bytes identical on every platform. The element order is fixed here so
     encryption and decryption cannot drift.
 
-    ``context`` is empty for ordinary chat rows. Reported-message evidence uses
-    it to bind the report and evidence identifiers on top of the original
-    message id, chat id and sender id, which are carried in the three slots
-    above.
+    ``context`` is empty for ordinary chat rows. Reported-message evidence
+    uses it to bind the report and evidence identifiers on top of the original
+    message id, chat id and sender id carried in the three slots above.
     """
     return json.dumps(
         [

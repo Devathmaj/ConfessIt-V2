@@ -1,58 +1,17 @@
-"""Caps the application puts on a single conversation: text lengths, and message counts.
+"""Caps the application puts on a single conversation: text lengths and message counts.
 
-The text lengths are enforced twice on purpose: once by Pydantic, so the caller gets a 422
-naming the field, and once by the database, so a write that does not come through the API
-(a migration, a maintenance script, an endpoint added later) cannot store more than the
-application claims to accept. Only the Pydantic half is a user-facing error; only the
-database half is an invariant. Neither alone is sufficient, and a varchar column that is
-narrower than the Pydantic cap is a 500 waiting to happen rather than a validation
-message.
-
-The message counts are a different kind of cap -- how much of a conversation may be written
-at all, rather than how long one turn is -- and they are enforced in one place only,
-``message_service``, because they are a statement about how many rows a conversation holds
-and not about a column's width. They live here anyway because this module is the one place
-a client-mirrored limit belongs, and because ``frontend/src/lib/limits.ts`` restates the
-whole set so the browser can stop the input at the same point.
-
-The values are product decisions rather than technical ones. They are sized to the content
-each field actually holds: a confession is a short personal note, a comment is a reply to
-one, and a chat message is a conversational turn.
+Text lengths are enforced twice -- Pydantic (a 422 naming the field) and the database (writes
+outside the API cannot exceed what the application accepts; a narrower varchar is a 500 waiting
+to happen); counts only in ``message_service``. Mirrored in ``frontend/src/lib/limits.ts``.
 """
 
-# A confession is a short personal note, not an essay. 500 characters is roughly a paragraph
-# -- enough for the thing someone actually wants to say and short enough that a feed of them
-# stays scannable, which is the entire reason the feed exists.
-#
-# Lowered from 2000, which was sized as if a confession were a diary entry. The cost of the old
-# number was not storage; it was that the card rendering one confession could push everything
-# below it off the screen.
-#
-# Longer feelings have a home already: a love note is a message to one person and is bounded
-# separately at LOVE_NOTE_BODY_MAX. A public anonymous feed is the wrong place for a paragraph
-# nobody chose to read.
+# A confession is a short personal note, not an essay: 500 keeps the feed scannable (lowered
+# from 2000, where one card pushed everything below it offscreen). Love notes bound separately.
 CONFESSION_BODY_MAX = 500
 
-# The message on a love note, and the only limit here that is a layout constraint rather than a
-# readability one.
-#
-# A love note is *drawn*: the browser rasterises the message onto the template's PNG at the
-# sender's chosen font and font size, and that image is the whole note. There is no markup and no
-# scroll, so a message has to fit inside a fixed rectangle on the card or part of it is simply
-# not there. This number is therefore the point past which the picture stops being able to show
-# the note at a size anybody can read -- which is why it is far below the storage it could have.
-#
-# 1000 is set against the tightest template rather than the average one. The body box on
-# template 3 is 895x328; at the 32px its JSON declares, that is about 10 lines of roughly 45
-# characters, so ~450 characters at the intended size and a good deal more once the renderer is
-# allowed to scale the type down. A note near this limit renders noticeably smaller than one
-# near the start of it, which is the intended behaviour -- the sender sees the same scaling in
-# the live preview before sending -- but it does mean the limit is a legibility ceiling rather
-# than a comfortable one.
-#
-# Lowered from 2000, which was inherited from the confession and never checked against what a
-# card could hold. At that length the only way to render a note was to shrink the type to
-# roughly 12px, so the extra characters bought a love note nobody could read.
+# A love note is *drawn* (rasterised onto the template PNG, no markup or scroll), so 1000 is a
+# legibility ceiling against the tightest template: template 3's 895x328 box at 32px fits ~450
+# characters at intended size, and the renderer scales type down beyond that.
 LOVE_NOTE_BODY_MAX = 1000
 
 # A comment replies to a confession, so it is deliberately much shorter.
@@ -61,160 +20,72 @@ COMMENT_BODY_MAX = 500
 # Chat turns. Sized to the same order as a confession; a real message is a sentence.
 MESSAGE_BODY_MAX = 100
 
-# How many messages one conversation may ever hold, counted across both participants.
-#
-# This is the ceiling on the transcript itself, and it is what makes the transcript readable:
-# ``GET /messages/{conversation_id}`` returns the oldest N with no cursor, so a conversation
-# long enough to overflow that window would hide its own newest messages from the two people
-# in it. With a hard ceiling at or below the read window, every message a conversation holds
-# is a message its participants can still fetch.
-#
-# A conversation also has a four-hour life, so this is a bound on what two people can put in
-# one sitting rather than on how much anyone may ever say to each other.
+# Messages one conversation may ever hold, across both participants. ``GET /messages/{id}``
+# returns the oldest N with no cursor, so this ceiling must stay at or below that read window
+# or a conversation would hide its newest messages.
 CONVERSATION_MESSAGE_MAX = 200
 
-# How many messages one participant may send into a single conversation.
-#
-# The conversation ceiling alone would not stop a conversation being entirely one person
-# talking: 200 messages is a monologue, and the exchange is the point. This is the number
-# that makes the conversation two-sided -- neither party can take the whole allowance, so
-# the thread can only be finished when both have had their say.
-#
-# Twice this is the conversation ceiling, deliberately: the binding limit in normal use is
-# this one, and the conversation cap is the backstop that holds even if a conversation was
-# filled by a build that did not enforce it.
+# Messages one participant may send into a conversation (otherwise 200 is a monologue). Twice
+# this is the conversation ceiling, so this binds in normal use.
 CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100
 
-# Case Closed per-couple detective thread: double the matchmaking allowance
-# (400 per thread, 200 per detective) so a full five-actions-each investigation
-# plus accusation discussion fits without hitting the ceiling mid-case.
+# Case Closed detective thread: double the matchmaking allowance (400 per thread, 200 per
+# detective) so a full five-action investigation plus accusation discussion fits.
 CASE_CLOSED_CONVERSATION_MESSAGE_MAX = 400
 CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX = 200
 
-# Report reasons are reviewed by an admin, so they need to be readable but not a data dump.
-# Matches the existing reports.reason column.
+# Reviewed by an admin: readable but not a data dump. Matches reports.reason.
 REPORT_REASON_MAX = 1000
 
-# The name a confession is addressed to. Matches users.name and
-# confessions.recipient_name, which are both String(160).
+# The name a confession is addressed to. Matches users.name and confessions.recipient_name.
 RECIPIENT_NAME_MAX = 160
 
-# A reaction is one of a fixed set of keys held in a JSONB column, so the service already
-# rejects anything else. This bounds what a client can make it parse and log first.
+# A fixed set of keys held in JSONB, so the service rejects anything else; this bounds what
+# a client can make it parse and log first.
 REACTION_MAX = 24
 
-# Admin-supplied profile fields, sized to the columns they are stored in.
-# (USER_ROLE_MAX removed: the `role` column is gone -- the table a row lives in
-# *is* its account type -- so a role length cap is dead code.)
+# Admin-supplied profile fields, sized to their columns. (USER_ROLE_MAX removed with the
+# ``role`` column -- the table a row lives in is its account type.)
 USER_NAME_MAX = 160
 USER_BIO_MAX = 500
 USER_GENDER_MAX = 24
 USER_REGNO_MAX = 100
 
-# A participant's department. Free text and deliberately *not* a closed set: the departments that
-# exist are a property of the institution this deployment serves, not of this codebase, so a list
-# written here would be a guess that is wrong the day another one is introduced. It is a display
-# field and a matchmaking grouping, not a filter anything is required to match against.
+# Free text and deliberately not a closed set: departments belong to the institution this
+# deployment serves, not this codebase. A display field and matchmaking grouping.
 USER_DEPARTMENT_MAX = 80
 
-# How far into a list a client may page. The page *size* is bounded per
-# endpoint; the offset was not, and an offset is an ``OFFSET`` clause -- a
-# PostgreSQL bigint. A value past that range is refused by the database as
-# "bigint out of range", which is a 500 for a request that asked for a page that
-# does not exist.
-#
-# A million rows is past any list this application holds, so the bound never
-# refuses a page a client could have had. It is here rather than left to each
-# endpoint because the cost of forgetting it is the same 500 on every one of
-# them: thirty-one routes took an unbounded offset.
+# How far a client may page: offset becomes a PostgreSQL OFFSET (bigint), and a value past
+# that range is a 500 ("bigint out of range"). Enforced here because 31 routes were unbounded.
 PAGE_OFFSET_MAX = 1_000_000
 
-# Bulk participant onboarding (``POST /admin/users/bulk-upload``).
-#
-# The row ceiling is deliberately a fixed application limit rather than a function of
-# ``MAX_USER_COUNT``. The account cap is how many people may *exist*; this is how much one
-# request may parse and validate, so a deployment with a large participant ceiling still
-# cannot turn a single upload into an unbounded parse/transaction. A file with more rows is
-# refused whole -- it is never truncated to the first 1000, because a partial import is a
-# file whose operator has no way to tell which half landed.
-#
-# The byte ceiling bounds what is read before parsing. It is comfortably above a 1000-row
-# CSV or a normal XLSX workbook, so ordinary files are judged on their content rather than
-# their size. The ASGI request-body middleware still applies to the whole multipart body
-# first; this ceiling is the upload parser's own, and it is what makes the limit explicit
-# for callers even when the deployment raises the global body cap.
+# Bulk participant onboarding (``POST /admin/users/bulk-upload``). Fixed application limits,
+# not a function of MAX_USER_COUNT: they bound one request's parse/transaction. A file over
+# the row ceiling is refused whole, never truncated (a partial import hides which half
+# landed); the ASGI body limit still applies first.
 BULK_UPLOAD_MAX_ROWS = 1000
 BULK_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
-# How many distinct departments/divisions may exist at once, counted as distinct
-# (case-insensitive) ``users.department`` values.
-#
-# Departments are free text -- there is no departments table -- so this is a cap on how many
-# *different* values the column holds, not on how many rows hold one. Joining an existing
-# department never counts against it; only a value nobody already uses opens a new slot.
-# Enforced in ``app/routers/admin.py`` on participant create and on any edit that moves a
-# participant onto a brand-new department, behind the same advisory lock as the account caps
-# so two concurrent creates cannot both open the 51st slot.
-#
-# Product knob, not a technical one: raise it to onboard more divisions, lower it to freeze
-# the current set. Lowering it below the number already stored does not delete anything --
-# it only refuses brand-new values until the count falls back under the new ceiling.
-# Change this one number and the enforcement follows; there is no second copy to update.
+# Distinct (case-insensitive) ``users.department`` values; departments are free text, so this
+# caps distinct values, not rows. Enforced in app/routers/admin.py behind the account-cap
+# advisory lock so two concurrent creates cannot both open the 51st slot. Lowering below the
+# stored count deletes nothing, it only refuses new values until the count falls back.
 MAX_DEPARTMENTS = 50
 
-# The closed set of genders an account may carry, and the one place the list is written down.
-#
-# Closed rather than free text because gender is a *filter*, not a description: matchmaking
-# pairs candidates by it, and a value outside the set is not a gender nobody has, it is a typo
-# that silently excludes the account from every pool the opposite gender draws from. The old
-# column accepted any string up to 24 characters, so "Male", "male " and "M" were three
-# different people to that query and none of them matched each other.
-#
-# ``other`` is a real value rather than a null: "not one of the two" is the answer, and storing
-# it as NULL would make it indistinguishable from an account that predates the column.
-#
-# Enforced three times, because each one covers a different hole: Pydantic so the caller gets a
-# 422 naming the field, the frontend Select so there is no invalid value to send in the first
-# place, and a CHECK constraint so a write that bypasses the API cannot store anything else.
+# The closed gender set, enforced by Pydantic, the frontend Select and a CHECK constraint.
+# Closed because gender is a matchmaking *filter*: free text meant "Male"/"male "/"M" never
+# matched; ``other`` is a real value, not NULL.
 USER_GENDER_VALUES: tuple[str, ...] = ("male", "female", "other")
 
-# The range of years of study a participant may be in, and the one place the bounds are written
-# down. A number rather than a closed list of names, because the same schema has to serve
-# institutions that number a cohort differently: an undergraduate programme runs 1st-4th Year, a
-# school runs Class 1 to Class 12. Storing the *name* would bake one institution's vocabulary into
-# the column, and serving the other one would need a second column and a second set of endpoints.
-# The bounds are chosen to hold the longer of the two.
-#
-# Still a closed range, closed for the same reason gender is, and it is worth saying out loud why:
-# matchmaking groups participants by year, so "2", "02" and "second year" would be three cohorts
-# that never match each other and no screen could tell them apart. Storing an int makes the first
-# two unwritable rather than merely discouraged, which is strictly stronger than the closed list
-# this replaced.
-#
-# Enforced in exactly the three places ``USER_GENDER_VALUES`` is: Pydantic (a 422 naming the
-# field), the frontend select (no invalid value to offer in the first place), and a CHECK
-# constraint (so a write that bypasses the API cannot store anything else).
-#
-# ``frontend/src/lib/accountFields.ts`` restates the bounds so the browser offers the same range
-# the server accepts. Change both.
+# Years of study, closed because matchmaking groups by year ("2"/"02"/"second year" would
+# never match; an int makes the first two unwritable). A number rather than names, since
+# institutions number cohorts differently. Enforced like USER_GENDER_VALUES + accountFields.ts.
 USER_YEAR_MIN = 1
 USER_YEAR_MAX = 12
 
-# The closed set of interests a participant may hold, and the one place the list is written down.
-#
-# Closed for the same reason gender is: interests feed matchmaking scoring, and an interest
-# outside the set has no counterpart on the other participant's profile to be compared against.
-# It used to be free text, entered as a comma-separated string, which meant "music", "Music" and
-# "musics" were three interests that never matched each other and no screen could tell the
-# difference.
-#
-# Capitalised, and matched exactly. These strings are stored, displayed and compared, so they
-# are values rather than labels: normalising case on the way in would make the stored value
-# disagree with the one the browser offered, and the checkbox a participant unchecks would come
-# back ticked.
-#
-# ``frontend/src/lib/interests.ts`` restates the whole set so the browser can render the same
-# checkbox grid the server will accept. Change both.
+# The closed interest set, capitalised and matched exactly (stored/compared values, not
+# labels): interests feed matchmaking scoring, and free text meant "music"/"Music"/"musics"
+# never matched. frontend/src/lib/interests.ts restates the set -- change both.
 INTEREST_VALUES: tuple[str, ...] = (
     "Music",
     "Movies",
@@ -230,104 +101,57 @@ INTEREST_VALUES: tuple[str, ...] = (
     "Coding",
 )
 
-# A participant cannot hold every interest at once and still be telling a matchmaker anything,
-# and an unbounded array is a payload no screen has a sane way to render. The ceiling is the
-# size of the whole vocabulary, so it is a backstop against a client sending the list twice
-# over rather than a limit that ever rejects a real selection.
-#
-# There is deliberately no separate per-interest length cap. `INTEREST_MAX` used to sit here for
-# the `ARRAY(String(80))` column, but with the vocabulary closed every value is one of twelve
-# known strings, so the column's width is a database detail rather than something the API has to
-# police -- and a second number to keep in step with the first is one more thing to drift.
-# Widening an array element is a migration; refusing a value that is not in `INTEREST_VALUES` is
-# a 422.
+# The size of the whole vocabulary: a backstop against a client sending the list twice, not
+# a limit on real selections. No per-interest length cap -- the vocabulary is closed.
 INTEREST_MAX_SELECTED = len(INTEREST_VALUES)
 
 
-# Wordle. The answer is five letters, and the length is the whole shape of the game: the
-# grid, the keyboard, the guess validation and the word list all assume it. One number, so
-# the column, the payload validator and the word-list check cannot drift apart -- a word
-# list written for one length and a column written for another would only meet at the
-# insert, as a value the database accepts and no screen can render.
+# Wordle. The answer is five letters: grid, keyboard, validation and word list all assume
+# it. One number so column, validator and word list cannot drift apart.
 WORDLE_ANSWER_LENGTH = 5
 
-# How many guesses one player may make against a single day's Wordle, and therefore the
-# size of the whole game: six rows on the board, and it is the number a loss means the
-# player reached. Written down once here because it appears three more places -- the CHECK
-# constraint on ``wordle_user_games.attempt_count`` (named after the number so the
-# constraint supersedes itself when the limit changes), the ``max_attempts`` field a
-# participation answer carries, and the grid the frontend renders. It is a product decision:
-# six is the Wordle norm, long enough that a player who is stuck still has a board to think
-# about and short enough that a loss is a board fully played rather than a wall of grey.
+# Six guesses, and therefore the size of the board. Appears in the CHECK constraint on
+# ``wordle_user_games.attempt_count`` (named after the number), the participation answer's
+# ``max_attempts``, and the frontend grid. Product decision: the Wordle norm.
 WORDLE_MAX_ATTEMPTS = 6
 
-# Anagram. The shortest word a *random* draw may return, and only that: an answer the
-# administrator types is accepted at any length down to a single letter, because "cat" and
-# "encyclopedia" are both perfectly playable anagrams and the length rule exists to stop the
-# draw handing out a two-letter word nobody has to rearrange. Two numbers rather than one
-# is the point -- a single minimum would either reject legal custom answers or let the draw
-# produce trivia.
-#
-# The random draw filters ``backend/assets/anagram_words.txt`` by this before choosing, so
-# the file itself is left exactly as committed.
+# Shortest word the *random* draw may return; an admin-typed answer is accepted down to one
+# letter, since "cat" and "encyclopedia" both play. Two numbers on purpose. The draw filters
+# ``backend/assets/anagram_words.txt`` by this, leaving the file as committed.
 ANAGRAM_RANDOM_MIN_LENGTH = 5
 
-# The longest answer an administrator may type. Not a rule about the game -- an anagram of
-# any length plays the same -- but the column has to end somewhere, and 100 is far past the
-# longest entry in the word list (23 characters) while still being a bound a payload can be
-# refused against rather than a value PostgreSQL truncates. It is enforced twice, like every
-# other length here: a 400 from the service for a request that asked for it, and a CHECK
-# constraint for a write that never went through the API.
+# The longest typed answer; a column bound (word list max is 23), not a game rule. Enforced
+# twice: a 400 from the service and a CHECK constraint for writes outside the API.
 ANAGRAM_ANSWER_MAX = 100
 
-# How many guesses one player may make against a single Anagram puzzle, and therefore the
-# size of the whole game: five tiles of patience. Written down once here because it appears
-# three more places -- the CHECK constraint on ``anagram_user_games.attempt_count`` (named
-# after the number so the constraint supersedes itself when the limit changes), the
-# ``max_attempts`` field a participation answer carries, and the attempts-remaining line the
-# player-facing screen renders. Five rather than Wordle's six is the product decision: an
-# anagram guess costs a full rearrangement rather than a typed word, so the budget is a
-# touch shorter.
+# Five guesses, and therefore the size of the game. Restated in the CHECK constraint on
+# ``anagram_user_games.attempt_count``, the participation answer's ``max_attempts`` and the
+# attempts-remaining line. One fewer than Wordle because a rearrangement costs more.
 ANAGRAM_MAX_ATTEMPTS = 5
 
-# Couple Prediction Game. The question bank is static application content: fifty
-# templates sharing one shape -- a question naming ``X`` and exactly four options.
-# One number for the count, so the seed, the sequence CHECK and any future player
-# surface cannot drift apart; one number for the options, so a question with three
-# or five is unwritable rather than merely discouraged.
+# Couple Prediction: static content -- 50 templates sharing one shape (a question naming
+# ``X`` and exactly four options). One number each so seed, CHECKs and UI cannot drift.
 COUPLE_QUESTIONS_COUNT = 50
 COUPLE_OPTIONS_PER_QUESTION = 4
 
-# The longest question template or option the bank may hold. Not a rule about the
-# game -- a prediction plays the same at any length -- but the columns have to end
-# somewhere, and these sit far past the longest seeded entry while still being a
-# bound a write can be refused against rather than a value PostgreSQL truncates.
-# Enforced twice, like every other length here: the service refuses an over-long
-# template with a readable error, and a CHECK guards a write that never went
-# through the API.
+# Column bounds far past the longest seeded entry; enforced by the service (readable error)
+# and a CHECK, like every other length here.
 COUPLE_QUESTION_TEXT_MAX = 300
 COUPLE_OPTION_TEXT_MAX = 200
 
-# A mutual session draws this many of the fifty bank questions, and splits them
-# into this many shared plus this many exclusive per player: 5 shared + 10 each
-# is 25 unique per session and 15 answered per participant. One number each, so
-# the draw, the assignment CHECKs and the player surface cannot drift apart -- a
-# session holding any other shape is a state no screen can render.
+# A mutual session draws this many bank questions: 5 shared + 10 exclusive each = 25 unique,
+# 15 answered per participant. One number each so the draw, assignment CHECKs and player
+# surface cannot drift apart.
 COUPLE_SESSION_QUESTIONS = 25
 COUPLE_SESSION_SHARED_QUESTIONS = 5
 COUPLE_SESSION_EXCLUSIVE_PER_PLAYER = 10
-# Each participant's share, derived rather than restated: shared plus their own
-# exclusives. Written as the sum so the relationship stays visible.
+# Derived, not restated: shared plus their own exclusives, so the relationship stays visible.
 COUPLE_ANSWERS_PER_PARTICIPANT = COUPLE_SESSION_SHARED_QUESTIONS + COUPLE_SESSION_EXCLUSIVE_PER_PLAYER
 
 # --- Game sessions, featured games and availability ------------------------------
-#
-# The three games share one session lifecycle, but each game owns its own cadence:
-# there is deliberately no global reset setting. A game's ``reset_cadence`` says how
-# its sessions count calendar days -- daily, every 2/3/5 days, or weekly
-# (Monday-Sunday UTC) -- and the featured game is only a spotlight that never drives
-# session creation. All three values below are mirrored by CHECK constraints on
-# ``game_configs``; every list here, the payload Literal and the constraint agree.
+# Games share one session lifecycle but each owns its cadence (no global reset setting): a
+# ``reset_cadence`` counts calendar days, and the featured game is a spotlight that never
+# drives session creation. All values below are mirrored by CHECK constraints on ``game_configs``.
 GAME_IDS: tuple[str, ...] = (
     "wordle",
     "anagram",
@@ -340,9 +164,8 @@ GAME_IDS: tuple[str, ...] = (
     "case-closed",
 )
 
-# The only reset cadences a game may carry. Stored as the strings below; each game
-# has its own row in ``game_configs`` so Wordle can reset daily while Anagram runs
-# every five days and the Couple Questionnaire runs weekly.
+# The only reset cadences; each game has its own ``game_configs`` row, so Wordle can reset
+# daily while Anagram runs every five days and the Couple Questionnaire runs weekly.
 RESET_CADENCE_VALUES: tuple[str, ...] = (
     "daily",
     "every_2_days",
@@ -351,9 +174,8 @@ RESET_CADENCE_VALUES: tuple[str, ...] = (
     "weekly",
 )
 
-# Days in each cadence, for every cadence except weekly. Weekly is always
-# Monday-Sunday UTC regardless of when its session started, so it has no fixed
-# length here -- see ``game_periods.period_end``.
+# Days per cadence, excluding weekly: weekly is always Monday-Sunday UTC regardless of when
+# its session started (see ``game_periods.period_end``).
 RESET_CADENCE_DAYS: dict[str, int] = {
     "daily": 1,
     "every_2_days": 2,
@@ -361,89 +183,54 @@ RESET_CADENCE_DAYS: dict[str, int] = {
     "every_5_days": 5,
 }
 
-# How an admin-supplied Wordle/Anagram word reaches a session: ``random`` draws from
-# the committed word list at the reset boundary with no approval step, ``manual``
-# waits for an administrator to provide (or schedule) the word and otherwise leaves
-# the session pending and unplayable. The Couple Questionnaire carries no mode.
+# ``random`` draws from the committed word list at reset with no approval step; ``manual``
+# waits for an administrator and otherwise leaves the session pending.
 GAME_CONTENT_MODES: tuple[str, ...] = ("random", "manual")
 
-# Session lifecycle states. ``active`` is playable (when configured), ``pending`` is
-# a manual-mode session still waiting for its word, ``ended`` is history that keeps
-# its user progress attached. At most one active-or-pending row exists per game.
+# ``active`` is playable, ``pending`` awaits a manual word, ``ended`` is history that keeps
+# user progress. At most one active-or-pending row exists per game.
 SESSION_STATUS_VALUES: tuple[str, ...] = ("active", "pending", "ended")
 
-# The farthest ahead an administrator may schedule a manual word, in days from
-# today (UTC). Scheduling is deliberately bounded: without a horizon the schedule
-# table becomes an unbounded promise the reset loop must keep forever. Enforced
-# server-side on every schedule write; the admin UI names the same number.
+# Farthest ahead a manual word may be scheduled. Bounded so the schedule cannot become an
+# unbounded promise; enforced server-side and named in the admin UI.
 MAX_FUTURE_SCHEDULE_DAYS = 30
 
-# Reaction Time. One featured game per date, five submissions per user per date.
-# The budget is fixed at the application level: there is no per-day knob for
-# it, so it lives here next to WORDLE_MAX_ATTEMPTS rather than in a settings
-# table an administrator could edit. A valid reaction is a click *after* green,
-# measured client-side with a high-resolution clock; the bounds below keep a
-# fabricated payload honest without judging skill -- a reaction under a
-# millisecond is not a reaction, and anything past ten seconds is a click on a
-# screen that was left open rather than a measurement. A false start's elapsed
-# time (start click until the early click) is informational only and never a
-# score, so its ceiling is generous.
+# Reaction Time: one featured game per date, five submissions per user per date, budget fixed
+# here rather than in a settings table. A valid reaction is a click after green, timed
+# client-side; the bounds keep a fabricated payload honest (1ms is not a reaction, 10s an
+# abandoned screen). False-start elapsed time is informational only, never a score.
 REACTION_TIME_MAX_SUBMISSIONS = 5
 REACTION_TIME_MIN_VALID_MS = 1
 REACTION_TIME_MAX_VALID_MS = 10_000
 REACTION_TIME_MAX_ELAPSED_MS = 60_000
 
-# The lifecycle states of one Reaction Time submission. ``pending`` is an
-# attempt whose start click already consumed one of the five submissions but
-# whose result has not been recorded yet (the red wait or the green screen);
-# ``valid`` is a click after green carrying a reaction time; ``too_early`` is a
-# click before green carrying only informational elapsed time.
+# ``pending`` consumed a submission but has no result yet; ``valid`` is a click after green;
+# ``too_early`` a click before green carrying only informational elapsed time.
 REACTION_TIME_STATUS_VALUES: tuple[str, ...] = ("pending", "valid", "too_early")
 
-# Connections. Sixteen words in four hidden groups of four, configured manually
-# by an administrator -- there is no random-content mode. One number for the
-# total, one for the group count and one for the group size, so the puzzle
-# validation, the submission validation, the scoring and the player surface
-# cannot drift apart: a puzzle holding any other shape is a state no screen
-# can render.
+# Connections: sixteen words in four hidden groups of four, configured manually (no random
+# mode). One number each so puzzle validation, submission validation, scoring and the player
+# surface cannot drift apart.
 CONNECTIONS_WORDS_TOTAL = 16
 CONNECTIONS_GROUPS_COUNT = 4
 CONNECTIONS_WORDS_PER_GROUP = 4
 
-# The longest word a Connections puzzle may hold. Not a rule about the game --
-# a grouping plays the same at any length -- but the columns have to end
-# somewhere, and 50 is far past any reasonable single word or short phrase
-# while still being a bound a payload can be refused against rather than a
-# value PostgreSQL truncates. Enforced twice, like every other length here: a
-# 400 from the service for a request that asks for more, and a CHECK guarding
-# a write that never went through the API.
+# Column bound far past any reasonable word or short phrase; a 400 from the service and a
+# CHECK for writes outside the API.
 CONNECTIONS_WORD_MAX = 50
 
-# Trivia Drop. Each question carries exactly four options with one or more of
-# them correct; the single-answer vs multiple-answer distinction is derived
-# from the correct count, never configured. One number for the option count so
-# the question validation, the submission validation, the admin surface and
-# the player surface cannot drift apart. The text ceilings are bounds a
-# payload can be refused against rather than values PostgreSQL truncates:
-# enforced twice, like every other length here -- a 400 from the service for
-# a request that asks for more, and a CHECK guarding a write that never went
-# through the API.
+# Trivia Drop: exactly four options per question, one or more correct; single- vs
+# multiple-answer is derived from the correct count, never configured. One number for the
+# option count so validation, admin and player surfaces cannot drift. Text ceilings are
+# enforced by the service and a CHECK, like every other length here.
 TRIVIA_OPTIONS_COUNT = 4
 TRIVIA_QUESTION_TEXT_MAX = 500
 TRIVIA_OPTION_TEXT_MAX = 200
 
-# Two-Key Escape. A square grid maze played by one couple with complementary
-# roles: the Navigator moves one cell at a time, the Key Operator uses keys
-# that each unlock one locked cell and block one traversable cell.
-#
-# The grid size is the only gameplay knob an administrator may set; the
-# number of locks on the board is derived from it by the single mapping
-# below, kept here rather than restated on the frontend so the two cannot
-# drift apart. Keys are reusable -- every use costs the ten-second cooldown,
-# never a consumable charge -- because single-use keys plus relocking can
-# permanently strand a lock the couple still needs, an unwinnable state no
-# warning can fix. The cooldown is enforced server-side; no movement is ever
-# required between key uses.
+# Two-Key Escape: a square-grid maze for one couple -- the Navigator moves one cell at a time,
+# the Key Operator uses keys that each unlock one cell and block one. Keys are reusable
+# (single-use keys plus relocking can strand the couple); grid size is the only gameplay knob,
+# lock count the mapping below, cooldown server-side.
 TWO_KEY_ESCAPE_GRID_SIZES: tuple[int, ...] = (12, 13, 14, 15)
 TWO_KEY_ESCAPE_DEFAULT_GRID_SIZE = 12
 TWO_KEY_ESCAPE_KEY_CHARGES: dict[int, int] = {12: 12, 13: 13, 14: 14, 15: 15}
@@ -456,13 +243,9 @@ def two_key_escape_key_charges(grid_size: int) -> int:
     return TWO_KEY_ESCAPE_KEY_CHARGES[grid_size]
 
 
-# Plot Twist. An asynchronous cooperative storytelling game for couples.
-# Stories are AI-generated into versioned packages before play; the engine
-# executes published packages deterministically and never calls the model
-# during gameplay. The bounds below keep generated packages playable and
-# scores bounded: scene/decision ceilings bound validation and the UI, the
-# repair cap bounds generation loops, and reward tiers map endings to the
-# 0-100 league base every other game honours.
+# Plot Twist: asynchronous cooperative storytelling for couples. Stories are AI-generated into
+# versioned packages before play; the engine executes them deterministically and never calls
+# the model during gameplay.
 PLOT_TWIST_SCENE_TYPES: tuple[str, ...] = (
     "opening",
     "encounter",
@@ -521,40 +304,29 @@ PLOT_TWIST_SESSION_STATUSES: tuple[str, ...] = (
 )
 PLOT_TWIST_MAX_SCENES = 40
 PLOT_TWIST_MAX_DECISIONS = 24
-# How often one couple may revisit the same scene through choices. Reached
-# over and over, a loop of compatible scenes plays forever instead of
-# ending: past this many visits the choice leading back is no longer
-# offered (the least-visited way forward always remains, so the story can
-# never strand). Linear stories never notice -- every scene is seen once.
+# How often one couple may revisit a scene. A loop of compatible scenes would otherwise play
+# forever; past this the way back is no longer offered (the least-visited forward path always
+# remains, so the story cannot strand). Linear stories never notice.
 PLOT_TWIST_MAX_SCENE_VISITS = 2
-# The decision budget when a package does not name its own: reaching it on
-# a non-terminal scene concludes the story at the best qualifying ending
-# rather than letting an unnoticed loop run past it.
+# Decision budget when a package names none: reaching it on a non-terminal scene concludes at
+# the best qualifying ending rather than letting an unnoticed loop run past it.
 PLOT_TWIST_DEFAULT_MAX_DECISIONS = 24
-# The large majority of decision scenes must belong to one participant:
-# past this fraction of shared (either/joint) scenes a package reads as a
-# solo story with an audience, not a two-sided one.
+# Past this fraction of shared (either/joint) scenes a package reads as a solo story with an
+# audience rather than a two-sided one.
 PLOT_TWIST_SHARED_SCENE_FRACTION = 0.5
 PLOT_TWIST_MAX_INTERCHANGEABLE_PER_SLOT = 6
-# Repair rounds. Scene patches are cheap (a handful of scenes per request)
-# while whole-package regenerations are the expensive step, so the cap leaves
-# room for both: a live run chained five patches to take a package from 34
-# errors to 5, and another converged on its eighth round; a regeneration that
-# would add errors is discarded rather than erasing that progress.
+# Repair rounds: scene patches are cheap, whole-package regenerations expensive. Ten leaves
+# room for both (a live run chained five patches; another converged on its eighth round); a
+# regeneration that would add errors is discarded rather than erasing progress.
 PLOT_TWIST_MAX_REPAIR_ATTEMPTS = 10
 PLOT_TWIST_MAX_BATCH_SCENES = 8
-# Scene-local repairs: how many implicated scenes one patch request may carry.
-# Repairs used to regenerate the whole package, which could fix one scene and
-# regress another; a patch touches only the scenes the errors name (plus their
-# direct successors), so it cannot drift elsewhere.
+# Scenes one patch request may carry: a patch touches only the scenes the errors name (plus
+# their direct successors), so it cannot fix one scene and regress another.
 PLOT_TWIST_MAX_PATCH_SCENES = 6
-# Consecutive whole-package regenerations that came back worse than the draft
-# already in hand. Once this many are discarded in a row, more rolls are not
-# finding a better structure and the loop ends on the best draft it reached
-# instead of spending the remaining rounds on hopeless requests.
+# Consecutive whole-package regenerations that came back worse than the draft in hand. Past
+# this, more rolls are not finding a better structure and the loop ends on the best draft.
 PLOT_TWIST_MAX_STUCK_REGENERATIONS = 3
-# Reward tiers map an ending to league base points. The engine caps the final
-# base at 100 however the tiers combine, so AI values can never bypass it.
+# Ending -> league base points; the engine caps the final base at 100 however tiers combine.
 PLOT_TWIST_REWARD_TIERS: dict[str, int] = {
     "participation": 40,
     "bronze": 60,
@@ -563,18 +335,16 @@ PLOT_TWIST_REWARD_TIERS: dict[str, int] = {
 }
 PLOT_TWIST_TREASURE_BONUS_EACH = 5
 PLOT_TWIST_TREASURE_BONUS_MAX = 15
-# Generation transport: per-request timeout and overall attempt caps so a
-# stalled provider fails visibly instead of hanging an admin request. The
-# timeout leaves room for the largest legitimate package answer (about 20k
-# tokens of JSON at the deployment's observed decode speed, plus hidden
-# reasoning); a cut-off answer is retried inside the attempt cap either way.
+# Per-request timeout and attempt caps so a stalled provider fails visibly: 150s covers the
+# largest legitimate package (~20k tokens of JSON plus hidden reasoning), and a cut-off answer
+# is retried inside the attempt cap either way.
 PLOT_TWIST_LLM_TIMEOUT_SECONDS = 150
 PLOT_TWIST_SESSION_LOCK_KEY = 7_250_003
 
-# Case Closed. Cooperative mystery game: one immutable published case per
-# event, five investigation actions per partner, three initial leads,
-# ~15-20 DAG lead nodes, joint accusation with hidden correctness until
-# event finalization. Deterministic gameplay; LLM only pre-publication.
+# Case Closed: cooperative mystery -- one immutable published case per event, five
+# investigation actions per partner, three initial leads, ~15-24 DAG lead nodes, joint
+# accusation with hidden correctness until finalization. Deterministic; LLM only
+# pre-publication.
 CASE_CLOSED_DIFFICULTIES: tuple[str, ...] = ("easy", "medium", "hard")
 CASE_CLOSED_EVIDENCE_KINDS: tuple[str, ...] = (
     "establishes_fact",
@@ -616,21 +386,14 @@ CASE_CLOSED_DEFAULT_HALF_LIFE_SECONDS = 43200
 CASE_CLOSED_DEFAULT_MAX_POINTS = 100
 CASE_CLOSED_SESSION_LOCK_KEY = 7_250_004
 
-# Automated AI session generation (Plot Twist and Case Closed). Both games
-# ride the existing 00:01 UTC scheduler, but their sessions come from an
-# asynchronous pipeline: the scheduler only *enqueues* a generation cycle,
-# and a background worker claims one job at a time, runs Stage A -> approve
-# -> Stage B -> validate -> publish, and only then opens the playable
-# session. The constants below bound the queue without introducing a second
-# scheduler: one job per game per cycle (the unique key), bounded worker
-# attempts with backoff, and a single advisory lock that serialises the
-# protected generation pipeline across both games and every worker process.
+# Automated AI session generation (Plot Twist and Case Closed): the 00:01 UTC scheduler only
+# *enqueues* a cycle; a worker claims one job and runs Stage A -> approve -> Stage B ->
+# validate -> publish before the session opens. One job per game per cycle (the unique key)
+# and one advisory lock serialise the protected pipeline across games and workers.
 AI_GAME_IDS: tuple[str, ...] = ("plot-twist", "case-closed")
-# The lifecycle states a generation job may carry. ``queued`` waits for a
-# worker, ``running`` is claimed and holds the pipeline lock, ``retry_wait``
-# waits out a backoff before another attempt, and the three terminal states
-# are ``published`` (the session opened), ``failed`` (attempts exhausted) and
-# ``cancelled`` (revoked, hidden, or superseded before publishing).
+# ``queued`` waits for a worker, ``running`` is claimed and holds the pipeline lock,
+# ``retry_wait`` waits out a backoff; terminal states are ``published`` (session opened),
+# ``failed`` (attempts exhausted) and ``cancelled`` (revoked, hidden or superseded).
 AI_GENERATION_JOB_STATUSES: tuple[str, ...] = (
     "queued",
     "running",
@@ -639,41 +402,23 @@ AI_GENERATION_JOB_STATUSES: tuple[str, ...] = (
     "failed",
     "cancelled",
 )
-# One shared advisory-lock key, deliberately a single value for both games:
-# only one protected generation workflow may run at a time across the whole
-# deployment, so a simultaneous Plot Twist + Case Closed due tick queues.
+# One key for both games: only one protected generation workflow may run at a time across the
+# deployment, so simultaneous due ticks queue.
 AI_GENERATION_LOCK_KEY = 7_250_005
-# Attempts one queued cycle may spend inside the worker before the job is
-# parked as failed. A crash mid-run is reclaimed as a fresh attempt after
-# ``AI_GENERATION_STALE_SECONDS``; the cap keeps a broken provider from
-# retrying forever, and the next scheduled cycle starts clean.
+# Attempts one cycle may spend before parking as failed. A crash mid-run is reclaimed as a
+# fresh attempt after ``AI_GENERATION_STALE_SECONDS``; the next scheduled cycle starts clean.
 AI_GENERATION_MAX_ATTEMPTS = 3
-# How long a claimed job may sit without a worker touching it before another
-# worker treats it as abandoned (crashed process) and reclaims it.
+# How long a claimed job may sit untouched before another worker reclaims it as abandoned.
 AI_GENERATION_STALE_SECONDS = 1800
-# Wait between worker attempts on the same cycle (seconds), multiplied by the
-# attempt number so backoff grows: a provider blip recovers quickly, a real
-# outage stops hammering it.
+# Base wait between attempts, multiplied by the attempt number so backoff grows.
 AI_GENERATION_RETRY_BACKOFF_SECONDS = 120
-# Session-history pages behind the two admin consoles. Same convention as
-# every other history read: a hard ceiling a single request can never exceed.
+# Admin session-history page limits; the same hard-ceiling convention as other history reads.
 AI_GENERATION_HISTORY_MAX_LIMIT = 100
 AI_GENERATION_HISTORY_DEFAULT_LIMIT = 50
 
 
-# How old an open timing segment may be before it is treated as dead rather than played.
-#
-# The active-play timer is authoritative in ``anagram_user_games``: ``active_time_seconds``
-# holds finished segments and ``timer_started_at`` opens the current one. A segment normally
-# closes on pause, heartbeat, guess or completion -- but a browser that dies mid-game sends
-# none of those, so the segment stays open across the dead period. When a segment older
-# than this is closed, its tail is discarded rather than counted: the alternative is
-# crediting hours a crashed tab never played.
-#
-# Two minutes is two heartbeat intervals plus grace. The client heartbeats every 30 seconds
-# while the game runs visibly, so a live game never has a segment older than about half a
-# minute; anything past two minutes means the heartbeats stopped, which means the page is
-# gone, hidden without pausing, or dead. Short enough that a quick logout and return inside
-# the window still counts honestly, long enough that a slow network never discards real
-# play.
+# How old an open timing segment may be before its closed tail is discarded rather than
+# credited (a browser dying mid-game never sends the close). Two minutes is two 30s heartbeat
+# intervals plus grace -- a live game never has a segment older than ~30s -- so a quick
+# logout-and-return still counts honestly.
 ANAGRAM_TIMER_STALE_AFTER_SECONDS = 120

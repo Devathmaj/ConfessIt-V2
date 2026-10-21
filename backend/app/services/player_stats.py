@@ -1,30 +1,9 @@
-"""Player activity: play history across every game.
+"""Player activity across every game, read from each game's participation tables.
 
-The League ledger is the cross-game scoring layer, but it only holds
-*finalized* events -- a round played today is not awarded until its session
-closes. This module answers the dashboards' questions immediately instead,
-from each game's own participation tables:
-
-* for one player: how many rounds they finished, their current and longest
-  daily streaks (consecutive UTC days with at least one finished round),
-  this week's rounds and distinct games, and their newest finished rounds
-  with a short summary and native performance number;
-* for the console overview: the same events aggregated across every player,
-  with today/week/all-time totals, distinct-player counts and per-game
-  totals for the most-played and type-breakdown panels.
-
-Both views run the same collectors, so "a finished round" is defined once
-and the admin overview cannot disagree with a player's own summary.
-
-Nothing here is a score and nothing here recalculates a league award: native
-results stay where they are and the ledger stays the only ranking source.
-Only performance numbers travel -- answers, words, scrambles, prompts and
-selections never leave this module, mirroring the league adapters' rule.
-
-A round counts once it is settled in game terms: Wordle/Anagram won or lost,
-a Connections or Trivia submission, one Reaction Time session with at least
-one valid measurement, and a completed (or finalized) couple session. A
-round still in progress is not history yet and is deliberately absent.
+The League ledger holds only finalized events, while this module answers
+dashboard questions immediately. Player and console views share collectors so
+"finished" means the same thing in both. These are performance figures, not
+scores or league awards; only native performance numbers travel outward.
 """
 
 from dataclasses import dataclass

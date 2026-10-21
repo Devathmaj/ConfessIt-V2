@@ -1,18 +1,4 @@
-"""Record-shaped adapters around :mod:`chat_encryption`.
-
-Every encrypted chat body needs the same five AAD inputs, and rebuilding them
-at each call site is exactly where encryption and decryption drift apart. These
-helpers are the single mapping from a stored row (or a row about to be stored)
-to the generic AES-GCM service:
-
-* matchmaking message -> ``matchmaking``
-* matchmaking conversation preview -> ``matchmaking_preview``
-* Case Closed detective turn -> ``case_closed``
-* reported-message evidence -> ``report_evidence``
-
-No plaintext is logged here. Callers catch :class:`ChatDecryptionError`, log the
-record id and error code, and decide whether to skip a row or fail the request.
-"""
+"""Record-shaped adapters around chat_encryption for AES-GCM payloads."""
 
 from __future__ import annotations
 
@@ -94,11 +80,7 @@ def encrypt_matchmaking_preview(
 
 
 def decrypt_matchmaking_preview(row: Any) -> str | None:
-    """Decrypt a conversation preview, or return None when there is none.
-
-    A preview is an encrypted copy of the newest visible message, so it follows
-    the same retention deadline and is cleared when that message is purged.
-    """
+    """Decrypt a conversation preview, or return None if absent or decryption fails."""
     if not getattr(row, "last_message_preview_ciphertext", None):
         return None
     message_id = getattr(row, "last_message_preview_message_id", None)
@@ -129,9 +111,7 @@ def encrypt_report_evidence(
     sender_ref: str,
     plaintext: str,
 ) -> EncryptedPayload:
-    # The three authenticated slots carry the original turn's identity, exactly
-    # as the live row did. Context adds the report/evidence ids so a ciphertext
-    # cannot be moved between reports either.
+    # Bind turn identity and report/evidence IDs into AAD context.
     return encrypt_text(
         plaintext,
         chat_type=CHAT_TYPE_REPORT_EVIDENCE,

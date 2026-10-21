@@ -37,16 +37,14 @@ def create_connections_game(
 ) -> ConnectionsGame:
     """Update the current session: end it and open a brand-new one ("Update").
 
-    Stores the sixteen supplied words in their four canonical groups on the
-    new session -- or, when no puzzle is supplied, consumes the earliest
-    scheduled puzzle inside the new window (pending when the window holds
-    none). The old session is stamped ended and kept as history with its
-    words and submissions; the new session starts from scratch for today's UTC
-    date under the game's own reset cadence. Future puzzles belong on the
-    schedule endpoint below.
-
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
-    an administrator cannot publish a puzzle attributed to somebody else.
+    Stores the sixteen supplied words in their four canonical groups on the new
+    session -- or, when no puzzle is supplied, consumes the earliest scheduled puzzle
+    inside the new window (pending when the window holds none). The old session is
+    stamped ended and kept as history with its words and submissions; the new one
+    starts from scratch for today's UTC date under the game's reset cadence. Future
+    puzzles belong on the schedule endpoint below. The caller's ``regno`` is recorded
+    as ``created_by``, not taken from the payload: an administrator cannot publish a
+    puzzle attributed to somebody else.
     """
     return connections_service.create_connections_game(
         db,
@@ -80,9 +78,8 @@ def schedule_connections_puzzle(
 ) -> ConnectionsScheduledPuzzle:
     """Schedule a manual puzzle for a future session period.
 
-    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced
-    server-side. The puzzle waits until its period opens and never activates a
-    session early.
+    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced server-side:
+    the puzzle waits until its period opens and never activates a session early.
     """
     return ConnectionsScheduledPuzzle(
         **connections_service.schedule_puzzle(

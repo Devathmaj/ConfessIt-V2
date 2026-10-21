@@ -1,74 +1,9 @@
-"""Per-participant tallies of how often their content was reported, and how often it came down.
+"""Maintain participant report and upheld-removal tallies.
 
-**The one reason this module exists.** Nine places across four services now have to say "this
-belongs to the participant who wrote it" and then bump a column: four filing paths and five
-removal paths. Written inline at each of them they would drift -- a new content kind would get
-six call sites updated and one forgotten, and the missing one would be a counter that silently
-reads low, which is the failure mode a "was this person reported?" number must never have.
-
-So the kind-to-column mapping lives here, once, and the two events are two functions:
-
-* :func:`record_report_filed` -- called when a report row is created.
-* :func:`record_removal` -- called when content is actually taken down.
-
-**Why there are two numbers and not one.** See ``UserRecord``. The short version: the total
-counts complaints and the removal count counts upheld ones, and only the second should ever be
-used to judge a participant. They are incremented at different moments on purpose, so they
-genuinely diverge -- and they are *supposed* to, because a participant whose content was
-reported once and cleared is not in the same position as one whose content was taken down once.
-
-**A direct hide counts as a removal.** ``hide_confession`` and ``hide_comment`` perform the
-same ``removed_at`` write a ``removed`` ruling performs, so they call :func:`record_removal`
-too. If they did not, a moderator could take a participant's entire history down from the review
-screen without the authoritative count moving at all, and the tally would then be a measure of
-which screen the ruling happened on rather than of what was done to the person.
-
-**Idempotency is the caller's job, and it now holds under concurrency.** Removal counters must
-be incremented only on the transition to removed, not on every call -- so ``resolve_*_report``
-and the two ``hide_*`` functions all gate on the boolean ``_stamp_removal`` returns, and only
-the ``True`` branch reaches here. A repeat request against already-removed content increments
-nothing. This is the same gate that keeps the notification count and the ``comment_count``
-decrement correct, for the same reason: one removal is one event.
-
-The gate is only as good as the transition it guards, so the transition is itself atomic: the
-content row is stamped by a single conditional ``UPDATE`` (``WHERE removed_at IS NULL``), which
-PostgreSQL settles by re-checking the predicate after the row lock is taken. Of two moderators
-racing on the same content exactly one is told it took the content down, and the other is told
-the content was already down -- so it never reaches this module, never moves a counter, and
-never pushes the author over the threshold a second time. A counter that moved twice for one
-removal would inflate the tally an appeal is argued from and block an account one removal
-early, which is exactly what the threshold rule below is meant to prevent.
-
-**A removal that takes the total past the threshold blocks the participant.** This is the one
-automatic consequence of the counts, and it lives here because this module is the single funnel
-every removal path passes through: the ruling screens, the two direct hides, and the automated
-content-safety takedowns all end in :func:`record_removal`, so none of them has to remember the
-rule and none of them can get it wrong on its own.
-
-A block is also news an administrator needs -- they are the only role that can clear it -- so
-the transition stages one admin-only staff notice into the same transaction
-(``staff_notification_service.notify_user_auto_blocked``). Same reasoning as the session
-retirement below: an alert about a block that rolled back is an admin chasing a state that does
-not exist. Staged here rather than by the callers for the same funnel reason as the rule
-itself: no removal path has to know that an admin is being told.
-
-Blocking is the existing ``users.is_blocked`` flag, so every auth path already enforces it --
-the next request, refresh, magic-link mint or redemption is refused without anything new here
-having to reach into sign-in. The block is a stored fact rather than a condition recomputed at
-sign-in on purpose: an administrator unblocks a participant by clearing the flag, and a rule
-that re-derived "has more than five removals" at login would re-block them the moment they
-tried, making the unblock meaningless. A participant who crosses the line again is blocked
-again, because the check is "over the threshold and not already blocked", not "just crossed
-it". The block retires the account's live sessions and unredeemed links in the same
-transaction (see ``auth_service.retire_account_sessions``), so no status reader sees a blocked
-account as signed in.
-
-**Writes are atomic SQL increments.** ``SET n = n + 1`` issued as a Core ``UPDATE``, not
-``row.counter += 1`` on a loaded ORM object. Two reports against the same participant filed at
-the same moment is not a theoretical case -- it is what a popular participant's post attracting
-two complaints in the same second looks like -- and read-modify-write would silently drop one.
-It also avoids a stale-identity problem: the caller's session may already hold the
-``UserRecord`` instance this row belongs to.
+Filing, removal, and direct-hide paths share this counter mapping. Report counts record
+complaints; removal counts record upheld actions. Caller-side conditional transitions make
+removals idempotent, while atomic SQL increments prevent lost concurrent updates. Crossing
+the threshold blocks the account and retires its sessions in the same transaction.
 """
 
 from typing import Any, Dict, Optional

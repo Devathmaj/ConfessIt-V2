@@ -377,12 +377,8 @@ def trivia_results(session, opportunity_id: str) -> list[RankedSubject]:
         correct = 1 if row.is_correct else 0
         elapsed = int(row.response_time_ms)
         if not universe and not key:
-            # Degraded data path: real questions always carry their four
-            # options, but legacy rows may predate them. The stored
-            # is_correct verdict was computed server-side at submit time
-            # under exact-match semantics, so it doubles as single-answer
-            # accuracy rather than zeroing a correct answer for missing key
-            # data no scoring function may invent.
+        # Legacy rows may lack options; use the stored server-validated verdict
+        # rather than inventing an answer key or dropping correct results.
             accuracy = 1.0 if row.is_correct else 0.0
         else:
             accuracy = trivia_accuracy(row.selected_options, key, universe)

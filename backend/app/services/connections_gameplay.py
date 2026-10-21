@@ -1,34 +1,4 @@
-"""Playing the day's Connections: the participant-facing half of the feature.
-
-``connections_service`` configures a puzzle -- a session and its sixteen words
-in four canonical groups. This module is everything that happens *afterwards*:
-reading the day's tiles without revealing their groups, and settling one final
-arrangement against them.
-
-Four rules hold at the bottom of everything here.
-
-**One submission per player per puzzle.** A ``connections_submissions`` row
-pairs a user with a session, and the unique pair is the schema's rule, not a
-service check. Two concurrent submissions race that insert: each reads "no
-submission yet", each tries to write, and the unique index lets exactly one of
-them own the row. The loser is refused as already submitted.
-
-**The answer key never leaves the server.** The canonical groups live in
-``connections_words``; a read emits display spellings only, in the player's own
-shuffled order, and the submit response is a confirmation carrying no score,
-no correctness and no membership. Scores are computed inside the transaction
-from the stored rows and persisted for a future leaderboard that does not
-exist yet.
-
-**The shuffle is deterministic per player per puzzle.** The tile order is
-derived from the user id and the session id, so every player ordinarily sees a
-different order, every refresh shows the same one, and no order row has to be
-stored -- shuffling changes only presentation, never the canonical groups.
-
-**Arranging is not submitting.** Moving tiles costs nothing and stores
-nothing; only the explicit final arrangement consumes the one submission, and a
-submitted puzzle is read-only.
-"""
+"""Connections gameplay: tile presentation, deterministic shuffle, and arrangement scoring."""
 
 import hashlib
 import random
@@ -61,13 +31,7 @@ def _today() -> "object":
 
 
 def shuffle_words_for_player(words: list[str], user_id: str, game_id: str) -> list[str]:
-    """This player's stable tile order for one puzzle.
-
-    Seeded from the user id and the session id, so different players
-    ordinarily see different orders, the same player always sees the same one,
-    and no order has to be stored anywhere. Presentation only: the canonical
-    groups are untouched.
-    """
+    """Derive stable deterministic tile ordering for player and session."""
     digest = hashlib.sha256(f"{user_id}|{game_id}".encode("utf-8")).hexdigest()
     rng = random.Random(int(digest, 16))
     ordered = list(words)
@@ -78,15 +42,7 @@ def shuffle_words_for_player(words: list[str], user_id: str, game_id: str) -> li
 def score_arrangement(
     submitted: list[list[str]], canonical: list[list[str]]
 ) -> tuple[int, int]:
-    """The two persisted scores for one final arrangement.
-
-    ``submitted`` and ``canonical`` are normalized spellings. Correct groups
-    (0-4) counts submitted groups exactly matching a canonical group, with
-    group position ignored. Correct words (0-16) is the best one-to-one mapping
-    between the four submitted and four canonical groups, maximizing the total
-    number of words whose membership matches -- so a 3-and-1 split still banks
-    its three, rather than scoring zero for matching nothing exactly.
-    """
+    """Calculate matching groups and best-fit word overlaps against canonical groups."""
     canonical_sets = [frozenset(group) for group in canonical]
     submitted_sets = [frozenset(group) for group in submitted]
     remaining = list(canonical_sets)
@@ -154,20 +110,7 @@ def _pending_game(game: ConnectionsGameRecord, message: str) -> ConnectionsCurre
 
 
 def current_connections(db: Database, user_id: str) -> ConnectionsCurrentGame:
-    """The playable puzzle and this player's submission state, creating nothing.
-
-    Reading the screen must leave no trace: opening it twice costs nothing,
-    and a player who only looks at today's puzzle has not submitted anything.
-    A submitted player reads a confirmation rather than a board; a fresh
-    player reads their own stable shuffled tiles.
-
-    Availability is enforced before anything else: hidden and disabled games
-    refuse with a coded 403 rather than a board. A pending session -- or an
-    active session still holding no valid puzzle -- answers 200 with
-    ``session_status="pending"`` and a sentence the screen shows instead of a
-    playable board. A session past its calendar boundary reads as absent until
-    the reset loop opens the next period -- reads never create sessions.
-    """
+    """Fetch playable puzzle state and user submission status without mutating state."""
     from . import game_periods
     from .game_configs import check_playable
 
@@ -191,9 +134,7 @@ def current_connections(db: Database, user_id: str) -> ConnectionsCurrentGame:
             return _empty_game()
         word_rows = _words_for(session, str(game.id))
         if len(word_rows) != CONNECTIONS_WORDS_TOTAL:
-            # An active session with no valid puzzle is not playable: same
-            # pending behavior as a session still waiting for configuration,
-            # never a partial or empty board.
+            # Treat active sessions without valid puzzles as pending.
             return _pending_game(
                 game, "Today's puzzle has not been set yet. Check back soon."
             )
@@ -226,8 +167,7 @@ def _get_game_for_update(session, game_id: str) -> tuple[ConnectionsGameRecord, 
     from . import game_periods
     from .game_configs import check_playable, lock_game_for_play
 
-    # ENG-001: hold the lifecycle lock across liveness-check + write so a
-    # scheduler rollover cannot slip between them. The sole caller writes.
+    # Hold lifecycle lock across liveness check and write.
     lock_game_for_play(session, "connections")
     if not is_valid_id(game_id):
         raise HTTPException(
@@ -278,13 +218,7 @@ def _get_game_for_update(session, game_id: str) -> tuple[ConnectionsGameRecord, 
 def _normalize_submission(
     raw_groups: object, word_rows: list[ConnectionsWordRecord]
 ) -> list[list[str]]:
-    """The submitted arrangement as normalized spellings, validated as a whole.
-
-    Four groups of exactly four words, holding all sixteen distinct puzzle
-    words exactly once -- no unknown words, no omissions, no duplicates.
-    Every refusal is a 400 with a sentence the screen can show; nothing here
-    consumes the submission, because nothing is stored until the insert below.
-    """
+    """Validate and normalize 4 groups of 4 distinct puzzle words."""
     if not isinstance(raw_groups, list) or len(raw_groups) != CONNECTIONS_GROUPS_COUNT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -331,16 +265,7 @@ def _normalize_submission(
 def submit_arrangement(
     db: Database, user_id: str, game_id: str, raw_groups: list[list[str]]
 ) -> ConnectionsSubmitResponse:
-    """Score one final arrangement against the named puzzle, for this player.
-
-    The whole exchange runs in one transaction. The submission row is inserted
-    under the unique ``(game, user)`` pair, which serializes concurrent
-    submissions on the same puzzle: exactly one insert wins, and the loser is
-    refused as already submitted. Scores are computed from the stored canonical
-    groups inside the transaction, so nothing the client sends can mark itself
-    correct -- and the response carries no score at all, only the confirmation
-    the screen shows.
-    """
+    """Persist submission and compute scores against canonical groups atomically."""
     with db.sessions.begin() as session:
         game, word_rows = _get_game_for_update(session, game_id)
         normalized = _normalize_submission(raw_groups, word_rows)

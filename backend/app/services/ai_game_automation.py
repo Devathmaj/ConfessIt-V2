@@ -1,41 +1,31 @@
 """Automated, schedule-driven session generation for the two AI-powered games.
 
-Plot Twist and Case Closed no longer wait for an administrator to run the
-blueprint -> approve -> package -> publish pipeline by hand. They ride the
-game scheduler that already runs at 00:01 UTC (and at boot, and from
-``POST /admin/games/run-resets``), but the scheduler only *enqueues* a cycle:
-it writes one ``game_generation_jobs`` row and returns immediately. A
-background worker -- in-process, safe on every uvicorn worker and replica --
-claims the job under one shared advisory lock, runs the existing two-stage
-generation pipeline, validates the result, and only then opens the playable
-session, all inside the game's own lifecycle lock.
+Plot Twist and Case Closed ride the game scheduler that already runs at 00:01 UTC
+(and at boot, and from ``POST /admin/games/run-resets``), but the scheduler only
+*enqueues* a cycle: one ``game_generation_jobs`` row. A background worker --
+in-process, safe on every uvicorn worker and replica -- claims the job under one
+shared advisory lock, runs the existing two-stage generation pipeline, validates
+the result, and only then opens the playable session, all inside the game's own
+lifecycle lock.
 
 Why it is shaped this way:
 
-* **00:01 UTC is a checkpoint, not a deadline.** Queueing is a fast database
-  write; the actual model calls happen later, take as long as they take, and
-  never block the scheduling pass. A session exists only after its content
-  was generated, validated and published.
-* **One cycle per game per boundary.** ``(game_id, cycle_start_date)`` is
-  unique in the schema, and the cycle's window is fixed when it is enqueued,
-  so a repeated scheduler run (boot, manual trigger, next tick) finds the
-  existing job -- or reports the live one -- instead of starting a second
-  generation, and long generation time can never shift the configured
-  frequency.
-* **One protected pipeline.** Every worker claims and runs under the single
-  ``AI_GENERATION_LOCK_KEY`` advisory lock, so Plot Twist and Case Closed can
-  never call the provider concurrently, whether they are claimed by the same
-  process or by two replicas.
-* **Publication is atomic with completion.** The validated package's
-  ``published`` status, the old session's end, the new session's start and
-  the job's terminal update all commit in one transaction under the game
-  lock. A crash can leave an unpublished package (retryable) but never a
-  published session without its job or a completed job whose session is
-  missing.
-* **Revocation wins races.** ``game_session_revocations`` both ends the live
-  session and suppresses replacement generation until the next boundary; a
-  running job is cancelled in the same locked transaction, and the publish
-  transaction re-checks the job and the revocation before opening anything,
+* **00:01 UTC is a checkpoint, not a deadline.** Queueing is a fast database write;
+  the model calls happen later and never block the scheduling pass.
+* **One cycle per game per boundary.** ``(game_id, cycle_start_date)`` is unique
+  and the window is fixed at enqueue, so repeated scheduler runs find the existing
+  job instead of starting a second generation, and slow generation can never shift
+  the configured frequency.
+* **One protected pipeline.** Every worker runs under the single
+  ``AI_GENERATION_LOCK_KEY`` advisory lock, so the two games can never call the
+  provider concurrently, in one process or across replicas.
+* **Publication is atomic with completion.** The package's ``published`` status,
+  the old session's end, the new session's start and the job's terminal update
+  commit in one transaction under the game lock: a crash can leave an unpublished
+  (retryable) package, but never a published session without its job or vice versa.
+* **Revocation wins races.** ``game_session_revocations`` ends the live session,
+  suppresses replacement generation until the next boundary, cancels a running job
+  in the same locked transaction, and is re-checked inside the publish transaction
   so a stale job can never resurrect a revoked session.
 """
 
@@ -143,10 +133,10 @@ def _current_row(session, model):
 def _end_session(db: Database, game_id: str, row, moment: datetime) -> None:
     """End one live session through the existing ``ended`` convention.
 
-    Case Closed additionally finalizes first -- closing the case is what
-    reveals the solution and scores every participant -- and a failure there
-    is logged rather than raised, exactly like the scheduler's boundary
-    close: the stranded scan retries whatever this misses.
+    Case Closed first finalizes -- closing the case reveals the solution and
+    scores every participant -- and a failure there is logged, not raised,
+    exactly like the scheduler's boundary close: the stranded scan retries
+    whatever this misses.
     """
     if game_id == "case-closed":
         _finalize_case_closed_safely(db, str(row.id))
@@ -167,10 +157,10 @@ def _finalize_case_closed_safely(db: Database, game_id: str) -> None:
 def _finalize_stranded_case_closed(db: Database) -> None:
     """Finish Case Closed events that ended without ever revealing the case.
 
-    An event that died between ending and finalizing would otherwise keep its
-    solution hidden -- and every participant un-told -- forever. The scan runs
-    inside the case-closed lock, so two scheduler passes can never race the
-    same reveal.
+    An event dying between ending and finalizing would otherwise keep its
+    solution -- and every participant's reveal -- hidden forever. The scan
+    runs inside the case-closed lock, so two scheduler passes cannot race
+    the same reveal.
     """
     with db.sessions() as session:
         stranded = [
@@ -191,17 +181,18 @@ def _finalize_stranded_case_closed(db: Database) -> None:
 # ---------------------------------------------------------------------------
 
 
-def ensure_cycle(db: Database, game_id: str, now: Optional[datetime] = None) -> dict:
+def ensure_cycle(
+    db: Database, game_id: str, now: Optional[datetime] = None, *, startup: bool = False
+) -> dict:
     """Evaluate one AI game's cycle boundary and enqueue generation when due.
 
-    The delegated entry point behind ``game_scheduler.ensure_single_game`` for
-    Plot Twist and Case Closed. It never generates content itself: it closes a
-    session whose boundary has passed (Case Closed reveals and scores there,
-    as before), respects a live or recently revoked cycle, and otherwise
-    writes one idempotent generation job.
+    The delegated entry point behind ``game_scheduler.ensure_single_game``. It
+    never generates content itself: it closes a session whose boundary has
+    passed (Case Closed reveals and scores there), respects a live or recently
+    revoked cycle, and otherwise writes one idempotent generation job.
 
     Actions: ``skipped_hidden``, ``generating`` (a job is already live),
-    ``current`` (the session is still inside its period), ``revoked_waiting``,
+    ``current`` (the session is inside its period), ``revoked_waiting``,
     ``generation_queued``, ``generation_requeued`` (a failed same-cycle job
     gets another attempt), ``generation_failed`` and ``generation_cancelled``.
     """
@@ -224,6 +215,29 @@ def ensure_cycle(db: Database, game_id: str, now: Optional[datetime] = None) -> 
             config = get_config(session, game_id)
             if config.is_hidden:
                 return {"game_id": game_id, "action": "skipped_hidden"}
+
+            if startup:
+                today_session = session.scalar(
+                    select(model)
+                    .where(
+                        model.period_start_date <= today,
+                        model.period_end_date >= today,
+                    )
+                    .order_by(model.period_end_date.desc())
+                    .limit(1)
+                )
+                reset_boundary = datetime.combine(
+                    today, datetime.min.time(), timezone.utc
+                ) + timedelta(minutes=1)
+                session_is_current = today_session is not None and (
+                    today_session.period_end_date > today or moment < reset_boundary
+                )
+                if session_is_current:
+                    return {
+                        "game_id": game_id,
+                        "action": "session_exists_today",
+                        "session_id": str(today_session.id),
+                    }
 
             current = _current_row(session, model)
             if current is not None and game_periods.is_reset_due(
@@ -379,12 +393,11 @@ def revoke_current_session(
     """End the live session (or cancel its generation) and hold the next cycle.
 
     Returns ``action: "revoked"`` with the ended session and the date
-    generation may resume, or ``action: "none"`` when nothing live existed --
-    repeated revokes are therefore safe and never extend the suppression.
-    The marker always reaches at least tomorrow, so revocation can never be
-    followed by an immediate replacement in the same scheduling cycle; for
-    longer cadences the revoked session's own period end (the next boundary)
-    is later and wins.
+    generation may resume, or ``action: "none"`` when nothing live existed, so
+    repeated revokes are safe and never extend the suppression. The marker
+    always reaches at least tomorrow, so revocation can never be followed by
+    an immediate replacement in the same cycle; for longer cadences the
+    session's own period end (the next boundary) is later and wins.
     """
     _validate_ai_game(game_id)
     moment = _utc(now)

@@ -1,39 +1,8 @@
-"""All-or-nothing bulk onboarding of participant accounts from a CSV or XLSX file.
+"""Import participant accounts from CSV/XLSX with all-or-nothing validation.
 
-The endpoint behind this service is an administrator's way to add a whole intake at once,
-so it deliberately has none of the ordinary create form's flexibility:
-
-* **Participants only.** The file has no ``account_type`` column and there is no way to ask
-  for one. Every row is written to ``users``; a column named ``account_type`` is an unknown
-  column and the file is refused, rather than being quietly ignored. Staff accounts are
-  minted one at a time through ``POST /admin/users``.
-* **All-or-nothing.** Every row is parsed and validated before anything is written, and the
-  database count is checked inside the same transaction as the insert. One bad row, one
-  duplicate, one new department over the ceiling or one row too many for the account cap
-  cancels the entire upload. A partial import would leave the operator unable to tell which
-  half of their file landed without reconciling it by hand.
-* **Strict input.** The first row is the heading row and must name exactly the six editable
-  identity fields. Unknown, duplicated or missing headings are refused. Cell values are
-  checked against the same limits the single-create payload uses (through
-  ``AdminUserCreate``), plus the length caps of the columns underneath them.
-* **Bounded parsing.** The file is read behind byte and row ceilings, and the XLSX reader
-  inspects the ZIP container before handing it to openpyxl. That is what stops a small
-  compressed workbook from expanding into an unbounded parse, an external link from being
-  followed, or a macro-bearing container from being treated as a spreadsheet.
-
-Security notes for the file readers:
-
-* The filename extension chooses the reader, but the bytes choose whether it is believable.
-  An ``.xlsx`` must actually be a ZIP with the workbook parts; a ``.csv`` must decode as
-  UTF-8 and must not be a ZIP. Neither the browser-supplied content type nor the filename is
-  trusted on its own.
-* CSV is read with ``strict=True`` so a malformed quote is an error rather than a silently
-  repaired row. Formula prefixes are refused in every text field, because a value beginning
-  ``=``, ``+``, ``-`` or ``@`` is a spreadsheet formula waiting for the next export.
-* XLSX cells are never evaluated. Formula cells are refused by type, external workbook
-  links and embedded/macro parts are refused by name, and encrypted entries are refused
-  before openpyxl sees them. ``defusedxml`` is installed as a dependency so openpyxl's XML
-  parser refuses entity-expansion payloads.
+Input size, row count, workbook contents, and fields are validated before writes; account
+capacity is checked in the insert transaction. Formula cells, external links, macros,
+encrypted entries, and malformed CSV are refused rather than evaluated or repaired.
 """
 
 from __future__ import annotations

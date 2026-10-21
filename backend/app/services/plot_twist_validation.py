@@ -1,24 +1,4 @@
-"""Deterministic validation for Plot Twist story packages.
-
-AI-generated reviews may supplement these checks but never replace them:
-a package is publishable only when this module reports ``ok=True``.
-Every error names the offending scene (or package level) and the exact
-problem, so the admin screen and the repair loop can act on it.
-
-Checks:
-- schema parse into StoryPackageDef;
-- unique scene / choice / ending ids;
-- every transition target and ending reference exists;
-- state variables referenced by conditions and changes are declared;
-- state-change ops / types / ranges are legal (no expressions);
-- interchangeable modules are compatible with their slots;
-- reachability of endings from the opening scene (graph traversal);
-- every non-terminal scene has a valid route forward (no dead ends);
-- ending conditions use defined variables; conflicting ending conditions
-  resolve by priority (duplicate priority + overlapping conditions flagged);
-- reward tiers within configured limits;
-- scene / decision ceilings honoured.
-"""
+"""Deterministic structural and graph validation for Plot Twist story packages."""
 
 from collections import deque
 from typing import Any, Optional
@@ -184,13 +164,7 @@ def validate_blueprint(
     decision_count: Optional[int] = None,
     interchangeable_count: Optional[int] = None,
 ) -> ValidationReport:
-    """Validate a Stage A blueprint: schema plus structural sanity.
-
-    The optional budgets enforce the generation config's scale: a blueprint
-    whose main path or slot list dwarfs the configured decision count forces
-    Stage B to render far more scenes than the package ceiling allows (that
-    is how a 24-beat main path became a 29-scene package).
-    """
+    """Validate a Stage A blueprint: schema, scale budgets, and structural sanity."""
     errors: list[ValidationMessage] = []
     try:
         blueprint = BlueprintDef.model_validate(data)
@@ -235,13 +209,7 @@ def validate_blueprint(
 
 
 def _stranded_scene_ids(by_scene: dict, reachable: set[str]) -> list[str]:
-    """Scenes no traversal can enter, module selection included.
-
-    A non-core slot is entered through module selection: a transition naming
-    any scene of the slot resolves to the couple's selected alternative, so
-    an alternative is playable whenever one of its slot-mates is reachable.
-    Slot safety (no same-slot chaining) is enforced separately.
-    """
+    """Identify scenes unreachable via graph traversal or module selection."""
     reachable_slots = {(by_scene[sid].slot or "core") for sid in reachable}
     return [
         sid
@@ -364,8 +332,7 @@ def validate_package(
                     "flag state must be a list of string tokens.",
                 )
 
-    # Content variety: repeated titles or narratives play as deja vu, the
-    # exact complaint behind looped histories.
+    # Content variety: flag duplicate titles.
     _check_content_variety(package, errors, by_scene)
 
     # Per-scene checks.
@@ -518,16 +485,10 @@ def validate_package(
                 scene.id,
             )
 
-    # Slot-collapse guard: two scenes sharing one non-core slot must be
-    # alternatives for the same moment, never sequential beats. If one can
-    # reach the other, per-couple module selection collapses the whole path
-    # into a loop (the Echoes of Trust failure: slot-1 held scene-1 and
-    # scene-5, so every couple replayed 4 scenes 11 times).
+    # Guard against sequential slot reuse causing loop collapse.
     _check_slot_reuse_on_path(by_scene, errors)
 
-    # Two-sidedness: turns strictly alternate at runtime, so the package
-    # must read that way too -- mostly individual scenes, and never two
-    # consecutive scenes for the same member.
+    # Ensure alternating turns between partners without consecutive member scenes.
     non_terminal = [scene for scene in package.scenes if not scene.is_terminal]
     if non_terminal:
         shared = [
@@ -562,10 +523,7 @@ def validate_package(
                     scene.id,
                 )
 
-    # Inescapable cycles: a strongly connected set of scenes with no choice
-    # leading out toward an ending replays forever. Edges are the authored
-    # transitions (module selection may redirect inside a slot, but never
-    # invents an exit the author did not write).
+    # Detect strongly connected scene components with no exit to an ending.
     _check_escapable_cycles(by_scene, errors)
 
     # Graph traversal from the opening: reachability + forward progress.
@@ -601,21 +559,14 @@ def validate_package(
                 "no_reachable_ending",
                 "No terminal scene is reachable from the opening scene.",
             )
-        # Bounded simulation: walk up to 200 steps of blind choices to shake
-        # out loops that never terminate.
+        # Bounded simulation: detect infinite choice loops.
         _check_livelock(errors, by_scene, package.opening_scene_id)
 
     return ValidationReport(ok=not errors, errors=errors)
 
 
 def _check_content_variety(package: Any, errors: list[ValidationMessage], by_scene: dict) -> None:
-    """Flag copy-paste stories: duplicate titles read as loops in histories.
-
-    Narrative text is deliberately not enforced here: synthetic engine tests
-    reuse short placeholders like "Onward." across corridor scenes, while the
-    prompt already asks the model for distinct vivid beats. Titles are what
-    the history screen repeats, so they stay a hard rule.
-    """
+    """Flag duplicate scene titles within a package."""
     titles: dict[str, list[str]] = {}
     for scene in package.scenes:
         key = str(scene.title or "").strip().lower()
@@ -700,8 +651,7 @@ def _check_escapable_cycles(by_scene: dict, errors: list[ValidationMessage]) -> 
             continue
         can_finish.add(current)
         queue.extend(reverse[current])
-    # Strongly connected components (Tarjan): loops are components with
-    # more than one scene, or one scene pointing at itself.
+    # Tarjan's SCC to detect loops without terminal paths.
     index_of: dict[str, int] = {}
     low: dict[str, int] = {}
     on_stack: set[str] = set()

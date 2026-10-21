@@ -62,10 +62,10 @@ def update_game_config(
 ) -> GameConfig:
     """Patch one game's availability, content mode or reset cadence.
 
-    Enabled/hidden, the Wordle/Anagram content mode, each game's own reset
-    cadence and the two AI games' difficulty are set here. Values outside the
-    vocabularies are refused; the questionnaire accepts no content mode at all,
-    and only Plot Twist and Case Closed accept a difficulty.
+    Enabled/hidden, the Wordle/Anagram content mode, each game's reset cadence and
+    the two AI games' difficulty are set here; values outside the vocabularies are
+    refused. The questionnaire accepts no content mode at all, and only Plot Twist
+    and Case Closed accept a difficulty.
     """
     return GameConfig(
         **game_configs.update_config(
@@ -98,9 +98,9 @@ def set_featured_game(
 ) -> FeaturedGame:
     """Pin one game as featured for one UTC date.
 
-    A date that already holds a featured game is a 409: the spotlight seats
-    one game per day, enforced by the schema as well as this check. Featuring
-    never creates or touches any session.
+    A date that already holds a featured game is a 409: the spotlight seats one game
+    per day, enforced by the schema as well as this check. Featuring never creates
+    or touches any session.
     """
     created = featured_games.set_featured(
         db, payload.game_date, payload.game_id, created_by=account.regno
@@ -116,13 +116,12 @@ def replace_featured_game(
 ) -> FeaturedGame:
     """Set one game as featured for one UTC date, replacing any current pick.
 
-    The atomic path for the per-game "Set as Featured" action: when another
-    game holds the date it is removed in the same transaction and the new pick
-    is stored, so the admin confirms once and the schedule never sits empty
-    between a delete and a create. Replacing the spotlight never rewrites
-    league history -- awards snapshot ``is_featured`` at finalization time, so
-    points already earned keep their 2x while only future plays earn 2x on the
-    new game. Featuring never creates or touches any session.
+    The atomic path for the per-game "Set as Featured" action: another game's pick is
+    removed and the new pick stored in the same transaction, so the admin confirms once
+    and the schedule never sits empty. Replacing the spotlight never rewrites league
+    history -- awards snapshot ``is_featured`` at finalization time, so points already
+    earned keep their 2x while only future plays earn 2x on the new game. Featuring
+    never creates or touches any session.
     """
     replaced = featured_games.replace_featured(
         db, payload.game_date, payload.game_id, created_by=account.regno
@@ -138,10 +137,10 @@ def set_featured_range(
 ) -> List[FeaturedGame]:
     """Feature one game for a whole span, start to end inclusive.
 
-    Every date in the span must be free of other games: the first date held
-    by another game is a 409 naming it, and nothing is stored. A span whose
-    consecutive run -- merged with the same game's picks bordering it -- would
-    pass a week is a 422. Featuring never creates or touches any session.
+    Every date in the span must be free of other games: the first date held by
+    another game is a 409 naming it, and nothing is stored. A span whose consecutive
+    run -- merged with the same game's bordering picks -- would pass a week is a 422.
+    Featuring never creates or touches any session.
     """
     created = featured_games.set_featured_range(
         db, payload.start_date, payload.end_date, payload.game_id,
@@ -158,11 +157,11 @@ def replace_featured_range(
 ) -> List[FeaturedGame]:
     """Feature one game for a whole span, erasing any other picks it covers.
 
-    The override path for the schedule page: dates held by other games are
-    removed in the same transaction and the new picks stored, so the admin
-    confirms once and the schedule never sits half-written. A span whose
-    consecutive run would pass a week is still a 422. League history is
-    untouched -- awards snapshot ``is_featured`` at finalization time.
+    The override path for the schedule page: dates held by other games are removed
+    and the new picks stored in the same transaction, so the admin confirms once and
+    the schedule never sits half-written. A span whose run would pass a week is still
+    a 422. League history is untouched -- awards snapshot ``is_featured`` at
+    finalization time.
     """
     replaced = featured_games.replace_featured_range(
         db, payload.start_date, payload.end_date, payload.game_id,
@@ -189,10 +188,10 @@ def game_stats(
 ) -> GameStatsSummary:
     """Live play telemetry across every game, for the console overview.
 
-    Read from the games' native participation tables, not the league ledger,
-    so a round played today appears immediately instead of waiting for its
-    event to finalize. The same collectors answer ``GET /games/summary`` for
-    a player, so both screens agree on what counts as a finished round.
+    Read from the games' native participation tables, not the league ledger, so a
+    round played today appears immediately instead of waiting for its event to
+    finalize. The same collectors answer ``GET /games/summary``, so both screens
+    agree on what counts as a finished round.
     """
     return GameStatsSummary(**player_stats.build_games_stats(db))
 
@@ -204,10 +203,10 @@ def run_scheduled_resets(
 ) -> dict:
     """Evaluate every game's session boundary now (the manual 00:01 UTC trigger).
 
-    The same function the automatic loop runs: idempotent per game, safe to
-    retry, and a no-op for games still inside their period. Hidden games are
-    skipped -- no new sessions while hidden. Returns the per-game summary plus
-    the active-session counts, so an operator can see what the run did.
+    The same function the automatic loop runs: idempotent per game, safe to retry,
+    and a no-op for games still inside their period. Hidden games are skipped. Returns
+    the per-game summary plus the active-session counts, so an operator can see what
+    the run did.
     """
     from ..services import game_scheduler
 
@@ -223,10 +222,9 @@ def finalize_league_opportunity(
 ) -> dict:
     """Finalize one closed event's league awards (idempotent repair path).
 
-    The scheduler finalizes ended events on its own runs; this endpoint is
-    the explicit path for backfilling history or retrying an event the loop
-    has not reached. Ranking an event that is still open is refused, and a
-    repeated call settles on the same rows.
+    The scheduler finalizes ended events on its own runs; this is the explicit path
+    for backfilling history or retrying an event the loop has not reached. Ranking an
+    event that is still open is refused, and a repeated call settles on the same rows.
     """
     return league_finalization.finalize_opportunity(
         db, payload.game_id, payload.opportunity_id
@@ -241,10 +239,10 @@ def reprocess_league_opportunity(
 ) -> dict:
     """Supersede one event's live awards and issue auditable replacements.
 
-    The deliberate correction path for a wrong snapshot or result: original
-    rows stay in the ledger marked superseded, replacements carry a fresh
-    finalization instant, and boards read live rows only. Changing the
-    featured schedule never triggers this silently.
+    The deliberate correction path for a wrong snapshot or result: original rows stay
+    in the ledger marked superseded, replacements carry a fresh finalization instant,
+    and boards read live rows only. Changing the featured schedule never triggers this
+    silently.
     """
     return league_finalization.reprocess_opportunity(
         db, payload.game_id, payload.opportunity_id
@@ -276,9 +274,9 @@ def admin_individual_board(
 ) -> LeagueIndividualBoard:
     """Ranked individual standings for the games console.
 
-    The admin mirror of the player-facing board: staff hold no participant
-    row, so they read standings here rather than through ``/leaderboards``.
-    ``game_id`` narrows an individual game to its own board.
+    The admin mirror of the player-facing board: staff hold no participant row, so
+    they read standings here rather than through ``/leaderboards``. ``game_id`` narrows
+    an individual game to its own board.
     """
     if game_id is not None:
         board = league_boards.game_board(
@@ -359,9 +357,9 @@ def admin_game_categories(
 ) -> List[GameCategoryInfo]:
     """The selectable metric views for one game, the console mirror.
 
-    The same descriptors the player-facing board offers -- Performance,
-    Fastest Solve, All-Time Fastest and the rest -- so an operator reads the
-    expanded rankings exactly as players do.
+    The same descriptors the player-facing board offers -- Performance, Fastest Solve,
+    All-Time Fastest and the rest -- so an operator reads the expanded rankings exactly
+    as players do.
     """
     return [
         GameCategoryInfo(**info) for info in league_game_boards.list_categories(game_id)
@@ -384,9 +382,9 @@ def admin_game_category_board(
 ) -> GameCategoryBoard:
     """One game's category board: metric rankings over finalized results.
 
-    Record-scope categories always answer all-time history; the response says
-    so (``period: "all_time"``) rather than echoing an ignored window. There
-    is deliberately no admin ``/me``: staff hold no participant row to rank.
+    Record-scope categories always answer all-time history; the response says so
+    (``period: "all_time"``) rather than echoing an ignored window. There is
+    deliberately no admin ``/me``: staff hold no participant row to rank.
     """
     board = league_game_boards.category_board(
         db, game_id=game_id, category=category, period=period,
@@ -402,9 +400,9 @@ def admin_game_records(
 ) -> GameRecordHighlights:
     """Every game's headline record, all-time, for the console overview.
 
-    One leader per game (fastest time, fewest guesses, fastest escape, ...)
-    read through the same category builders the expanded rankings use, so the
-    overview can never disagree with the board behind it.
+    One leader per game (fastest time, fewest guesses, fastest escape, ...) read
+    through the same category builders the expanded rankings use, so the overview can
+    never disagree with the board behind it.
     """
     return GameRecordHighlights(
         highlights=league_game_boards.record_highlights(db)

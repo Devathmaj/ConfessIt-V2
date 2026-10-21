@@ -12,26 +12,14 @@ from .limits import INTEREST_VALUES, USER_YEAR_MAX, USER_YEAR_MIN
 from .postgres import PostgresClient
 from .services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 
-# 100 participants, split evenly. A school run of this app has a real gender mix and the
-# matchmaking screens filter and sort by it, so a seed that is all one value hides layout and
-# filter bugs. The count is deliberately round so the per-gender half is obvious.
+# Seed 50 participants per gender so development data exercises both matchmaking cohorts.
 PARTICIPANTS_PER_GENDER = 50
 
-# Seeded profile variety, cycled through so the list, profile and matchmaking screens have
-# more than one distinct value to render. Nothing here is load-bearing for the application.
-#
-# Year and department are two fields rather than one joined string, because that is what the
-# column is now: seeding a pre-joined "2nd Year CSE" would exercise a shape the schema can no
-# longer store. ``YEARS`` is derived from ``limits.USER_YEAR_MIN``..``USER_YEAR_MAX`` (the range
-# the CHECK constraint holds the column to) so it cannot drift out of step with it, and holds
-# numbers because the column is an ``Integer`` -- an invented year here would be refused by the
-# database rather than stored. ``INTERESTS`` is ``limits.INTEREST_VALUES`` itself (case included:
-# "music" is not "Music" and violates ck_users_interests_known).
+# Cycle valid year, department, and interest values to give development profiles variety.
 YEARS = tuple(range(USER_YEAR_MIN, USER_YEAR_MAX + 1))
 DEPARTMENTS = ("Test_Department_A", "Test_Department_B", "Test_Department_C")
 INTERESTS = INTEREST_VALUES
-# Fixed rotating window so every participant holds exactly two interests even at
-# wrap-around (a slice of INTERESTS[i:i+2] shrinks to one element at the tail).
+# Wrap the selection so every seeded participant receives two interests.
 SEED_INTEREST_COUNT = 2
 
 
@@ -43,19 +31,12 @@ def create_magic_link_token() -> str:
 
 
 def _participants() -> list[dict]:
-    """Build the 100 participant rows: 50 male, then 50 female.
-
-    Regnos are prefixed by gender so a person reading a login table can tell at a glance
-    which half of the cohort a regno belongs to, and so a regno never collides with the
-    staff accounts seeded alongside them.
-    """
+    """Build 100 participant rows with gender-prefixed, staff-distinct regnos."""
     rows: list[dict] = []
     for prefix, gender in (("M", "male"), ("F", "female")):
         for index in range(1, PARTICIPANTS_PER_GENDER + 1):
             regno = f"{prefix}{index:02d}"
-            # Every tenth account opts out of matchmaking, and only half send love notes, so
-            # both halves of each toggle are represented without anyone having to hand-edit
-            # the seed before checking that a disabled control looks disabled.
+            # Include opted-out accounts so both states of each toggle are testable.
             rows.append(
                 {
                     "regno": regno,
@@ -82,15 +63,12 @@ def _participants() -> list[dict]:
 def _staff() -> list[tuple[str, dict]]:
     """One admin and one moderator, the two staff tables a developer needs to sign in as.
 
-    They are seeded on every run even when the participants are not, because a moderator
-    account is the only way to reach the moderation screens at all.
-
-    Each carries an address, which every account table now has a column for. It is not
-    load-bearing -- sign-in is regno-based and the column is nullable -- but a staff row with
-    no address on it is a row the admin list renders with a blank contact line, which looks
-    like a bug rather than like a column nobody wrote. The addresses are distinct from the
-    participants' and from each other, so this seed does not also become the example of a
-    shared address; that case is covered by tests instead.
+    Seeded on every run even when the participants are not: a moderator account
+    is the only way to reach the moderation screens at all. Each carries an
+    address (a nullable, non-load-bearing column) so the admin list does not
+    render a blank contact line that looks like a bug. The addresses are distinct
+    from the participants' and from each other; the shared-address case is
+    covered by tests instead.
     """
     return [
         (AccountType.ADMIN.value, {

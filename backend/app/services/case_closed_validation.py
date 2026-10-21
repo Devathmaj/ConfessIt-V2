@@ -514,11 +514,8 @@ def validate_package(
             )
 
     # --- board completeness: some clues must never be shown ----------------
-    # Each partner can charge one investigation per action (2 x budget in
-    # total) and a charged lead reveals its evidence once for the couple, so a
-    # package whose reachable clues are covered by that many leads lets a run
-    # collect the whole board. Enforce the opposite: every possible sequence
-    # of choices must leave at least one reachable clue hidden.
+    # Require more reachable clues than the couple can reveal with its total
+    # investigation budget, preventing a complete-board sweep.
     reveal = {
         lid: frozenset(eid for eid in by_lead[lid].revealed_evidence_ids if eid in ev_set)
         for lid in reachable
@@ -564,9 +561,7 @@ def validate_package(
     # admin-defined, so only flag the trivial leak where the culprit suspect
     # id sorts first *and* a lead id mentions ordering. Kept narrow on purpose.
     if pkg.suspects and pkg.suspects[0].id == sol.culprit_id and len(pkg.suspects) > 2:
-        # Not a hard fail by itself; flag only when combined with shallow graph
-        # would make the first suspect the obvious guess. We keep it as info:
-        # no error (ordering alone is not proof of leak).
+        # Not an error: ordering alone is not proof of a leak.
         pass
 
     # Timeline order uniqueness (package-level public timeline).

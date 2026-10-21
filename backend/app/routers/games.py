@@ -31,11 +31,10 @@ from ..services.game_configs import get_config
 
 router = APIRouter(prefix="/games", tags=["Games"])
 
-# What the selection screen and the featured page read. Hidden games never
-# appear here; disabled games appear as temporarily unavailable; a game whose
-# session is pending (manual word not yet provided) appears as waiting for
-# configuration. Direct game endpoints enforce the same rules again, so this
-# list is discovery, never the boundary.
+# What the selection screen and the featured page read. Disabled games appear as
+# temporarily unavailable, and a game whose session is pending (manual word not yet
+# provided) as waiting for configuration. Direct game endpoints enforce the same
+# rules again, so this list is discovery, never the boundary.
 
 _GAME_NAMES = {
     "wordle": "Wordle",
@@ -67,9 +66,9 @@ _SESSION_MODELS = {
 def _trivia_entry(session, config, featured_id: str | None) -> GameSelectEntry | None:
     """Trivia Drop as the selection screen sees it: live question or waiting.
 
-    Trivia Drop has no periods and no pending state: a live question is
-    playable, anything else is a wait for the next release. Drafts and
-    scheduled questions are never named here.
+    Trivia Drop has no periods and no pending state: a live question is playable,
+    anything else a wait for the next release. Drafts and scheduled questions are
+    never named here.
     """
     live = session.scalar(
         select(TriviaDropQuestionRecord)
@@ -188,10 +187,9 @@ def partner_cohorts(
 ) -> list[Cohort]:
     """Every ``(year, department)`` pair the partner pickers may filter by.
 
-    One list for all four couple games: they pair from the same participant
-    table and their filter is the pair -- "CSE" and year 1 at once -- so they
-    are offered the same palette of cohorts that actually exist rather than
-    four separately derived copies. Declared before any ``/{...}``-style route
+    One list for all four couple games: they pair from the same participant table
+    and filter on the same pair, so they share one palette of cohorts that actually
+    exist rather than four derived copies. Declared before any ``/{...}``-style route
     so ``partner-cohorts`` is never read as an id.
     """
     del user  # identity gates the route; the palette is the same for everyone.
@@ -234,8 +232,8 @@ def featured_today(
 ) -> dict:
     """Today's featured game (UTC), if the day has a pick.
 
-    The spotlight only: featuring never implies anything about sessions, and a
-    game is playable featured or not unless it is disabled or hidden.
+    The spotlight only: featuring never implies anything about sessions, and a game
+    is playable featured or not unless it is disabled or hidden.
     """
     del user
     today = datetime.now(timezone.utc).date()
@@ -257,9 +255,8 @@ def player_summary(
 ) -> PlayerGameSummary:
     """The caller's own finished rounds, streaks and this week's activity.
 
-    Read from the games' native participation tables so a round played today
-    appears immediately, not when its league event finalizes. The summary is
-    strictly personal: every collector filters on the caller's id, and no
-    other player's activity is ever materialized.
+    Read from the games' native participation tables so a round played today appears
+    immediately, not when its league event finalizes. Strictly personal: every
+    collector filters on the caller's id and no other player's activity is materialised.
     """
     return PlayerGameSummary(**player_stats.build_player_summary(db, user_id=user.id))

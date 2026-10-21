@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from ..postgres import Database
 from typing import Annotated
 
-# Corrected: Use direct imports from the project root
 from ..config import cookie_secure, cors_allow_origins, settings
 from ..dependencies import get_db
 from ..accounts import AccountType
@@ -52,25 +51,18 @@ class WebSocketTicket(BaseModel):
 class RefreshRequest(BaseModel):
     """An alternative to the refresh cookie, for non-browser callers only.
 
-    A caller (test, API client) that captured the token out of band can hand the raw
-    refresh token in the body instead of doing cookie plumbing. Honoured only when
-    ``ENABLE_DEBUG_ENDPOINTS`` is on: in any real deployment the cookie is the one
-    credential these endpoints read, and a body that worked there would be a second,
-    unguarded way to drive rotation and revocation. With the flag off a body is
-    silently ignored and the cookie flow below applies.
-
-    Optional (default None) rather than required: browser clients POST an empty ``{}``
-    body on refresh/logout while the credential travels in the HttpOnly cookie, and a
-    required field turned that into a 422 -- logging the user out right after login.
+    Honoured only when ``ENABLE_DEBUG_ENDPOINTS`` is on; otherwise a body is ignored and
+    the cookie flow applies. Optional rather than required because browsers POST an empty
+    ``{}`` body on refresh/logout, and a required field caused a 422 right after login.
     """
     refresh_token: Optional[str] = None
 
 
 def _request_origin(value: str) -> Optional[str]:
-    """Reduce an Origin or Referer header to its ``scheme://authority`` for comparison.
+    """Reduce an Origin or Referer header to ``scheme://authority``.
 
-    Returns None when the value is not shaped like an origin at all, which the caller
-    treats as a refusal: a present-but-unparseable attestation is worse than none.
+    Returns None when the value is not shaped like an origin; the caller treats that as a
+    refusal, since a present-but-unparseable attestation is worse than none.
     """
     if "://" not in value:
         return None
@@ -84,14 +76,10 @@ def _request_origin(value: str) -> Optional[str]:
 def _enforce_cookie_origin(request: Request) -> None:
     """Refuse a cookie-authenticated refresh/logout that arrived cross-site.
 
-    ``SameSite=Lax`` already keeps modern browsers from attaching the cookie to a
-    cross-site POST, but 307 redirect chains and old browsers bypass that layer -- and
-    when they do, this is the layer that has to say no. A browser-driven POST always
-    carries ``Origin`` (fetch/XHR) or ``Referer`` (navigation); either one must name an
-    origin from the CORS allowlist, which is exactly the set permitted to call with
-    credentials. A request carrying neither is not browser-driven (curl, tests, service
-    clients) and is let through: there is no ambient authority to steal outside a
-    browser. A 403 here reveals nothing -- no account state is involved.
+    ``SameSite=Lax`` already blocks most of this, but 307 chains and old browsers can
+    bypass it. A browser-driven POST carries Origin or Referer; either must name a CORS
+    allowlist origin. No header means a non-browser caller, which has no ambient
+    authority to steal, so it is allowed. A 403 here reveals no account state.
     """
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
@@ -110,25 +98,14 @@ def _enforce_cookie_origin(request: Request) -> None:
 def _refresh_cookie_options(request: Request) -> Dict[str, object]:
     """Keyword arguments for setting the session's refresh token as a cookie.
 
-    Backend-asserted contract (see tests/test_refresh_cookie_contract.py -- the
-    frontend's comments restate this, but this function plus that test is the
-    source of truth, not the frontend):
+    Contract source of truth: tests/test_refresh_cookie_contract.py (the frontend's
+    comments restate it). ``HttpOnly`` hides the token from scripts, ``SameSite=Lax``
+    keeps it off cross-site requests, ``Secure`` follows the client-facing scheme or
+    ``COOKIE_SECURE``, and ``Path=/auth`` limits it to auth endpoints.
 
-    ``HttpOnly`` keeps the raw token out of page scripts, ``SameSite=Lax`` keeps it off
-    cross-site requests while still delivering it to the API from a sibling port of the
-    same site, and ``Secure`` follows the client-facing scheme -- behind a TLS proxy
-    that is the scheme the proxy reported (see ``TRUSTED_PROXY_HOSTS``), not the
-    proxy-to-app hop -- or the explicit ``COOKIE_SECURE`` override. ``Path=/auth``
-    means the browser only ever attaches it to authentication endpoints, never to the
-    rest of the API, so even an XSS cannot send it along with an ordinary request.
-
-    Deliberately NOT ``__Host-``-prefixed and NOT ``SameSite=Strict``: a ``__Host-``
-    cookie is rejected by browsers unless ``Path=/`` exactly, so adopting the prefix
-    would force widening this cookie from ``/auth`` to the whole API -- the opposite
-    of containment. ``Strict`` would break any cross-site deployment's refresh POST
-    outright (the cookie would never be sent); ``Lax`` plus the Origin/Referer check
-    on cookie-authenticated refresh (see ``_enforce_cookie_origin``) and rotation on
-    every use is the CSRF posture instead.
+    Not ``__Host-``-prefixed (that requires ``Path=/``, widening the cookie to the whole
+    API) and not ``SameSite=Strict`` (that breaks cross-site refresh). The CSRF posture
+    is Lax plus the Origin/Referer check plus rotation on every use.
     """
     return {
         "key": settings.REFRESH_COOKIE_NAME,
@@ -143,10 +120,8 @@ def _refresh_cookie_options(request: Request) -> Dict[str, object]:
 def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
     """Drop the refresh cookie, matching the path it was set with.
 
-    The ``secure`` flag must match how the cookie was set: browsers ignore a deletion
-    for a Secure cookie that arrives without the flag, which would leave a stale
-    session cookie behind on exactly the deployments that need it gone. Callers pass
-    ``cookie_secure(request.url.scheme)`` from the request being answered.
+    The ``secure`` flag must match how it was set: browsers ignore deletion of a Secure
+    cookie that arrives without the flag.
     """
     response.delete_cookie(
         settings.REFRESH_COOKIE_NAME,
@@ -160,25 +135,15 @@ def _clear_refresh_cookie(response: Response, *, secure: bool) -> None:
 def _refresh_refusal(
     request: Request, exc: HTTPException, *, cookie_presented: bool
 ) -> JSONResponse:
-    """The answer to a refused refresh, with the cookie deleted when it is dead.
+    """The answer to a refused refresh, clearing the cookie when it is dead.
 
-    FastAPI builds a *fresh* response for a raised ``HTTPException``, so a
-    ``Set-Cookie`` written on the injected response is discarded on the way out.
-    That is why the deletion never reached the browser: the cookie stayed in the
-    jar and was re-sent with every later request. The refusal is therefore built
-    here, as a response, rather than raised.
+    FastAPI builds a fresh response for a raised ``HTTPException``, discarding any
+    ``Set-Cookie`` on the injected response, so the refusal is built here instead.
 
-    The cookie is deleted only when it is dead, and only when it was the
-    credential that was presented. A value that was rotated away from a session
-    that is still alive is a stale copy -- the browser may be holding the newer
-    value that replaced it, and deleting the cookie would sign that browser out
-    of a session it is still using. Two tabs racing a refresh is exactly that:
-    one of them rotates, the other is refused, and the loser must not take the
-    winner's cookie with it.
-
-    The Origin/Referer refusal is not routed through here: a request that looked
-    cross-site says nothing about the cookie, and destroying a session because of
-    it would hand an attacker exactly that.
+    Delete only when the cookie was presented and is dead. A rotated-away value from a
+    live session may coexist with the newer value in another tab; clearing it would sign
+    that browser out. The Origin/Referer refusal is not routed here: it says nothing about
+    the cookie, and destroying a session over it would help an attacker.
     """
     refusal = JSONResponse(
         status_code=exc.status_code,
@@ -218,14 +183,9 @@ async def generate_magic_link(
             request, db, account_type.value, client_id=client_id
         )
     except HTTPException as exc:
-        # FastAPI's own handler would build the error response from scratch and drop a
-        # client id this request just issued, so the refusal is built here, where the
-        # id is known. Only the rate limiter and the input gate refuse here -- the
-        # lookup itself always answers 200 -- and a request refused by either has
-        # already counted against this client, so unless the browser is given the id
-        # back it will be treated as a brand-new client -- handed a fresh budget -- on
-        # the very next request. That is what lets repeated sweeps of unknown
-        # registration numbers dodge the per-browser limit.
+        # Build the refusal here so a client id issued by this request is not lost.
+        # Otherwise the next request looks like a new client and gets a fresh budget,
+        # letting sweeps of unknown regnos dodge the per-browser limit.
         refusal = JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -249,9 +209,8 @@ def verify_magic_link(
     Used to verify a magic link token and return a JWT access token.
     """
     payload = verify_magic_link_service(token, db, request)
-    # The refresh token only ever leaves the server through this cookie. The response body
-    # is the ``Token`` model (access token plus where to send the person); the raw refresh
-    # value is carried out of the service separately and handed to the browser here.
+    # The refresh token only leaves via this cookie; the body carries the Token model,
+    # and the raw value is passed out of the service separately.
     response.set_cookie(
         value=payload["refresh_token"],
         **_refresh_cookie_options(request),
@@ -299,9 +258,8 @@ def refresh_access_token(
     try:
         result = rotate_refresh_token_service(raw, db)
     except HTTPException as exc:
-        # Answered, not raised: a raised HTTPException is turned into a fresh
-        # response by FastAPI, and the cookie deletion this refusal owes the
-        # browser would be discarded with the injected response.
+        # Answered, not raised: FastAPI discards Set-Cookie on a raised HTTPException,
+        # losing the cookie deletion this refusal owes the browser.
         return _refresh_refusal(request, exc, cookie_presented=using_cookie)
     response.set_cookie(value=result["refresh_token"], **_refresh_cookie_options(request))
     return {"access_token": result["access_token"], "token_type": result["token_type"]}
@@ -365,19 +323,16 @@ def mint_websocket_ticket(
         ticket = create_websocket_ticket(db, current_user, session_id)
     except ValueError:
         # The dependency already resolved a participant; this only refuses a malformed
-        # session id or an account shape that cannot own a socket. Keep it generic.
+        # session id or an account shape that cannot own a socket.
         raise credentials_exception()
     # A ticket is a credential in a response body; keep it out of caches.
     response.headers["Cache-Control"] = "no-store"
     return ticket
 
 
-# Deliberately not a response_model. The response is a ``UserDetails`` for a participant and
-# an ``AccountDetails`` for a staff account, and a single model would have to declare every
-# participant field optional to be valid for both -- which would let a staff response
-# quietly carry a year and department the row does not have, and would stop the client from
-# being able to tell a missing field from a null one. Declaring no model keeps the response
-# equal to what the account actually is.
+# No response_model: a participant gets UserDetails and staff get AccountDetails. One
+# model would force every participant field optional, blurring missing versus null and
+# letting staff responses carry fields their row lacks.
 @router.get("/me")
 def read_users_me(current_user: Annotated[AccountDetails, Depends(get_current_user)]):
     """
@@ -389,9 +344,8 @@ def read_users_me(current_user: Annotated[AccountDetails, Depends(get_current_us
     server re-checks all of it per request regardless.
     """
     payload = current_user.model_dump(by_alias=True)
-    # ``profile_picture_url`` is already correct here: ``auth_service._user_payload`` derives it
-    # from the stored Cloudinary identity when a participant is resolved, so there is no URL in the
-    # database to rewrite and nothing that could still hold a stale address from a previous build.
+    # ``profile_picture_url`` is already derived by auth_service._user_payload from the
+    # stored Cloudinary identity, so there is no stale URL to rewrite here.
     if current_user.account_type == AccountType.USERS.value:
         return UserDetails(**payload)
     return AccountDetails(**payload)

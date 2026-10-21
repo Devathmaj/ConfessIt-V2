@@ -13,27 +13,21 @@ Configuration (app.config.Settings, from the runtime environment)::
     EMBEDDING_SEARCH_ENABLED="true"
 
 Azure API contract implemented here (Foundry v1 embeddings, per
-https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/embeddings and
-.../api-version-lifecycle):
+https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/embeddings)::
 
     POST {endpoint}/openai/v1/embeddings
     Headers: api-key: <EMBEDDING_API_KEY>, Content-Type: application/json
     Body:    {"model": "<deployment>", "input": ["<normalized text>"], "dimensions": 1536}
 
 ``base_url`` accepts both ``*.openai.azure.com/openai/v1/`` and
-``*.services.ai.azure.com/openai/v1/``. No ``api-version`` query param on v1.
-``model`` in the body is the Azure deployment name (which often equals the
-model id ``text-embedding-3-small``).
+``*.services.ai.azure.com/openai/v1/``; no ``api-version`` query param on v1.
+Response: ``{"data": [{"embedding": [1536 floats], "index": 0}], ...}``.
 
-Response::
-
-    {"data": [{"embedding": [1536 floats], "index": 0}], ...}
-
-``deployment`` is ``EMBEDDING_DEPLOYMENT`` when set, else ``EMBEDDING_MODEL``.
+``deployment`` is ``EMBEDDING_DEPLOYMENT`` when set, else ``EMBEDDING_MODEL``:
 Azure distinguishes a deployment name from the underlying model id on some
-resources; this module accounts for that distinction explicitly instead of
-inventing a name silently. The response embedding is validated to contain
-exactly 1536 finite numbers; vectors are never truncated, padded, or reshaped.
+resources, and this module accounts for that explicitly instead of inventing a
+name silently. The response embedding is validated to contain exactly 1536
+finite numbers; vectors are never truncated, padded, or reshaped.
 
 Only the confession's own public text is embedded (body plus the optional public
 recipient name). Comments, replies, usernames, emails, author ids, reports,

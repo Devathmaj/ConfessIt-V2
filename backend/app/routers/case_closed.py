@@ -201,16 +201,8 @@ def get_result(
     return CaseClosedResultView(**case_closed_gameplay.get_result(db, user))
 
 
-# ---------------------------------------------------------------------------
-# Detective thread: per-couple chat inside the game window.
-# ---------------------------------------------------------------------------
-# Same transport as matchmaking chat (REST send + Redis pub/sub WS), own
-# scope (the couple's Case Closed session) and own quotas (400 per thread,
-# 200 per detective). Messaging never consumes an investigation action.
-# The thread lives only while the accusation is open: the first confirmation
-# from either detective (or the end of the case) closes it for writes, refuses
-# new socket handshakes, and is re-checked on every live socket ping so no
-# connection outlives the thread. The transcript stays readable.
+# Detective chat is scoped to the couple's case and closes when either confirms
+# an accusation or the case ends. Existing transcripts remain readable.
 
 
 @router.get("/messages/thread")
@@ -313,6 +305,7 @@ async def _socket_account_valid(
     forwarded -- re-reads the session and account. Any failure closes as
     auth-required rather than becoming permission to keep delivering.
     """
+
     from ..services.auth_service import revalidate_websocket_session
 
     try:
@@ -332,10 +325,10 @@ def _thread_still_open(db: Database, user) -> bool:
     """Whether a live socket's thread still accepts turns.
 
     Re-checked on every received frame (the 30s ping and any other text), so a
-    connection cannot outlive the thread just because the client has not
-    noticed: the first confirmation, the case ending, or the event rolling over
-    all close it. Any resolution failure counts as closed -- there is nothing
-    left to listen for, and REST stays the source of truth.
+    connection cannot outlive the thread: the first confirmation, the case
+    ending, or the event rolling over all close it. Any resolution failure
+    counts as closed -- nothing is left to listen for and REST stays the
+    source of truth.
     """
     try:
         return bool(case_closed_messaging.get_thread(db, user)["chat_open"])
@@ -352,10 +345,10 @@ async def thread_websocket(
     """Live detective-thread turns over the shared Redis pub/sub.
 
     Same hardening as matchmaking chat (origin, flood brake, short-lived
-    single-use ticket, membership gates pre-accept; send-via-REST-only; idle
-    reap). The only difference is entitlement: membership of the couple's Case
-    Closed session rather than of a matchmaking conversation. The channel is
-    ``case-closed:{session_id}`` (distinct namespace, same infrastructure).
+    single-use ticket, pre-accept membership gates, send via REST only, idle
+    reap); the only difference is entitlement -- membership of the couple's
+    Case Closed session rather than of a matchmaking conversation. Channel
+    ``case-closed:{session_id}``: distinct namespace, same infrastructure.
     """
     from ..services.auth_service import consume_websocket_ticket
     from .auth import _request_origin
@@ -418,10 +411,10 @@ async def thread_websocket(
         logger.info("Case Closed WS connected: %s to session %s", user.regno, thread["session_id"])
         pubsub = redis_service.subscribe_to_conversation(channel_id)
         if not pubsub:
-            # A capacity refusal (this worker is already serving as many live
-            # threads as it can) and a Redis outage are told apart: the open
-            # sockets carry on in the first case, and the refusal says which it
-            # was rather than looking like a working thread.
+            # A capacity refusal and a Redis outage are told apart: in the first
+            # case the open sockets carry on and only this one is refused, and
+            # the log and reason field say which it was rather than leaving it
+            # to look like a working thread.
             at_capacity = redis_service.subscriber_capacity_reached()
             logger.warning(
                 "Case Closed WS refused: %s could not subscribe to session %s%s",
@@ -455,10 +448,10 @@ async def thread_websocket(
                     if message is None:
                         break
 
-                    # A live thread is not a lifetime grant either: the session
-                    # may have been revoked, superseded, expired or blocked, and
-                    # the thread may have closed. Check both before forwarding so
-                    # no message is delivered into an ended connection.
+                    # A live thread is not a lifetime grant either: check both
+                    # the session (revoked, superseded, expired or blocked) and
+                    # the thread before forwarding, so no message is delivered
+                    # into an ended connection.
                     if not await _socket_account_valid(
                         session_id, account_id, account_type, db
                     ):
@@ -492,8 +485,8 @@ async def thread_websocket(
                     close_code = WS_CLOSE_IDLE
                     break
                 # Revalidate on every frame, not only the literal "ping": a
-                # revoked session must not be able to keep the socket alive by
-                # sending arbitrary text instead.
+                # revoked session must not keep the socket alive by sending
+                # arbitrary text instead.
                 if not await _socket_account_valid(
                     session_id, account_id, account_type, db
                 ):

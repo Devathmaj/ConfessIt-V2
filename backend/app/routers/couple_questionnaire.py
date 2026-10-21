@@ -20,14 +20,12 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/couple-questionnaire", tags=["Couple Questionnaire"])
 
-# The player-facing surface of the feature. Every route resolves the caller as a participant
-# and reads and writes only that caller's own place in the game: their selection, their
-# questions, their answers, their predictions, their score. There is no way to choose for
-# someone else, answer for them, or read their originals before the completed result --
-# the session the caller belongs to is derived from their own id on every request, never
-# from an id the client supplied. Choosing a partner sends no notification anywhere: the
-# mutual-selection mechanism is discovery-based, and the choice is only visible to its
-# chooser until both sides have chosen each other.
+# The player-facing surface of the feature. Every route resolves the caller as a
+# participant and reads and writes only that caller's own place in the game -- nothing
+# on someone else's behalf and no reading of others' originals before the completed
+# result. The session belongs to the caller's own id on every request, never a
+# client-supplied one. Choosing a partner sends no notification: mutual selection is
+# discovery-based, and a choice is visible only to its chooser until both have chosen.
 
 
 @router.get("", response_model=CoupleCurrentState)
@@ -37,10 +35,9 @@ def current_state(
 ) -> CoupleCurrentState:
     """This caller's place in the featured Couple Questionnaire.
 
-    Reading this never creates anything: a fresh caller reads partner selection,
-    a paired caller reads their questions, predictions or score depending on how
-    far both sides have played. The screen calls this on every entry -- refresh,
-    return, reconnect -- and resumes exactly where the stored rows say.
+    Reading never creates anything: a fresh caller reads partner selection, a
+    paired caller their questions, predictions or score. The screen calls this
+    on every entry and resumes exactly where the stored rows say.
     """
     return couple_gameplay.current_state(db, user)
 
@@ -74,12 +71,11 @@ def partner_candidates(
 ) -> CouplePartnerPage:
     """One page of participants the caller may choose, excluding only themselves.
 
-    Declared before ``/{...}``-style routes so ``partners`` is never read as an
-    id. Every filter is a SQL WHERE, the page a SQL LIMIT/OFFSET and the search
-    a SQL ILIKE, so the screen pages downwards instead of downloading the
-    participant table to filter it in the browser. The male/female/other
-    default and the same-gender toggle stay discovery aids: this decides
-    nothing about who may be chosen, and picking an id is validated on its own.
+    Declared before ``/{...}``-style routes so ``partners`` is never read as an id.
+    Every filter is a SQL WHERE, the page a SQL LIMIT/OFFSET and the search a SQL
+    ILIKE, so the screen pages downwards instead of filtering in the browser. The
+    gender default and same-gender toggle stay discovery aids, never rules about
+    who may be chosen; picking an id is validated on its own.
     """
     return couple_gameplay.list_partners(
         db,
@@ -101,11 +97,10 @@ def choose_partner(
 ) -> CoupleCurrentState:
     """Record this caller's partner choice, starting a session only if it is mutual.
 
-    Choosing is an upsert of the caller's one selection row: a changed mind
-    replaces the previous pick, and nobody is told. When the chosen user has
-    already chosen this caller back, exactly one session is created holding both
-    users and the featured game it belongs to. The response is the caller's new
-    state, so the screen advances in one round trip.
+    Choosing is an upsert of the caller's one selection row: a changed mind replaces
+    the previous pick, and nobody is told. When the chosen user has already chosen
+    back, exactly one session holding both users and the featured game is created.
+    The response is the caller's new state, so the screen advances in one round trip.
     """
     return couple_gameplay.select_partner(db, user, payload.selected_user_id)
 
@@ -118,10 +113,10 @@ def answer_question(
 ) -> CoupleCurrentState:
     """Store one of this caller's own answers.
 
-    The question must be one of the fifteen this caller was assigned; answers
-    are insert-only, so a second submit for the same question is refused rather
-    than overwritten. When both sides' fifteen originals are all stored, the
-    session moves to predictions in the same transaction.
+    The question must be one of the fifteen this caller was assigned; answers are
+    insert-only, so a second submit is refused rather than overwritten. When both
+    sides' originals are all stored, the session moves to predictions in the same
+    transaction.
     """
     return couple_gameplay.submit_answer(db, user, payload)
 
@@ -134,10 +129,9 @@ def predict_answer(
 ) -> CoupleCurrentState:
     """Store one prediction of the partner's answer, scored against the original.
 
-    The question must be one of the fifteen the partner answered, and the
-    verdict is computed server-side from the stored original -- nothing the
-    client sends can mark itself correct. When both sides' fifteen predictions
-    are all stored, the session completes in the same transaction and the
-    response carries the settled score.
+    The question must be one of the fifteen the partner answered, and the verdict
+    is computed server-side from the stored original -- nothing the client sends
+    can mark itself correct. When both sides' predictions are all stored, the
+    session completes and the response carries the settled score.
     """
     return couple_gameplay.submit_prediction(db, user, payload)

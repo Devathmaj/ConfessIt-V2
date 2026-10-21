@@ -34,9 +34,8 @@ def find_match(
     Finds a random user and consumes the user's matchmaking attempt for the cooldown period.
     This should only be called after a successful check and user confirmation.
 
-    NOTE: previously this endpoint declared response_model=UserDetails which caused the
-    service's dict payload (status, matched_with, match_id, expires_at) to be coerced
-    and the matched payload to be lost. Removing the response_model ensures the
-    full dict is returned to the frontend.
+    NOTE: a previously declared response_model=UserDetails coerced the service's dict
+    payload (status, matched_with, match_id, expires_at) and lost the matched payload;
+    no response_model is declared so the full dict reaches the frontend.
     """
     return find_match_service(current_user, db)

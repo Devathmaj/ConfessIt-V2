@@ -1,17 +1,4 @@
-"""Plot Twist story schemas: the versioned, structured representation of a story.
-
-AI-generated prose is never executed as game logic. Every generated package
-is parsed into these Pydantic models first; anything that does not parse is
-rejected before validation. The same models produce the strict JSON Schemas
-sent to the provider as Structured Outputs, so the contract the model is
-asked to honour and the contract the backend enforces are one definition,
-not two.
-
-State changes use a closed set of operations (set / increment / decrement /
-add_flag / remove_flag) over declared variables. There is deliberately no
-expression language: a model that cannot name an operator cannot smuggle one
-in.
-"""
+"""Pydantic schemas and strict JSON Schema conversions for Plot Twist packages."""
 
 from typing import Any, Literal, Optional
 
@@ -38,12 +25,7 @@ EndingType = Literal[
 
 
 class GenerationConfig(BaseModel):
-    """What the administrator supplies before Stage A.
-
-    Only ``difficulty`` is required (and the only knob the admin UI offers);
-    everything else defaults so a story can always be generated, while tests
-    and power users may pin the rest.
-    """
+    """Administrator configuration for Stage A story generation."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -194,9 +176,7 @@ class StoryPackageDef(BaseModel):
     tone: Optional[str] = None
     difficulty: str = "medium"
     blueprint_ref: str = Field(min_length=1, max_length=64)
-    # The decision budget for one playthrough: reaching it on a
-    # non-terminal scene concludes the story at the best qualifying ending,
-    # so no unnoticed loop can run past it.
+    # Maximum decisions allowed before concluding playthrough at best ending.
     max_decisions: int = Field(default=24, ge=5, le=40)
     initial_state: dict[str, Any] = Field(default_factory=dict)
     state_vars: list[StateVarDef] = Field(default_factory=list)
@@ -231,12 +211,7 @@ def _has_type(node: dict) -> bool:
 
 
 def _is_free_form_map(node: dict) -> bool:
-    """A ``dict[str, X]`` field: strict mode cannot express it.
-
-    Provider strict schema only accepts ``additionalProperties: false`` with
-    named properties, so free-form maps are dropped from provider schemas;
-    the matching Pydantic field keeps its ``{}`` default locally.
-    """
+    """Check if field is a free-form dictionary unrepresentable in strict schema mode."""
     return (
         node.get("type") == "object"
         and not isinstance(node.get("properties"), dict)
@@ -245,19 +220,7 @@ def _is_free_form_map(node: dict) -> bool:
 
 
 def _strict_node(node: Any) -> Any:
-    """Rewrite one schema node for the provider's strict Structured Outputs.
-
-    Probed live against the deployment:
-    - every schema node needs a ``type`` (or equivalent), so typeless ``Any``
-      nodes become an explicit union of scalars, string lists and null;
-    - ``anyOf`` with a ``null`` branch is accepted, so optional fields stay
-      nullable instead of collapsing to non-null (the old collapse made the
-      model invent placeholders like ``ending_id: ""``);
-    - every object declares ``required`` for all of its properties and
-      forbids extras;
-    - free-form maps have no strict form and return ``None`` so containers
-      can drop them.
-    """
+    """Adapt JSON schema node for strict Structured Outputs compliance."""
     if isinstance(node, list):
         return [_strict_node(item) for item in node]
     if not isinstance(node, dict):
@@ -316,18 +279,7 @@ def blueprint_json_schema() -> dict:
 def package_json_schema(
     blueprint: Optional[dict] = None, max_scenes: Optional[int] = None
 ) -> dict:
-    """The strict JSON Schema sent to the provider for Stage B.
-
-    ``initial_state`` is a free-form map, which strict mode cannot express.
-    When the approved blueprint is supplied its variables are injected as an
-    explicit typed object instead -- integer bounds included -- so the
-    provider enforces coverage and ranges; without one the field is omitted
-    (local validation still fills defaults).
-
-    ``max_scenes`` caps the ``scenes`` array at the provider (``maxItems``),
-    so an oversized package is structurally impossible to emit and the model
-    must merge beats instead of inventing scenes.
-    """
+    """Strict JSON schema for Stage B investigation packages."""
     schema = strict_schema_for(StoryPackageDef)
     if max_scenes:
         scenes = schema.get("properties", {}).get("scenes")

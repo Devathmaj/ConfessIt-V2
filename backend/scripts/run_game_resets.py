@@ -2,23 +2,20 @@
 """00:01 UTC game reset trigger: one pass, then exit.
 
 Run by the ``game-scheduler`` cron sidecar (daily tick plus one catch-up pass
-at container start) and safe to run by hand. The pass itself is
+at container start) and safe to run by hand. The pass is
 :func:`app.services.game_scheduler.run_reset_cycle`, which calls the same
 per-game entry point as boot and ``POST /admin/games/run-resets`` -- so every
 update-handling rule holds on this path: per-game advisory locks serialize a
 tick racing an admin Update, the partial unique index refuses a duplicate
-active session, pending sessions activate in-period, hidden games are
-skipped, Trivia Drop releases through its own entry point, and closed league
-events are finalized afterwards. Nothing here writes sessions directly.
+active session, pending sessions activate in-period, hidden games are skipped,
+Trivia Drop releases through its own entry point, and closed league events are
+finalized afterwards. Nothing here writes sessions directly.
 
-Exit status is 0 only when every game and the league scan succeeded, so a
-failed tick surfaces loudly in the container logs and in cron's own exit
-reporting. A repeated run is always safe: each game's evaluation is
-idempotent, and a second run for the same boundary changes nothing.
-
-Every failure -- a database that is not there, a game that refuses to open, a
-setting that is missing or invalid -- is reported the same way: exit 1 and a
-sanitized report, never a raw traceback carrying the DSN or the signing key.
+Exit status is 0 only when every game and the league scan succeeded. A repeated
+run is always safe: each game's evaluation is idempotent. Every failure -- a
+missing database, a game that refuses to open, a missing or invalid setting --
+is reported the same way: exit 1 and a sanitized report, never a raw traceback
+carrying the DSN or the signing key.
 """
 
 import os
@@ -46,16 +43,16 @@ if _BACKEND_ROOT not in sys.path:
 def _sanitize_failure(text: str) -> str:
     """Redact DSN/password/secret material from a traceback before printing.
 
-    SQLAlchemy/DBAPI errors echo the connection URL (user:password@host); cron
-    logs are retained, so the raw traceback is a credential leak. A settings
-    error is worse: pydantic echoes the whole settings mapping it was given,
-    which carries the DSNs and the signing key verbatim. So the values the
-    tick was handed are redacted by value as well as by shape.
+    SQLAlchemy/DBAPI errors echo the connection URL (user:password@host) and
+    cron logs are retained, so the raw traceback is a credential leak. A
+    settings error is worse: pydantic echoes the whole settings mapping, which
+    carries the DSNs and the signing key verbatim -- so the values the tick was
+    handed are redacted by value as well as by shape.
 
     The character class is ``[^@\\s]`` -- "not @, not whitespace". It used to
     read ``[^@\\\\s]``, which in a raw string excludes the letter ``s`` as
-    well, so the rule never matched a PostgreSQL DSN (every one of them
-    contains an ``s``) and the DSN was logged in full.
+    well, so the rule never matched a PostgreSQL DSN and the DSN was logged in
+    full.
     """
     redacted = re.sub(r"://[^@\s]+@", "://***@", text)
     for secret_name in (

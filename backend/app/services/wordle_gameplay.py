@@ -1,25 +1,7 @@
-"""Playing a day's Wordle: the participant-facing half of the feature.
+"""Participant gameplay for daily Wordle guesses and board state.
 
-``wordle_service`` configures a puzzle -- a day and a word. This module is everything that
-happens *afterwards*: reading the day's puzzle without revealing its answer, and settling
-one guess at a time against it.
-
-Two rules hold at the bottom of everything here.
-
-**One participation per player per puzzle.** A ``wordle_user_games`` row pairs a user with
-a wordle game, and the unique pair is the schema's rule, not a service check. A guess
-against a puzzle a player has no row for creates the row lazily, and two concurrent first
-guesses race that insert: each reads "no participation yet", each tries to write, and the
-unique index lets exactly one of them own the row. The loser re-reads the winner's row
-under ``FOR UPDATE`` and plays the guess against *that* -- so a day's puzzle cannot be
-played twice for an extra attempt.
-
-**The answer is never stored here.** ``wordle_games`` is the only place the word exists;
-a participation row stores guesses only, and a read re-derives each guess's verdict with
-the same deterministic evaluation the guess was scored with. ``current_wordle`` therefore
-reveals the answer at exactly one moment -- when the player's game is complete -- and no
-write path ever needs to trust a client-supplied answer, because there is no answer
-anywhere in this table to send.
+Guess validation and letter feedback use the word list; session state
+determines whether a game is active, stale or complete.
 """
 
 from datetime import datetime, timezone
@@ -168,19 +150,10 @@ def _empty_game() -> WordleCurrentGame:
 
 
 def current_wordle(db: Database, user_id: str) -> WordleCurrentGame:
-    """The playable puzzle and this player's participation, without creating a row.
+    """Read the current puzzle and participation without creating a row or consuming a guess.
 
-    Reading the board must leave no trace: opening the screen twice at six guesses costs
-    nothing, and a fresh player who only looks at today's puzzle has not started playing it.
-    A player's participation exists exactly once they commit a guess, so a fresh player
-    reads ``participation=None`` and a returning one reads the same board they left.
-
-    Availability is enforced before anything else: hidden and disabled games
-    refuse with a coded 403 rather than a board. A pending session (manual mode,
-    word not yet provided) answers 200 with ``session_status="pending"`` and a
-    sentence the screen shows instead of a playable board. A session past its
-    calendar boundary reads as absent until the reset loop opens the next
-    period -- reads never create sessions.
+    Hidden or disabled games refuse; pending sessions return their status, and
+    expired sessions remain absent until the reset loop opens the next period.
     """
     from . import game_periods
     from .game_configs import check_playable
@@ -232,17 +205,10 @@ def _read_board(session, game: WordleGameRecord, user_id: str) -> WordleCurrentG
 
 
 def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> WordleGuessResponse:
-    """Score one guess against ``payload.game_id`` and record it for ``user_id``.
+    """Score and record a guess in one transaction, serializing writes on the participation row.
 
-    The whole exchange runs in one transaction. The participation row is read for update,
-    which serialises concurrent guesses on the same puzzle: a first guess creates the row
-    (two creations racing on the unique pair settle to the one that inserted first), and
-    every subsequent guess appends to whatever row that was. A guess against a finished
-    puzzle, or a seventh guess against an in-progress one, is refused rather than stored.
-
-    ``result`` is computed against the stored answer inside the transaction, so the answer
-    and the verdict a client receives cannot disagree, and the response is built while the
-    row is still locked so the ``attempt_count`` it reports is the one that was committed.
+    The stored answer determines feedback, and completed games or guesses beyond the
+    attempt limit are refused. The response reflects the committed row state.
     """
     if not is_valid_id(payload.game_id):
         raise HTTPException(
@@ -255,9 +221,7 @@ def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> Wor
         from . import game_periods
         from .game_configs import check_playable, lock_game_for_play
 
-        # ENG-001: hold the lifecycle lock across the liveness checks below and
-        # the participation write, so a scheduler rollover cannot slip between
-        # them and land this guess in the session being ended.
+        # Keep the lifecycle lock through validation and write to prevent rollover races.
         lock_game_for_play(session, "wordle")
         check_playable(session, "wordle")
         game = session.get(WordleGameRecord, payload.game_id)
@@ -304,14 +268,7 @@ def submit_guess(db: Database, user_id: str, payload: WordleGuessRequest) -> Wor
 
         now = datetime.now(timezone.utc)
         if participation is None:
-            # First guess for this player on this puzzle. Two requests can both read "no
-            # participation yet" and both try to write; the unique (game, user) pair is the
-            # rule, so the insert races them. ON CONFLICT DO NOTHING makes the losing
-            # insert a non-event rather than an IntegrityError: exactly one of the two
-            # requests inserts, and the loser's rowcount is zero. Either way a fresh
-            # FOR UPDATE read follows -- the loser waits for the winner's transaction to
-            # commit, then plays against the row that won -- so the day's puzzle is not
-            # two puzzles with two attempt budgets.
+            # The unique game/user key allows one insert; the loser reloads the winner's row.
             inserted = session.execute(
                 pg_insert(WordleUserGameRecord)
                 .values(

@@ -1,16 +1,4 @@
-"""Separately encrypted moderation evidence for reported chat messages.
-
-Ordinary chat history is purged on its own deadline. A report is a moderation
-record with a different lifetime, so the individual message it names is copied
-here at filing time, encrypted again under its own AAD, and retained for
-``REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``. Only that one turn is preserved --
-never the surrounding conversation -- and only the authorised report-review
-endpoint decrypts it.
-
-The table has no foreign key to the live chat tables: those rows are expected to
-be deleted first. Reports themselves point at messages with ``ON DELETE SET
-NULL``, so they survive the purge and still identify the evidence by report id.
-"""
+"""Separately encrypted moderation evidence store for reported chat messages."""
 
 from __future__ import annotations
 
@@ -44,13 +32,7 @@ def capture_report_evidence(
     message_created_at: datetime,
     reported_at: Optional[datetime] = None,
 ) -> ChatMessageEvidenceRecord:
-    """Encrypt and queue one evidence row inside the caller's transaction.
-
-    Called immediately after the report row is flushed, so a report can never
-    commit without its evidence and evidence can never outlive a rolled-back
-    report. Re-capturing the same report is a no-op (the automated path checks
-    for an existing report first, and this unique report id is the backstop).
-    """
+    """Encrypt and store an evidence row within the caller's transaction."""
     existing = session.scalar(
         select(ChatMessageEvidenceRecord).where(
             ChatMessageEvidenceRecord.report_id == str(report_id)
@@ -96,12 +78,7 @@ def evidence_for_reports(
     *,
     now: Optional[datetime] = None,
 ) -> dict[str, ChatMessageEvidenceRecord]:
-    """Bulk-load unexpired evidence rows keyed by report id (one query, not one per row).
-
-    ``expires_at`` is a logical deadline, not merely the next cleanup's to-do
-    list: evidence whose retention window has passed is withheld immediately,
-    even if the daily purge has not physically removed the row yet.
-    """
+    """Bulk-load unexpired evidence rows keyed by report ID."""
     ids = {str(value) for value in report_ids if value}
     if not ids:
         return {}
@@ -137,11 +114,7 @@ def audit_evidence_access(
     report_kind_by_id: dict[str, str],
     evidence_by_report: dict[str, ChatMessageEvidenceRecord],
 ) -> None:
-    """Persist one audit row per report whose evidence content was returned.
-
-    A failure here fails the read: if access cannot be recorded, the private
-    content is not handed out. Only ids and the reviewer are stored.
-    """
+    """Persist audit records for reports whose evidence content was accessed."""
     if not evidence_by_report:
         return
     now = datetime.now(timezone.utc)

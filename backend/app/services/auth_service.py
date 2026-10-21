@@ -34,31 +34,19 @@ from .storage_service import storage_service
 
 logger = get_logger(__name__)
 
-# Deliberately separate from the module logger above. The magic link is a live bearer
-# credential, so it goes to stdout only: `docker compose logs backend` shows it while
-# debugging, but the OTLP handler is never attached, so it is not exported to the
-# collector and never lands in Loki (or any log store with a retention period).
+# Console-only: the magic link is a live bearer credential and OTLP/Loki retains logs.
 magic_link_logger = get_console_only_logger(__name__ + ".magic_link")
 
-# Single wording for every blocked-account rejection so the frontend can show
-# one message regardless of which endpoint refused the request.
+# One wording for every blocked-account rejection, whichever endpoint refuses it.
 ACCOUNT_UNAVAILABLE_DETAIL = "Your account is currently not available. Please contact an administrator."
 
-# The one live-session-per-account rule: exactly one of an account's sessions is `active`,
-# and every older login is `superseded` by the newest one. Read here so the wording of the
-# response, the comparison in the token check, and the state written at login cannot drift
-# apart.
+# One live session per account: older logins move to `superseded`; shared constants keep wording and checks aligned.
 SESSION_STATUS_ACTIVE = "active"
 SESSION_STATUS_SUPERSEDED = "superseded"
 SESSION_STATUS_REVOKED = "revoked"
 SESSION_STATUS_EXPIRED = "expired"
 
-# The one body a refused credential gets back. Every refresh/logout failure -- a token
-# that never existed, one that was rotated away, a session past its absolute deadline, an
-# account that was blocked or deleted -- answers identically, so nothing about the
-# response tells a caller whether a random refresh token belongs to a live account. Only
-# the superseded case is told apart, for the same reason an access token is: the person's
-# session is genuinely over and the frontend needs the "signed in elsewhere" wording.
+# Uniform 401 so a random token cannot be probed for liveness; only superseded is distinguished.
 def credentials_exception() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -68,18 +56,7 @@ def credentials_exception() -> HTTPException:
 
 
 class StaleRefreshTokenError(HTTPException):
-    """The presented refresh token is a stale copy of a live session's previous value.
-
-    A refusal like any other -- the value can never succeed again -- but the caller
-    has to tell it apart from a value no session ever held. The browser that
-    presented a rotated-away value may still hold the *newer* value that replaced it
-    (two tabs of one browser racing a refresh), and deleting the cookie would sign
-    that browser out of a session it is still using.
-
-    The client sees the same generic 401 as any other refusal: the answer must not
-    tell a caller whether a random token belonged to a live account. Only the
-    server's own decision about the cookie differs.
-    """
+    """A rotated-away refresh value from a still-live session; do not clear the cookie (another tab may hold the newer value)."""
 
 
 def _stale_refresh_token_exception() -> HTTPException:
@@ -89,26 +66,13 @@ def _stale_refresh_token_exception() -> HTTPException:
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-# What the superseded holder is told on their very next request, and what the frontend
-# surfaces as the reason they were signed out. Kept distinguishable from the generic
-# credentials wording so the client can show "signed in elsewhere" rather than "try again".
-# The `WWW-Authenticate` error is the machine-readable half, the detail the human one.
+# Distinguishable from the generic refusal so the client can say "signed in elsewhere".
 SESSION_SUPERSEDED_DETAIL = (
     "You have been signed out because a new session was opened on another device."
 )
 _SESSION_SUPERSEDED_WWW_AUTHENTICATE = 'Bearer error="session_superseded"'
 
-# The sign-in form answers uniformly. Every answered request -- a real, unblocked
-# account, a registration number with no account, a blocked account -- gets the same
-# 200 and the same body shape, so sweeping registration numbers across the three doors
-# learns nothing: not existence, not blocked state, not which table holds the number.
-# A link is minted (and the mint logged) only for a real, unblocked account; the other
-# outcomes mint nothing and answer a synthetic deadline computed by the same formula
-# as a real mint, so even the body is indistinguishable. None of these answers echoes
-# the submitted registration number or any account field -- the only thing a caller
-# can observe is timing noise. A request the rate limiter refuses gets its own 429
-# instead of any of them, and a request the validation gate refuses gets a 400;
-# neither of those varies with account state either.
+# Uniform 200 for real, unknown and blocked regnos, so sweeping reveals no account state.
 LOGIN_LINK_SENT_MESSAGE = (
     "If this registration number is registered, a login link has been generated. "
     "Check the backend console -- and double-check the number for typos."
@@ -116,13 +80,7 @@ LOGIN_LINK_SENT_MESSAGE = (
 
 
 def _uniform_link_response() -> Dict[str, Any]:
-    """The body every answered sign-in request gets, eligible or not.
-
-    `expires_at` is synthesized by the same `now + LOGIN_TOKEN_EXPIRE_MINUTES` formula
-    `create_and_store_magic_token` stores on a real row, so a refused caller sees the
-    same keys, the same message and a same-shaped deadline as a minted one. The sign-in
-    page counts this down exactly as it would a real mint.
-    """
+    """The uniform sign-in body; ``expires_at`` uses the same formula as a real mint."""
     return {
         "message": LOGIN_LINK_SENT_MESSAGE,
         "expires_at": (
@@ -143,27 +101,14 @@ _RATE_LIMIT_DETAILS: Dict[str, str] = {
     ),
 }
 
-# What each sign-in page calls the kind of account it is for. Used only in
-# server-side log lines: the caller is never told which category a regno belongs to --
-# or whether it belongs to one at all -- so the sign-in form cannot be used as a probe
-# for whether a given staff account exists.
+# Log-only labels; callers are never told an account's category, so sign-in cannot probe for staff.
 ACCOUNT_CATEGORY_LABELS: Dict[str, str] = {
     AccountType.USERS.value: "participant",
     AccountType.ADMIN.value: "admin",
     AccountType.MODERATOR.value: "moderator",
 }
 
-# The columns every account table shares. Read generically so one serialiser serves all
-# three, and so a field added to the mixin cannot be added to only one of the tables.
-#
-# ``gender`` and the two profile-picture columns are deliberately absent from this list, for
-# the same reason the participant fields below are: they exist on ``users`` only, so a staff row
-# has nothing to read and ``AccountDetails`` does not declare them. They are added by
-# ``_user_payload``, alongside the rest of the participant shape.
-#
-# What an API response carries for a picture is an address the browser can fetch -- not the
-# internal identity of the object behind it -- so that derivation lives with the participant
-# payload too.
+# Columns shared by all three account tables; users-only fields come from `_user_payload`.
 _ACCOUNT_SERIALIZED_FIELDS: Tuple[str, ...] = (
     "id", "regno", "name", "email",
     "notifications_enabled", "is_blocked", "last_login_at",
@@ -188,10 +133,7 @@ def _user_payload(row: Any) -> Dict[str, Any]:
         "year": row.year,
         "department": row.department,
         "gender": row.gender,
-        # A profile picture is a public object on Cloudinary's CDN, so the address is derived
-        # from the stored identity rather than stored itself. Nothing here authorises anything:
-        # the same URL goes to every account that can see the profile, which is why it is cheap
-        # to build and why building it must not be confused with a permission check.
+        # Derived from stored identity: a profile picture is a public CDN object that authorises nothing.
         "profile_picture_url": storage_service.profile_delivery_url(
             row.profile_picture_public_id, row.profile_picture_format
         ),
@@ -206,12 +148,7 @@ def _user_payload(row: Any) -> Dict[str, Any]:
 
 
 def account_from_row(account_type: str, row: Any):
-    """Build the model an account of this kind is exposed as.
-
-    A participant row becomes a ``UserDetails``; a staff row becomes the shared
-    ``AccountDetails``. Both carry the shared columns, email included, so the difference is
-    exactly the participant fields -- which is the same distinction the schema makes.
-    """
+    """Build the model for an account kind from a row; participant rows get UserDetails."""
     if account_type == AccountType.USERS.value:
         return UserDetails(**_user_payload(row))
     return AccountDetails(**_account_payload(row, account_type))
@@ -226,18 +163,7 @@ def _ensure_not_blocked(row: Any) -> None:
 
 
 def retire_account_sessions(session, account_id: str, account_type: str) -> None:
-    """Retire an account's live sessions and unredeemed magic links in the caller's transaction.
-
-    The write side of a block, shared by the admin route and the automatic block at the removal
-    threshold so the two cannot disagree about what blocking does. Enforcement never depends on
-    it -- every auth path re-checks ``is_blocked`` per request -- but the session table must not
-    go on describing a blocked account as actively signed in, or a status-only reader (the admin
-    census of live sessions among them) sees a live session that cannot authenticate.
-
-    Live sessions move to ``revoked`` and links that were never redeemed are marked revoked, so
-    neither can be picked up again. Retirement is not undone by an unblock: the account signs in
-    fresh, which is also what rotates its credentials.
-    """
+    """Revoke live sessions and unredeemed magic links in the caller's transaction; shared by both block paths, while enforcement always re-checks ``is_blocked``."""
     session.execute(
         update(LoginTokenRecord)
         .where(
@@ -259,59 +185,37 @@ def retire_account_sessions(session, account_id: str, account_type: str) -> None
     )
 
 
-# ``HTTPBearer`` rather than ``OAuth2PasswordBearer``: there is no password grant and no
-# ``/auth/token`` endpoint (the tokenUrl in the old scheme's constructor advertised one
-# that does not exist). The bearer scheme extracts the ``Authorization: Bearer`` header,
-# which is exactly the shape every authenticated endpoint already uses.
+# HTTPBearer, not OAuth2PasswordBearer: there is no password grant, only the Bearer header.
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def _deadline_passed(deadline: Optional[datetime], now: datetime) -> bool:
-    """Whether an absolute session deadline is missing or already behind us.
-
-    A missing deadline is treated as passed. The boot path backfills a deadline for every
-    *redeemed* session, so a NULL here means a row that either never became a session or
-    belongs to a build before the deadline existed -- and a session without a ceiling is
-    precisely the unbounded-renewal case the deadline exists to forbid.
-    """
+    """Whether an absolute session deadline is missing or passed; missing counts as passed."""
     if deadline is None:
         return True
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
     return deadline <= now
 
-#: The only JWT algorithm this deployment speaks, on both sides of the wire. A
-#: configurable algorithm is how ``none`` (and cross-algorithm confusion generally)
-#: gets in: decoding accepts exactly this tuple and nothing else, so there is no
-#: setting to misconfigure into accepting an unsigned token.
+#: Fixed HS256 on both sides: a configurable algorithm is how ``none``/cross-algorithm confusion gets in.
 _JWT_ALGORITHM = "HS256"
 _JWT_ALGORITHMS = (_JWT_ALGORITHM,)
 
-#: Claims a decoded access token must carry. ``exp`` is verified for freshness by
-#: PyJWT once required; the identity claims are re-checked against the session row
-#: below rather than trusted, but a token missing them is refused before any lookup.
+#: Required claims; a token missing them is refused before any session lookup.
 _JWT_REQUIRED_CLAIMS = ("exp", "account_id", "session_id")
 
-#: Token-hash domains. Magic-link and refresh values hash under different prefixes so
-#: a stored value for one column can never be replayed as the other, even if a caller
-#: mixed the columns up.
+#: Hash domains prevent replaying a value across token-type columns.
 TOKEN_HASH_DOMAIN_MAGIC = "magic"
 TOKEN_HASH_DOMAIN_REFRESH = "refresh"
 TOKEN_HASH_DOMAIN_WEBSOCKET = "websocket"
 
-#: How long a WebSocket ticket may be redeemed. The client mints one immediately
-#: before opening the socket, so this only has to cover a slow handshake; keeping it
-#: under a minute bounds the value of a ticket that leaked into retained logs. The
-#: ticket is single-use and session-bound regardless, so this is the outer bound.
+#: Covers a slow handshake while bounding a leaked ticket's value.
 WEBSOCKET_TICKET_EXPIRE_SECONDS = 60
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    """
-    Used to create a JWT access token.
-    """
+    """Create a signed JWT access token."""
     to_encode = data.copy()
-    # Aware UTC, not utcnow(): the claim value is identical, but an aware datetime
-    # cannot be silently confused with local time by a later edit.
+    # Aware UTC so a later edit cannot confuse it with local time.
     now = datetime.now(timezone.utc)
     if expires_delta:
         expire = now + expires_delta
@@ -322,38 +226,19 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 def hash_token(token: str, *, domain: str) -> str:
-    """Hash a token for storage, peppered and domain-separated.
-
-    The pepper (``TOKEN_HASH_PEPPER``, required and shared like ``SECRET_KEY``) is what
-    makes a database dump useless for offline search: without it the stored SHA-256 of
-    a high-entropy token cannot be reversed, replayed, or rainbow-tabled. The domain
-    prefix scopes the hash to one column's purpose -- a magic-link hash presented as a
-    refresh hash simply misses, even though both live in the same table. The domain is
-    keyword-only so no call site can pass it positionally and no reader can mistake
-    which column a hash is for.
-    """
+    """Hash a token for storage, peppered and domain-separated (pepper defeats offline dump search; domain prevents cross-column replay)."""
     return hashlib.sha256(
         f"{domain}:{settings.TOKEN_HASH_PEPPER}:{token}".encode()
     ).hexdigest()
 
 def generate_refresh_token() -> str:
-    """A fresh opaque refresh token.
-
-    The raw value is secrets.token_urlsafe(64) -- 256 bits of entropy, so guessing one is
-    not a threat worth defending against. It is shown exactly once (the router sets it as
-    an HttpOnly cookie on the way through) and stored only as ``hash_token``.
-    """
+    """A fresh opaque 256-bit refresh token, shown once and stored only hashed."""
     return secrets.token_urlsafe(64)
 
 def _session_advisory_lock_key(account_type: str, account_id: str) -> int:
-    """The advisory-lock key that serialises logins for *one* account.
+    """Advisory-lock key that serialises logins for one account.
 
-    ``account_cap`` serialises per account *table* with a fixed key; one-live-session needs
-    the same serialisation per account, because two logins racing for the same account would
-    otherwise both observe "no other active session" from the same snapshot and both go
-    active. The key is derived from the two identity facts a login already has (the table and
-    the row), masked to the positive bigint range advisory locks accept, so two logins for
-    different accounts never block each other.
+    Per-account, not per-table: two racing logins must not both see no active session and both go live.
     """
     digest = hashlib.sha256(f"{account_type}:{account_id}".encode()).digest()
     return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
@@ -391,13 +276,7 @@ def _account_from_session(
     account_type: str,
     require_active_session: bool = True,
 ) -> Optional[Any]:
-    """Resolve the account behind one login session, re-reading both rows.
-
-    The bearer-token and WebSocket-ticket paths converge here. Keeping the session and
-    account checks in one function is what makes a ticket no weaker than the access token
-    it replaced: a ticket records the session it was minted from, and this re-runs the same
-    one-live-session, absolute-deadline and blocked-account rules at redemption time.
-    """
+    """Resolve the account behind one login session, re-reading rows; bearer and WebSocket-ticket paths converge here under the same live-session/deadline/blocked rules."""
     session_row = session.get(LoginTokenRecord, session_id)
     if session_row is None:
         logger.error(f"Session {session_id} does not exist")
@@ -440,25 +319,7 @@ def _account_from_bearer_token(
     *,
     require_active_session: bool = True,
 ) -> Optional[Any]:
-    """Decode an access token and resolve it to a live account, or None.
-
-    Shared by the request dependencies and the optional-auth feed path so the re-read
-    cannot drift between them. The token carries the account's table and primary key, so
-    the lookup is a primary-key read in one named table -- never a search for the regno,
-    which would be a search for *an* account rather than *this* one once a regno can exist
-    in more than one table.
-
-    Nothing about an account's privileges is ever taken from the token. The table decides
-    what the caller may do, and it is re-read from the row on every request, so a revoked or
-    demoted account is refused on its very next call, and a token minted for one table
-    cannot be replayed as another.
-
-    A token without the session claim is rejected rather than resolved by regno. Such a
-    token was minted before the account's table -- or the session it belongs to -- was
-    recorded in it, and honouring it by searching is exactly the ambiguity this design
-    removes; the cost is that sessions issued by an older build end at their next request
-    and their users sign in again.
-    """
+    """Decode an access token and resolve it to a live account, or None; privileges are never taken from the token because the row is re-read every request."""
     payload = _decode_access_token(token)
     if payload is None:
         return None
@@ -493,13 +354,7 @@ def access_token_session_id(token: Optional[str]) -> Optional[str]:
 
 
 def create_websocket_ticket(db: Database, account: Any, session_id: str) -> Dict[str, Any]:
-    """Mint one short-lived, single-use ticket for an authenticated socket.
-
-    The raw value is returned exactly once. Only its domain-separated hash is stored, so a
-    database reader cannot replay it, and the row is bound to both the account and the
-    login session that requested it. Expired rows are swept opportunistically on each mint
-    so the table stays bounded even though every connection mints one.
-    """
+    """Mint one short-lived, single-use WebSocket ticket; only its hash is stored."""
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=WEBSOCKET_TICKET_EXPIRE_SECONDS)
     raw_ticket = secrets.token_urlsafe(32)
@@ -532,12 +387,9 @@ def create_websocket_ticket(db: Database, account: Any, session_id: str) -> Dict
 def consume_websocket_ticket(
     db: Database, raw_ticket: Optional[str]
 ) -> Optional[Tuple[Any, str]]:
-    """Burn a ticket and return ``(account, session_id)``, or None if it is not usable.
+    """Burn a ticket and return ``(account, session_id)``, or None if unusable.
 
-    The conditional UPDATE is the single-use gate: two racing handshakes can both read the
-    same row, but only one can set ``consumed_at`` while it is NULL. Session and account
-    state are then re-read in the same transaction, so a ticket minted a moment before a
-    logout, supersede, expiry or block cannot open a socket after it.
+    The conditional UPDATE is the single-use gate; session state is re-read in the same transaction.
     """
     if not raw_ticket:
         return None
@@ -583,14 +435,7 @@ def revalidate_websocket_session(
     account_id: str,
     account_type: str,
 ) -> Optional[Any]:
-    """Re-resolve a live socket's session after the handshake.
-
-    A socket is authenticated once, but the session behind it can be revoked, superseded,
-    expired, or its account blocked while the socket is open. Long-lived transports
-    therefore re-run this on every received frame and before forwarding a published message.
-    Any refusal -- including the dedicated superseded-session 401 -- is represented as None
-    so callers close the socket with the auth-required code.
-    """
+    """Re-resolve a live socket's session per frame; any refusal becomes None so the socket closes."""
     try:
         with db.sessions() as session:
             return _account_from_session(
@@ -605,12 +450,7 @@ def revalidate_websocket_session(
 
 
 def verify_token_service(token: str, db: Database) -> AccountDetails:
-    """
-    Verify JWT token and return account details.
-
-    Kept for non-WebSocket callers and tests; the live socket endpoints now consume a
-    short-lived ticket instead of placing this bearer in the URL.
-    """
+    """Verify a JWT and return account details; kept for non-WebSocket callers and tests."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -627,13 +467,7 @@ def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Database = Depends(get_db),
 ) -> AccountDetails:
-    """
-    Used to decode the JWT, validate the account, and return its details.
-
-    Returns a ``UserDetails`` for a row in ``users`` and the shared ``AccountDetails`` for a
-    row in ``admin`` or ``moderator``, which is what lets a participant route depend on
-    ``require_participant`` and be handed a fully-populated participant model.
-    """
+    """Decode the JWT and validate the account; participant rows become ``UserDetails``, staff the shared ``AccountDetails``."""
     token = credentials.credentials if credentials is not None else None
     account = _account_from_bearer_token(token, db)
     if account is None:
@@ -644,39 +478,20 @@ def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Database = Depends(get_db),
 ) -> Optional[AccountDetails]:
-    """
-    Used to decode the JWT and return account details if the token is valid,
-    but does not raise an error if the token is missing or invalid.
-    """
+    """Like ``get_current_user`` but returns None for a missing or invalid token."""
     token = credentials.credentials if credentials is not None else None
-    # A replaced session is "no account" here rather than a 401: this dependency is for the
-    # one surface that works while signed out, and a superseded token has lost the right to
-    # claim an identity on it exactly like a token that never had one.
+    # A superseded session counts as anonymous here, not a 401: a replaced token has no more claim than none.
     return _account_from_bearer_token(token, db, require_active_session=False)
 
 
-# Log-safe stand-ins for login actors. These logs ship to OTLP/Loki, which keeps
-# them for the full retention period, so a raw regno, client id or IP must never
-# reach a log line: each would turn the log store into a browsable record of who
-# signed in, from where, on every throttled or failed attempt.
+# Log-safe stand-ins: these logs ship to retained OTLP/Loki, so raw identifiers must never appear.
 def _log_identity_hash(value: str) -> str:
-    """Backwards-compatible name for the shared log identifier hash.
-
-    The upload services now use the same helper, so auth and image logging agree
-    on what a ``regno_hash`` means. Kept as an alias because the auth log tests
-    import this name.
-    """
+    """Shared log identifier hash; alias kept because auth tests import this name."""
     return log_identity_hash(value)
 
 
 def _log_ip_network(ip: Any) -> str:
-    """The caller's subnet for logs: /24 for IPv4, /64 for IPv6.
-
-    Host bits identify a device; the subnet is what abuse review needs (same
-    neighbourhood as the mint, same actor behind a NAT) without it. Mirrors the
-    widths :func:`_redemption_continuity` enforces, so the log says what the
-    check checked. Anything unparseable logs as ``unparseable`` rather than raw.
-    """
+    """The caller's subnet for logs: /24 IPv4, /64 IPv6; unparseable logs as ``unparseable``."""
     try:
         parsed = ipaddress.ip_address(str(ip).strip())
     except ValueError:
@@ -692,16 +507,7 @@ def _rate_limit_rejection(    verdict: RateLimitVerdict,
     client_id: str,
     ip: str,
 ) -> HTTPException:
-    """Log which limiter refused a login request, and build the 429 that says so.
-
-    The log lines are the observability contract: one per scope, named the way an
-    operator would search for them. They carry hashed/truncated keys -- a client
-    hash or subnet, never the raw values -- because these warnings ship to
-    OTLP/Loki and are retained: a raw regno, client id or IP on every refusal
-    would be a browsable record of who signs in from where. The hashes are
-    stable per deployment, so one actor's lines still correlate. No token ever
-    appears here, because no token exists yet at this point in the request.
-    """
+    """Log which limiter refused and build the 429; only hashed/truncated keys reach retained logs."""
     if verdict.scope == SCOPE_CLIENT:
         logger.warning(
             f"Client rate limit triggered: "
@@ -736,30 +542,15 @@ def _rate_limit_rejection(    verdict: RateLimitVerdict,
     )
 
 
-# The only characters a registration number may be made of, enforced at sign-in so no
-# unvalidated string reaches a lookup, a rate-limit key or a log line. ``\w`` is Unicode
-# in a str pattern: letters and digits from any script, plus ``_``. The punctuation
-# ``. / -`` is what real regnos carry (e.g. ``22/CS0455``). Everything else -- whitespace,
-# control characters, quotes, angle brackets, ``&``, ``=``, ``;``, backslashes and the
-# rest -- is refused with a 400 before it can do anything. The length is ``USER_REGNO_MAX``,
-# the same bound the ``regno`` column and the admin account payloads enforce.
+# Regno shape, enforced before any lookup, rate-limit key or log line; matches USER_REGNO_MAX.
 _REGNO_PATTERN = re.compile(rf"^[\w./-]{{1,{USER_REGNO_MAX}}}$")
 
-# An administrator address is about to be placed in an email that the Function
-# App validates again. Keep the same conservative shape here so a malformed
-# legacy row is never chosen as the only contact route.
+# Conservative shape check before a legacy admin row is used as a contact address.
 _ADMIN_EMAIL_PATTERN = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
 
 
 def _validated_regno(value: Any) -> str:
-    """The submitted registration number, narrowed to what a regno may be, or a 400.
-
-    Runs before the rate limits so invalid input is refused without spending any budget,
-    and before the lookup so no unvalidated string ever reaches a query, a key or a log
-    line. Surrounding whitespace is trimmed first -- a pasted value with a stray space
-    still signs in -- and the trimmed value is what is searched and what keys the limits.
-    A value that is not a string (a list, a dict, a number) is invalid, never coerced.
-    """
+    """Trim and validate the submitted regno or 400; runs before rate limits so invalid input costs no budget."""
     if not isinstance(value, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -778,14 +569,7 @@ def _validated_regno(value: Any) -> str:
 
 
 def _random_admin_contact_email(db: Database) -> Optional[str]:
-    """One administrator address for a blocked-account appeal, chosen at random.
-
-    The account cannot sign in, so the blocked notice has to name a route back.
-    Any administrator can receive the appeal; choosing one at random avoids
-    hard-coding a person and spreads the mail. The address is only ever placed
-    in the recipient's email, never in the login response or logs. A lookup
-    failure returns None and must not stop the blocked notice from being sent.
-    """
+    """One random administrator address for a blocked-account appeal; failures return None without stopping the notice."""
     try:
         with db.sessions() as session:
             emails = session.scalars(
@@ -818,29 +602,7 @@ async def generate_magic_link_service(
     """
     Mint a magic link for an account in one named account table.
 
-    ``account_type`` is the table the person said they were signing in to, which is the only
-    thing that makes the request answerable: a regno is unique per table, so the same regno
-    can exist as a participant and as an admin at the same time, and the page the person
-    chose is what says which of them they are. Searching all three tables here would put
-    that decision back to an arbitrary ordering, and the person would be sent a link for an
-    account they did not ask for.
-
-    The table is recorded on the token as well, so redemption reads the same one table
-    rather than searching for the regno again.
-
-    The answer is uniform by design: a link for a real, unblocked account and the
-    identical 200 body for an unknown registration number or a blocked one. A
-    blocked account's own address receives a blocked-account notice instead of a
-    magic link, but that side effect is never visible in the response. The rate
-    limits run before the lookup for a reason: they are keyed on the submitted
-    registration number, so being cooled down -- and paying the cooldown down --
-    happens for an invented registration number exactly as it does for a real one,
-    and the 429s never vary with account state either.
-
-    ``client_id`` is the caller's browser identity for the client-scoped limit. The
-    router resolves it from the request cookie and passes it in so the same value can be
-    written back into the response; a direct caller that supplies none gets one resolved
-    here instead.
+    ``account_type`` selects the table (a regno is unique only within one) and is recorded on the token. The answer is uniform for real, unknown or blocked regnos; rate limits run before the lookup, so 429s reveal no account state. ``client_id`` comes from the router when given, else resolved here.
     """
     if not is_valid_account_type(account_type):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown account type")
@@ -880,9 +642,7 @@ async def generate_magic_link_service(
     with db.sessions() as session:
         found = find_account_in_table(session, account_type, regno)
     if not found:
-        # Answered, not refused: the caller gets the same body as a mint, and no
-        # token is stored. The log names what happened for a hashed tag, never the
-        # submitted regno itself; the response does not.
+        # Answered, not refused: same body as a mint, no token stored, hashed tags only in logs.
         logger.info(
             f"Login request for unknown {category} registration number "
             f"(regno_hash={_log_identity_hash(regno)}): answering as if a link was sent"
@@ -891,19 +651,13 @@ async def generate_magic_link_service(
 
     resolved_type, account = found
 
-    # A blocked account mints nothing -- while redemption re-checks the block for a
-    # link issued before the block was set -- and is answered exactly like an
-    # unknown number, so blocked state is not learnable from this endpoint.
+    # Blocked accounts mint nothing (redemption also re-checks) and answer like an unknown number, so state is not learnable.
     if account.is_blocked:
         logger.warning(
             f"Login request for blocked {category} account "
             f"(regno_hash={_log_identity_hash(regno)}): answering as if a link was sent"
         )
-        # A blocked account gets no magic link, but it does get a notice to the
-        # address on the account explaining the block and naming an administrator
-        # to contact. This is a sign-in outcome, so it is not gated by the
-        # notifications_enabled preference. The HTTP answer stays uniform, and
-        # the administrator address is never included in it.
+        # The notice is a sign-in outcome: ignores notifications_enabled, and the response stays uniform.
         await email_delivery_service.enqueue_account_blocked_email(
             email=account.email,
             name=account.name,
@@ -922,12 +676,7 @@ async def generate_magic_link_service(
         f"(regno_hash={_log_identity_hash(regno)})"
     )
 
-    # Queue the same link for email delivery; the console copy above is the
-    # development fallback and remains unchanged. This is deliberately not
-    # gated by ``notifications_enabled``: that preference controls notification
-    # email, while sign-in delivery must work for every real account that can
-    # log in. A queueing failure is logged by the service and does not change
-    # the uniform login response.
+    # Console copy is the dev fallback; a queueing failure is logged without changing the response.
     await email_delivery_service.enqueue_login_email(
         link=magic_link,
         email=account.email,
@@ -939,13 +688,7 @@ async def generate_magic_link_service(
 
 
 def _normalize_client_ip(value: Any) -> Optional[Any]:
-    """Parse an address for comparison, or None when it is not an address at all.
-
-    IPv4-mapped IPv6 (``::ffff:127.0.0.1``, what a dual-stack proxy reports for an IPv4
-    client) unwraps to its IPv4 self, so the same client seen through different stacks
-    still compares equal. Anything unparseable -- a hostname, garbage -- compares as
-    nothing, which can only refuse, never admit.
-    """
+    """Parse an address for comparison, or None; IPv4-mapped IPv6 unwraps to IPv4."""
     try:
         parsed = ipaddress.ip_address(str(value).strip())
     except ValueError:
@@ -964,11 +707,7 @@ def _redemption_continuity(
 ) -> bool:
     """Whether a redemption plausibly continues the session its mint started.
 
-    True when both addresses parse to the same /24 (IPv4) or /64 (IPv6) network, or
-    when the User-Agent matches the one recorded at mint. Either signal is weak on its
-    own -- NAT pools share subnets and User-Agents repeat -- but the token is a
-    256-bit secret and remains the actual authentication; these only decide whether a
-    roam looks legitimate enough to let through versus count and refuse.
+    Same /24 (IPv4) or /64 (IPv6) subnet or User-Agent; the token remains the actual authentication.
     """
     minted = _normalize_client_ip(minted_ip)
     remote = _normalize_client_ip(remote_ip)
@@ -982,13 +721,7 @@ def _redemption_continuity(
 
 
 def verify_magic_link_service(token: str, db: Database, request: Optional[Request] = None):
-    """
-    Redeem a magic link and return an access token plus the landing path for the account.
-
-    The account is read from the table the token recorded at mint time, so a staff link and
-    a participant link take different paths through here without either of them naming the
-    other in code.
-    """
+    """Redeem a magic link and return an access token plus the landing path; the account is read from the table the token recorded."""
     if not token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token is required")
 
@@ -999,28 +732,16 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     if request is None or request.client is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request context is required")
 
-    # Read-only classification lookup (no write txn): the single conditional
-    # UPDATE ... WHERE used=False AND revoked=False AND expires_at>now in the
-    # consume step below is the linearisation point for single-use -- two racers
-    # can both pass this read, but PostgreSQL re-evaluates the predicate under
-    # the row lock so exactly one UPDATE matches (rowcount==1). See the consume
-    # block for the full reasoning. All failures here answer the uniform
-    # "Invalid or expired token" so classification is not a timing oracle.
+    # Read-only classification; the conditional UPDATE below is the single-use
+    # linearisation point, and every failure answers the same body (no timing oracle).
     with db.sessions() as session:
         login_token = session.scalar(select(LoginTokenRecord).where(
             LoginTokenRecord.token_hash == hashed_token,
         ))
 
-    # The lookup reads by hash alone and the state is classified here, deliberately
-    # separate from the consume below: the client is told one thing ("invalid or
-    # expired") for all of these, while the log says which one actually happened, so
-    # an operator can tell a link that aged out from one an attacker is replaying
-    # without the answer to either becoming a signal to the caller.
+    # Lookup by hash alone; one client message for every failure, the log records which.
     if login_token is None:
-        # The hint is DEBUG-only and 6 chars: a 12-char prefix of a live token
-        # hash at WARNING would sit in retained logs next to the timestamp of the
-        # attempt, narrowing an offline search for the token. Six chars still
-        # joins a debug session against the database row when needed.
+        # DEBUG hint is only 6 chars so retained logs cannot narrow an offline search.
         logger.debug(
             f"Invalid magic link token: no matching token "
             f"(hash_hint={hashed_token[:6]})"
@@ -1051,20 +772,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     account_type = str(login_token.account_type)
     request_user_agent = login_token.request_user_agent
 
-    # The redemption is expected from the same neighbourhood as the mint, not the
-    # same address: carrier NAT, campus egress pools and IPv6-to-IPv4 transitions move
-    # legitimate users between addresses constantly, and a strict equality check turns
-    # every such move into a failed login. What still has to hold is *some* continuity
-    # -- the same /24 (IPv4) or /64 (IPv6) subnet, or the same User-Agent the mint saw.
-    # Either is enough to proceed; the unguessable token itself remains the real gate.
-    # Anything else is counted (bounded, so spam cannot overflow the counter) and
-    # refused with the same uniform body as every other dead token (SEC-008): a distinct
-    # status would tell anyone holding a stolen token whether it is live, while the
-    # recovery is identical either way -- request a fresh link. The log keeps the
-    # subnets for abuse review -- the /24 or /64 each side was in, never the host
-    # addresses. Exact IPs would retain who was where in Loki for the full retention
-    # period; the neighbourhood is what the continuity check actually compared, so it
-    # is also what the log records.
+    # Redemption is expected from the same neighbourhood (NAT/campus egress): same /24,
+    # /64 or User-Agent is enough; mismatches are counted (bounded) and refused uniformly.
     if not _redemption_continuity(
         minted_ip=login_token.request_ip,
         minted_user_agent=request_user_agent,
@@ -1080,9 +789,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
             session.execute(
                 update(LoginTokenRecord)
                 .where(LoginTokenRecord.id == login_token_id)
-                # The bound goes on the operand, not the sum: LEAST(x + 1, MAX) still
-                # evaluates x + 1, which overflows on a maxed row before LEAST ever sees
-                # it. LEAST(x, MAX - 1) + 1 saturates at MAX with no overflow possible.
+                # Bound the operand, not the sum: LEAST(x, MAX-1) + 1 saturates; LEAST(x+1, MAX) can overflow.
                 .values(attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1)
             )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
@@ -1090,19 +797,13 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     consume_ip = request.client.host
     consume_user_agent = request.headers.get("user-agent", "unknown")
 
-    # The refresh token is minted here, once, and hashed before storage. The raw value is
-    # returned to the caller a single time (the router hands it to the browser as an
-    # HttpOnly cookie); every later refresh rotates to a fresh value under the same
-    # immutable deadline. ``session_expires_at`` is the absolute lifetime of the session,
-    # written now from the login time and never moved forwards by any number of refreshes.
+    # Store only the refresh token's hash; ``session_expires_at`` is an absolute login deadline, never extended.
     refresh_token = generate_refresh_token()
     session_expires_at = now + timedelta(hours=settings.LOGIN_SESSION_EXPIRE_HOURS)
 
     with db.sessions.begin() as session:
         login_token_row = session.get(LoginTokenRecord, login_token_id)
-        # Read from the table recorded on the token rather than searching all three: the
-        # token was minted for one specific account in one specific table, and that is the
-        # only interpretation of it that is correct.
+        # Read the table recorded on the token - minted for one account in one table.
         account = (
             resolve_account(session, account_type, account_id)
             if login_token_row
@@ -1124,8 +825,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 consumed_at=now,
                 consume_ip=consume_ip,
                 consume_user_agent=consume_user_agent,
-                # Bounded like the refusal counter below: a consume runs once per token,
-                # but the shape is kept identical so no increment path can overflow.
+                # Bounded like the refusal counter so no increment path can overflow.
                 attempt_count=func.least(LoginTokenRecord.attempt_count, 2147483646) + 1,
                 session_status="active",
                 last_seen_at=now,
@@ -1135,12 +835,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
             )
         )
         if result.rowcount != 1:
-            # The conditional UPDATE is the only thing that makes single-use true under
-            # concurrency: two requests can both pass the classification read above, but
-            # they serialise on this row and PostgreSQL re-evaluates the predicate
-            # against the committed version, so exactly one of them updates it. Whoever
-            # loses re-reads the row to say which of the three refusals actually
-            # happened -- a loss to a racing request reads back as used.
+            # Conditional UPDATE makes single-use true under concurrency (PostgreSQL re-checks the
+            # predicate under the row lock); the loser re-reads to log which refusal happened.
             fresh = session.get(LoginTokenRecord, login_token_id)
             if fresh is None or fresh.revoked:
                 logger.warning(f"Invalid magic link token during redemption: token {login_token_id}")
@@ -1156,15 +852,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
                 )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
 
-        # One live session per account. This login is now this account's session, so any
-        # older one is replaced -- recorded as superseded, with this session named as the
-        # replacement, so the old session's next request can tell its holder why it stopped
-        # working. This runs inside the same transaction as the consume above, behind an
-        # advisory lock keyed to *this* account, for the same reason account creation is
-        # locked: two logins racing for one account would otherwise both read "no other
-        # active session" from the same snapshot and both go active, and neither would have
-        # superseded the other. The lock serialises the pair, so whichever commits second
-        # sees the first's active session and replaces it -- exactly one stays live.
+        # One live session per account: older actives are superseded, recorded with their successor.
+        # Runs under a per-account advisory lock so two racing logins cannot both go live.
         session.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": _session_advisory_lock_key(account_type, account_id)},
@@ -1202,15 +891,8 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
 
 
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    # The account's table and primary key, not just its regno. Every later request resolves
-    # the caller from these two claims with a primary-key read, so a regno shared by a
-    # participant and a moderator cannot move the session from one account to the other
-    # between two requests. ``sub`` is kept alongside as the human-readable identity for
-    # logs and for anything that wants to know who a token was for.
-    #
-    # ``session_id`` is the login-token row this session became. It is what ties the JWT to
-    # the live-session state that is re-read on every request, so a JWT whose session has
-    # been replaced by a newer login is refused even though the JWT itself is unexpired.
+    # Table plus primary key (never regno alone), with `session_id` tying the JWT to the
+    # session row re-read per request: a superseded session's JWT is refused even unexpired.
     access_token = create_access_token(
         data={
             "sub": account_regno,
@@ -1221,18 +903,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
         expires_delta=access_token_expires
     )
 
-# Staff land on the moderation area; participants on their dashboard. Decided by the
-    # account table, via the capabilities that table grants, so a moderator is not bounced
-    # to a dashboard it has no business seeing and a table added later does not have to be
-    # remembered here. The client re-derives the same destination from /auth/me once it
-    # loads, so this only decides what the browser shows in the moment between the redirect
-    # and that first fetch.
-    #
-    # Both kinds of staff get a landing page and they are not the same one. An admin can read
-    # the platform census and goes to the console that shows it; a moderator cannot, and goes
-    # to the moderation hub, which counts the backlog of the queues they can rule on. Both
-    # destinations are reached through `/admin/*` except the hub, which is its own page
-    # precisely because it is not the admin's.
+    # Landing path by capability; the client re-derives from /auth/me, so this only covers the redirect gap.
     if has_capability(account_type, Capability.STATS_READ):
         redirect_url = "/admin"
     elif capabilities_for(account_type):
@@ -1240,10 +911,7 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     else:
         redirect_url = "/dashboard"
 
-    # ``refresh_token`` is carried out to the router so it can be set as the HttpOnly
-    # cookie; the ``Token`` response model does not declare it, so the raw value never
-    # reaches the response body. The stored copy is its SHA-256 hash, and this is the last
-    # moment the plaintext is in this process before the router's cookie transition.
+    # Carried out to the router for the HttpOnly cookie; the raw value never reaches the response body.
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -1252,17 +920,11 @@ def verify_magic_link_service(token: str, db: Database, request: Optional[Reques
     }
 
 
-# Rate-limit window for the replay notice below: at most one per session per hour,
-# so two tabs racing a refresh do not nag the holder, while a credential presented
-# repeatedly still surfaces.
+# At most one replay notice per session per hour: racing tabs stay quiet, repeats still surface.
 _REFRESH_REPLAY_NOTICE_TTL_SECONDS = 3600
 
 
-# A refresh write only ever waits on one row, and a healthy rotation holds that row
-# for milliseconds. Bounding the wait keeps a genuinely stuck transaction (a crashed
-# worker, an orphaned connection) from parking every later refresh in a row-lock
-# queue until the pool is exhausted: the wait fails, the request answers 401, and the
-# connection goes back to the pool.
+# Bounded lock wait: a stuck transaction must not queue every later refresh until the pool exhausts.
 _AUTH_ROW_LOCK_TIMEOUT = "5s"
 
 
@@ -1281,26 +943,9 @@ def _is_lock_timeout(error: BaseException) -> bool:
 
 
 def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional[str]) -> None:
-    """Count a proven refresh replay and, sparingly, tell the holder (SEC-008).
+    """Count a proven refresh replay and, sparingly, notify the holder (SEC-008).
 
-    A proven replay is a second presentation of a value the session already rotated
-    away from -- recognisable because the row keeps the previous hash, unlike a random
-    guess, which matches no row at all. The counter is the row's ``attempt_count``,
-    shared with the pre-redemption presentation counting: post-redemption it only ever
-    moves here, so a session with a high count is one whose old credentials keep
-    showing up, queryable without trawling logs.
-
-    Best-effort and never raises: the caller is already answering 401, and
-    bookkeeping must not turn a refusal into a 500. Runs in its own transaction
-    because the caller's is rolling back, and the holder notice is gated to one per
-    hour per session in Redis (skipped entirely when Redis is unreachable).
-
-    The caller must invoke this **after** its own transaction has closed. Opening
-    this second connection while the caller still held a lock on the same
-    ``login_tokens`` row deadlocked the request against itself: the rotation's
-    zero-row UPDATE keeps a tuple lock for the rest of its transaction (the READ
-    COMMITTED re-check), this UPDATE waits for that lock, and the caller cannot commit
-    until this returns. That wedged the connection, then the whole pool.
+    Proven means the value matches ``refresh_token_replaced_hash`` (a rotated-away value). Best-effort and never raises. Runs after the caller's transaction closes -- opening it earlier deadlocks on the rotation's tuple lock; the hourly Redis gate fails open.
     """
     try:
         with db.sessions.begin() as session:
@@ -1347,32 +992,7 @@ def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional
 def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]:
     """Rotate a refresh token and mint a fresh access token for its session.
 
-    Returns ``{"access_token", "token_type", "refresh_token"}`` (the new refresh token
-    still being the session's one live value). Raises the generic 401 for any refusal,
-    and the dedicated superseded 401 when the session was replaced by a newer login.
-
-    The transformation is one conditional UPDATE, keyed on the incoming token's hash, in a
-    single transaction, and it is the only thing that makes rotation single-use under
-    concurrency: two refresh calls that both present the same value serialise on this row
-    and PostgreSQL re-evaluates the ``refresh_token_hash == :incoming`` predicate against
-    the committed version, so exactly one of them updates it and the other re-reads the row
-    to say what happened. There is no lock to hold and no path by which a second chain can
-    start from the same token.
-
-    A token that was already rotated away is refused generically and logged as a replay:
-    a second use of a consumed value means someone may be holding a stale copy of it. The
-    session itself is *not* revoked -- the value can never succeed again anyway, and killing
-    the freshly rotated token too would punish the legitimate user (or a second tab of
-    theirs that lost a concurrent refresh race) rather than the replay.
-
-    Replay bookkeeping runs only after the rotation's transaction has closed: it needs
-    its own connection, and a second connection that waits on this transaction's own
-    tuple lock can never be satisfied. See ``_record_refresh_replay``.
-
-    Nothing about the account's authority is taken from the token. The session row is
-    re-read, the account is re-resolved from the current table, and the blocked/deleted
-    states are applied on this request, so a revoked or demoted account stops refreshing on
-    the very next call.
+    One conditional UPDATE keyed on the incoming hash makes rotation single-use. A rotated-away value is refused and logged as replay, but the session is *not* revoked: the old value can never succeed again and killing the live token would punish a benign racing tab. Replay bookkeeping runs after the transaction closes; authority is re-read so revocation or a block applies now.
     """
     if not raw_token:
         raise credentials_exception()
@@ -1392,14 +1012,8 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
             )
             if row is None:
-                # The value may be a stale copy of a session's previous refresh
-                # token -- the other tab of a browser that raced a rotation --
-                # rather than a value no session ever held. The two are different
-                # for the caller's cookie: the stale copy's browser still holds
-                # the newer, live value, and deleting the cookie would sign that
-                # browser out of a session it is still using. Only the most
-                # recently rotated value is remembered per session, which is
-                # exactly the one a racing tab can still be holding.
+                # A stale copy of the session's previous value (a racing tab can still hold it),
+                # not an unknown value: its browser may hold the newer live value, so keep the cookie.
                 rotated_away_from = session.scalar(
                     select(LoginTokenRecord.id)
                     .where(LoginTokenRecord.refresh_token_replaced_hash == hashed)
@@ -1436,9 +1050,7 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 raise credentials_exception()
 
             if _deadline_passed(row.session_expires_at, now):
-                # The session has hit its hard ceiling. No write is needed here: the admin
-                # "active sessions" sweep already moves a session past its 24-hour window to
-                # `expired`, and this refusal is the enforcement.
+                # Hard ceiling reached; the admin sweep marks expiry past the window, this refusal is enforcement.
                 logger.warning(
                     f"Refresh rejected: session {session_id} passed its absolute deadline "
                     f"({row.session_expires_at})"
@@ -1471,11 +1083,8 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                 )
             )
             if result.rowcount != 1:
-                # Lost the race against a concurrent rotation of the same value, or the
-                # session changed underneath us. Re-read the row to say which. The refusal
-                # is raised after this transaction closes (the replay bookkeeping below
-                # needs its own connection); raising here would roll the transaction back
-                # before that bookkeeping could run.
+                # Lost a race or the session changed underneath; re-read to say which. The refusal
+                # is raised after this transaction closes so replay bookkeeping gets its own connection.
                 fresh = session.get(LoginTokenRecord, session_id)
                 if fresh is not None and fresh.session_status == SESSION_STATUS_SUPERSEDED:
                     logger.warning(
@@ -1492,16 +1101,11 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
                         f"Refresh token replayed: session {session_id} already rotated away "
                         f"this value"
                     )
-                    # Proven second use of a consumed value (SEC-008): count it and, at
-                    # most hourly, tell the holder. The 401 below is unchanged -- the
-                    # value can never succeed again, and killing the live session too
-                    # would punish a benign double-submit (two tabs racing a refresh)
-                    # rather than the replay.
+                    # Proven second use of a consumed value (SEC-008): count it and notify at most hourly.
+                    # The 401 is unchanged; killing the live session would punish a benign double-submit.
                     replay_proven = True
                     replay_holder = getattr(account, "regno", None)
-                    # Stale, not dead: this is the value a concurrent rotation
-                    # replaced, and the browser that presented it may still hold the
-                    # newer one. The caller must not delete the cookie over it.
+                    # Stale, not dead: a racing rotation replaced this value; do not clear the cookie.
                     refusal = _stale_refresh_token_exception()
                 else:
                     logger.warning(f"Refresh race lost for session {session_id}")
@@ -1512,8 +1116,7 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
             raise credentials_exception() from exc
         raise
 
-    # Only now that the rotation's transaction has ended: its zero-row UPDATE keeps a
-    # tuple lock until commit, and the replay's own connection would wait on it forever.
+    # Only after the rotation's transaction ends: its UPDATE holds a tuple lock until commit.
     if replay_proven:
         _record_refresh_replay(db, session_id, replay_holder)
     if refusal is not None:
@@ -1535,23 +1138,9 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
 
 
 def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
-    """Revoke the session that holds a refresh token. Returns whether anything was revoked.
+    """Revoke the session holding a refresh token; returns whether anything was revoked.
 
-    A logout is idempotent and deliberately silent about whether the token existed: the
-    browser is clearing its own cookie either way, and answering differently would let a
-    caller probe whether an arbitrary refresh token is live. Only an *active* session is
-    marked revoked -- a superseded one keeps its superseded state, because that state
-    records which newer session replaced it, and an unredeemed magic-link row is untouched
-    (its pre-redemption `revoked` column is the mechanism for that, not the session status).
-    The raw value is looked up by its hash and never logged.
-
-    A value that was *rotated away* still names its session: it is the value that session
-    replaced one refresh ago. That is what makes a log out reliable when it races a
-    refresh. The refresh rotates the cookie, so a log out sent with the value it replaced
-    would find nothing to revoke and leave the session alive -- with the browser holding
-    the newer cookie, and a reload quietly signing the person back in. The fallback only
-    ever reaches the session that value belonged to, so it ends that session and nothing
-    else.
+    Logout is idempotent and silent about whether the token existed, so a caller cannot probe for live tokens. Only an *active* session is marked revoked; a value rotated away one refresh ago still names its session via ``refresh_token_replaced_hash``, keeping logout reliable when it races a refresh.
     """
     if not raw_token:
         return False
@@ -1561,8 +1150,7 @@ def revoke_refresh_token_service(raw_token: str, db: Database) -> bool:
             select(LoginTokenRecord).where(LoginTokenRecord.refresh_token_hash == hashed)
         )
         if row is None:
-            # The value was rotated away: the session it belonged to is the one that
-            # replaced it, and that is the session a log out is asking to end.
+            # Rotated away: the session that replaced this value is the one to end.
             row = session.scalar(
                 select(LoginTokenRecord).where(
                     LoginTokenRecord.refresh_token_replaced_hash == hashed

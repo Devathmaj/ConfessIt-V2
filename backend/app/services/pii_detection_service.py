@@ -1,58 +1,4 @@
-"""Azure AI Language PII detection for love-note moderation previews.
-
-Every love note is composed at send time and shown to administrators and
-moderators on ``/admin/love-notes`` before it is approved. Moderators judge
-the words, so the words they are given must not carry the sender's personal
-information. This module is the one place that turns a note body into that
-privacy-safe preview, using the official Azure AI Language SDK:
-
-    https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/textanalytics/azure-ai-textanalytics
-
-The flow, per note (see :func:`redact_love_note_body`):
-
-  1. ``detect_language`` reads the note body and returns the primary language
-     and its confidence. No caller supplies a language code.
-  2. ``recognize_pii_entities`` runs the language service's own redaction
-     for each pass the detected language calls for, and its ``redacted_text``
-     -- not a hand-rolled replacement pass over the original -- is what the
-     moderator sees.
-  3. The redacted text is persisted once, on the row, when the note is
-     created (or when a reviewer retries a failed preview); the moderation
-     screen never re-runs Azure per page refresh.
-
-Language handling, honestly stated:
-
-  * **English** (``en``) and **Malayalam script** (``ml``) are the two
-    supported PII languages this feature requests. Both are in the service's
-    published PII language support table.
-  * **Manglish** -- Malayalam written in Latin characters -- is *not* a
-    language the PII model offers. Live verification against the deployed
-    resource showed the service classifying romanized Malayalam as English
-    on one body and as Malayalam on another, each with full confidence, so
-    no confidence threshold can separate the two. Rather than invent a
-    classifier, every Latin-script note is evaluated with both the English
-    and Malayalam PII passes and the detected spans are merged. That is
-    best-effort, not a guarantee: a Manglish note reaches the moderator
-    redacted by whichever of the two models recognized each entity, and an
-    entity neither model recognizes stays visible. This limitation is
-    deliberate and documented rather than hidden.
-
-Failures are never treated as redaction. If language detection or any
-recognition pass fails, :func:`redact_love_note_body` raises and the caller
-stores no preview: the moderator is shown an explicit "preview unavailable"
-state instead of the original note. The original body is never modified and
-is never returned to the moderation API -- see ``love_note_service``.
-
-Only this module talks to the Language endpoint, so credentials and the two
-language passes live in one place. The region from ``PII_DETECTION_REGION``
-is read for deployment parity, but the official ``TextAnalyticsClient``
-authenticates with the endpoint and key alone and has no ``region``
-constructor argument, so no unsupported argument is invented.
-
-The client is synchronous: love notes are created on the existing sync
-service path (threadpool), the same execution model the Content Safety
-integration uses, so there is no event loop to block.
-"""
+"""Azure AI Language PII detection for love-note moderation previews."""
 
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, Tuple
@@ -61,36 +7,33 @@ from ..logger import get_logger
 
 logger = get_logger(__name__)
 
-# The service API version this module is pinned to. ``2023-04-01`` is the
-# default of azure-ai-textanalytics 5.4.0 and the last stable version before
-# the 2025-05-15 preview line; pinning it explicitly means a future SDK bump
-# cannot silently change which service contract this code speaks.
+# Pinned to ``2023-04-01``: the default of azure-ai-textanalytics 5.4.0 and the
+# last stable version before the 2025-05-15 preview line. Pinning explicitly
+# means a future SDK bump cannot silently change the service contract.
 API_VERSION = "2023-04-01"
 
-# Azure documents a 5,120-character limit per document for PII recognition
-# (and language detection). A love note body is capped far below this by
-# ``LOVE_NOTE_BODY_MAX``, but the check is kept so an over-long body is
-# refused as an error rather than silently trimmed and treated as safe.
+# Azure documents a 5,120-character limit per document for PII recognition and
+# language detection. ``LOVE_NOTE_BODY_MAX`` already caps a note far below
+# this, but the check is kept so an over-long body is refused as an error
+# rather than silently trimmed and treated as safe.
 TEXT_MAX_LENGTH = 5120
 
 LANGUAGE_ENGLISH = "en"
 LANGUAGE_MALAYALAM = "ml"
 
-# The marker the language service uses in ``redacted_text``: each detected
-# entity is replaced by ``*`` repeated to the entity's own length (verified
-# against the deployed resource). Merging two passes re-uses the same marker
-# so a merged preview reads exactly like a single-pass one.
+# The marker the service uses in ``redacted_text``: each detected entity is
+# replaced by ``*`` repeated to the entity's own length (verified against the
+# deployed resource). Merging re-uses the same marker so a merged preview
+# reads exactly like a single-pass one.
 REDACTION_CHARACTER = "*"
 
 # Malayalam Unicode block (U+0D00-U+0D7F), used only to decide whether the
-# Malayalam PII pass is needed. This is a script check, not a language
-# classifier.
+# Malayalam PII pass is needed -- a script check, not a language classifier.
 _MALAYALAM_RANGE = (0x0D00, 0x0D7F)
 
-# Bounded HTTP behavior for the Language client (seconds). There is no
-# dedicated setting, for the same reason Content Safety's timeout is one
-# value: the caller treats a failure as "no preview", so the only knob that
-# matters is that a hung provider cannot hang the request.
+# Bounded HTTP behavior for the Language client (seconds); there is no
+# dedicated setting because the caller treats a failure as "no preview", so
+# the only knob that matters is that a hung provider cannot hang the request.
 REQUEST_TIMEOUT_SECONDS = 10.0
 
 
@@ -144,13 +87,7 @@ def _require_config(config: PiiDetectionConfig) -> None:
 
 
 def get_pii_client(config: PiiDetectionConfig):
-    """Build the official SDK client for this configuration.
-
-    Uses ``azure-ai-textanalytics`` ``TextAnalyticsClient`` with API version
-    ``2023-04-01``. One client per redaction (all of that note's passes share
-    it); it is closed by the caller, the same per-call lifetime the Content
-    Safety path uses, which keeps credential/timeout rotation test-safe.
-    """
+    """Build the official SDK client for this configuration."""
     try:
         from azure.ai.textanalytics import TextAnalyticsClient
         from azure.core.credentials import AzureKeyCredential
@@ -350,13 +287,7 @@ def recognize_pii(
     config: Optional[PiiDetectionConfig] = None,
     client: Any = None,
 ) -> PiiPassResult:
-    """Run one PII recognition pass over ``text`` in ``language``.
-
-    The SDK's ``redacted_text`` is the pass's output; entities are kept for
-    merging passes. Raises :class:`PiiDetectionError` on a document error or
-    a failed call: a pass that did not run cannot be assumed to have found
-    nothing.
-    """
+    """Run one PII recognition pass over ``text`` in ``language``."""
     if config is None:
         from ..config import settings as _settings
 
@@ -424,23 +355,7 @@ def _has_latin_letters(text: str) -> bool:
 def passes_for(
     text: str, detected: Optional[DetectedLanguage]
 ) -> Tuple[str, ...]:
-    """Which PII passes this note's script and detected language call for.
-
-    Bounded by construction: at most the English pass and the Malayalam pass.
-    The primary pass follows the detected language (``ml`` when the service
-    says Malayalam, ``en`` otherwise -- the two forms this feature supports),
-    falling back to the script when detection is unknown or a language outside
-    this feature's scope.
-
-    The Manglish fallback keys off the *script*, not the detected language:
-    live verification showed romanized Malayalam classified as ``en`` on one
-    body and as ``ml`` on another, both with full confidence. So any note
-    containing Latin letters is evaluated with both passes and the detected
-    spans are merged -- whichever pass sees a name, phone number or address,
-    it is redacted. A note with no Latin letters is one pass: the Malayalam
-    pass for Malayalam script, the English pass otherwise. Best-effort by
-    design: an entity neither model recognizes stays visible.
-    """
+    """Which PII passes this note's script and detected language call for."""
     latin_letters = _has_latin_letters(text)
     malayalam_script = _contains_malayalam_script(text)
     detected_code = detected.iso6391_name if detected is not None else None
@@ -466,15 +381,7 @@ def passes_for(
 
 
 def merge_redactions(text: str, passes: Sequence[PiiPassResult]) -> LoveNoteRedaction:
-    """Combine one or more passes into the single preview the moderator sees.
-
-    A single pass is its own answer: the SDK's ``redacted_text`` is returned
-    verbatim. With two passes the entity spans are unioned and re-applied to
-    the original text with the service's own marker, so an entity only the
-    Malayalam model saw and an entity only the English model saw are both
-    removed instead of one pass being chosen and the other discarded.
-    Spans are clamped to the body; overlapping or duplicate spans merge.
-    """
+    """Combine one or more passes into the single preview the moderator sees."""
     if not passes:
         raise PiiDetectionError(
             "No PII recognition pass produced a result.",
@@ -495,7 +402,7 @@ def merge_redactions(text: str, passes: Sequence[PiiPassResult]) -> LoveNoteReda
             end = entity.offset + entity.length
             # The body is the coordinate space every pass ran against; a span
             # outside it is a provider bug, and dropping it is safer than
-            # letting it slice the wrong characters into the preview.
+            # slicing the wrong characters into the preview.
             if start < 0 or end <= start or end > len(text):
                 continue
             spans.append((start, end))
@@ -532,16 +439,7 @@ def redact_love_note_body(
     *,
     config: Optional[PiiDetectionConfig] = None,
 ) -> LoveNoteRedaction:
-    """Produce the privacy-safe moderation preview for one love note body.
-
-    This is the module's one entry point. It detects the language once, runs
-    the bounded pass set from :func:`passes_for` on a single SDK client, and
-    merges the passes. Raises :class:`PiiDetectionError` when the text is
-    over the service limit, the provider is unconfigured or unavailable, or
-    any required pass fails -- the caller stores nothing rather than storing
-    an unredacted preview. Empty or whitespace-only bodies raise without any
-    service call. The body itself is never logged.
-    """
+    """Produce the privacy-safe moderation preview for one love note body."""
     if config is None:
         from ..config import settings as _settings
 

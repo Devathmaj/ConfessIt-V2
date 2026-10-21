@@ -15,12 +15,11 @@ from ..services.authorization import require_participant
 
 router = APIRouter(prefix="/games/connections", tags=["Connections"])
 
-# The player-facing surface of the feature. Every route resolves the caller as
-# a participant and reads and writes only that caller's own submission: there
-# is no leaderboard here, no way to play another player's board, and no way to
-# ask what the answer key is -- the tiles are display spellings in the
-# caller's own shuffled order, and the submit response is a confirmation that
-# carries no score, no correctness and no membership.
+# The player-facing surface of the feature. Every route resolves the caller as a
+# participant and reads and writes only that caller's own submission: no leaderboard,
+# no way to play another player's board, and no way to ask what the answer key is --
+# the tiles are display spellings in the caller's own shuffled order, and the submit
+# response is a confirmation carrying no score, no correctness and no membership.
 
 
 @router.get("", response_model=ConnectionsCurrentGame)
@@ -30,9 +29,9 @@ def current_connections(
 ) -> ConnectionsCurrentGame:
     """Today's puzzle and this player's submission state.
 
-    Reading this never creates a submission and never consumes one: a fresh
-    player reads their shuffled tiles, a returning one reads the same order,
-    and a submitted player reads a confirmation rather than a board.
+    Reading never creates or consumes a submission: a fresh player reads their
+    shuffled tiles, a returning one the same order, a submitted one a
+    confirmation rather than a board.
     """
     return connections_gameplay.current_connections(db, user.id)
 
@@ -45,10 +44,10 @@ def submit(
 ) -> ConnectionsSubmitResponse:
     """Score one final arrangement against the named puzzle, for this player.
 
-    Exactly one submission per player per session: moving tiles around is not
-    a submission, and a second submit -- concurrent or direct -- is refused.
-    The response is a confirmation only; scores are persisted server-side for
-    a future leaderboard and never returned here.
+    Exactly one submission per player per session: moving tiles is not a
+    submission, and a second submit -- concurrent or direct -- is refused. The
+    response is a confirmation only; scores persist server-side for a future
+    leaderboard and are never returned here.
     """
     return connections_gameplay.submit_arrangement(
         db, user.id, payload.game_id, [list(group) for group in payload.groups]

@@ -30,9 +30,7 @@ def request_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to create a pending conversation request for a given match.
-    """
+    """Create a pending conversation request for a given match."""
     return request_conversation_service(current_user, conversation_data.match_id, db)
 
 @router.get("/{match_id}/status")
@@ -41,9 +39,7 @@ def get_conversation_status(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to get the status of a conversation for a given match.
-    """
+    """Get the status of a conversation for a given match."""
     return get_conversation_status_service(current_user, match_id, db)
 
 @router.post("/{match_id}/accept", status_code=status.HTTP_200_OK)
@@ -52,9 +48,7 @@ def accept_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to accept a pending conversation request.
-    """
+    """Accept a pending conversation request."""
     return accept_conversation_service(current_user, match_id, db)
 
 @router.post("/{match_id}/reject", status_code=status.HTTP_200_OK)
@@ -63,9 +57,7 @@ def reject_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to reject a pending conversation request.
-    """
+    """Reject a pending conversation request."""
     return reject_conversation_service(current_user, match_id, db)
 
 @router.get("/current")
@@ -73,9 +65,7 @@ def get_current_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to get the current active conversation for the authenticated user.
-    """
+    """Get current active conversation for authenticated user."""
     return get_current_conversation_service(current_user, db)
 
 @router.get("/received")
@@ -83,9 +73,7 @@ def get_received_conversations(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to get conversations where the current user is the receiver.
-    """
+    """Get conversations where the current user is the receiver."""
     return get_received_conversations_service(current_user, db)
 
 @router.get("/{match_id}")
@@ -94,10 +82,7 @@ def get_conversation_by_match(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to get a specific conversation by match_id.
-    Works for both initiators and receivers.
-    """
+    """Get a specific conversation by match ID."""
     return get_conversation_by_match_service(current_user, match_id, db)
 
 @router.post("/{match_id}/block", status_code=status.HTTP_200_OK)
@@ -106,9 +91,7 @@ def block_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to block a conversation.
-    """
+    """Block a conversation."""
     return block_conversation_service(current_user, match_id, db)
 
 @router.post("/{match_id}/unblock", status_code=status.HTTP_200_OK)
@@ -117,8 +100,5 @@ def unblock_conversation(
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db)
 ):
-    """
-    Used to unblock a conversation.
-    Only the user who blocked can unblock.
-    """
+    """Unblock a conversation (blocker only)."""
     return unblock_conversation_service(current_user, match_id, db)

@@ -265,14 +265,8 @@ def _strict_node(node: Any) -> Any:
         out["required"] = sorted(out["properties"].keys())
     if out.get("type") == "object" or "properties" in out:
         out["additionalProperties"] = False
-        # Strict mode (verified against Microsoft Foundry) refuses an object
-        # schema that has no ``properties`` key at all -- it reports the
-        # parent's ``required`` entry for it as an "extra required key". A
-        # bare ``dict[str, Any]`` field (authoring metadata) generates exactly
-        # such a node, so it is completed to an empty, strictly-valid object:
-        # the model emits ``{}`` for it, which the local Pydantic model
-        # accepts. Without this the whole package schema is rejected and
-        # generation drops to the looser JSON-object fallback.
+    # Strict providers reject object schemas without ``properties``. Complete
+    # bare dict schemas as empty objects so package generation remains strict.
         out.setdefault("properties", {})
     return out
 

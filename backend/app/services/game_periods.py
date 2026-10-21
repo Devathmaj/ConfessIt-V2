@@ -1,16 +1,4 @@
-"""One place for every session-boundary calculation in the games system.
-
-Every game -- Wordle, Anagram, Couple Questionnaire -- counts the same way: the
-session's start calendar date is Day 1, and the reset boundary is derived from
-that date and the game's own cadence. Weekly is always Monday-Sunday UTC. Daily
-and every-N-days count calendar days, never elapsed hours: a session created at
-23:58 on October 8 under a daily cadence still ends at the October 9 boundary
-rather than receiving a fresh 24 hours.
-
-All dates are UTC calendar dates. The daily reset executes at 00:01 UTC, which at
-date granularity is the moment the UTC date rolls over -- so boundaries are
-expressed as exclusive end dates and ``today >= period_end`` means "reset due".
-"""
+"""Session boundary and reset window calculations for game cadences in UTC."""
 
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -41,13 +29,7 @@ def monday_of(day: date) -> date:
 
 
 def period_end(start: date, cadence: str) -> date:
-    """The exclusive reset date for a session starting on ``start``.
-
-    Daily and every-N-days count from the start date as Day 1: a 2-day session
-    starting Monday ends Wednesday (Monday + 2). Weekly always ends on the next
-    Monday, no matter which weekday the session started on -- an Update on
-    Friday does not move the Monday boundary.
-    """
+    """Calculate exclusive reset date for a session starting on start under cadence."""
     from datetime import timedelta
 
     validate_cadence(cadence)

@@ -1,36 +1,29 @@
 """Configuring the day's Anagram puzzle: which word the day runs on, and where it came from.
 
 The table this writes is the *word* and nothing else -- a day, a word, how the word was
-chosen, and who chose it. There is no scramble, no attempt, no guess and no result here,
-because none of those exist yet and the separation is worth stating rather than assuming:
-every write below is an administrator publishing something, and none of it is ever triggered
-by a participant.
+chosen, and who chose it. No scramble, attempt, guess or result exists here: every write
+below is an administrator publishing something, never a participant.
 
 **The stored answer is canonical and uppercase, and it is never scrambled here.** Each
-player will later receive their own permutation of this same word, so a scrambled copy in
-``anagram_games`` would be a second, conflicting spelling of one puzzle -- and the whole
-point of the split is that the shared word lives in exactly one place. Normalisation to
-uppercase happens once, on the way in, so ``elephant``, ``ElePhAnT`` and `` ELEPHANT `` are
-one answer rather than three.
+player later receives their own permutation of this same word, so a scrambled copy in
+``anagram_games`` would be a second, conflicting spelling of one puzzle. Uppercase
+normalisation happens once, on the way in, so ``elephant``, ``ElePhAnT`` and
+`` ELEPHANT `` are one answer rather than three.
 
 **The word list is data, not a dependency.** ``backend/assets/anagram_words.txt`` is
-committed and read from disk, so the running application needs no package and no network.
-It is application-owned static data: this module reads it and nothing else -- never the
-Wordle vocabulary, and never a word API. The file is loaded once and reused for the
-process's life, and it is cleaned rather than trusted on the way in: entries are stripped
-and uppercased, empty lines are dropped, and entries that are not letters at all (the list
-contains contractions such as ``I'd``) are excluded from the draw because an anagram answer
-is a bag of letters. A missing or empty file is a loud error on first use rather than a
-silent fall back to some other dictionary.
+committed and read from disk, loaded once for the process's life -- never the Wordle
+vocabulary, never a word API. It is cleaned rather than trusted on the way in: entries
+are stripped and uppercased, empty lines dropped, and non-letter entries (the list holds
+contractions such as ``I'd``) excluded from the draw because an anagram answer is a bag
+of letters. A missing or empty file is a loud error on first use, never a silent
+fall back to some other dictionary.
 
 **The draw is previewed, not saved sight unseen.** ``GET /admin/anagram/preview`` picks a
 word and signs it together with the date; ``POST /admin/anagram`` re-derives the signature
-before storing. That is what makes the preview honest -- the admin sees the answer *before*
-saving, can draw again as often as they like, and saving cannot produce a different word --
-while keeping the choice on the server: the client echoes a word back only alongside a
-signature it cannot forge, so no client can supply an answer of its own making under
-``mode="random"``. The minimum applies only to the draw -- a custom answer of any length is
-legal, which is why the filter lives here rather than on the column.
+before storing. The admin sees the answer *before* saving and saving cannot produce a
+different one, while the choice stays on the server: the client echoes a word back only
+alongside a signature it cannot forge. The minimum applies only to the draw -- a custom
+answer of any length is legal, which is why the filter lives here rather than on the column.
 """
 
 import hashlib
@@ -50,26 +43,22 @@ from ..limits import ANAGRAM_ANSWER_MAX, ANAGRAM_RANDOM_MIN_LENGTH
 from ..models import AnagramDraw, AnagramGame, AnagramGameCreate
 from ..postgres import Database, is_valid_id
 
-# Three levels up -- out of ``app/services`` and out of ``app`` itself -- because this is
-# data at the top of the backend rather than inside the package: ``backend/assets/`` sits
-# beside ``backend/app``, so one fewer ``parent`` would look for the file inside the
-# package and find nothing.
+# Three levels up -- out of ``app`` itself -- because ``backend/assets/`` sits beside
+# ``backend/app``: one fewer ``parent`` would look for the file inside the package.
 _WORDS_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "anagram_words.txt"
 
-# Loaded once and reused for the process's life. The list is read on the first random draw,
-# not at import: a module that fails to import would take the application down before it
-# could log why, where a failure here is a request that answers 500 with the reason attached.
+# Loaded once and reused for the process's life, on the first random draw rather than at
+# import: an import failure takes the application down before it could log why, where a
+# failure here is a request that answers 500 with the reason attached.
 _anagram_words: Optional[tuple[str, ...]] = None
 
 
 def anagram_words() -> tuple[str, ...]:
     """Every word the draw may choose from, loaded once and cleaned on the way in.
 
-    Cleaning rather than validating: unlike the Wordle list -- where one malformed entry
-    means the committed artifact drifted and the game cannot run -- this file is a general
-    word list that legitimately holds short words, duplicates and contractions. Those are
-    not errors, they are entries the anagram draw simply cannot use, so they are dropped
-    here instead of failing the load.
+    Cleaning rather than validating: unlike the Wordle list, this general word list
+    legitimately holds short words, duplicates and contractions. Those are entries the
+    anagram draw cannot use, dropped here instead of failing the load.
     """
     global _anagram_words
     if _anagram_words is None:
@@ -110,9 +99,8 @@ def _signature(word: str, game_date: date) -> str:
 def draw_answer(game_date: Optional[date] = None) -> AnagramDraw:
     """Pick a word of at least ``ANAGRAM_RANDOM_MIN_LENGTH`` letters and sign the pair.
 
-    The filter is a list comprehension over the loaded entries rather than a change to the
-    file itself: the committed data stays exactly as it is, and the minimum is a rule about
-    what the *draw* may return.
+    The filter is over the loaded entries, not a change to the file: the minimum is a
+    rule about what the *draw* may return, and the committed data stays as it is.
 
     The date is part of the signature rather than a comment on it: a draw made for Monday
     cannot be submitted as Tuesday's puzzle, so an admin who draws, changes the date field
@@ -139,11 +127,10 @@ def _require_answer(word: Optional[str], missing_detail: str) -> str:
 
     One place for the three rules -- present, letters only, short enough -- so a custom
     answer and the stored form of any future input cannot drift into answering them
-    differently. There is deliberately *no* minimum length here: ``cat`` is a legal custom
-    answer, and the five-letter floor belongs to the draw alone.
+    differently. Deliberately *no* minimum length here: ``cat`` is a legal custom answer.
 
-    The answer to a wrong word is a 400 rather than a 422, matching ``wordle_service``: the
-    request was well-formed, it asked for something this server will not do.
+    A wrong word is a 400 rather than a 422, matching ``wordle_service``: the request was
+    well-formed, it asked for something this server will not do.
     """
     if word is None or not word.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=missing_detail)

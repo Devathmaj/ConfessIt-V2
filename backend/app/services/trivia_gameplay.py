@@ -1,36 +1,4 @@
-"""Answering the live Trivia Drop question: the participant-facing half.
-
-``trivia_service`` authors and releases questions. This module is everything
-that happens *afterwards*: reading the live question without learning its
-key, settling one complete selection against it, and -- once the session has
-ended -- reading its settled results.
-
-Four rules hold at the bottom of everything here.
-
-**One accepted submission per player per question.** A
-``trivia_drop_submissions`` row pairs a user with a question, and the unique
-pair is the schema's rule, not a service check. Two concurrent submissions
-race that insert and exactly one of them owns the row; the loser is refused
-as already answered. A multiple-answer selection travels as one complete set
-in one request -- several checked boxes never become several rows.
-
-**The key never leaves the server while the question is live.** A read emits
-display options plus the derived mode (single vs multiple) the screen needs
-for its instruction and its controls -- never the correct indexes, never even
-how many of them there are. The submit response is a confirmation carrying no
-correctness and no time; both surface on the ended question's results.
-
-**Response time starts at release, not at page load.** ``response_time_ms``
-is ``submitted_at - released_at`` from server timestamps only: a player who
-opens the question ten minutes after release and answers in five seconds
-banks ten minutes and five seconds, because the ranking rewards answering
-soon after release, not reacting fast after opening.
-
-**Correctness is exact set equality.** A multiple-answer submission is
-correct only when the selected set matches the complete correct set -- no
-partial credit, no per-option points. Order never matters; duplicates are
-normalized away before the comparison.
-"""
+"""Participant gameplay and answer settlement service for Trivia Drop."""
 
 from datetime import datetime, timezone
 from typing import Optional
@@ -81,18 +49,7 @@ def _active_row(session) -> Optional[TriviaDropQuestionRecord]:
 
 
 def current_trivia(db: Database, user_id: str) -> TriviaDropCurrentQuestion:
-    """The live question and this player's submission state, creating nothing.
-
-    Reading the screen must leave no trace: opening it twice costs nothing,
-    and a player who only looks at the live question has not answered
-    anything. A submitted player reads a confirmation rather than a board; a
-    player arriving with no live question reads the waiting state rather than
-    an invented puzzle or a reused one. Upcoming scheduled questions are never
-    named here -- surprise releases stay surprising.
-
-    Availability is enforced before anything else: hidden and disabled games
-    refuse with a coded 403 rather than a board.
-    """
+    """Return the live question and submission status for the current player."""
     from .game_configs import check_playable
 
     with db.sessions.begin() as session:
@@ -106,8 +63,7 @@ def current_trivia(db: Database, user_id: str) -> TriviaDropCurrentQuestion:
             )
         options = _options_for(session, str(live.id))
         if len(options) != TRIVIA_OPTIONS_COUNT:
-            # A live question with no valid options is not playable: the same
-            # waiting behavior as no live question, never a partial board.
+            # Unplayable question without valid options degrades to waiting state.
             return TriviaDropCurrentQuestion(
                 message="No question is live right now. Check back soon.",
             )
@@ -138,8 +94,7 @@ def _get_live_question(session, question_id: str) -> tuple[TriviaDropQuestionRec
     """The named question, live and fully configured -- or why it cannot be answered."""
     from .game_configs import check_playable, lock_game_for_play
 
-    # ENG-001: hold the lifecycle lock across liveness-check + write so a
-    # question release cannot slip between them. The sole caller writes.
+    # Hold lifecycle lock across liveness check and write.
     lock_game_for_play(session, "trivia-drop")
     if not is_valid_id(question_id):
         raise HTTPException(
@@ -172,13 +127,7 @@ def _get_live_question(session, question_id: str) -> tuple[TriviaDropQuestionRec
 
 
 def _normalize_selection(raw: object) -> list[int]:
-    """One complete selection as sorted unique indexes, or why it is refused.
-
-    At least one option must be chosen; every index must name one of the four
-    options. Duplicates are normalized away -- checking a box twice is one
-    choice stated twice. Nothing here consumes the submission, because nothing
-    is stored until the insert below.
-    """
+    """Validate and normalize selected answer option indices."""
     if not isinstance(raw, list) or not raw:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -203,17 +152,7 @@ def _normalize_selection(raw: object) -> list[int]:
 def submit_answer(
     db: Database, user_id: str, question_id: str, raw_selection: list[int]
 ) -> TriviaDropSubmitResponse:
-    """Settle one complete selection against the live question, for this player.
-
-    The whole exchange runs in one transaction. The submission row is inserted
-    under the unique ``(question, user)`` pair, which serializes concurrent
-    answers on the same question: exactly one insert wins, and the loser is
-    refused as already answered. Correctness is exact set equality against
-    the stored key, and the response time is ``submitted_at - released_at``
-    from server timestamps -- so nothing the client sends can mark itself
-    correct or fast. The response carries no correctness at all, only the
-    confirmation the screen shows.
-    """
+    """Record and score a player's submission for the live trivia question."""
     selected = _normalize_selection(raw_selection)
     with db.sessions.begin() as session:
         question, options = _get_live_question(session, question_id)
@@ -261,16 +200,7 @@ def submit_answer(
 
 
 def previous_trivia(db: Database, user_id: str) -> TriviaDropPreviousQuestion:
-    """The most recently ended question, with its answer key revealed.
-
-    Reading this never creates anything. Ended sessions belong to history,
-    so the key, the options and this caller's own settled answer are all
-    public here -- the opposite rule from the live question, which names
-    none of them. With no ended question yet the answer is empty, and the
-    screen shows nothing at all rather than an invented previous round.
-    Drafts, scheduled and cancelled questions are never candidates; only the
-    live question's predecessor chain counts.
-    """
+    """Return the most recently ended trivia question with answers and player result."""
     from .game_configs import check_playable
 
     with db.sessions.begin() as session:
@@ -321,15 +251,7 @@ def previous_trivia(db: Database, user_id: str) -> TriviaDropPreviousQuestion:
 
 
 def question_results(db: Database, user_id: str, question_id: str) -> TriviaDropResults:
-    """One ended question with its key revealed and its leaderboard settled.
-
-    Served only once the session has ended: the correct indexes and the
-    per-submission correctness would expose a live key, so a live question is
-    refused here and drafts, scheduled and cancelled questions read as absent.
-    Ranking is correctness first, response speed second, the authoritative
-    submission instant as the deterministic tiebreaker. Every number here is
-    persisted server-side; the frontend ranks nothing.
-    """
+    """Return settled results and leaderboard rankings for an ended trivia question."""
     from .game_configs import check_playable
 
     if not is_valid_id(question_id):

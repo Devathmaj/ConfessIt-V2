@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot destructive reset of the chat/report tables.
-
-The encrypted-message change replaces the plaintext ``body`` columns and the
-report foreign keys. The project has no Alembic: schema normally converges in
-``PostgresClient.initialize()``, but it cannot rewrite a NOT NULL plaintext
-column without inventing data. Because existing chat data in this repository is
-disposable demo data, the honest migration is to drop only the chat-related
-tables and let ``initialize()`` recreate them from the models.
-
-Usage
------
-    python scripts/recreate_chat_schema.py --yes                # DATABASE_URL
-    python scripts/recreate_chat_schema.py --yes --test         # TEST_DATABASE_URL
-
-The script prints the database host/name (never the password) before doing
-anything. It drops exactly the tables listed below and leaves users, accounts,
-matches, game sessions/results, rewards and every other table untouched.
-"""
+"""Reset chat and report tables and recreate schema from models."""
 
 from __future__ import annotations
 
@@ -87,9 +70,7 @@ def main() -> int:
         with client.engine.begin() as connection:
             for table in CHAT_TABLES:
                 connection.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
-        # Recreates every table in the current models. The dropped tables are
-        # recreated empty, and additive convergence handles conversations' new
-        # encrypted-preview columns.
+        # Recreate tables from current models and handle additive schema changes.
         client.initialize()
     finally:
         client.close()

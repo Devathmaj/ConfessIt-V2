@@ -1,64 +1,8 @@
-"""Playing Two-Key Escape: the participant-facing half of the feature.
+"""Server-authoritative Two-Key Escape gameplay for existing couple sessions.
 
-The pairing half belongs to the Couple Questionnaire and is reused, not
-reimplemented: a couple here is a mutual-selection session in
-``couple_game_sessions`` for the current global questionnaire period, read
-through ``couple_gameplay``'s own lookup. This module never decides who forms
-a couple, never lists partner candidates, and never creates a pairing -- it
-resolves the caller's existing couple session and plays the maze on top of
-it. No mutual-selection session, no game.
-
-Five rules hold at the bottom of everything here.
-
-**One global maze template per period, one live overlay per couple.** The
-reset loop opens each period with a single generated maze (edge length from
-the stored grid-size configuration, deterministic seed, persisted walls,
-locked cells and key mapping). Every couple in the period plays that same
-template, and each couple's position, unlocked cells, blocked cells,
-cooldown and counters live on its own ``two_key_escape_sessions`` row --
-so one couple's actions never touch another's, and a refresh reads the same
-walls.
-
-**Chambers make keys mandatory, provably.** Full-height wall columns divide
-the board with no way around: every wall must be crossed through one of its
-locked gates, so no straight keyless path exists and each playthrough needs
-at least one unlock per wall. Generation simulates that exact playthrough
--- open a gate, cross, let it relock behind, move on -- and rejects any
-layout that fails it, so completability is proven per maze, not hoped for.
-
-**Keys are reusable, and that is what keeps mandatory locks safe.** Every
-use costs the cooldown, never a consumable charge, so no amount of trial
-can permanently strand a lock the couple still needs: any gate reopens any
-time. Trial-and-error costs time, and time is the ranking.
-
-**Roles are submitted, then finalized exactly once.** Clicking a role option
-is local-only on the page; confirming sends one submission for the caller.
-When both submissions are stored and distinct, the assignment finalizes
-atomically in the same transaction. Identical submissions finalize nothing
-and surface a conflict both sides can see. Finalized roles are immutable.
-
-**Clients submit actions, never state.** Movement and key use arrive as
-``{direction}`` / ``{key_index}`` and are validated against the stored row
-under ``FOR UPDATE``: bounds, walls, locks, blocks, role and cooldown are
-all re-checked server-side, and ``state_version`` bumps on every accepted
-action. No movement is ever required between key uses.
-
-**A key trades one cell for another, never a solution.** Each lock opens a
-*different* lock, per the maze's hidden mapping -- the clicked lock itself
-never opens, so players must discover which lock opens the cell they need.
-Only one lock stays open at a time: opening another sends the previous one
-back (refused while the Navigator stands on it). Blocking picks a different
-traversable cell by game logic: never the start, the exit, the player's
-cell, a gate shoulder or an exit approach -- and never a cell whose blocking
-leaves the exit unreachable from the player (reading through every lock,
-which is sound precisely because keys are reusable) or strands the player
-without an ordinary step.
-
-**Scoring measures start-to-finish time, nothing else.** The Navigator's
-first valid move stamps the start; reaching the exit stamps the end. What
-happens between -- logouts, tab switches, hours away -- simply counts, by
-decision rather than by accident. Completion ranks above anything
-incomplete; among completed couples the shorter elapsed time wins.
+Each period shares a persisted, solver-verified maze; each couple has its own state. Role-
+gated actions are revalidated under row locks, reusable keys preserve solvability, and
+leaderboards rank completed couples by elapsed time.
 """
 
 import random
@@ -209,25 +153,10 @@ def _verify_walkthrough(
 
 
 def generate_maze(grid_size: int, seed: str) -> dict[str, Any]:
-    """Generate a chambered maze that *requires* keys, deterministically.
+    """Generate a deterministic maze whose walls require key unlocks.
 
-    Full-height wall columns divide the board into chambers with no way
-    around: every wall must be crossed through one of its locked gates, so no
-    straight keyless path from start to finish exists on any maze, and each
-    playthrough needs at least one unlock per wall. The remaining locks are
-    flavor off the walkable space. Gate shoulders (approach and beyond
-    cells) are forced clear so crossings always land on open ground.
-
-    Only walls gate progress, never the start: the chambers stay walkable,
-    so the Navigator can always roam and no game can deadlock for want of
-    a move. Every lock is dealt at least one staging cell -- an ordinary
-    neighbor blocks can never take -- so stepping off an open lock is
-    always possible and multi-lock leapfrogging always has footing.
-
-    Retried with a derived stream until the walkthrough simulation passes --
-    gates crossed in order under single-open relocking, exit reached -- so
-    every emitted template proves the operator's mandatory multi-lock role
-    by construction rather than by luck.
+    Keep gate approaches and staging cells clear, then return only after the
+    walkthrough simulation proves the exit reachable with one open lock at a time.
     """
     if grid_size not in TWO_KEY_ESCAPE_GRID_SIZES:
         raise ValueError(f"Unknown grid size {grid_size!r}.")

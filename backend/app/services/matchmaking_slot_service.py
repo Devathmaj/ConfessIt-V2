@@ -1,16 +1,6 @@
-"""Which participant cohorts are allowed to match with each other.
+"""Define matching rules for participant cohorts, represented as ``(year, department)`` pairs.
 
-A *cohort* is a ``(year, department)`` pair, and it replaced a single free-text ``class_name``
-column. That change is the whole reason this module was rewritten rather than adjusted: with one
-string, the only thing a slot could name was whatever an operator had typed, so "CSE 2nd Year"
-and "2nd Year CSE" were two unrelated cohorts and a rule configured between them matched nobody.
-Both halves are now columns, so a cohort can be selected, displayed and compared without parsing
-anything.
-
-There is exactly one implementation of "what cohorts exist" -- :func:`list_participant_cohorts` --
-and the Love Notes filter reads through it too, rather than keeping its own copy of the same
-query. They were two identical functions before this, and two identical functions are two places
-for the answer to disagree.
+The shared cohort query also serves Love Notes filters so both features use the same population.
 """
 
 import uuid
@@ -22,33 +12,15 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from ..postgres import Database
 from ..db_models import MatchmakingSlotRecord, UserRecord
 
-# The key a cohort is addressed by in a drag-and-drop UI and in a POST body. An object rather than
-# a joined string because the two halves have to stay separable to be sent back separately.
-# ``Any`` rather than ``str`` because ``year`` is an int: the pair is a heterogeneous mapping, and
-# a ``Dict[str, str]`` annotation here is what let the whole read path look type-correct while
-# handing ints to code that joined them as text.
+# Cohorts stay structured objects so integer ``year`` and string ``department`` remain distinct.
 CohortDict = Dict[str, Any]
 
-# Advisory-lock key serialising matchmaking-slot writes (ENG-005). Fixed and private
-# to this module: nothing else may reuse it. Distinct from the game lifecycle keys
-# (7_260_001..7_260_007) and the pair-session keys (7_250_001, 7_250_002) -- slot
-# writes never share a transaction with gameplay, so no lock ordering applies.
+# Dedicated advisory-lock key for slot writes; keep it distinct from lifecycle and pair-session keys.
 _SLOT_WRITE_LOCK_KEY = 7_250_003
 
 
 def cohort_label(year: Optional[int], department: Optional[str]) -> str:
-    """How a cohort reads in one line of UI text.
-
-    Derived on the way out rather than stored, so there is no third column that can disagree with
-    the other two. Either half missing renders as whatever there is, which is why it takes
-    ``Optional``: the slot editor receives cohorts from an operator-typed request body, and a
-    half-filled one should still produce something readable rather than "None".
-
-    Each half is rendered individually rather than by joining the tuple, because the two halves are
-    no longer the same type -- ``year`` is an int and ``department`` a str -- and ``" · ".join`` on
-    the pair raises ``TypeError: sequence item 1: expected str instance, int found``. That is the
-    reason this is written as two appends instead of a comprehension.
-    """
+    """Format a cohort for display without storing a duplicate label."""
     parts: List[str] = []
     if department:
         parts.append(department.strip())
@@ -59,43 +31,14 @@ def cohort_label(year: Optional[int], department: Optional[str]) -> str:
     return " · ".join(parts) if parts else "Unspecified cohort"
 
 
-# ---------------------------------------------------------------------------
-# The rule: who may match whom
-# ---------------------------------------------------------------------------
-#
-# One definition of the rule, here, because matchmaking has to obey it on every draw and the
-# obvious alternative -- asking ``is_cohort_match_service`` once per candidate -- is a query per
-# row of the participant table inside the request that is supposed to be answering a click. These
-# three functions are what the draw path calls: two to describe a cohort's standing, and one to
-# fold the whole rule into the candidate query as a predicate.
-#
-# The rule in one sentence: a cohort is *in a slot* when some row names it on either side, and two
-# cohorts may match when some row names both of them. Those two clauses are the entire model, and
-# the second one applied to a cohort against itself is where self-matching comes from.
+# Matching rules live here and are folded into the candidate SQL query, avoiding per-candidate
+# lookups. A cohort is configured if a slot names it; two cohorts may match if one slot names both.
 
 
 def slots_are_configured(db: Database) -> bool:
-    """Whether any matchmaking slot row exists at all.
+    """Return whether explicit slot rules exist; an empty table means all cohorts may match.
 
-    This is the switch between the two different products the table can describe, and which one is
-    in force is not a matter of taste:
-
-    * **No rows.** Every cohort may match with every other. This is what a deployment that has never
-      been configured means, and it is why the initial state is the empty table rather than a
-      placeholder row -- see :func:`init_matchmaking_slot_service`, which used to write one
-      representative pair and thereby restricted a fresh install to a single pair of cohorts.
-    * **One row or more.** The rows are the whole rule. Every cohort not named by any of them is
-      now unmatchable, including cohorts that had no slot a moment ago.
-
-    That second clause is the sharp edge, and it is deliberate: the moment an operator creates their
-    first slot, the cohorts they did not mention stop matching. Anything else would mean a
-    half-configured screen silently still pairing people the operator can see are not configured
-    to pair, which is the failure this is here to prevent. It is also why the admin screen has to
-    show the unconfigured cohorts as such rather than leaving them to be discovered by a user
-    wondering why their draws keep failing.
-
-    Read per request rather than cached at import. It is an operator flipping a switch on a screen,
-    and the next draw has to be the new rule without a restart.
+    Read on each request so operator changes take effect without restarting the service.
     """
     with db.sessions() as session:
         return session.scalar(select(MatchmakingSlotRecord.id).limit(1)) is not None
@@ -104,10 +47,10 @@ def slots_are_configured(db: Database) -> bool:
 def cohort_is_configured(db: Database, year: Optional[int], department: Optional[str]) -> bool:
     """Whether this cohort is named by any slot, on either side.
 
-    A half-supplied cohort is reported as unconfigured rather than raising. The answer is only ever
-    used to phrase a message about why a draw found nobody, and a cohort missing a half cannot be
-    named by any row -- both halves of a row are NOT NULL -- so "no" is already the truth. Raising
-    would turn a legacy row into a 500 on the one path that is trying to explain itself.
+    A half-supplied cohort is answered as unconfigured rather than raising: the answer only ever
+    phrases a message about why a draw found nobody, and both halves of a row are NOT NULL so a
+    half cannot be named -- raising would turn a legacy row into a 500 on the one path trying
+    to explain itself.
     """
     if not year or not department:
         return False
@@ -121,21 +64,16 @@ def cohort_is_configured(db: Database, year: Optional[int], department: Optional
 def candidate_shares_a_slot_predicate(year: Optional[int], department: Optional[str]):
     """Restrict a candidate query to partners this cohort may actually be matched with.
 
-    Returns a SQL predicate rather than a set of cohorts to filter in Python, and the difference is
-    the whole reason this function exists: the permitted partners of a cohort are exactly the people
-    in the cohorts some row names alongside it, which is a property of the *candidate* rows and so
-    belongs in the query that already reads them. Materialising the cohort list first and then
-    filtering on it would mean a second query whose answer is stale before it is used, and would
-    read as though a cohort list were an authorisation boundary when it is only a convenience for
-    the editor's palette.
+    A SQL predicate, not a cohort list to filter in Python: permitted partners are a property of
+    the candidate rows and belong in the query already reading them, while a materialised list
+    would be a second query stale before use that also reads like an authorisation boundary
+    when it is only a convenience for the editor's palette.
 
-    The correlated subquery asks a single question of each candidate: is there a row naming both
-    them and me? For a candidate in my own cohort that row need only name me once, which is what
-    makes self-matching fall out of the same clause instead of needing a second one.
-
-    Callers must only apply this when :func:`slots_are_configured` is true. The empty table means
-    all-to-all, and this predicate would answer "nothing may match" for it, so the bypass is the
-    caller's to make and is deliberately not hidden in here.
+    The correlated EXISTS asks each candidate: is there a row naming both them and me? For a
+    candidate in my own cohort that row need only name me once, which is how self-matching
+    falls out of the same clause. Callers must apply this only when
+    :func:`slots_are_configured` is true -- the empty table means all-to-all, and here it would
+    answer "nothing may match"; the bypass is deliberately the caller's.
     """
     return exists(
         select(MatchmakingSlotRecord.id).where(
@@ -145,11 +83,9 @@ def candidate_shares_a_slot_predicate(year: Optional[int], department: Optional[
 
 
 def _names_cohort(year: Optional[int], department: Optional[str]):
-    """A slot row naming ``(year, department)`` on either of its two sides.
-
-    Both sides, because the row does not remember which one the operator typed first and there is
-    no reason for that to matter -- the same order-independence :func:`is_cohort_match_service`
-    applies when comparing two named cohorts.
+    """A slot row naming ``(year, department)`` on either side -- the row does not remember
+    which one the operator typed first, and there is no reason for that to matter (the same
+    order-independence :func:`is_cohort_match_service` applies).
     """
     return or_(
         and_(MatchmakingSlotRecord.year_a == year, MatchmakingSlotRecord.department_a == department),
@@ -160,9 +96,9 @@ def _names_cohort(year: Optional[int], department: Optional[str]):
 def _names_candidate_cohort():
     """:func:`_names_cohort` for the cohort of whichever candidate row is being examined.
 
-    Written against ``UserRecord`` rather than against a value, because the cohort being tested is
-    the one on the candidate row and is only known once the row is. SQLAlchemy correlates the outer
-    query in for it, which is what lets this stay a predicate instead of a per-candidate query.
+    Written against ``UserRecord`` rather than a value, because the cohort tested is only known
+    once the row is; SQLAlchemy correlates the outer query in, keeping this a predicate instead
+    of a per-candidate query.
     """
     return or_(
         and_(
@@ -179,18 +115,14 @@ def _names_candidate_cohort():
 def list_participant_cohorts(db: Database) -> List[CohortDict]:
     """Every ``(year, department)`` pair at least one participant actually belongs to.
 
-    Distinct, and derived from ``users`` rather than stored, so a cohort with nobody in it never
-    appears in the configuration palette and an operator is not offered a pairing that would match
-    no one.
+    Distinct and derived from ``users`` rather than stored, so a cohort with nobody in it never
+    appears in the palette. Ordered by year then department so it reads the same every time --
+    an unordered ``SELECT DISTINCT`` reshuffles whenever PostgreSQL picks a different plan,
+    which makes the drag-and-drop palette hard to reason about between saves.
 
-    Ordered by year then department so the palette reads in the same order every time it is
-    opened -- an unordered ``SELECT DISTINCT`` reshuffles whenever PostgreSQL picks a different
-    plan, which makes a drag-and-drop configuration hard to reason about between saves.
-
-    NULL is filtered out on both columns even though both are NOT NULL. A CHECK constraint added
-    by ``apply_check_constraints`` lands ``NOT VALID``, so a row written before the columns were
-    tightened can still hold one, and a cohort of ``{"year": null}`` would be a chip nothing could
-    be dropped into.
+    NULL is filtered out on both columns even though both are NOT NULL: a CHECK constraint
+    added by ``apply_check_constraints`` lands ``NOT VALID``, so pre-tightening rows can still
+    hold one, and a ``{"year": null}`` chip is one nothing can be dropped into.
     """
     with db.sessions() as session:
         rows = session.execute(
@@ -205,12 +137,9 @@ def list_participant_cohorts(db: Database) -> List[CohortDict]:
 def _serialise_slot(slot: MatchmakingSlotRecord) -> Dict[str, Any]:
     """One slot as the API returns it, with a pre-joined label beside the separable halves.
 
-    The label is a convenience for the editor's chips and is derived here rather than in the
-    browser, so the two sides of this codebase cannot render the same cohort differently.
-
-    ``group_key`` is returned as a plain string or ``None``, never omitted: the editor groups boxes
-    on it, and a key missing from the JSON would be indistinguishable from a pair that was never
-    part of a named box, which is the NULL it is already meant to spell.
+    The label is derived here rather than in the browser so both sides of the codebase render
+    the same cohort. ``group_key`` is plain string or ``None``, never omitted: the editor groups
+    boxes on it, and a missing key would be indistinguishable from a pair never part of a box.
     """
     return {
         "id": str(slot.id),
@@ -229,17 +158,12 @@ def _serialise_slot(slot: MatchmakingSlotRecord) -> Dict[str, Any]:
 def get_all_slots_service(db: Database) -> List[Dict[str, Any]]:
     """Every configured slot, both sides as ``(year, department)`` pairs.
 
-    Ordered, and by ``group_key`` first, because the editor reconstructs a list of boxes out of this
-    and a list whose order depends on the query plan is a drag-and-drop screen whose boxes move
-    between saves. Same argument as the ordering in :func:`list_participant_cohorts`: an unordered
-    ``SELECT`` reshuffles whenever PostgreSQL picks a different plan, and an operator who cannot
-    predict where their box will be next time cannot tell whether it moved or was replaced.
-
-    ``group_key`` ascending with NULLs *last*, so a deployment that has never been saved through the
-    current editor reads in the order the pairs were created, and the boxes the editor reconstructs
-    from them sit together rather than being split by keyed boxes that happen to sort before them.
-    ``created_at`` breaks ties within a box, and ``id`` breaks ties between rows written in the same
-    statement, so the order is total rather than merely stable per-plan.
+    Ordered by ``group_key`` ascending with NULLs *last* (so a never-legacy-saved deployment
+    reads in creation order and boxes sit together instead of being split), then ``created_at``
+    within a box, then ``id`` between rows written in the same statement, making the order
+    total. The editor reconstructs boxes from this, and an order that depends on the query plan
+    is a screen whose boxes move between saves -- same argument as in
+    :func:`list_participant_cohorts`.
     """
     with db.sessions() as session:
         slots = session.scalars(
@@ -255,11 +179,10 @@ def get_all_slots_service(db: Database) -> List[Dict[str, Any]]:
 def _normalize_department(value: str, field_name: str) -> str:
     """Trim a department and refuse an empty one.
 
-    A blank department is refused rather than stored because a cohort is a *pair*: a slot with a
-    year and no department describes everybody in that year across every department, which is a
-    different rule wearing the same shape, and would be configured by accident the moment somebody
-    cleared the input and pressed save. Department is free text, so nothing else can rule this
-    out -- it has to be checked here.
+    A cohort is a *pair*: a slot with a year and no department describes everybody in that year
+    across every department -- a different rule wearing the same shape, configured by accident
+    the moment somebody cleared the input and saved. Department is free text, so nothing else
+    can rule this out.
     """
     normalized = (value or "").strip()
     if not normalized:
@@ -280,28 +203,18 @@ def create_matchmaking_slot_service(
 ) -> Dict[str, Any]:
     """Create a slot permitting one cohort to match with another.
 
-    A slot whose two sides are the same cohort is allowed and means that cohort may match within
-    itself, so there is no "these must differ" rule here.
+    A slot whose two sides are the same cohort is allowed and means that cohort may match
+    within itself. ``group_key`` names the editor box, is optional (a pair is valid on its own,
+    and rows written before the column existed have none) and changes nothing about what may
+    match. A duplicate is a 409 rather than a unique-constraint error, because "this pairing is
+    already configured" is an answer the operator can act on; the check and insert run under
+    the slot-write advisory lock below, which makes that 409 hold under concurrency too -- no
+    unique index can express this invariant (order-independent pairs, NULL group semantics).
 
-    ``group_key`` names the editor box this pair belongs to. It is optional, because a pair is a
-    valid thing to store on its own and every row written before the column existed is one. It
-    changes nothing about what may match -- see ``MatchmakingSlotRecord`` -- it only says which box
-    to put the pair back into when the editor loads.
-
-    A duplicate is a 409 rather than a unique-constraint error: the operator pressed save twice, and
-    "this pairing is already configured" is an answer they can act on. The check and the insert run
-    under the slot-write advisory lock below, which is what makes the promised 409 hold under
-    concurrency too -- see ``MatchmakingSlotRecord`` for why a unique index cannot express this
-    invariant (order-independent pairs, NULL group semantics) and therefore cannot back it.
-
-    The duplicate is scoped to ``group_key`` as well as to the pair, and that is what makes
-    overlapping boxes expressible. Two boxes naming the same pair -- ``[A, B]`` and ``[A, B, C]``
-    say, or ``[A, B, C]`` and ``[D, E, A]`` where both write A-B -- are a legitimate configuration,
-    not a mistake: each box is a thing the operator built and expects to still be there after a
-    reload. Refusing the second one would make the editor unable to represent overlapping boxes at
-    all. The rule reads pairs and not boxes, so storing the pair twice costs nothing beyond the row,
-    and it is still a 409 when the pair *and* the box both repeat -- which is what an actual double
-    submit looks like.
+    The duplicate is scoped to the pair *and* the box, which is what makes overlapping boxes
+    expressible: two boxes naming the same pair (``[A, B]`` and ``[A, B, C]``) are a legitimate
+    configuration, each a thing the operator built, and refusing the second would make the
+    editor unable to represent overlapping boxes at all.
     """
     department_a = _normalize_department(department_a, "department_a")
     department_b = _normalize_department(department_b, "department_b")
@@ -322,10 +235,10 @@ def create_matchmaking_slot_service(
         )
     )
 
-    # The box this pair is being written into. A NULL group has to be matched with ``IS NULL`` and
-    # every other value with ``=``, so this is built as a condition rather than folded into the
-    # equality above -- which would also be wrong in the other direction, matching a pair that
-    # exists in a *different* box and is precisely the case being allowed.
+    # The box this pair is being written into. NULL groups must be matched with ``IS NULL`` and
+    # every other value with ``=``, so this stays a separate condition rather than being folded
+    # into the equality above -- which would also be wrong in the other direction, matching the
+    # pair living in a *different* box, precisely the case being allowed.
     group_matches = (
         (MatchmakingSlotRecord.group_key == group_key)
         if group_key is not None
@@ -333,22 +246,19 @@ def create_matchmaking_slot_service(
     )
 
     with db.sessions.begin() as session:
-        # ENG-005: serialize slot writes. The duplicate check below is read-then-write,
-        # so two concurrent creates of one pair+box both pass it and both land -- and no
-        # unique index can back it instead (the pair is order-independent and the group
-        # match is NULL-sensitive, neither of which a constraint expresses). Slot writes
-        # are administrator-only and rare; the lock is held for one short transaction.
+        # ENG-005: serialize slot writes -- the duplicate check below is read-then-write, so two
+        # concurrent creates of one pair+box both pass it and both land, and no unique index can
+        # back it instead (order-independent pair, NULL-sensitive group). Administrator-only and
+        # rare, so the lock is held for one short transaction.
         session.execute(
             text("SELECT pg_advisory_xact_lock(:key)"),
             {"key": _SLOT_WRITE_LOCK_KEY},
         )
         # Order-independent: A-B and B-A are the same rule, and an operator who adds the second
-        # should be told it exists rather than be shown two rows that do the same thing.
-        #
-        # Pair *and* box in one query, rather than fetching a row for the pair and comparing its
-        # group in Python. The fetched row would be whichever one the planner returned, so a pair
-        # stored in two boxes could be reported as a duplicate or as new depending on the order --
-        # and which of those happens would change with the query plan.
+        # is told it exists. Pair *and* box matched in one query rather than fetching a row and
+        # comparing its group in Python -- the fetched row would be whichever the planner
+        # returned, so a pair stored in two boxes could be reported as duplicate or new
+        # depending on the query plan.
         existing = session.scalar(
             select(MatchmakingSlotRecord).where(and_(pair_matches, group_matches)).limit(1)
         )
@@ -376,15 +286,10 @@ def create_matchmaking_slot_service(
 def _normalize_group_key(group_key: Optional[str]) -> Optional[str]:
     """Validate a slot box key, or pass ``None`` through as "not part of a named box".
 
-    Not invented here. A box key is minted by the editor, so a request without one is a legitimate
-    client -- a script, or a row written before the column existed -- and a request with one that is
-    not a UUID is a client that got the shape wrong. Refusing the second is worth a round trip: a key
-    that stored as something other than a UUID would come back as a different string and quietly
-    fall into the legacy grouping path on the next load, which is the exact failure this column
-    exists to remove.
-
-    Empty string is read as absent rather than as an invalid key, because that is what a form field
-    the operator never touched submits, and it means the same thing as not sending one.
+    A request without one is a legitimate client (a script, or a row from before the column
+    existed); a non-UUID one got the shape wrong, and storing it would fall into the legacy
+    grouping path on the next load. Empty string reads as absent, as an untouched form field
+    submits.
     """
     if group_key is None:
         return None
@@ -438,28 +343,18 @@ def init_matchmaking_slot_service(
 ) -> Dict[str, Any]:
     """Report the slot configuration's state on boot. Writes nothing.
 
-    The intent is "every cohort may match with every other", and that is a fact about *no rows
-    existing* rather than about some particular row -- there is no row that says "all of them"
-    without enumerating every cohort that will ever be created. An empty table is therefore the
-    initialised state, and the configuration screen reads it as one slot holding every cohort.
+    "Every cohort may match with every other" is a fact about *no rows existing*, so the empty
+    table is the initialised state. This used to write a single representative pair "to give the
+    editor something to show", which was wrong twice over: the editor reconstructs slots from
+    the rows it is given, so a fresh install opened on a slot of two cohorts out of thirty-six,
+    and saving from there *replaced* the intended all-to-all with that one pair -- while a lone
+    pair also reads as a rule permitting exactly that pair. That is load-bearing now:
+    :func:`slots_are_configured` is what the matchmaking draw consults to decide whether to
+    apply the slot predicate at all, so the placeholder row would have restricted a
+    never-configured deployment permanently and invisibly.
 
-    This used to write a single representative pair "to give the editor something to show", on the
-    understanding that saving would expand it into the full all-to-all set. That was wrong twice
-    over. The editor does not treat a lone pair as unconfigured: it reconstructs slots from the
-    rows it is given, so a deployment that had never been configured opened on a slot containing
-    exactly two cohorts out of thirty-six, and saving from there *replaced* the intended
-    all-to-all with the one pair. And a lone pair is not a harmless placeholder -- it reads as a
-    rule permitting that pair and nothing else, which is the opposite of what it stood for, so the
-    moment anything consults these rows to decide who may match it would have restricted
-    matchmaking to one pair of cohorts on a fresh install.
-
-    Kept as a function because it is the boot-time report of "is anything configured", and that is
-    a question worth a log line, but it holds no write path at all.
-
-    The claim that an empty table means all-to-all is now load-bearing rather than decorative:
-    :func:`slots_are_configured` is what the matchmaking draw reads to decide whether to apply the
-    slot predicate at all. That is exactly why the placeholder row had to go -- it would have made
-    a never-configured deployment enforce a single pair of cohorts, permanently and invisibly.
+    Kept as a function because it is the boot-time report of "is anything configured", and that
+    is a question worth a log line.
     """
     with db.sessions() as session:
         existing_count = session.scalar(select(func.count()).select_from(MatchmakingSlotRecord)) or 0

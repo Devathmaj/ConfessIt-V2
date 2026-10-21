@@ -37,16 +37,7 @@ PAIR_COLLISION_RETRIES = 5
 
 
 def _consume_matchmaking_attempt(session, regno: str, now: datetime) -> bool:
-    """Atomically claim the user's single matchmaking attempt.
-
-    The conditional UPDATE is the only thing serialising this action. Concurrent callers
-    contend on the same row lock, and because PostgreSQL re-evaluates the predicate against
-    the committed version of the row, only the winner sees a row to update. Reading
-    ``last_matchmaking_at`` and writing it in a later transaction instead leaves a window in
-    which every concurrent request observes "eligible".
-
-    Returns True if this caller won the attempt.
-    """
+    """Claim the attempt with one conditional update; return whether this caller won."""
     cooldown_cutoff = now - timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)
     result = session.execute(
         update(UserRecord)
@@ -69,16 +60,11 @@ NO_CANDIDATES = "matchmaking_no_candidates"
 class MatchmakingRefusal(HTTPException):
     """A draw that was refused, carrying a code the client can branch on.
 
-    ``detail`` is the human sentence the toast shows and stays a plain string, because that is
-    what ``describeApiError`` reads and it should not have to change. ``code`` is what the client
-    branches on to decide what the *page* should say.
-
-    The two need to be separate because the two refusals ask different things of the reader. "No
-    potential matches found" is bad luck, and the honest response is that another attempt may
-    succeed. "Your cohort is not configured" is not bad luck at all -- no future attempt can succeed
-    until an operator adds a slot -- and telling that user to try again would be the same mistake as
-    telling them they are on a cooldown. The server is the only place that knows which happened, and
-    a client that inferred it from the wording would break the day a sentence is reworded.
+    ``detail`` is the human toast sentence and stays a plain string; ``code`` is what the page
+    branches on. They are separate because "no potential matches found" is bad luck and another
+    attempt may succeed, while "cohort not configured" needs an operator to add a slot -- and
+    telling that user to try again would repeat the cooldown mistake. Only the server knows
+    which happened; a client inferring from wording would break when the sentence is reworded.
     """
 
     def __init__(self, detail: str, code: str):
@@ -104,16 +90,11 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
     The caller is a ``UserDetails``, which the router only produces for an account in
     ``users``, so no staff check is needed here.
 
-    **Three answers, not two.** A cooldown and a cohort with no slot both stop a draw, but they are
-    different problems for different people and the page has to be able to tell them apart: one is
-    the user's own timer, the other is an operator's configuration. Answering ``cohort_not_configured``
-    here rather than letting the draw discover it is what lets the page stop *before* the animation
-    instead of after it, so the user is not made to watch five seconds of matching to be told what
-    they could have been told by a click.
-
-    Ordered so the cheaper and more common answer wins: a user who is on a cooldown is told so
-    without the slot table being read, and a user with no slot is told that even if they would also
-    have been on a cooldown -- because the slot is the one that will still be true in four hours.
+    **Three answers, not two**: a cooldown is the user's own timer, an unconfigured cohort is
+    an operator's problem, and answering the latter here is what lets the page stop *before*
+    the animation. Ordered so the cheaper, more common answer wins: a cooldown answer skips
+    the slot table entirely, and a user with no slot is told that even if they would also have
+    been on a cooldown -- the misconfiguration is what will still be true in four hours.
     """
     current_time = datetime.now(timezone.utc)
 
@@ -141,9 +122,7 @@ def check_matchmaking_cooldown_service(current_user: UserDetails, db: Database):
                 "remaining_minutes": int(minutes)
             }
 
-    # A cohort no slot names cannot be matched, and no amount of waiting changes that. Only a
-    # configured deployment can refuse a cohort this way; with no slots at all every cohort may
-    # match with every other, so there is nobody to refuse.
+    # Refuse unconfigured cohorts only when slots are in use; without slots, all cohorts can match.
     if slots_are_configured(db) and not cohort_is_configured(
         db, current_user.year, current_user.department
     ):
@@ -171,17 +150,7 @@ class _PairTaken(Exception):
 
 def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime) -> dict:
     """One pass: claim the attempt, pick a partner, and write the match atomically."""
-    # Whether this cohort can be matched at all, decided before anything is written.
-    #
-    # This is the one refusal that costs the user nothing. Spending an attempt on it would be the
-    # worst of the three outcomes: the user watches five seconds of animation, is told their cohort
-    # is not configured, and is then locked out for four hours from a draw that could never have
-    # succeeded anyway. Nothing about waiting changes the answer -- only an operator adding a slot
-    # does -- so the attempt is left unspent and the user may click again the moment they are
-    # configured, without losing anything.
-    #
-    # Read per draw, because an operator can add the missing slot between two attempts, and the
-    # user should not have to wait out a cooldown to benefit from it.
+    # This refusal does not consume an attempt; recheck slots each draw so new configuration applies immediately.
     slots_exist = slots_are_configured(db)
     if slots_exist and not cohort_is_configured(
         db, current_user.year, current_user.department
@@ -196,17 +165,12 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
 
     is_rare_same_gender_match = random.random() < (SAME_GENDER_MATCH_CHANCE / 100)
 
-    # Staff are excluded as candidates by the schema rather than by a filter: they have no
-    # row in ``users``, so a moderator cannot be paired off as a stranger while holding a
-    # review queue.
+    # Staff have no ``users`` row, so they cannot enter the participant candidate pool.
     filters = [UserRecord.matchmaking_enabled.is_(True),
                UserRecord.is_blocked.is_(False), UserRecord.regno != current_user.regno,
                UserRecord.gender == current_user.gender if is_rare_same_gender_match else UserRecord.gender != current_user.gender]
 
-    # Skip anyone this user is already matched with right now. This keeps the common case
-    # from even attempting a pair that is taken; the unique pair_key below is what
-    # actually settles the race when two requests read the same candidate list. Each arm
-    # selects the *other* column, since that is the partner rather than this user.
+    # Exclude live partners; the unique pair key still settles races between requests.
     live_partners = select(MatchRecord.user_2_regno).where(
         MatchRecord.user_1_regno == current_user.regno,
         MatchRecord.expires_at > now,
@@ -218,15 +182,8 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     )
     filters.append(UserRecord.regno.not_in(live_partners))
 
-    # Which cohorts may match is a rule about the deployment rather than about this user, and it is
-    # read per draw because an operator changes it from the admin screen between two draws. Empty
-    # means all-to-all and skips the predicate; non-empty means the rows are the whole rule, so a
-    # cohort missing from every one of them cannot match anybody. Both branches are the same query
-    # with a different WHERE clause rather than two queries, because "no candidates" has to mean the
-    # same thing on both paths for the message below to be honest.
-    #
-    # ``slots_exist`` was resolved above, where the cohort was checked against it, rather than
-    # queried again here.
+    # Slot settings are read per draw so operator changes apply immediately.
+    # No slots means all-to-all; otherwise candidates must share a configured slot.
     with db.sessions() as session:
         candidate_query = select(UserRecord).where(*filters)
         if slots_exist:
@@ -236,10 +193,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
         candidate_users = session.scalars(candidate_query).all()
 
     if not candidate_users:
-        # The cohort is configured -- it was checked at the top of this function -- so this is
-        # nobody being available rather than a rule that excludes everyone, and that is bad luck
-        # rather than a permanent condition. The attempt is spent even though nothing was created,
-        # so the user cannot poll the endpoint for candidates.
+        # A configured cohort with no candidates spends the attempt to prevent polling.
         with db.sessions.begin() as session:
             _consume_matchmaking_attempt(session, current_user.regno, now)
 
@@ -273,13 +227,10 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
     pair_key = _pair_key(current_user.regno, matched_user.regno)
 
     try:
-        # One transaction: claim the attempt, free any lapsed key for this pair, insert the
-        # match and insert its pending conversation. A losing race rolls back having
-        # written nothing, so it can neither consume the attempt nor orphan a match.
+        # Claim the attempt, release an expired pair key, and create both rows atomically.
         with db.sessions.begin() as session:
             if not _consume_matchmaking_attempt(session, current_user.regno, now):
-                # Lost the race, or an earlier request already took the attempt. The
-                # winner holds the row lock until it commits, so this read is current.
+                # The winning request holds this row lock until its timestamp is committed.
                 row = session.scalar(select(UserRecord).where(UserRecord.regno == current_user.regno))
                 last = row.last_matchmaking_at if row is not None else None
                 if last is not None and last.tzinfo is None:
@@ -287,9 +238,7 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
                 eligible_at = (last + timedelta(hours=MATCHMAKING_COOLDOWN_HOURS)) if last else now
                 raise _cooldown_rejection((eligible_at - now).total_seconds())
 
-            # A match of this pair that has already lapsed must not keep the pair locked.
-            # Doing it here, for the exact pair about to be created, is what makes the
-            # uniqueness constraint mean "no two live matches" without a sweeper.
+            # Release this expired pair key so the uniqueness constraint covers live matches only.
             session.execute(
                 update(MatchRecord)
                 .where(MatchRecord.pair_key == pair_key, MatchRecord.expires_at <= now)
@@ -302,38 +251,22 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
             session.flush()
             match_id_str = str(match_row.id)
 
-            # Create a pending conversation in the same transaction. It becomes a request
-            # only after the initiator explicitly sends one.
+            # Create a pending conversation; it becomes a request after the initiator sends one.
             session.add(ConversationRecord(
                 match_id=match_id_str, initiator_regno=current_user.regno,
                 receiver_regno=matched_user.regno, status="pending", created_at=now,
             ))
     except IntegrityError as exc:
-        # Another request matched this exact pair first. The transaction rolled back, so
-        # the attempt is unspent and it is safe to draw again.
+        # The pair race rolled back the transaction, leaving the attempt available for a redraw.
         if "pair_key" not in str(exc.orig):
             raise
         raise _PairTaken from exc
 
     logger.info(f"Automatically created a pending conversation (not requested) for match {match_id_str}")
 
-    # Notify the matched user only after the match is committed, so a notification failure
-    # cannot roll back a match the user was already told about.
-    #
-    # No absolute time is written into the body. `now` is UTC and the server does not know
-    # where the recipient is, so a formatted wall-clock string is persisted once and then
-    # reads wrong for everyone outside the server's assumed zone -- a user at UTC+5:30 saw
-    # "12:00 PM" for a match made at 17:31. The row's own created_at is timezone-aware and
-    # already renders in the reader's local time, so the body stays timezone-free.
+    # Notify after commit; the timezone-aware creation time is rendered in the recipient's locale.
     from ..services.notification_service import create_notification_service
-    # No target. A match is a fact about two people, not a thing on a page: the recipient has
-    # no list of their matches to open, and the match id means nothing until someone asks for
-    # the conversation it opened. So this notice says what happened and stops there.
-    #
-    # Best-effort, like every other notice this application writes: the match is already
-    # committed, and a notice that cannot be stored is a missing inbox entry rather than a
-    # failed match. Letting the write raise would answer 500 for a match that stands
-    # anyway, and the participant would never be told who they were matched with.
+    # Best-effort notice: a delivery failure must not turn a committed match into an HTTP error.
     try:
         create_notification_service(
             recipient_regno=matched_user.regno,
@@ -349,9 +282,8 @@ def _create_match_attempt(current_user: UserDetails, db: Database, now: datetime
             exc_info=True,
         )
 
-    # Return match details immediately with full user information. ``matched_user`` was built
-    # above from the matched row, so its ``profile_picture_url`` is already the derived public CDN
-    # address; re-deriving it here would be the same answer computed twice.
+    # ``matched_user.profile_picture_url`` was already derived as the public CDN address when
+    # built from the matched row; re-deriving it here would compute the same answer twice.
     matched_user_picture_url = matched_user.profile_picture_url
 
     matched_user_details = {
@@ -381,17 +313,8 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
     As with the cooldown check, the participant-only caller is guaranteed by the route's
     dependency, so no staff check remains here.
     """
-    # Re-check cooldown status for a friendly message before touching the database. This
-    # is only a fast-fail: _consume_matchmaking_attempt is the authoritative check,
-    # because this one runs in a different transaction than the write.
-    #
-    # Only a cooldown is answered here. The check now also reports a cohort that no slot names, and
-    # that must not be answered with a 429: it is not a rate limit, nothing is waiting, and a
-    # cooldown status would tell the client to come back in four hours for a draw that cannot
-    # succeed. It is left to _create_match_attempt, which refuses it with the right code and --
-    # unlike a cooldown -- without spending the attempt. That costs a second read of the slot table
-    # on a draw that is going to be refused anyway, which is cheaper than teaching two places how to
-    # describe the same refusal and having one of them drift.
+    # Check cooldown early for a clear response; the write transaction rechecks it authoritatively.
+    # Cohort configuration is handled in the attempt path, not as a rate-limit response.
     cooldown_check = check_matchmaking_cooldown_service(current_user, db)
     if cooldown_check["status"] == "cooldown":
         raise HTTPException(
@@ -405,8 +328,7 @@ def find_match_service(current_user: UserDetails, db: Database) -> dict:
         try:
             return _create_match_attempt(current_user, db, datetime.now(timezone.utc))
         except _PairTaken:
-            # The partner we drew was matched to this user by a racing request. Draw again;
-            # the rolled-back attempt is still unspent.
+            # A competing request took this pair; redraw because the transaction rolled back.
             continue
 
     raise HTTPException(

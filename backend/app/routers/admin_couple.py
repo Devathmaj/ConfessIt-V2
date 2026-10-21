@@ -29,11 +29,10 @@ def create_couple_game(
 
     Featuring only pins the spotlight: questionnaire *sessions* are opened by the
     reset loop under the game's own cadence, never by featuring, and there is no
-    Update action for this game. A day that already holds a featured game (any
-    game) is a 409, because the spotlight seats one game per date.
-
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
-    an administrator cannot feature a day attributed to somebody else.
+    Update action for this game. A day that already holds a featured game (any game)
+    is a 409 -- the spotlight seats one game per date. The caller's ``regno`` is
+    recorded as ``created_by``, not taken from the payload: an administrator cannot
+    feature a day attributed to somebody else.
     """
     return couple_service.create_couple_game(db, payload, created_by=account.regno)
 
@@ -46,8 +45,8 @@ def current_couple_session(
     """The current global questionnaire session, if the reset loop opened one.
 
     Declared before ``/{game_id}`` so ``session`` is never read as an id. The
-    questionnaire has no Update: at each boundary the loop ends this session
-    and opens the next with a fresh question set per couple.
+    questionnaire has no Update: at each boundary the loop ends this session and
+    opens the next with a fresh question set per couple.
     """
     from fastapi import HTTPException, status
 

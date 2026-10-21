@@ -1,14 +1,4 @@
-"""Future manual words, bounded by a finite scheduling horizon.
-
-Wordle and Anagram in ``manual`` mode run on words an administrator provides.
-``schedule_word`` stores one word for one future period-start date; the reset
-loop consumes it when that period opens instead of leaving the session pending.
-A scheduled word never activates early -- the row waits until its date arrives.
-
-``MAX_FUTURE_SCHEDULE_DAYS`` bounds the horizon server-side: a target farther
-than ``today + horizon`` is refused, and the admin UI names the same number so
-an operator learns the window before submitting.
-"""
+"""Manual word scheduling for Wordle and Anagram within bounded future horizons."""
 
 from datetime import date, timedelta
 from typing import Optional
@@ -98,11 +88,7 @@ def schedule_word(
                 with session.begin_nested():
                     session.flush()
             except IntegrityError:
-                # Lost an insert race with a concurrent schedule for the same
-                # (game, date): the unique index refused the duplicate. Re-read
-                # the winner (committed before the violation surfaced) and apply
-                # the replace the caller asked for, so concurrent identical
-                # writes converge instead of answering 500.
+                # Retry update on concurrent insert conflict for same (game, date).
                 existing = session.scalar(
                     select(ScheduledGameContentRecord).where(
                         ScheduledGameContentRecord.game_id == game_id,

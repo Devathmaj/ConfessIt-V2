@@ -15,13 +15,8 @@ from opentelemetry.sdk.resources import Resource
 # Correctly define the formatter
 FORMATTER = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-# Uvicorn's accepted-WebSocket handshake line includes the full path *and query
-# string* at INFO. The application no longer sends an access token there -- the
-# socket uses a one-use ticket -- but a ticket is still a credential, and a
-# dependency or future route could put a token back in a query. Redacting the
-# value at the logging boundary keeps every such line safe regardless of which
-# caller built the URL. The name is kept so operators can still see which kind of
-# credential was present.
+# Redact credential query values from Uvicorn WebSocket logs while keeping keys
+# visible for diagnosis, including credentials added by future routes.
 _QUERY_CREDENTIAL_RE = re.compile(
     r"([?&](?:token|ticket|access_token|refresh_token)=)[^&\s\"']+",
     re.IGNORECASE,
@@ -35,13 +30,7 @@ def _redact_query_credentials(value):
 
 
 class QueryCredentialRedactionFilter(logging.Filter):
-    """Remove credential values from URL-shaped log messages.
-
-    Filters are applied by the logger before handlers, so this covers both the
-    console handler and any handler Uvicorn installs. It mutates the record's
-    message arguments rather than formatter output so every handler sees the same
-    sanitized line.
-    """
+    """Redact credential values before any logging handler receives the record."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
@@ -57,12 +46,7 @@ class QueryCredentialRedactionFilter(logging.Filter):
 
 
 def install_query_credential_redaction() -> None:
-    """Install the filter on the loggers Uvicorn uses for handshake lines.
-
-    Called at import and again on startup: Uvicorn configures its loggers before
-    importing the ASGI app, but a test harness or a future launcher may configure
-    logging later, and adding the harmless filter twice is a no-op.
-    """
+    """Install the idempotent query-credential filter on Uvicorn loggers."""
     for name in ("uvicorn.error", "uvicorn.access"):
         target = logging.getLogger(name)
         if not any(
@@ -76,29 +60,14 @@ install_query_credential_redaction()
 
 
 def log_identity_hash(value: object) -> str:
-    """A stable, non-reversible 8-hex-char tag for a regno or other log identifier.
-
-    Keyed with ``SECRET_KEY`` (the pepper): identical inputs hash identically, so an
-    operator can still correlate one actor's lines, but the tag reverses to nothing
-    without the deployment secret. Eight hex chars (32 bits) is enough to join on and
-    too short to brute-force a high-entropy client id; regnos are lower-entropy, which
-    is why the pepper -- not just the hash -- carries the protection against dictionary
-    enumeration.
-    """
+    """Return a stable, peppered 8-hex tag for correlating log identifiers."""
     return hashlib.sha256(
         f"{value}:{settings.SECRET_KEY}".encode("utf-8")
     ).hexdigest()[:8]
 
 
 def redact_log_identifiers(message: object, *identifiers: object) -> str:
-    """Replace named identifiers embedded in an exception or log message with tags.
-
-    Upstream errors are the hard case: Cloudinary's text can repeat the public_id it
-    failed on, and a public_id contains the owner's regno. Passing both the message and
-    the values that must not survive produces a line that is still diagnosable by hash
-    while containing no raw identifier. Longer values go first so a public_id is tagged
-    as a whole rather than being partially rewritten through the regno inside it.
-    """
+    """Replace supplied identifiers with tags, longest first to avoid partial matches."""
     text = str(message)
     for identifier in sorted(
         {str(value) for value in identifiers if value},
@@ -111,34 +80,15 @@ def redact_log_identifiers(message: object, *identifiers: object) -> str:
 
 _OTEL_LOG_HANDLER = None
 
-# SDK 1.45.x deprecates its own LoggingHandler in favour of the handler from
-# opentelemetry-instrumentation-logging, and warns on import. The SDK handler is kept
-# anyway: instrumentation-logging is deliberately not a dependency here, and the SDK
-# handler is what puts trace_id and span_id on every exported LogRecord, which is the
-# field M1's correlation depends on. Adding the package to silence a warning would
-# trade a known, working log path for a new dependency and a new failure mode. The
-# deprecation is currently a warning only; the handler still populates trace context.
-#
-# The OTLP handler ships WARNING and above only. The collector feeds Loki, which
-# retains everything for its full retention period, so INFO and DEBUG stay
-# console-only: anything below a warning -- including the DEBUG-only token hints
-# and any identifier a future info line carries by accident -- never reaches
-# retained storage. The level-by-level Grafana panel simply goes quiet at INFO;
-# the WARN/ERROR panels it is actually watched through are unaffected.
+# Keep the SDK handler for trace/span IDs without adding another dependency.
+# Export WARNING+ to Loki; lower levels stay console-only to limit retained data.
 
 def get_console_handler():
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(FORMATTER)
     return console_handler
 
-# There is deliberately no file handler. This application used to write every record
-# to my_app.log as well as to stdout and to OTLP, and promtail scraped both the file
-# and the Docker host, so one log line reached Loki three times with differing
-# content. The OTLP handler below is now the only path into Loki, and the console
-# handler exists for `docker compose logs` rather than as an ingestion route --
-# nothing scrapes stdout any more. Adding a file handler back would reintroduce the
-# duplicate, so a log-on-disk requirement should be met by the collector's own
-# export rather than by a second copy of the application log.
+# No file handler: OTLP is the sole Loki path, while stdout serves container logs.
 
 # CA bundle cap: a PEM CA is ~1-2KB; 10KB admits chains while bounding what the
 # telemetry path reads into memory before any parsing.
@@ -262,12 +212,11 @@ def _get_otel_log_handler():
 def get_console_only_logger(logger_name):
     """Return a logger that writes to stdout and to nothing else.
 
-    The same logger is used for one purpose: emitting a freshly minted magic-link
-    token to the developer's terminal during local debugging. get_logger() attaches
-    an OTLP handler alongside the console one, so anything it records is exported to
-    the collector and retained in Loki for the full retention period, which is the
-    wrong place for a live bearer credential. This logger has no OTLP handler and
-    never acquires one, so the token exists only for as long as the terminal does.
+    For emitting a freshly minted magic-link token to the developer's terminal
+    during local debugging: get_logger() attaches an OTLP handler alongside the
+    console one, which would export and retain a live bearer credential in Loki
+    for the full retention period. This logger has no OTLP handler and never
+    acquires one, so the token exists only for as long as the terminal does.
     """
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.DEBUG)

@@ -44,12 +44,11 @@ def preview_wordle_answer(
 ) -> WordleDraw:
     """Draw a word for ``game_date`` from the approved list, signed for that day.
 
-    This is the "show me what will be saved" half of the flow. The word is chosen here, on
-    the server, and the token that comes back is an HMAC over the word and the date -- so the
-    screen can display the answer before anything is written, and ``POST`` can then store
-    exactly that answer without taking the client's word for what it is.
-
-    Declared before ``/{game_id}`` so ``preview`` is never read as an id.
+    The "show me what will be saved" half of the flow: the word is chosen on the server
+    and the returned token is an HMAC over the word and the date -- so the screen shows
+    the answer before anything is written and ``POST`` stores exactly that answer
+    without taking the client's word for it. Declared before ``/{game_id}`` so
+    ``preview`` is never read as an id.
     """
     return wordle_service.draw_answer(game_date)
 
@@ -64,10 +63,10 @@ def create_wordle_game(
 
     ``mode="custom"`` stores the supplied word if it is on the approved list;
     ``mode="random"`` stores the word the preview drew, verified against its signature.
-    The old session is stamped ended and kept as history with its user progress;
-    the new session starts from scratch for today's UTC date under the game's own
-    reset cadence. An explicit ``game_date`` other than today is refused --
-    future words belong on the schedule endpoint below.
+    The old session is stamped ended and kept as history with its user progress; the
+    new one starts from scratch for today's UTC date under the game's reset cadence.
+    An explicit ``game_date`` other than today is refused -- future words belong on
+    the schedule endpoint below.
     """
     return wordle_service.create_wordle_game(db, payload)
 
@@ -79,9 +78,9 @@ def current_wordle_session(
 ) -> WordleGame:
     """The current active-or-pending session, or 404 when the game has none.
 
-    Declared before ``/{game_id}`` so ``current`` is never read as an id. This
-    is what the admin screen renders as "the session now": its word (or its
-    pending state), its period, and whether it is waiting for configuration.
+    Declared before ``/{game_id}`` so ``current`` is never read as an id. This is
+    what the admin screen renders as "the session now": its word (or its pending
+    state), its period, and whether it is waiting for configuration.
     """
     from fastapi import HTTPException
 
@@ -99,9 +98,9 @@ def schedule_wordle_word(
 ) -> ScheduledWord:
     """Schedule a manual word for a future session period.
 
-    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced
-    server-side: farther dates are refused with the window named. The word waits
-    until its period opens and never activates a session early.
+    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced server-side:
+    farther dates are refused with the window named, the word waits until its period
+    opens, and it never activates a session early.
     """
     return ScheduledWord(
         **schedule_word(

@@ -61,10 +61,9 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 logger = get_logger(__name__)
 
-# Every account the list can hold, newest-looking first. Ordered explicitly so the response
-# is stable across calls: three unordered SELECTs concatenated would otherwise reshuffle the
-# page whenever PostgreSQL chose a different plan, and the admin would have to re-find what
-# they were looking at after an unrelated edit to an unrelated account.
+# Every account the list can hold, newest-looking first, ordered explicitly so the
+# response is stable across calls: three unordered SELECTs concatenated would
+# reshuffle the page wherever PostgreSQL picked a different plan.
 _ACCOUNT_TABLE_ORDER = (AccountType.ADMIN, AccountType.MODERATOR, AccountType.USERS)
 
 
@@ -95,11 +94,9 @@ def _ensure_department_capacity(
 ) -> None:
     """Refuse a brand-new department once ``MAX_DEPARTMENTS`` distinct values exist.
 
-    Joining a department somebody already uses never counts against the cap -- only a
-    value no row carries opens a new slot. Renaming the last holder of a department to
-    another brand-new value is a swap rather than growth, so it is allowed even at the
-    ceiling; otherwise lowering the cap would freeze every edit rather than just new
-    names.
+    Joining a department somebody already uses never counts against the cap --
+    only a value no row carries opens a new slot. Renaming the last holder onto
+    a new value is a swap, not growth, so it is allowed even at the ceiling.
     """
     if not isinstance(new_department, str) or not new_department.strip():
         return
@@ -165,16 +162,11 @@ def get_all_confessions(
 ) -> Dict[str, Any]:
     """Return one page of confessions for admin review.
 
-    Everything a reviewer acts on is here -- body, timestamps, reports, comments, engagement --
-    with one exception: the sender of an anonymous confession. That identity is withheld for
-    staff exactly as it is for users, and the redaction happens in the service so it is not
-    merely absent from the screen but absent from the response.
-
-    The search is a SQL WHERE across the confession and its sender, the filter picker a SQL
-    WHERE, the sort picker a SQL ORDER BY, and every page a SQL LIMIT/OFFSET: the backend
-    reads at most one page no matter how many confessions exist, and ``total`` is a COUNT
-    under the same filter so the screen can load more downwards without holding the posts
-    it is not showing.
+    Everything a reviewer acts on is here, with one exception: the sender of an
+    anonymous confession, withheld in the service so the identity is absent
+    from the response itself, not merely hidden on screen. Search, filter, sort
+    and paging are SQL WHERE/ORDER BY/LIMIT-OFFSET, and ``total`` is a COUNT
+    under the same filter, so the backend reads at most one page.
     """
     return get_admin_confessions_data(db, skip=skip, limit=limit, query=q, filter_option=filter, sort=sort)
 
@@ -194,12 +186,11 @@ def search_confessions_hybrid(
     """Hybrid keyword + semantic search for staff review.
 
     Keyword is the existing lexical page unchanged (same sender-aware search,
-    same filter/sort/paging/total). Semantic runs the shared embed +
-    vector-query pipeline with staff visibility -- removed rows included and
-    flagged, anonymous senders withheld, active filter applied -- deduped
-    against the keyword page and capped at the configured top-K. Degrades like
-    the public path: semantic failures return keyword results with
-    ``semantic.status`` naming the reason. Uses the admin rate-limit bucket.
+    filter/sort/paging/total). Semantic runs the shared embed + vector-query
+    pipeline with staff visibility -- removed rows included and flagged,
+    anonymous senders withheld -- deduped against the keyword page and capped
+    at the configured top-K, on the admin rate-limit bucket. Semantic failures
+    return keyword results with ``semantic.status`` naming the reason.
     """
     from ..services.admin_service import get_admin_confessions_hybrid_data
 
@@ -217,11 +208,10 @@ def delete_confession(
 ) -> Dict[str, Any]:
     """Remove a confession permanently, row and attached reports included.
 
-A hard delete, and deliberately the odd one out: it is the route that exists for content that
-must not remain in the database at all. The Confession Review screen does not offer it --
-``PATCH /confessions/{confession_id}/hide`` is what a reviewer reaches for, and that one keeps
-the row so the report trail stays intact.
-"""
+    A hard delete, deliberately the odd one out: for content that must not
+    remain in the database at all. The review screen offers the hide route
+    instead, which keeps the row so the report trail stays intact.
+    """
     if not is_valid_id(confession_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confession id")
 
@@ -241,24 +231,13 @@ def hide_confession(
 ) -> Dict[str, Any]:
     """Hide a confession from public view, keeping the row and everything attached to it.
 
-    This is what the Confession Review screen offers instead of deleting. The write is the same
-    one a ``removed`` ruling on a report performs -- ``removed_at`` plus who stamped it -- so a
-    confession hidden from the review screen and one taken down through a report queue end up in
-    identical state, and every participant-facing read filters the one column.
-
-    What replaces ``DELETE /confessions/{confession_id}`` on that screen is not nothing: the
-    delete route stays, for the cases that genuinely need the row and its reports to be gone.
-    What is dropped is the one-keystroke path to it from the screen where a reviewer works
-    through many posts.
-
-    Hiding an already-hidden confession is answered, not refused, and says so in
-    ``already_hidden``. The alternative -- a 409 -- turns a double click into an error toast
-    that reads like a failure when the requested state is already in place, and pushes the
-    screen to special-case a condition the user did nothing wrong about.
-
-    Manual hides are one-way; only Azure-hidden rows restore via
-    ``PATCH /confessions/{confession_id}/unhide``. The confirmation dialog
-    for manual hides still says so.
+    The write is the same one a ``removed`` report ruling performs -- ``removed_at``
+    plus who stamped it -- so a screen hide and a report takedown land in identical
+    state, and every participant-facing read filters that one column. The delete
+    route stays for cases that need the row and its reports gone, but this screen
+    offers no path to it. Hiding an already-hidden confession answers
+    ``already_hidden``, not 409, so a double click is not an error toast. Manual
+    hides are one-way; only Azure-hidden rows restore via the unhide route.
     """
     return hide_confession_service(db, confession_id, reviewer.regno)
 
@@ -287,26 +266,16 @@ def hide_comment(
 ) -> Dict[str, Any]:
     """Hide one comment from its confession, keeping the row and everything attached to it.
 
-    The comment-level counterpart to ``PATCH /confessions/{confession_id}/hide``: the same soft
-    write, the same ``removed_at`` every participant-facing comment read filters on, and the same
-    one-way warning in the confirmation dialog. A confession with one bad comment in a hundred
-    should not have to be hidden wholesale to deal with it.
-
-    Declared under ``/admin/comments`` rather than nested under ``/admin/confessions/{id}/``
-    for the same routing reason as the report queue below: a literal segment beside a path
-    parameter can be read as that parameter's value, and a comment id being interpreted as a
-    confession id is a 404 that looks like a missing row.
-
-    Gated on ``confessions:delete``, the capability ``hide_confession`` already uses, because
-    this is the same job -- taking content out of public view without destroying the record --
-    and moderators already hold it. A separate capability would mean granting moderators a
-    second name for a privilege they already have, and then keeping the two in step.
-
-    Unlike ``DELETE /confessions/{confession_id}``, this does not cascade the reports filed
-    against the comment: hiding is a visibility change, so the record of it has to survive.
-
-    Manual hides are one-way; only Azure-hidden rows restore via
-    ``PATCH /comments/{comment_id}/unhide``.
+    Comment-level counterpart to the confession hide: the same soft write, the
+    same ``removed_at`` every comment read filters on, so one bad comment in a
+    hundred need not hide the confession wholesale. Declared under
+    ``/admin/comments`` because a literal segment beside a path parameter can
+    be read as that parameter's value -- a comment id read as a confession id
+    is a 404 that looks like a missing row. Gated on ``confessions:delete``
+    like ``hide_confession`` since it is the same job; a separate capability
+    would mean keeping two names for one moderator privilege in step. Reports
+    filed against the comment survive (hiding is a visibility change), and
+    manual hides are one-way.
     """
     return hide_comment_service(db, comment_id, reviewer.regno)
 
@@ -325,13 +294,12 @@ def unhide_comment(
     return unhide_comment_service(db, comment_id, reviewer.regno)
 
 
-# The report queue is declared after ``/confessions/{confession_id}`` on purpose. FastAPI
-# matches on method first, and the only sibling is a DELETE, so nothing here is shadowed
-# today; keeping the literal path last means adding a ``GET /{confession_id}`` later cannot
-# swallow it. ``/confessions/{confession_id}/hide`` is PATCH like ``/confessions/reports/...``,
-# and the literal ``reports`` segment is matched first, so a report id is never read as a
-# confession id. These two carry the reporting capabilities rather than the confession ones, so
-# that ruling on reports stays separately grantable from reviewing the posts themselves.
+# Declared after ``/confessions/{confession_id}`` on purpose. FastAPI matches on method
+# first and the only sibling is a DELETE, so nothing is shadowed today; keeping the
+# literal path last means a later ``GET /{confession_id}`` cannot swallow it, and the
+# literal ``reports`` segment is matched first so a report id is never read as a
+# confession id. These two carry the reporting capabilities so ruling on reports stays
+# separately grantable from reviewing the posts themselves.
 
 
 @router.get("/confessions/reports")
@@ -347,10 +315,9 @@ def get_confession_reports(
 ) -> Dict[str, Any]:
     """Every report filed against a confession or one of its comments, newest first.
 
-    Carries the reported content itself rather than an id, so the question a reviewer opens
-    this screen to answer -- what did this actually say -- is answerable here. The author of
-    an anonymous confession is withheld, as it is from the confession review screen: an
-    anonymous post stays anonymous to staff through every door.
+    Carries the reported content itself rather than an id, so "what did this
+    actually say" is answerable here. Anonymous confession authors are
+    withheld, as they are on the confession review screen.
     """
     return get_confession_reports_data(db, status_filter=status_filter, skip=skip, limit=limit, query=q)
 
@@ -362,32 +329,7 @@ def update_confession_report(
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_MODERATE)),
 ) -> Dict[str, Any]:
-    """Rule on a confession or comment report: dismiss it, or take the content down.
-
-    Two outcomes and no third. ``dismissed`` records that a human looked and the content
-    stays; ``removed`` marks the reported confession or comment removed so it disappears from
-    every participant-facing read, and notifies both the author and the reporter.
-
-    ``reviewed`` is accepted as a synonym for ``dismissed``. It is the word this route used
-    before the screen grew a remove button, it is what the queue's status filter still labels
-    older rows with, and it is what a bookmarked request or a stale client will send. Turning it
-    into a 422 would break a caller over a rename and would not stop a single moderation action,
-    so it is answered rather than refused -- while the screen only ever offers the two new
-    words, which is what stops ``reviewed`` from being the thing a moderator actually picks.
-
-    Removal here is deliberately *not* the same as ``DELETE /admin/confessions/{id}``. That
-    route is a hard delete, and the report's foreign key cascades from the content, so deleting
-    a reported post would delete the record that it was reported and ruled on. Ruling on a
-    report keeps both.
-
-    ``reports:moderate`` is the whole gate rather than a second capability for the removing
-    case. A moderator already holds ``confessions:delete``, so this grants them nothing over
-    confessions; the one genuine widening is that ruling on a *message* report can now take a
-    message down, which no route could do before. A route declaring one capability is the
-    invariant ``test_roles_routes.py`` holds the admin surface to, so splitting the check
-    across two capabilities would mean checking the second one in the handler body instead --
-    the one place a gate can be forgotten.
-    """
+    """Dismiss or remove a report; retain the audit row and accept legacy ``reviewed`` status."""
     return resolve_confession_report(db, report_id, new_status, reviewer.regno)
 
 
@@ -406,15 +348,11 @@ def get_all_users(
 ) -> Dict[str, Any]:
     """Return one page of accounts, from all three tables, for review.
 
-    Staff and participants arrive through one endpoint because they are one population of
-    accounts; the ``account_type`` on each document is which table it came from. Splitting
-    the admin list per table would mean the search box on it would have to know which table
-    to search, which is not a distinction a person administering the app should have to make.
-
-    Every filter is a SQL WHERE and every page is a SQL LIMIT/OFFSET: with ten thousand
-    participants the backend reads and serialises at most one page, never the whole table,
-    and ``total`` is a COUNT under the same WHERE so the screen can page without holding
-    the rows it is not showing. ``limit`` is clamped to 100 for the same reason.
+    One endpoint because staff and participants are one population of accounts;
+    the ``account_type`` on each document is which table it came from, and the
+    search box does not have to know which table to search. Every filter is a
+    SQL WHERE and every page a SQL LIMIT/OFFSET, with ``total`` a COUNT under
+    the same WHERE, so the backend never reads more than one page.
     """
     return get_admin_users_data(
         db, skip=skip, limit=limit, query=q, account_type=account_type,
@@ -430,46 +368,32 @@ def create_user(
 ) -> Dict[str, Any]:
     """Create an account in the table named by ``account_type``.
 
-    The table is chosen by the payload, and the same payload shape creates a participant or
-    a staff account: there is no separate admin-creation form or endpoint to fall out of
-    step with this one. ``year`` and ``department`` are required by the payload validator only
-    for a participant, so a caller cannot write them onto a staff row.
-
-    What an admin supplies is an identity and a cohort -- regno, name, email, and, for a
-    participant, gender, year and department. Everything else belongs to the account rather than
-    to whoever typed the form: the picture, bio, interests and the four preference
-    flags are not on this payload at all, and ``AdminUserCreate`` forbids them by name so a
-    curl that sends one is answered 422 rather than a 201 for an insert that dropped it.
-
-    Each of those columns is still populated on the new row, from the default declared in
-    ``db_models`` rather than from the request: notifications on, matchmaking on, love notes
-    receivable, love notes not yet sendable, no interests, and a NULL picture. A participant
-    edits them through ``PUT /profile/update`` from the moment the account exists. A staff
-    account also gets its ``staff_notification_preferences`` row in the same transaction,
-    from the mapper hook declared beside the model, so there is no separate creation path to
-    remember here.
+    The same payload shape creates a participant or a staff account, so there is no
+    separate admin-creation path to fall out of step with. ``year`` and ``department``
+    are required only for a participant. The payload is identity plus cohort only --
+    the picture, bio, interests and the four preference flags are absent, and
+    ``AdminUserCreate`` forbids them by name so a curl sending one gets a 422 rather
+    than a 201 for an insert that dropped it. Those columns still fill from the
+    defaults declared in ``db_models``, and a staff account also gets its
+    ``staff_notification_preferences`` row in the same transaction via the mapper hook.
     """
 
     account_type = payload.account_type
     model = ACCOUNT_MODELS[account_type.value]
     normalized_regno = payload.regno.strip()
 
-    # Uniqueness is enforced per table, by PostgreSQL, on the table being written to. It is
-    # deliberately *not* enforced across the three tables any more: sign-in is category
-    # scoped, so a regno is only ever looked up in the one table the person chose on the way
-    # in, and a session is pinned to that row by primary key for its whole life. That means
-    # the same regno can exist as a participant and as staff, and each sign-in page resolves
-    # its own account -- which is a supported state, not corruption. Refusing it here would
-    # have been a workaround for the ambiguity that no longer exists.
+    # Uniqueness is enforced per table, by PostgreSQL, and deliberately not across the
+    # three tables: sign-in is category scoped and a session is pinned to that row for
+    # its whole life, so the same regno can legitimately exist as a participant and
+    # as staff -- each sign-in page resolves its own account.
     with db.sessions() as session:
         if find_account_in_table(session, account_type.value, normalized_regno) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An account with this registration number already exists for this account type.",
             )
-        # An address is unique within one account table and never across the three, for the
-        # same reason regno is: the value identifies a person for contact, not a route into an
-        # account, so nothing has to resolve one. The check is against the target table only.
+        # Email is unique within one account table and never across the three, like
+        # regno: it identifies a person for contact, not a route into an account.
         normalized_email = payload.email.strip().lower()
         email_conflict = session.scalar(select(model.id).where(
             model.email == normalized_email
@@ -480,16 +404,15 @@ def create_user(
                 detail="An account with this email already exists for this account type.",
             )
 
-    # ``notifications_enabled`` and ``is_blocked`` are intentionally not written here. Both have
-    # server defaults in ``db_models.AccountColumns`` (true and false), so the new row takes the
-    # declared values whether or not this dict mentions them, and there is no longer any way to
-    # ask for a different one at creation time. Blocking an existing account is
-    # ``PUT /admin/users/{id}/block``, which is a decision about a row that already exists.
+    # ``notifications_enabled`` and ``is_blocked`` are not written here: both have server
+    # defaults in ``db_models.AccountColumns`` (true and false), so the new row takes them
+    # whether or not this dict mentions them, and blocking an existing account is the
+    # separate ``PUT /admin/users/{id}/block`` route.
     #
-    # Only the fields the target table actually has are passed to the constructor. Building
-    # the kwargs from the payload with the participant keys removed -- rather than branching
-    # into two constructors -- means a field added to AccountColumns lands in all three
-    # tables at once, and a participant-only field can never reach a staff row.
+    # Only the fields the target table actually has are passed to the constructor, built
+    # from the payload rather than branched into two constructors: a field added to
+    # AccountColumns lands in all three tables, and a participant-only field can never
+    # reach a staff row.
     account_fields: Dict[str, Any] = {
         "regno": normalized_regno,
         "name": payload.name.strip(),
@@ -497,37 +420,29 @@ def create_user(
     }
     if account_type is AccountType.USERS:
         account_fields.update({
-            # A new account has no picture. Both halves of the picture's identity are named
-            # rather than left to a default, because "no picture" is a real state and it has to
-            # be one value in two columns -- a row with a public_id and no format would render a
-            # broken image.
+            # No picture: both halves of the picture's identity are named rather than
+            # left to a default, because "no picture" must be one state in two columns
+            # -- a public_id without a format would render a broken image.
             "profile_picture_public_id": None,
             "profile_picture_format": None,
             "gender": payload.gender.strip(),
-            # Written from the two fields separately rather than by joining them back into one
-            # string. The columns are what matchmaking groups by, and a stored "CSE 2" would
-            # be groupable by neither half.
+            # Written as separate columns rather than one joined string: matchmaking
+            # groups by each half, and a stored "CSE 2" is groupable by neither.
             "year": payload.year,
             "department": payload.department.strip(),
         })
 
 
     with db.sessions.begin() as session:
-        # The cap is checked here, inside the same transaction as the insert, and behind an
-        # advisory lock -- not in the `db.sessions()` block above with the duplicate checks.
-        #
-        # A SELECT count(*) followed by an INSERT is not atomic: two admins submitting the create
-        # form at the same moment both read "499 of 500", both decide there is room, and both
-        # insert. The cap would then be exceeded by exactly as many simultaneous requests as the
-        # deployment can serve at once, which is the one situation a cap exists to prevent.
-        # `pg_advisory_xact_lock` serialises account creation *per account table* for the rest of
-        # this transaction, so the second request blocks until the first has committed and then
-        # counts the row it just added. It is transaction-scoped, so it is released by the commit
-        # or the rollback without any cleanup to forget, and the three tables use different keys
-        # so creating a participant never waits on an admin.
-        #
-        # This is the only place a row is added through the API, which is what makes the lock
-        # sufficient: there is no second writer that could slip past it.
+        # The cap is checked inside the same transaction as the insert, behind an
+        # advisory lock -- not with the duplicate checks above, which cannot cover the
+        # race. A SELECT count(*) then INSERT is not atomic: N simultaneous creates all
+        # read "499 of 500" and all insert, exceeding the cap by as many requests as the
+        # deployment can serve at once. `pg_advisory_xact_lock` serialises creation
+        # *per account table* for the rest of the transaction (released by commit or
+        # rollback, different keys per table, so participants never wait on admins).
+        # This is the only place a row is added through the API, which is what makes
+        # the lock sufficient -- there is no second writer that could slip past it.
         session.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": account_cap_lock_key(account_type.value)},
@@ -545,10 +460,9 @@ def create_user(
                 ),
             )
 
-        # Departments/divisions are free text with no table of their own, so the
-        # ``MAX_DEPARTMENTS`` ceiling is on distinct ``users.department`` values. The
-        # users-table advisory lock above already serialises this count against the
-        # insert below, so two concurrent creates cannot both open the 51st slot.
+        # Departments are free text, so the ``MAX_DEPARTMENTS`` ceiling counts distinct
+        # ``users.department`` values; the users-table advisory lock above serialises
+        # the count against the insert, so concurrent creates cannot both open a slot.
         if account_type is AccountType.USERS:
             _ensure_department_capacity(session, account_fields["department"])
 
@@ -578,26 +492,18 @@ async def bulk_upload_users(
 ) -> Dict[str, Any]:
     """Create many participant accounts from one CSV or XLSX file.
 
-    Participants only: there is no ``account_type`` column and no account-type parameter,
-    so this route cannot be used to mint an admin or a moderator. Staff accounts are created
-    one at a time through ``POST /admin/users``, where an operator has to name the table
-    deliberately.
-
-    The file is parsed and validated in full before a transaction is opened. Inside the
-    transaction the users-table advisory lock is taken, the current participant count is read
-    and the upload is refused whole if adding every row would exceed ``MAX_USER_COUNT``.
-    That ordering matters: the check happens *before* the first insert, so a file that would
-    cross the ceiling never leaves a partial intake behind. The same all-or-nothing rule
-    applies to duplicate registration numbers or emails, invalid rows and the
-    ``MAX_DEPARTMENTS`` ceiling.
-
-    The hard ceiling of 1000 rows is an application limit independent of
-    ``MAX_USER_COUNT``: a deployment licensed for ten thousand participants still cannot
-    make one request parse an unbounded file. Over-long files are refused, never truncated.
+    Participants only -- there is no ``account_type`` parameter, so this route
+    cannot mint an admin or a moderator. The file is parsed and validated in
+    full before the transaction opens; inside it the users-table advisory lock
+    is taken and the upload is refused whole if it would exceed
+    ``MAX_USER_COUNT``, so a file that crosses the ceiling never leaves a
+    partial intake behind. The same all-or-nothing rule covers duplicates,
+    invalid rows and ``MAX_DEPARTMENTS``. The 1000-row ceiling is an
+    application limit independent of ``MAX_USER_COUNT``; over-long files are
+    refused, never truncated.
     """
-    # Imported here rather than at module scope so the spreadsheet parser is loaded only by
-    # the endpoint that needs it -- the rest of the admin surface has no reason to pay for
-    # openpyxl on every process start.
+    # Imported here so the spreadsheet parser is loaded only by the endpoint that
+    # needs it, not on every admin process start.
     from ..services.bulk_user_service import create_participants_bulk, read_bulk_upload
 
     rows = await read_bulk_upload(file)
@@ -611,34 +517,10 @@ def set_user_block_state(
     db: Database = Depends(get_db),
     current_admin: AccountDetails = Depends(require_capability(Capability.USERS_BLOCK))
 ) -> Dict[str, Any]:
-    """Block or unblock an account in any of the three tables.
+    """Block or unblock an account; admins cannot be blocked (also enforced by a DB constraint).
 
-    Resolved by id across all tables rather than against ``users``, because a moderator can
-    be blocked by an admin and the moderator's row is not in ``users``.
-
-    **An admin is never blockable, and the database is what enforces it.**
-    ``ck_admin_not_blockable`` (``db_models.AdminRecord``) is a CHECK constraint on the
-    ``admin`` table, so the rule holds for raw SQL, a script, an operator at a psql prompt and
-    any endpoint added later -- not just for this one. The check below is a courtesy that turns
-    a would-be ``IntegrityError`` into a 400 explaining itself; it is not the enforcement, and
-    deleting it would not make an admin blockable, only make the refusal a 500.
-
-    Unblocking is unaffected and still allowed: the constraint permits any value that is not
-    true, so this only ever refuses ``blocked=true`` on an admin.
-
-    Blocking rotates the account's live love note images after the commit: the notes stay
-    (blocking takes away sign-in, not content), but every signed delivery URL minted while
-    the account was live would otherwise keep resolving forever. Rotation replaces each
-    object under the same name, so old signatures stop verifying while entitled viewers
-    keep working. It is best-effort and never fails the block itself.
-
-    Blocking also retires the account's sessions atomically with the flag flip
-    (SEC-008): live sessions move to ``revoked`` and unredeemed links are marked
-    revoked, so the database stops describing a blocked account as actively signed
-    in. Enforcement never depended on this -- every auth path re-checks the block
-    per request -- but no status-only reader can now mistake a blocked session for
-    a live one. Unblocking does not resurrect retired sessions: the account signs
-    in fresh, which is also what rotates its credentials.
+    Blocking retires sessions in the same transaction and rotates participant love-note
+    images after commit to invalidate old signed URLs. Image rotation is best-effort.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
@@ -661,16 +543,15 @@ def set_user_block_state(
             blocked_type = normalize_account_type(target_type)
             row.is_blocked = blocked
             if became_blocked:
-                # Same transaction as the flag flip: a block that revokes nothing
-                # is a block the session table disagrees with. Shared with the
-                # automatic block at the removal threshold, so the two cannot
-                # disagree about what blocking retires.
+                # Same transaction as the flag flip -- a block that revokes nothing
+                # means the session table disagrees with the block. Shared with
+                # the automatic block at the removal threshold.
                 retire_account_sessions(session, str(user_id), blocked_type)
     if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if became_blocked and blocked_type == AccountType.USERS.value:
-        # Only participants send love notes, so only their rows can own images. After the
-        # commit, so a rotation failure can never roll back (or block) the flag flip.
+        # Only participants can own note images. Run after the commit so a
+        # rotation failure can never roll back (or block) the flag flip.
         try:
             rotate_sender_love_note_images(db, user_id)
         except Exception as exc:
@@ -688,55 +569,24 @@ def update_user_details(
     db: Database = Depends(get_db),
     current_admin: AccountDetails = Depends(require_capability(Capability.USERS_UPDATE))
 ) -> Dict[str, Any]:
-    """Edit an account that already exists, in whichever table it lives.
+    """Edit account identity fields without changing account type or block state.
 
-    The account is found by id across all three tables and edited in place. Its table is not
-    editable: ``AdminUserUpdate`` has no ``account_type`` field, so a save cannot turn a
-    moderator into a participant and strand the content that references it.
-
-    **An admin edits only their own admin profile.** The one target this route refuses is
-    another admin's row, answered with a 403: an admin account is the kind that can mint,
-    block and edit other accounts, so letting one admin rewrite another's identity -- the
-    regno above all, because it is the sign-in handle -- is a way to take the account over
-    or lock its holder out, and neither is an edit this screen exists to make. Only the
-    *target* decides: a moderator and a participant are edited exactly as they were, and an
-    admin may still edit their own row. The rule lives here rather than in the form that
-    usually sends the request, so a direct API call is refused the same way; the form leaves
-    the button off a colleague's card so the refusal is not the first the operator hears
-    of it.
-
-    The editable set is the account's identity: regno, name, email, and -- for a participant
-    only -- gender, year and department. The picture, bio, interests and the four
-    preference flags are not fields on this payload, and ``extra="forbid"`` refuses them by
-    name -- so a caller still sending one gets a 422 rather than a 200 for an edit that silently
-    did not happen. ``is_blocked`` is likewise absent, and blocking an account is the separate
-    ``PUT /admin/users/{id}/block`` route. That is what removes this route's old job of
-    refusing to block an admin: an admin row's block state cannot be written here at all, so
-    there is no second door to guard.
-
-    A field the operator cleared is dropped rather than written. ``AdminUserUpdate``'s validator
-    turns a blank string into ``None`` so the *model* is valid, but ``exclude_unset`` keeps the key
-    -- the field was sent, it just held nothing -- and writing that ``None`` to a NOT NULL column
-    is a 500 from PostgreSQL rather than anything the caller could act on. Dropping the key is
-    also the honest reading of what a cleared input means: the operator left it empty, which is not
-    a request to erase a value the row is required to have. This is the second line of defence the
-    validator's docstring refers to.
+    Admins may edit only their own admin account. Participant-only fields are validated
+    separately; blank values for required columns are treated as unchanged.
     """
     if not is_valid_id(user_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
 
-    # NOT NULL columns on the account tables, so a ``None`` here is never a value to write. Year
-    # and department are on the list for the same reason name and regno are: they are two halves
-    # of what used to be one ``class_name``, and a participant without either cannot be placed in
-    # a matchmaking cohort.
+    # NOT NULL columns on the account tables, so a ``None`` here is never a value
+    # to write. Year and department join name and regno: they are the two halves
+    # of the old ``class_name`` a matchmaking cohort needs.
     not_null_fields = frozenset({
         "regno", "name", "email", "gender", "year", "department",
     })
-    # model_dump (not deprecated .dict()): exclude_unset distinguishes "field
-    # absent" (leave alone) from "field sent as null/blank" (None after the
-    # validator). Both None spellings are dropped for NOT NULL columns -- an
-    # explicit null is never a value to write there -- so a cleared input can
-    # never become a NULL write; it is read as "leave it alone".
+    # exclude_unset distinguishes "field absent" (leave alone) from "field sent
+    # as null/blank" (None after the validator). Both spellings are dropped for
+    # NOT NULL columns, so a cleared input can never become a NULL write; it is
+    # read as "leave it alone".
     update_payload = {
         key: value
         for key, value in update.model_dump(exclude_unset=True).items()
@@ -750,9 +600,9 @@ def update_user_details(
         found = resolve_account_by_id(session, user_id)
         if found:
             account_type, account = found
-            # Another admin's row is not this route's to edit. Compared by id, not regno: the
-            # caller's id is what the session was minted with, while a regno can be renamed.
-            # Fail-closed on a missing caller id: no match, no write.
+            # Another admin's row is not this route's to edit. Compared by id, not
+            # regno -- the id is what the session was minted with, a regno can be
+            # renamed. Fail-closed on a missing caller id.
             if (
                 normalize_account_type(account_type) == AccountType.ADMIN.value
                 and str(account.id) != str(current_admin.id)
@@ -761,26 +611,21 @@ def update_user_details(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="An admin can edit only their own profile.",
                 )
-            # ``gender``, ``year`` and ``department`` are dropped for a staff account. The
-            # participant-shaped form submits every field it knows about, and without this an
-            # edit to a moderator's name would also try to write a cohort -- or a gender -- onto
-            # tables that have no such columns, and, more insidiously, would write one if the
-            # columns were ever added for an unrelated reason.
+            # ``gender``, ``year`` and ``department`` are dropped for a staff account: the
+            # participant-shaped form submits every field, and an edit to a moderator's
+            # name must not write a cohort onto tables without such columns.
             #
-            # ``email`` is *not* on this list. It is a shared column now, required on every
-            # account, so a moderator's address is edited exactly as a participant's is; the
-            # note that once stood here to explain its absence is what would have led to
-            # staff rows being left without one.
+            # ``email`` is *not* dropped -- a shared, required column on every account,
+            # so a moderator's address is edited exactly as a participant's is.
             participant_only = ("gender", "year", "department")
             if account_type != AccountType.USERS.value:
                 update_payload = {
                     key: value for key, value in update_payload.items()
                     if key not in participant_only
                 }
-            # A department edit that introduces a value nobody uses opens a new
-            # department/division slot, so it is held to MAX_DEPARTMENTS. Serialised
-            # behind the users-table advisory lock for the same reason creation is:
-            # without it two concurrent renames could both open the 51st slot.
+            # A department edit introducing a value nobody uses opens a new
+            # department/division slot, so it is held to MAX_DEPARTMENTS,
+            # serialised behind the users-table advisory lock as at creation.
             if account_type == AccountType.USERS.value and "department" in update_payload:
                 session.execute(
                     text("SELECT pg_advisory_xact_lock(:lock_key)"),
@@ -819,13 +664,12 @@ def read_app_configuration(
 ) -> Dict[str, Any]:
     """Return the application's operator-settable configuration.
 
-    ``settings`` is deliberately empty for now: platform settings are still environment variables
-    read by ``app/config.py`` at import time, so there is nothing stored to report yet.
-
-    ``cohorts`` is every ``(year, department)`` pair at least one participant occupies, and
-    ``slots`` the pairings between them. The key was ``classes`` while the participants it was
-    derived from had one ``class_name`` column; it is a list of two-field objects now, and a key
-    called ``classes`` returning that would be the kind of name that outlives its meaning.
+    ``settings`` is deliberately empty for now: platform settings are still
+    environment variables read by ``app/config.py`` at import time, so there is
+    nothing stored to report yet. ``cohorts`` is every ``(year, department)``
+    pair a participant occupies and ``slots`` the pairings between them; the
+    key was ``classes`` while participants carried a single ``class_name``
+    column, a name that would otherwise outlive its meaning.
     """
     from ..services.matchmaking_slot_service import get_all_slots_service, list_participant_cohorts
 
@@ -857,27 +701,16 @@ def create_matchmaking_slot(
 ) -> Dict[str, Any]:
     """Record that one cohort is allowed to match with another.
 
-    Both sides are sent as a ``(year, department)`` pair rather than as one name, because a slot is
-    the rule *these* participants may match with *those* participants and a joined string could not
-    be compared against either half of a participant's own row. Two identical sides are allowed and
-    mean the cohort may match within itself.
-
-    ``year_a``/``year_b`` are typed as ``Year``, the same bounded int the participant payload uses,
-    so a year outside the range is a 422 naming the field. Without it the value would reach
-    the table and be refused by a CHECK constraint as a 500, or -- on a write that somehow skipped
-    that -- become a cohort that matches nobody.
-
-    The bound is written as ``Annotated[Year, Body(...)]`` rather than as ``Year = Body(...)``
-    because the second spelling **drops it**: a parameter whose default is an explicit ``Body``
-    takes that ``Body`` as its field info, and the constraints on the annotation are not carried
-    over. A year of 13 was accepted by the framework and refused by the table, which is the 500
-    the paragraph above describes as the thing the bound exists to prevent. The ``Annotated``
-    spelling keeps the bound *and* names the field in the 422, which the embedded form did not.
-
-    ``group_key`` is a plain ``str`` rather than a ``UUID`` so that a malformed one is answered with
-    a 400 naming the field, the way ``slot_id`` is on the delete route. Letting the type system
-    reject it would produce a 422 whose ``loc`` points at the body rather than at the field, which
-    is the mistake ``test_the_delete_endpoint_takes_the_id_in_an_object`` records.
+    Both sides are ``(year, department)`` pairs rather than one joined string:
+    a joined name could not be compared against either half of a participant's
+    own row, and two identical sides mean the cohort may match itself.
+    ``year_a``/``year_b`` use ``Annotated[Year, Body(...)]`` deliberately: the
+    ``Year = Body(...)`` spelling **drops** the annotation's bound (a parameter
+    whose default is an explicit ``Body`` takes that as its field info), which
+    let year 13 through to be refused by a CHECK constraint as a 500; the
+    ``Annotated`` spelling keeps the bound *and* names the field in the 422.
+    ``group_key`` is a plain ``str`` so a malformed one answers a 400 naming the
+    field, not a 422 whose ``loc`` points at the body.
     """
     from ..services.matchmaking_slot_service import create_matchmaking_slot_service
 
@@ -895,12 +728,10 @@ def delete_matchmaking_slot(
 ) -> Dict[str, Any]:
     """Delete a matchmaking slot by ID.
 
-    ``embed=True`` so the id arrives as ``{"slot_id": "..."}`` rather than as a bare JSON string.
-    Without it FastAPI reads the *whole body* as this one scalar, so a client sending the obvious
-    object -- which is what the POST above takes, and what every other endpoint in this router
-    takes -- is refused with a 422 that names ``body`` and not ``slot_id``, which reads as a server
-    fault rather than a shape mismatch. Embedding it makes the two halves of this resource speak
-    the same dialect.
+    ``embed=True`` so the id arrives as ``{"slot_id": "..."}`` instead of the
+    whole body being read as one bare scalar; without it the obvious JSON
+    object -- what the POST above takes -- is refused with a 422 naming
+    ``body``, which reads as a server fault rather than a shape mismatch.
     """
     from ..services.matchmaking_slot_service import delete_matchmaking_slot_service
 
@@ -923,42 +754,10 @@ def get_message_reports(
     db: Database = Depends(get_db),
     reviewer: AccountDetails = Depends(require_capability(Capability.REPORTS_REVIEW))
 ) -> Dict[str, Any]:
-    """Every reported chat message, newest first, with the message and both parties.
+    """Return a merged, newest-first page of chat reports and encrypted evidence.
 
-    Shares its ``{reports, total, skip, limit}`` envelope and its status/audit fields with the
-    confession and love-note queues, because the three are rendered by one screen. The rows
-    themselves stay their own shapes -- ``message_id`` and ``body`` here, ``confession_id`` and
-    ``content`` there -- because a message is not a confession and flattening the difference
-    would mean the payload lied about one of them.
-
-    The wire name is ``status``, aliased onto ``status_filter`` so the parameter does not
-    shadow the ``fastapi.status`` module used for HTTP codes in this router. It used to arrive
-    as ``status_filter``, which was the odd one out among the queues; nothing called this
-    endpoint before the unified Reports Review screen, so renaming it cost nothing and leaves
-    all three queues speaking the same word for the same filter.
-
-    ``dismissed`` is widened to include the older ``reviewed`` by ``resolve_status_filter``, so a
-    legacy row closed out before the rename is still returned by the filter whose name matches the
-    label the screen prints (section 17.1).
-
-    ``q`` narrows in SQL to reports whose reason or either party's regno matches, with the
-    total counted under the same filter so the screen pages the question it asked. The body
-    is ciphertext at rest and is deliberately not searchable: doing so would mean decrypting
-    every message for a query, which is exactly the unrestricted access this queue exists to
-    avoid. The names stay a display concern resolved in bulk below.
-
-    Bodies come from the separately encrypted evidence row for each report, never from a
-    general chat-history read. A moderator sees the individual reported message and thread
-    metadata; they cannot walk the rest of the conversation from here.
-
-    **Two message surfaces, one queue.** Matchmaking chat messages and Case Closed
-    detective-thread turns both report here, so the tab a moderator already watches covers
-    both. Each row carries a ``kind`` (``matchmaking`` or ``case_closed``) and the rest of
-    the payload is deliberately the same shape -- ``body``, ``conversation``, ``reporter``,
-    ``content_removed`` -- so the screen renders them identically and a ruling dispatches on
-    ``kind`` alone. The two tables are read ``skip + limit`` deep each and merged newest-first,
-    then sliced, which is the only way to keep a stable page across a union PostgreSQL cannot
-    order for us in one statement without a view.
+    Search covers report reasons and party IDs, never message bodies. Matchmaking and Case
+    Closed rows share a response shape; each source is paged before the merged ordering.
     """
     wanted = resolve_status_filter(status_filter)
     cleaned = (q or "").strip()
@@ -1013,10 +812,10 @@ def get_message_reports(
             ).where(*filters_cc)) or 0
         )
 
-        # Merge newest-first. The two statements above each take the newest ``skip + limit`` of
-        # their own table; the union of those windows necessarily contains the global window, so
-        # slicing it here is exact. Sort by id first, then by ``reported_at`` with a *stable*
-        # sort, so the tie-break on equal timestamps is the ascending id each query ordered by.
+        # Merge newest-first: each table's window of ``skip + limit`` necessarily
+        # contains the global window, so slicing the union is exact. Sort by id,
+        # then by ``reported_at`` with a *stable* sort so equal timestamps still
+        # tie-break by ascending id.
         merged = [("matchmaking", r) for r in mm_rows] + [("case_closed", r) for r in cc_rows]
         merged.sort(key=lambda pair: str(pair[1].id))
         merged.sort(key=lambda pair: pair[1].reported_at, reverse=True)
@@ -1024,10 +823,9 @@ def get_message_reports(
         mm_page = [r for kind, r in page if kind == "matchmaking"]
         cc_page = [r for kind, r in page if kind == "case_closed"]
 
-        # Reported-message evidence is the authoritative source for the body:
-        # it survives ordinary chat retention and is the only content this
-        # endpoint is allowed to decrypt. Decryption is attempted only for the
-        # reports on this page.
+        # Evidence is the authoritative body source: it survives ordinary chat
+        # retention and is the only content this endpoint may decrypt, and only
+        # for the reports on this page.
         evidence_by_report = evidence_for_reports(
             session, [str(report.id) for _kind, report in page]
         )
@@ -1054,11 +852,10 @@ def get_message_reports(
         message_ids = {report.message_id for report in mm_page if report.message_id}
         messages = {str(message.id): message for message in session.scalars(select(MessageRecord).where(MessageRecord.id.in_(message_ids))).all()} if message_ids else {}
 
-        # Conversation context, in three bulk reads rather than three per row. A reported
-        # message without its thread is a sentence with nothing around it, and "who was this
-        # person talking to, and had anything else in there already come down" is the context
-        # that decides whether one message is a single lapse or a pattern. Evidence carries
-        # the conversation id even after the message row has been purged.
+        # Conversation context in bulk reads: a reported message without its thread
+        # is a sentence with nothing around it, and whether anything else already
+        # came down decides lapse-vs-pattern. Evidence carries the conversation id
+        # even after the message row has been purged.
         conversation_ids = {
             str(message.conversation_id) for message in messages.values() if message.conversation_id
         }
@@ -1082,10 +879,9 @@ def get_message_reports(
         party_regnos -= set(users)
         parties = {user.regno: user for user in session.scalars(select(UserRecord).where(UserRecord.regno.in_(party_regnos))).all()} if party_regnos else {}
 
-        # Both figures in one grouped pass: how big the thread is, and how much of it has
-        # already been taken down. Counts include removed rows on purpose -- a moderator
-        # auditing a thread needs to know that two of its messages are already gone, which is
-        # invisible if removed rows are excluded from the total.
+        # Both figures in one grouped pass, with removed rows included on
+        # purpose: a moderator auditing a thread needs to see how much of it
+        # already came down, which is invisible if removals are excluded.
         thread_totals: Dict[str, int] = {}
         thread_removed: Dict[str, int] = {}
         if conversation_ids:
@@ -1153,10 +949,9 @@ def get_message_reports(
             if evidence is not None
             else (str(message.conversation_id) if message is not None else None)
         )
-        # Evidence is the only content source a moderator may decrypt. There is
-        # deliberately no fallback to the live chat row: that path would hand out
-        # content whose evidence retention window had closed and would bypass the
-        # access audit below.
+        # Evidence is the only content a moderator may decrypt, with no fallback
+        # to the live chat row: that path would hand out content whose evidence
+        # retention window had closed and bypass the access audit below.
         body = evidence_bodies.get(str(report.id))
         if body is None:
             body = "[Message not found]"
@@ -1171,9 +966,8 @@ def get_message_reports(
         if conversation is not None:
             conversation_context = {
                 "id": str(conversation.id),
-                # Whether the thread is still open matters: a moderator weighing whether this
-                # is one lapse or a pattern is deciding against a conversation that may
-                # already have gone quiet on its own, and the two readings differ.
+                # Whether the thread is still open matters: a single lapse and a
+                # pattern read differently against an already-quiet conversation.
                 "status": conversation.status,
                 # The two parties, deduplicated by regno so a self-conversation would not render
                 # the same person twice.
@@ -1192,16 +986,15 @@ def get_message_reports(
             "kind": "matchmaking",
             "message_id": str(report.message_id) if report.message_id else None,
             "body": body,
-            # When the message was sent. The screen previously showed only when it was
-            # *reported*, so a message could sit in the queue looking like it was sent moments
-            # ago however long ago it actually was. Evidence keeps this timestamp after the
-            # live row is purged.
+            # When the message was sent, not merely reported: a queue row could
+            # otherwise look freshly sent however long ago it actually was.
+            # Evidence keeps this timestamp after the live row is purged.
             "message_created_at": serialize_datetime(created_at) if created_at else None,
             "conversation_id": chat_id,
             "conversation": conversation_context,
-            # Automated reports carry no participant reporter; the system is the author. The
-            # live users row wins for a manual report, so a renamed participant appears under
-            # the name they have now rather than the one they filed under.
+            # Automated reports carry no participant reporter -- the system is the
+            # author. For a manual report the live users row wins, so a renamed
+            # participant shows the name they have now.
             "reporter": (
                 {"regno": None, "name": AUTOMATED_REPORTER_DISPLAY_NAME}
                 if report.source == AUTOMATED_SOURCE
@@ -1224,9 +1017,9 @@ def get_message_reports(
             # a second request, matching the other two queues.
             "reviewed_at": serialize_datetime(report.reviewed_at),
             "reviewed_by_regno": report.reviewed_by_regno,
-            # Whether the message this report is about has been taken down. The screen cannot
-            # infer it from ``status``, because a content admin can remove a message without a
-            # report ever existing, and a moderator needs to see that before deciding.
+            # Whether the message this report is about has been taken down.
+            # Cannot be inferred from ``status``: a content admin can remove a
+            # message no report was ever filed against.
             "content_removed": bool(message.removed_at) if message else False,
             # Who took it down: the restore button is offered only for rows the system hid.
             "removed_by_regno": message.removed_by_regno if message else None,
@@ -1343,21 +1136,16 @@ def update_message_report_status(
 ) -> Dict[str, Any]:
     """Rule on a chat-message report: dismiss it, or take the message down.
 
-    ``reviewed`` is the older spelling of ``dismissed`` and is still accepted; the screen only
-    offers the two new words. See ``update_confession_report`` for why.
+    ``reviewed`` is the older spelling of ``dismissed`` and still accepted; the
+    screen only offers the two new words. See ``update_confession_report`` for
+    why. ``dismissed`` leaves the thread as it was and tells the reporter;
+    ``removed`` also moves the conversation's preview forward, since it is a
+    copy of the newest message's text.
 
-    ``dismissed`` leaves the thread exactly as it was and tells the reporter it was reviewed.
-    ``removed`` marks the message removed so it disappears from every participant read -- and
-    moves the conversation's preview forward, since the preview is a copy of the newest
-    message's text and would otherwise keep showing it -- and tells both the sender and the
-    reporter.
-
-    ``kind`` selects the table the report lives in: the default ``matchmaking`` keeps every
-    existing caller working, while ``case_closed`` rules on a detective-thread turn (which
-    has no preview to move).
-
-    Returns ``{id, status, content_removed}`` to match the other two close-out endpoints, with
-    the third field so the screen can say plainly whether anything came down.
+    ``kind`` selects the table the report lives in: the default ``matchmaking``
+    keeps every existing caller working, while ``case_closed`` rules on a
+    detective-thread turn, which has no preview to move. Returns
+    ``{id, status, content_removed}`` to match the other two close-out endpoints.
     """
     if kind == "case_closed":
         return resolve_case_closed_message_report(db, report_id, new_status, reviewer.regno)
@@ -1373,19 +1161,16 @@ def unhide_message(
 ) -> Dict[str, Any]:
     """Restore an Azure-hidden chat message to both participants.
 
-    Only content with ``removed_by_regno`` marking Azure Content Safety restores;
-    anything hidden by an admin/moderator answers 409 and stays hidden, so a
-    reviewer cannot undo a colleague's decision here. Already-visible rows answer
-    ``already_visible`` instead of erroring.
-
-    ``kind`` selects the table: ``matchmaking`` (the default) reads
-    ``messages``, ``case_closed`` reads the detective-thread ``case_closed_messages``.
+    Only content with ``removed_by_regno`` marking Azure Content Safety
+    restores; anything hidden by an admin/moderator answers 409 so a reviewer
+    cannot undo a colleague's decision, and already-visible rows answer
+    ``already_visible``. ``kind`` selects the table.
 
     Gated on ``reports:moderate`` rather than ``confessions:delete``: a message
-    has no hide route of its own, and the automated removal this restores is the
-    counterpart of the message-report ruling that same capability already governs.
+    has no hide route of its own, and the automated removal this restores is
+    the counterpart of the message-report ruling that same capability governs.
     The conversation preview is moved back onto the restored message when it is
-    the newest visible one; nothing is notified, because a restoration is a
+    the newest visible one; nothing is notified, since a restoration is a
     reviewer override rather than a ruling.
     """
     if kind == "case_closed":

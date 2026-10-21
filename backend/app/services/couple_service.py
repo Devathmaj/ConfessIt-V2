@@ -63,15 +63,8 @@ def format_couple_question(question_text: str, display_name: str) -> str:
     return _PLACEHOLDER_PATTERN.sub(name, question_text)
 
 
-# The fifty templates, in sequence order. Each entry is (question_text, options)
-# with exactly four options. The text names ``X`` and never a person, never
-# first-person ("I") or second-person ("you") wording: the player surface shows
-# "What would you prefer …?" while answering and the partner later sees the same
-# template with the answerer's name in place of ``X``.
-#
-# Kept as data next to the seed that reads it rather than in a request handler:
-# no endpoint builds questions, so the table stays the single source of truth
-# after the first boot.
+# Ordered seed bank: each template names ``X`` and has four choices. The client
+# substitutes the answerer's name when showing the partner's response.
 COUPLE_QUESTION_BANK: tuple[tuple[str, tuple[str, str, str, str]], ...] = (
     ("What would X prefer for a perfect date?", ("Dinner & movie", "Long drive", "Beach or outdoor trip", "Staying in together")),
     ("What would X choose for a free evening?", ("Watch a movie", "Play games", "Go out", "Just talk")),

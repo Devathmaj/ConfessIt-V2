@@ -20,12 +20,11 @@ from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 
 router = APIRouter(prefix="/games/plot-twist", tags=["Plot Twist"])
 
-# The player-facing surface of the feature. Every route resolves the caller
-# as a participant and reads and writes only that caller's own place in the
-# story: their selection, their couple's session, their assigned turns.
-# Pairing reuses the questionnaire's mutual selection; the story executes a
-# published, versioned package deterministically -- the model is never
-# called during gameplay.
+# The player-facing surface of the feature. Every route resolves the caller as a
+# participant and reads and writes only that caller's own place in the story:
+# their selection, their couple's session, their assigned turns. Pairing reuses
+# the questionnaire's mutual selection, and the story executes a published,
+# versioned package deterministically -- the model is never called during gameplay.
 
 
 @router.get("", response_model=PlotTwistCurrentState)
@@ -35,10 +34,9 @@ def current_state(
 ) -> PlotTwistCurrentState:
     """This caller's place in the active Plot Twist event.
 
-    Reading never creates gameplay rows: a fresh caller reads partner
-    selection, a paired caller reads their current scene or wait state,
-    and a finished caller reads the settled outcome. The screen calls this
-    on every entry and polls it while waiting for the partner.
+    Reading never creates gameplay rows: a fresh caller reads partner selection,
+    a paired caller their current scene or wait state, a finished caller the
+    settled outcome. The screen calls this on every entry and polls while waiting.
     """
     return plot_twist_gameplay.current_state(db, user)
 
@@ -72,10 +70,9 @@ def partner_candidates(
 ) -> CouplePartnerPage:
     """One page of participants the caller may choose, excluding only themselves.
 
-    The questionnaire's candidate list, not a second one: pairing here and
-    pairing there choose from the same people under the same rules, page in
-    SQL, search in SQL and cohort/gender filters in SQL (see
-    ``couple_gameplay.list_partners``).
+    The questionnaire's candidate list, not a second one: pairing here and pairing
+    there choose from the same people under the same rules -- SQL paging, SQL search
+    and SQL cohort/gender filters (see ``couple_gameplay.list_partners``).
     """
     return plot_twist_gameplay.list_partners(
         db,
@@ -110,10 +107,10 @@ def start_event(
 ) -> PlotTwistCurrentState:
     """Enter the active Plot Twist event.
 
-    Creates this couple's story session (with its deterministic module
-    selection persisted up front) when the pair is mutual and an event is
-    live, or fetches it when it already exists. Pairs formed while no
-    event was live reach the story through here instead of re-picking.
+    Creates this couple's story session (with its deterministic module selection
+    persisted up front) when the pair is mutual and an event is live, or fetches an
+    existing one. Pairs formed while no event was live reach the story through here
+    instead of re-picking.
     """
     return plot_twist_gameplay.enter_event(db, user)
 
@@ -126,10 +123,9 @@ def submit_choice(
 ) -> PlotTwistCurrentState:
     """Submit the assigned decision for the current scene.
 
-    The choice must be offered in the caller's current scene and the turn
-    must belong to the caller; the version must match the stored one, so a
-    stale screen cannot overwrite newer game state. A repeat submit of an
-    already-recorded turn answers the stored outcome without applying
-    consequences twice.
+    The choice must be offered in the caller's current scene and the turn belong to
+    the caller; the version must match the stored one, so a stale screen cannot
+    overwrite newer game state. A repeat submit of an already-recorded turn answers
+    the stored outcome without applying consequences twice.
     """
     return plot_twist_gameplay.submit_choice(db, user, payload.choice_id, payload.state_version)

@@ -1,19 +1,4 @@
-"""Case Closed two-stage AI generation pipeline, with bounded repair.
-
-Stage A turns an administrator's configuration into a hidden blueprint
-(truth of the mystery). Stage B turns the approved blueprint into a
-playable investigation package (DAG of leads + evidence + solution).
-Every stage validates deterministically; failures trigger a targeted
-repair request, bounded by ``CASE_CLOSED_MAX_REPAIR_ATTEMPTS``. An invalid
-package is never published.
-
-Reuses the shared Plot Twist LLM connection
-(``services.llm_client.generate_structured_json``): same provider,
-credentials, model selection, strict JSON Schema + JSON-object fallback,
-120s timeout. No independent client, key, base URL, or SDK.
-
-Runtime gameplay never calls this module.
-"""
+"""Two-stage AI mystery generation for Case Closed with bounded repairs."""
 
 import uuid
 from datetime import datetime, timezone
@@ -485,10 +470,7 @@ def get_package(db, package_id: str) -> dict:
 def list_packages(db, blueprint_id: Optional[str] = None) -> list[dict]:
     _, PackageRecord = _records()
     if blueprint_id is not None and not is_valid_id(blueprint_id):
-        # A malformed id names no blueprint, and it must not reach a uuid column to
-        # find that out: the filter compares against one, and PostgreSQL raises
-        # ``invalid input syntax for type uuid`` on a value that is not a uuid.
-        # A blueprint that does not exist has no packages, which is the answer.
+        # Guard against malformed UUIDs before querying PostgreSQL.
         return []
     with db.sessions() as session:
         query = select(PackageRecord).order_by(PackageRecord.created_at.desc())

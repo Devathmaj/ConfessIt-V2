@@ -921,7 +921,7 @@ def _rotate_event_to_package(db: Database, package_id: str) -> dict:
     fresh on the new story (created lazily on entering); unfinished sessions
     of the ended period stay unfinished and score nothing at finalization
     (only ``completed`` sessions rank). The ended period's awards finalize
-    now rather than waiting for the next reset run, as with wordle updates.
+    now rather than waiting for the next reset run.
     """
     import uuid as _uuid_mod
     from sqlalchemy import text as _text

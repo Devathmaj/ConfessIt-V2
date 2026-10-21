@@ -1,32 +1,4 @@
-"""Absolute global scoring profiles: native results in, 0-100 base points out.
-
-Where :mod:`league_scoring` converts a *placement within one opportunity*
-(rank 1 of N, ties, solo consolation) into points, this module converts the
-*result itself* -- guesses used, milliseconds measured, words placed,
-predictions correct -- into a normalized global base score. The two paths
-are independent by design:
-
-* ``game`` path (placement-relative, policy v1): feeds per-game boards and
-  preserves each game's established comparison rules, including Reaction
-  Time's relative comparison on its own board.
-* ``global`` path (absolute, policy v2 below): feeds the combined global
-  boards. It never inspects the session field -- no rank, no participant
-  count, no other subject's result, no min/max scaling, no tie positions.
-
-Every profile is a pure function of the finalized native metrics the
-adapters already persist on the award row's ``raw_metrics`` (plus small
-counts the adapters add, e.g. couple totals). The same metrics under the
-same profile version always produce the same base score, regardless of who
-else played. Thresholds are explicit constants, frozen here -- runtime
-scoring never adjusts them from leaderboard populations. If calibration
-ever changes, bump ``GLOBAL_SCORING_VERSION`` and reprocess; old rows keep
-their stamped version so history stays explainable.
-
-Common scale (shared interpretation, per-game functions below):
-
-* 0: no qualifying score / unsuccessful outcome / no valid result
-* 1-20: minimal | 21-40: low | 41-60: moderate | 61-80: strong | 81-100: excellent
-"""
+"""Absolute global scoring profiles: native results in, 0-100 base points out."""
 
 from decimal import Decimal
 from typing import Any
@@ -73,11 +45,9 @@ def wordle_global_base(raw: dict[str, Any]) -> Decimal:
     return WORDLE_GLOBAL_BY_ATTEMPTS.get(attempts, WORDLE_GLOBAL_BY_ATTEMPTS[6])
 
 
-# ---------------------------------------------------------------------------
 # Anagram: solved, then attempts tier, then active time within the tier.
 # ANAGRAM_MAX_ATTEMPTS is 5. Tiers never overlap: a slower solve with fewer
 # attempts always outscores a faster solve with more attempts.
-# ---------------------------------------------------------------------------
 
 # Tier floors: attempt N starts at 100 - 10*N, time bonus adds 1..10.
 ANAGRAM_TIER_FLOOR = {1: 90, 2: 80, 3: 70, 4: 60, 5: 50}
@@ -116,12 +86,10 @@ def anagram_global_base(raw: dict[str, Any]) -> Decimal:
     return quantize_points(Decimal(floor + bonus))
 
 
-# ---------------------------------------------------------------------------
 # Reaction Time (global path only): absolute milliseconds -> fixed brackets.
 # Strictly monotonic decreasing: a faster valid reaction never scores less
 # than a slower one. Invalid reactions never reach this function (the
 # adapter only emits valid rows) and score 0 by construction.
-# ---------------------------------------------------------------------------
 
 # (upper bound ms exclusive, points). Covers every non-negative time.
 REACTION_GLOBAL_BRACKETS: tuple[tuple[float, int], ...] = (
@@ -153,34 +121,17 @@ def reaction_global_base(raw: dict[str, Any]) -> Decimal:
     return Decimal("5")
 
 
-# ---------------------------------------------------------------------------
 # Trivia Drop: 80 accuracy + up to 20 speed, per question. Accuracy comes
 # from trivia_accuracy() below (exact match for single-answer, partial
 # credit for multi-answer, computed at finalization from the persisted key
 # -- never from the session field). Entirely incorrect -> 0, and blanketing
-# every option without exactly matching the key -> 0.
-# ---------------------------------------------------------------------------
 
 TRIVIA_ACCURACY_POINTS = Decimal("80")
 TRIVIA_SPEED_POINTS = Decimal("20")
 
 
 def trivia_accuracy(selected_options: Any, correct_options: Any, all_options: Any) -> float:
-    """Deterministic partial credit for one submission (0..1).
-
-    Inputs are the submitted option set, the answer-key set, and the full
-    set of available options for the question:
-
-    * exact match to the key -> 1.0 (covers single-answer correctness);
-    * empty selection, empty key, or wholly wrong answer -> 0.0;
-    * selecting *every* available option without exactly matching the key
-      -> 0.0 (anti-select-all: blanketing the options must never pay, e.g.
-      3-of-4 correct blanketed would otherwise score (3-1)/3 = 0.667);
-    * otherwise ``max(0, (hits - false_positives) / key_size)``: partial
-      selections without wrong picks keep proportional credit, and each
-      additional incorrect pick strictly lowers the score, so fishing with
-      extra options can never raise it.
-    """
+    """Deterministic partial credit for one submission (0..1)."""
     try:
         picked = {int(option) for option in (selected_options or [])}
     except (TypeError, ValueError):
@@ -267,14 +218,10 @@ def connections_global_base(raw: dict[str, Any]) -> Decimal:
     )
 
 
-# ---------------------------------------------------------------------------
 # Couple Questionnaire: 100 * correct / total scoreable predictions.
 # Denominator is the session's eligible question set (two prediction
 # opportunities per shared question, one per exclusive question), read from
 # the session's drawn question rows -- never from submissions. Unanswered
-# or never-submitted questions count as zero without shrinking the
-# denominator. No scoreable questions (or no correct predictions) -> 0.
-# ---------------------------------------------------------------------------
 
 
 def couple_global_base(raw: dict[str, Any]) -> Decimal:
@@ -294,11 +241,9 @@ def couple_global_base(raw: dict[str, Any]) -> Decimal:
     return quantize_points(Decimal("100") * Decimal(correct) / Decimal(total))
 
 
-# ---------------------------------------------------------------------------
 # Two-Key Escape: binary. Completed escape -> 100 regardless of time;
 # anything else never reaches an award row (unfinished runs are absent
 # subjects, not zero-point subjects).
-# ---------------------------------------------------------------------------
 
 TWO_KEY_ESCAPE_SUCCESS_POINTS = Decimal("100")
 
@@ -308,14 +253,10 @@ def two_key_escape_global_base(raw: dict[str, Any]) -> Decimal:
     return TWO_KEY_ESCAPE_SUCCESS_POINTS
 
 
-# ---------------------------------------------------------------------------
 # Plot Twist: tiered. The ending's validated reward tier sets the base and
 # each discovered treasure adds a bounded bonus, capped at 100. Unfinished
 # stories never reach an award row. The adapter precomputes the base with
 # the same rule (plot_twist_gameplay.score_for_outcome) and carries it in
-# ``base_points``; this profile clamps it so AI-authored tiers can never
-# bypass the ceiling even if a stored row predates a tier change.
-# ---------------------------------------------------------------------------
 
 
 def plot_twist_global_base(raw: dict[str, Any]) -> Decimal:

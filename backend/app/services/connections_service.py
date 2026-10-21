@@ -1,22 +1,4 @@
-"""Configuring the day's Connections puzzle: sixteen words in four groups.
-
-The tables this writes are the *configuration* of a puzzle and nothing else --
-a session plus its sixteen words and their four canonical answer groups. There
-is no arrangement, no guess and no score here, because none of those exist yet:
-every write below is an administrator publishing something, and none of it is
-ever triggered by a participant.
-
-**There is no random-content mode.** Every session needs an administrator to
-supply its own sixteen words. A session with no valid puzzle stays pending and
-unplayable -- the scheduler never draws, reuses or invents words, and the
-player surface never serves a board for one.
-
-**An Update never mutates history.** ``POST /admin/connections`` ends the
-current session and opens a brand-new one starting now, attaching the fresh
-puzzle to the new session. The old session keeps its word rows and its
-submissions, so earlier scores stay attached to the answer key they were
-computed against.
-"""
+"""Configuring Connections puzzles: session management, word groups, and scheduling."""
 
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -41,12 +23,7 @@ def _today() -> date:
 
 
 def normalize_word(raw: object) -> tuple[str, str]:
-    """The display and comparison spellings of one submitted word.
-
-    Leading and trailing whitespace is trimmed; the display spelling keeps its
-    capitalization, and the normalized spelling lowercases it. An empty,
-    non-string or over-long word is refused with a 400 naming the rule.
-    """
+    """Validate and return display and lowercase comparison spellings of one word."""
     if not isinstance(raw, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,15 +44,7 @@ def normalize_word(raw: object) -> tuple[str, str]:
 
 
 def validate_puzzle_groups(groups: object) -> List[List[str]]:
-    """Normalize and validate a full 4x4 puzzle, returning display spellings.
-
-    Exactly four groups of exactly four non-empty words each, with no duplicate
-    words -- including duplicates that differ only by capitalization or
-    surrounding whitespace. Every refusal is a 400 with a sentence the admin
-    screen can show without losing the entered puzzle; shape violations are
-    deliberately not 422s because the request was well-formed, it asked for
-    something this server will not store.
-    """
+    """Validate a 4x4 puzzle structure and return display spellings."""
     if not isinstance(groups, list) or len(groups) != CONNECTIONS_GROUPS_COUNT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -174,21 +143,7 @@ def update_connections_session(
     now: Optional[datetime] = None,
     discard_future_schedules: bool = False,
 ) -> ConnectionsGame:
-    """End the current session and open a brand-new one starting now ("Update").
-
-    Never mutates the old row: it is stamped ended and kept as history with its
-    word rows and submissions attached, while the new session starts from
-    scratch for today's UTC date under the game's own reset cadence. The game's
-    content mode stays ``manual`` -- Connections has no random mode. Atomic
-    under the game's advisory lock, so an Update racing the 00:01 reset cannot
-    leave two active sessions.
-
-    Without supplied groups, the earliest scheduled puzzle inside the new
-    window is consumed, or the session opens pending when the window holds
-    none. Other pending scheduled puzzles dated before the window end are
-    discarded (all of them, including future ones, with
-    ``discard_future_schedules`` for cadence-change re-anchoring).
-    """
+    """End current session and open a new session with supplied or scheduled puzzle."""
     from sqlalchemy import text as _text
 
     from . import game_periods
@@ -242,8 +197,7 @@ def update_connections_session(
                 session, game_id="connections", opportunity_id=str(row.id)
             )
             result = _as_model(row, _words_for(session, str(row.id)))
-        # The Update deliberately closes the previous session, so its awards
-        # finalize now rather than waiting for the next reset run.
+        # Finalize awards for the closed session immediately.
         league_finalization.finalize_game_safely(db, "connections")
         return result
     except IntegrityError as exc:
@@ -256,29 +210,16 @@ def update_connections_session(
 def create_connections_game(
     db: Database, groups: Optional[List[List[str]]], created_by: str
 ) -> ConnectionsGame:
-    """Publish the current Connections session ("Update").
-
-    ``POST /admin/connections`` is the Update action: it ends the currently
-    active/pending session and opens a new one for today with the supplied
-    puzzle -- or, when no puzzle is supplied, with the earliest scheduled
-    puzzle inside the new window (pending when the window holds none). Future
-    puzzles belong on the schedule endpoint below, and history is read-only.
-    """
+    """Publish or roll over Connections session from admin request."""
     return update_connections_session(db, groups=groups, updated_by=created_by)
 
 
-# Hard ceiling for one page of the session-history list. The endpoint clamps anything
-# larger, so no client can ask for every session at once and make the backend
-# materialise a whole season in one response.
+# Max page limit for session history.
 CONNECTIONS_GAMES_MAX_LIMIT = 100
 
 
 def _words_for_many(session, game_ids: List[str]) -> Dict[str, List]:
-    """Every word row for a page of sessions, grouped by session, in one read.
-
-    The single-row ``_words_for`` stays for the single-row readers; fanning it out per
-    row of a page would turn one bounded read into a query per session.
-    """
+    """Fetch word rows for multiple sessions in a single query."""
     by_game: Dict[str, List] = {}
     if not game_ids:
         return by_game
@@ -294,12 +235,7 @@ def _words_for_many(session, game_ids: List[str]) -> Dict[str, List]:
 def list_connections_games(
     db: Database, *, skip: int = 0, limit: int = 50
 ) -> Dict[str, Any]:
-    """One page of every session, newest first -- active, pending and ended history alike.
-
-    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT, so the screen loads history
-    downwards without ever holding the sessions it is not showing. ``id`` seconds the
-    order so two sessions stamped in the same instant still page deterministically.
-    """
+    """Paginated list of Connections sessions, newest first."""
     skip = max(0, int(skip or 0))
     limit = max(1, min(int(limit or 50), CONNECTIONS_GAMES_MAX_LIMIT))
     with db.sessions() as session:
@@ -324,12 +260,7 @@ def get_current_connections_session(db: Database) -> Optional[ConnectionsGame]:
 
 
 def get_connections_game(db: Database, game_id: str) -> ConnectionsGame:
-    """One configured puzzle by id.
-
-    A malformed id is a 400 and a well-formed one that matches nothing is a
-    404, so a typo in a URL and a puzzle that has been superseded are told
-    apart rather than both reported as "not found".
-    """
+    """Fetch configured puzzle by session ID."""
     if not is_valid_id(game_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Connections game id"
@@ -344,11 +275,7 @@ def get_connections_game(db: Database, game_id: str) -> ConnectionsGame:
 
 
 # --- scheduled puzzles --------------------------------------------------------
-#
-# Future manual puzzles, bounded by the same finite horizon as the scheduled
-# words. ``schedule_puzzle`` stores one 4x4 puzzle for one future period-start
-# date; the reset loop attaches it when that period opens instead of leaving
-# the session pending. A scheduled puzzle never activates early.
+# Scheduled future manual puzzles bounded by finite horizon.
 
 
 def schedule_puzzle(
@@ -386,11 +313,7 @@ def schedule_puzzle(
                 with session.begin_nested():
                     session.flush()
             except IntegrityError:
-                # Lost an insert race with a concurrent schedule for the same
-                # date: the unique index refused the duplicate. Re-read the
-                # winner (committed before the violation surfaced) and apply
-                # the replace the caller asked for, so concurrent identical
-                # writes converge instead of answering 500.
+                # Retry update on concurrent insert conflict for same date.
                 existing = session.scalar(
                     select(ConnectionsScheduledPuzzleRecord).where(
                         ConnectionsScheduledPuzzleRecord.target_date == target_date,

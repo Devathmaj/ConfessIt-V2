@@ -36,14 +36,12 @@ def get_all_love_notes(
     """
     Return one page of love notes for moderation as text only.
 
-    No sender, no recipient, no image, no anonymity flag: the reviewer judges the words. The
-    operational fields the screen needs to act -- id, status, arrival time, and whether the
-    note was already taken down -- come with it.
-
-    The status filter is a SQL WHERE, the timeline order a SQL ORDER BY, and every page a
-    SQL LIMIT/OFFSET: the backend reads at most one page no matter how many notes exist,
-    and ``total`` is a COUNT under the same filter so the screen can load more downwards
-    without holding the notes it is not showing.
+    No sender, no recipient, no image, no anonymity flag: the reviewer judges the words.
+    The operational fields the screen needs to act -- id, status, arrival time and
+    whether the note was already taken down -- come with it. The status filter is a SQL
+    WHERE, the order a SQL ORDER BY, every page a SQL LIMIT/OFFSET; ``total`` is a COUNT
+    under the same filter so the screen loads downwards without holding the notes it is
+    not showing.
     """
     return get_admin_love_notes_data(db, skip=skip, limit=limit, status=status, order=order)
 
@@ -56,13 +54,8 @@ def update_love_note_status(
     _: AccountDetails = Depends(require_capability(Capability.LOVE_NOTES_MODERATE))
 ) -> Dict[str, Any]:
     """
-    Approve or reject a love note.
-    
-    This endpoint:
-    - Updates the love note status
-    - Sends notifications to sender and/or recipient based on the status
-    - For approved: Notifies both sender and recipient
-    - For rejected: Notifies only the sender
+    Approve or reject a love note, and notify accordingly: approved notifies both
+    sender and recipient; rejected only the sender.
     """
     return update_love_note_status_service(note_id, status_value, db)
 
@@ -86,16 +79,13 @@ def regenerate_love_note_redaction(
     """
     Re-run PII redaction for one note whose moderation preview is missing.
 
-    A preview is produced when a note is sent and is the only rendering of the note
-    the moderation screens ever carry. When the provider was unavailable at send time
-    the note was still accepted (the sender's note is not held hostage to a preview)
-    but stored no preview; this endpoint lets a reviewer regenerate it on demand.
-
-    The response carries the redacted preview and the note id -- never the original
-    body. A note that already has a preview is returned unchanged without a provider
-    call. Provider or configuration failures answer 503 with a generic message so the
-    screen keeps its explicit "preview unavailable" state; there is no response shape
-    in which the raw body could escape.
+    The preview is the only rendering of the note the moderation screens ever carry, and
+    a note was still accepted when the provider was unavailable at send time (the
+    sender's note is not held hostage to a preview). The response carries the redacted
+    preview and the note id -- never the original body. A note that already has a preview
+    is returned unchanged without a provider call; provider or configuration failures
+    answer 503 with a generic message, so there is no response shape in which the raw
+    body could escape.
     """
     try:
         return regenerate_love_note_moderation_body(note_id, db)
@@ -103,12 +93,11 @@ def regenerate_love_note_redaction(
         raise pii_error_to_http(exc)
 
 
-# The report queue carries the reporting capabilities rather than the love-note ones, so that
-# reading reports and ruling on them stay separately grantable from approving a note. Nothing
-# here shadows a handler above: FastAPI matches on method first, and neither ``GET
-# /admin/love-notes/{note_id}`` nor any other literal-reading handler exists to catch these.
-# They are still declared last so that adding a ``GET /{note_id}`` later cannot silently
-# swallow ``/reports`` as a note id.
+# The report queue carries the reporting capabilities rather than the love-note ones, so
+# reading reports and ruling on them stay separately grantable from approving a note.
+# Nothing here shadows a handler above (FastAPI matches on method first, and no literal
+# "/{note_id}" reader exists), but they are still declared last so that adding a
+# ``GET /{note_id}`` later cannot silently swallow ``/reports`` as a note id.
 
 
 @router.get("/reports")
@@ -147,16 +136,13 @@ def update_love_note_report_status(
     """
     Rule on a love note report: ``dismissed`` or ``removed``.
 
-    ``reviewed`` is the older spelling of ``dismissed`` and is still accepted; the screen only
-    offers the two new words. See ``admin.update_confession_report`` for why.
-
-    ``dismissed`` leaves the note exactly as it is and tells the reporter it was reviewed.
-    ``removed`` marks the note removed so it leaves the recipient's inbox and has its image
-    destroyed at the store, and tells both the sender and the reporter.
-
-    The note's own ``status`` is untouched either way. Approving, rejecting or deleting a note
-    stays with the love-note endpoints above, so ``status`` keeps meaning "judged as a love
-    note" and ``removed_at`` keeps meaning "taken down for a report" -- two questions, two
-    columns, and no screen left guessing which one it is looking at.
+    ``reviewed`` is the older spelling of ``dismissed`` and is still accepted; the screen
+    only offers the two new words (see ``admin.update_confession_report`` for why).
+    ``dismissed`` leaves the note exactly as it is and tells the reporter it was reviewed;
+    ``removed`` marks the note removed so it leaves the recipient's inbox, has its image
+    destroyed at the store, and tells both sender and reporter. Either way the note's own
+    ``status`` is untouched -- approving, rejecting or deleting stays with the love-note
+    endpoints above -- so ``status`` keeps meaning "judged as a love note" and
+    ``removed_at`` keeps meaning "taken down for a report": two questions, two columns.
     """
     return resolve_love_note_report(db, report_id, status_value, AccountRef.of(reviewer))

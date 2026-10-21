@@ -57,17 +57,11 @@ def send_message(
     db: Database = Depends(get_db)
 ):
     """
-    Send a message in a conversation
-    
-    Validates:
-    - User is participant in conversation
-    - Conversation is accepted
-    - Conversation is not blocked
-    - Conversation is not expired
-    - User is within their own message allowance, and the conversation is within its own
+    Send a message in a conversation.
 
-    The response carries the message's `quota` so the client can show how much room is left
-    without a second request.
+    The response carries the message's `quota` so the client can show how much
+    room is left without a second request; the service validates participation,
+    conversation state, and both the user's and the conversation's allowances.
     """
     return message_service.send_message(
         db=db,
@@ -82,10 +76,7 @@ def get_messages(
     conversation_id: str,
     current_user: Annotated[UserDetails, Depends(require_participant)],
     db: Database = Depends(get_db),
-    # Upper-bounded by the conversation ceiling rather than by an arbitrary window: a
-    # conversation cannot hold more than this many messages, so a larger `limit` could only
-    # ever be a number that returns the same reply. Refusing it says so, where silently
-    # clamping would leave the caller believing it had asked for a window it cannot have.
+# Cap pagination at the conversation message limit; larger requests cannot return more.
     limit: int = Query(CONVERSATION_MESSAGE_MAX, ge=1, le=CONVERSATION_MESSAGE_MAX),
     before: Optional[str] = Query(
         None,
@@ -95,14 +86,12 @@ def get_messages(
     """
     Get one thread window for the dialog, oldest first with the newest last.
 
-    The dialog opens on the newest window and grows upwards: `before` names the oldest
-    message on screen and the read answers the next older page, while `total` counts
-    every visible message in the thread so the dialog knows how many older ones remain.
-    An anchor is stable where an offset is not -- a message sent between two reads
+    The dialog opens on the newest window and grows upwards: `before` names the
+    oldest message on screen and the read answers the next older page, while
+    `total` counts every visible message so the dialog knows what remains. An
+    anchor is stable where an offset is not -- a message sent between two reads
     would shift every offset down and repeat a row, while a row id cannot move.
-
-    `quota` is the message allowance as it stands for the caller, which is what the dialog
-    reads to decide whether to offer the composer at all.
+    `quota` is the caller's remaining allowance.
     """
     page = message_service.get_messages(
         db=db,
@@ -130,11 +119,10 @@ def report_message(
     db: Database = Depends(get_db)
 ):
     """
-    Report a message
-    
-    Validates:
-    - Reporter is receiver of the message
-    - No duplicate reports
+    Report a message.
+
+    The service validates that the reporter is the receiver of the message and
+    refuses duplicates.
     """
     return message_service.report_message(
         db=db,
@@ -144,12 +132,7 @@ def report_message(
     )
 
 
-# ---------------------------------------------------------------------------
-# WebSocket hardening (SEC-003).
-# ---------------------------------------------------------------------------
-# Application-defined close codes (4000-4999): distinct from HTTP statuses so
-# edge logs and client telemetry can tell a refused handshake from a failed
-# request. 4001/4003/5000 predate this hardening and keep their meaning.
+# SEC-003 WebSocket close codes distinguish handshake refusals from HTTP errors.
 WS_CLOSE_AUTH_REQUIRED = 4001
 WS_CLOSE_FORBIDDEN = 4003
 WS_CLOSE_SERVER_ERROR = 5000
@@ -160,16 +143,10 @@ WS_CLOSE_HANDSHAKE_FLOODED = 4429
 # Silent socket reaped: the client stopped talking (see the idle timeout).
 WS_CLOSE_IDLE = 4400
 
-# Handshakes per minute per client IP, counted in Redis and shared by every
-# worker. Generous on purpose: one socket per open dialog is legitimate, and
-# shared campus NATs put many users behind one address -- this catches floods
-# (reconnect loops, socket farms), not people. Zero or negative disables it.
+# Shared per-IP handshake limit; set to zero to disable it.
 WS_HANDSHAKE_LIMIT_PER_MINUTE = 30
 
-# A socket that hears nothing for this long is dead: the client pings every 30
-# seconds, so four missed intervals means the tab is suspended, the network is
-# gone, or the peer never intends to talk. Reaping bounds a slow accumulation
-# of silent sockets (each holding a Redis subscription) into a steady state.
+# Close idle sockets after four missed 30-second client pings to release subscriptions.
 WS_IDLE_TIMEOUT_SECONDS = 120.0
 
 
@@ -214,9 +191,9 @@ async def _socket_account_valid(
     """Whether an accepted socket's session is still live.
 
     A WebSocket has no per-request dependency to re-run, so this is the one
-    revalidation seam used both for frames the client sends and for messages
-    about to be forwarded from Redis. Any failure is closed as auth-required;
-    a database error never becomes permission to keep delivering.
+    revalidation seam, used for both client frames and messages about to be
+    forwarded from Redis. Any failure closes as auth-required; a database
+    error never becomes permission to keep delivering.
     """
     from ..services.auth_service import revalidate_websocket_session
 
@@ -242,27 +219,19 @@ async def websocket_endpoint(
 ):
     """Real-time messages for one conversation over Redis pub/sub.
 
-    A browser ``WebSocket`` cannot set request headers, so the credential travels
-    in the query string. It is deliberately *not* the access token: Uvicorn logs the
-    accepted handshake path with its query string at INFO, which would put a
-    30-minute bearer into stdout and every log store it reaches. Instead the client
-    exchanges its access token over the authenticated HTTP API for a single-use
-    ticket that expires in under a minute (``POST /auth/ws-ticket``); even a ticket
-    copied from a log is useless after one handshake or 60 seconds.
+    A browser ``WebSocket`` cannot set request headers, so the credential
+    travels in the query string -- deliberately a single-use ticket, not the
+    30-minute access token, because Uvicorn logs the accepted handshake path
+    with its query string at INFO. Tickets expire in under a minute, so even
+    one copied from a log is useless after one handshake or 60 seconds.
 
-    What else bounds exposure:
-
-    * no subscription exists before auth -- a captured URL is a read of one dialog
-      handshake, and the edge access log drops the query string (see
-      nginx.prod.conf.example);
-    * nothing is accepted before auth: origin, flood brake, ticket and entitlement
-      gates all run pre-accept and refuse with a bare close, so an unauthenticated
-      peer can never hold a socket, only fail a handshake;
-    * a browser handshake always carries ``Origin``; one outside the CORS
-      allowlist is refused, which keeps a leaked credential from being streamed to
-      an attacker's page. Handshakes with no Origin (tests, curl, native clients)
-      are let through -- there is no ambient authority to steal outside a browser,
-      the same contract as the cookie-origin check.
+    What else bounds exposure: no subscription or frame is accepted before
+    auth (origin, flood brake, ticket and entitlement gates all run pre-accept
+    with a bare close, so an unauthenticated peer only ever fails a
+    handshake); a foreign ``Origin`` is refused, keeping a leaked credential
+    from being streamed to an attacker's page, while handshakes with no
+    Origin (tests, curl, native clients) pass -- there is no ambient authority
+    to steal outside a browser, the same contract as the cookie-origin check.
     """
     # Import here to avoid circular dependency
     from ..services.auth_service import consume_websocket_ticket
@@ -311,9 +280,8 @@ async def websocket_endpoint(
         )
     except HTTPException:
         # Deliberate refusals (unknown dialog, non-participant, not accepted)
-        # stay generic on the wire: the REST transcript answers the same way
-        # rather than turning the socket into an existence oracle for dialog
-        # ids. The detail is server-logged above by the validator's caller.
+        # stay generic on the wire, matching the REST transcript, so the socket
+        # is not an existence oracle for dialog ids. Detail is server-logged.
         logger.warning(
             "WebSocket refused: %s not entitled to conversation %s",
             user.regno, conversation_id,
@@ -353,11 +321,7 @@ async def websocket_endpoint(
         pubsub = redis_service.subscribe_to_conversation(conversation_id)
 
         if not pubsub:
-            # Two very different refusals, and the difference is what an operator
-            # reads in the log: this worker is already serving as many live
-            # chats as it can -- in which case the open sockets carry on and only
-            # this one is refused -- or Redis itself is not answering. Either way
-            # the refusal is stated, not left to look like a working chat.
+        # Log capacity and Redis refusals distinctly; neither handshake succeeded.
             at_capacity = redis_service.subscriber_capacity_reached()
             logger.warning(
                 "WebSocket refused: %s could not subscribe to conversation %s%s",
@@ -382,10 +346,7 @@ async def websocket_endpoint(
         # Listen for messages from Redis
         async def redis_listener():
             """Listen for messages from Redis and forward to WebSocket"""
-            # The blocking Redis listen() runs on the loop's shared worker pool
-            # (asyncio.to_thread), not on a per-connection executor: the old code
-            # minted a ThreadPoolExecutor per socket and never shut it down, so
-            # every dialog leaked a thread for the life of the process.
+        # Run blocking Redis listen on asyncio's shared worker pool, not one thread per socket.
             def get_redis_message():
                 """Blocking function to get next message from Redis"""
                 for message in pubsub.listen():
@@ -400,10 +361,7 @@ async def websocket_endpoint(
                     if message is None:
                         break
 
-                    # The handshake is not a lifetime grant: a revoked, superseded,
-                    # expired, or blocked session must stop receiving immediately,
-                    # even before its next ping. Nothing is forwarded on a failed
-                    # revalidation; the main loop closes the socket on that ping.
+        # Revalidate each socket session so revoked, expired, or blocked users stop receiving.
                     if not await _socket_account_valid(
                         session_id, account_id, account_type, db
                     ):
@@ -431,10 +389,7 @@ async def websocket_endpoint(
         # Start Redis listener task
         listener_task = asyncio.create_task(redis_listener())
 
-        # Keep connection alive and handle ping/pong, reaping silent sockets:
-        # any text that is not a ping is ignored (clients cannot publish
-        # through the socket -- sending is REST-only), and a socket that hears
-        # nothing for WS_IDLE_TIMEOUT_SECONDS is closed rather than held.
+        # Ignore non-ping text (sending is REST-only) and close idle sockets.
         close_code = 1000
         try:
             while True:
@@ -449,10 +404,7 @@ async def websocket_endpoint(
                     close_code = WS_CLOSE_IDLE
                     break
 
-                # Every frame is a chance to notice the session ended: logout,
-                # a newer login, expiry, or an account block. This deliberately
-                # runs for non-ping text too, so a client cannot keep the socket
-                # alive by sending something else.
+        # Revalidate every frame so other traffic cannot keep a revoked session alive.
                 if not await _socket_account_valid(
                     session_id, account_id, account_type, db
                 ):

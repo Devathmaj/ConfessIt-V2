@@ -37,22 +37,17 @@ from .report_counters import MESSAGE, record_report_filed, record_removal
 
 logger = get_logger(__name__)
 
-# Statuses whose transcript a participant may read. ``accepted`` is a live thread and
-# ``terminated`` is a closed one; both are read-only-or-live and both were real conversations
-# that people wrote in. Anything earlier in the lifecycle has no transcript to speak of.
+# Readable transcripts: live (accepted) and moderator-closed (terminated) only.
 READABLE_CONVERSATION_STATUSES = frozenset({"accepted", "terminated"})
 
-# Statuses a message may be sent into. A terminated conversation is not one of them.
+# Only an accepted conversation accepts new messages; terminated is read-only.
 WRITABLE_CONVERSATION_STATUS = "accepted"
 
-# The two ways a conversation runs out of room. Which one stopped the send is worth knowing:
-# a participant at their own limit has a conversation they can still read and nothing more to
-# put in it, whereas a conversation at its ceiling is finished for both of them.
+# Which cap stopped a send: a participant's own cap vs the conversation's ceiling for both.
 PARTICIPANT_LIMIT_REACHED = "participant"
 CONVERSATION_LIMIT_REACHED = "conversation"
 
-# Built from the limits rather than written out, so the sentence a user reads cannot drift
-# away from the number the service is actually enforcing.
+# Built from the limits so the user-facing text cannot drift from the enforced number.
 MESSAGE_LIMIT_PARTICIPANT_DETAIL = (
     f"You have sent all {CONVERSATION_PARTICIPANT_MESSAGE_MAX} messages you can send "
     f"in this conversation"
@@ -71,11 +66,7 @@ class MessageService:
         conversation_id: str,
         user_regno: str
     ) -> Dict[str, Any]:
-        """
-        Validate that user is a participant in the conversation
-        
-        Returns conversation data if valid, raises HTTPException otherwise
-        """
+        """Return the conversation if ``user_regno`` is a participant; raise HTTPException otherwise."""
         try:
             with db.sessions() as session:
                 row = session.get(ConversationRecord, str(conversation_id))
@@ -92,7 +83,6 @@ class MessageService:
                 detail="Conversation not found"
             )
         
-        # Check if user is participant
         is_participant = (
             conversation.get("initiator_regno") == user_regno or
             conversation.get("receiver_regno") == user_regno
@@ -104,31 +94,22 @@ class MessageService:
                 detail="You are not a participant in this conversation"
             )
         
-        # Check conversation status. ``terminated`` is accepted here for the same reason
-        # expiry is: a thread a moderator closed is finished, not unreadable, and the two
-        # people in it still need to read what they said before it was shut. Writing is
-        # refused separately in send_message().
+        # ``terminated`` is readable too: a closed thread still holds its written history; writing is refused in send_message().
         if conversation.get("status") not in READABLE_CONVERSATION_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Conversation must be accepted before sending messages"
             )
         
-        # NOTE: Block check removed from here - reading messages should be allowed even when blocked
-        # The block check is only enforced in send_message() to prevent sending new messages
-        
-        # NOTE: Expiry check removed from here for the same reason. An expired conversation is
-        # read-only, not unreadable: get_messages() shares this validator and must still be
-        # able to return the history. Enforced in send_message() instead.
+        # Block checks are send-only; reading stays allowed even when blocked (see send_message()).
+
+        # Expiry is send-only too so get_messages() can still return history; enforced in send_message().
         
         return conversation
 
     @staticmethod
     def _conversation_payload(row):
-        # The preview is encrypted message content, not metadata. Do not decrypt
-        # it once its own retention deadline has passed: physical deletion may
-        # still be waiting for the next daily run, but the list must stop
-        # exposing it immediately.
+        # Preview is encrypted content: stop decrypting once its retention deadline passes.
         preview = None
         delete_after = getattr(row, "last_message_preview_delete_after", None)
         if delete_after is not None and delete_after.tzinfo is None:
@@ -148,23 +129,14 @@ class MessageService:
             "receiver_regno": row.receiver_regno, "status": row.status, "requested_at": row.requested_at,
             "accepted_at": row.accepted_at, "created_at": row.created_at,
             "last_message_at": row.last_message_at, "last_message_preview": preview,
-            # Whether the chat is closed, and who closed it. The closer is one
-            # participant, not a list: the block is a close, and the participant
-            # who closed the chat is the one who may reopen it. The same shape the
-            # conversation payload carries, so a client never has to read the same
-            # field two ways.
+            # One closer, not a list: only the participant who closed may reopen.
             "is_blocked": bool(row.blocked_by),
             "blocked_by": row.blocked_by[0] if row.blocked_by else None,
             "terminated_at": row.terminated_at,
         }
 
     def is_partner_blocked(self, db: Database, conversation: Dict[str, Any], regno: str) -> bool:
-        """Whether an admin has blocked the other participant of a conversation.
-
-        The conversation row says nothing about account state, so a chat that was accepted
-        before the block still has to be re-checked. Read on demand rather than cached: the
-        answer decides whether a message may be read or sent at all.
-        """
+        """Whether the other participant's account is blocked; read per call, never cached, since the conversation row carries no account state."""
         other_regno = (
             conversation["receiver_regno"]
             if conversation["initiator_regno"] == regno
@@ -176,17 +148,7 @@ class MessageService:
             )
     
     def _message_usage(self, session, conversation_id: str, regno: str) -> Dict[str, Any]:
-        """How much of a conversation's message allowance is spent, read on an open session.
-
-        Counts every row in the conversation, removed ones included. A message a moderator
-        took down is still a message that was written: it is still in
-        the transcript the other party sees a hole where it was, and letting its removal hand
-        the allowance back would mean the ceiling depended on how many reports succeeded.
-
-        Rows past their retention deadline may still be counted until the daily purge
-        physically removes them. That is deliberate: the allowance is spent by writing,
-        not restored by cleanup, and the thread is read-only by then anyway.
-        """
+        """How much of the message allowance is spent, on an open session; removed and purge-pending rows still count toward the ceiling."""
         total = session.scalar(
             select(func.count())
             .select_from(MessageRecord)
@@ -204,21 +166,13 @@ class MessageService:
 
     @staticmethod
     def _quota(usage: Dict[str, Any], *, messages_just_sent: int = 0) -> Dict[str, Any]:
-        """The usage figures as sent to the client, with the refusals derived from them.
-
-        The derivation happens once, here, so that "how much is left", "may this person send"
-        and "which limit stopped them" cannot be three different readings of the same two
-        counts on three different surfaces. ``messages_just_sent`` lets the send path report
-        the state *after* its own insert without counting the table a second time.
-        """
+        """Usage figures plus derived refusals, computed once so every surface agrees."""
         conversation_count = usage["conversation_count"] + messages_just_sent
         participant_count = usage["participant_count"] + messages_just_sent
         conversation_remaining = max(0, CONVERSATION_MESSAGE_MAX - conversation_count)
         participant_remaining = max(0, CONVERSATION_PARTICIPANT_MESSAGE_MAX - participant_count)
 
-        # The participant's own allowance is checked first because it is the limit that binds
-        # in normal use, and it is the more useful thing to be told: the conversation may
-        # have room in it that this person cannot use.
+        # Participant allowance first: it binds in normal use and reads as the clearer refusal.
         if participant_remaining == 0:
             limit_reached = PARTICIPANT_LIMIT_REACHED
         elif conversation_remaining == 0:
@@ -253,14 +207,7 @@ class MessageService:
         return None
 
     def conversation_quota(self, db: Database, conversation_id: str, regno: str) -> Dict[str, Any]:
-        """The message allowance of a conversation, as it stands for one participant.
-
-        Read-only, and deliberately independent of the conversation's status: a thread that
-        is terminated, expired or blocked is just as finished at 200 messages as at 1, and the
-        read that returns this is the one the chat dialog opens with. The caller must already
-        be a participant -- ``get_messages`` has established that by the time the router asks
-        for this.
-        """
+        """The allowance as it stands for one participant; read-only and independent of status."""
         with db.sessions() as session:
             usage = self._message_usage(session, conversation_id, regno)
         return self._quota(usage)
@@ -270,14 +217,7 @@ class MessageService:
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
     def _match_expiry(self, db: Database, match_id: str) -> datetime:
-        """The match's own four-hour deadline, normalised to UTC.
-
-        ``messages`` belongs to a conversation, and the conversation belongs to
-        exactly one match. The match row is the record matchmaking already uses
-        for ``expires_at`` (it is what the inbox and accept/request paths check),
-        so reading it here keeps one authoritative expiry instead of deriving a
-        second one from ``conversations.created_at``.
-        """
+        """The match's UTC deadline from ``matches.expires_at``, the single authoritative expiry."""
         with db.sessions() as session:
             row = session.get(MatchRecord, str(match_id))
         if row is None:
@@ -294,24 +234,13 @@ class MessageService:
         sender: UserDetails,
         body: str
     ) -> Dict[str, Any]:
-        """
-        Send a message in a conversation
-
-        Enforces:
-        - Sender is participant
-        - Conversation is accepted
-        - Conversation is not blocked
-        - Conversation is not expired (4 hours)
-        - Sender is within their own message allowance, and the conversation is within its own
-        """
-        # Validate sender is participant (allows reading but not sending if blocked)
+        """Send a message after enforcing participant, writable, unblocked, unexpired and quota."""
+        # Validate sender is participant (reading allowed even when blocked)
         conversation = self.validate_conversation_participant(
             db, conversation_id, sender.regno
         )
 
-        # A thread a moderator closed takes no new messages. Checked here rather than in the
-        # shared validator because that one is also on the read path, where a terminated
-        # conversation is deliberately still open.
+        # Terminated is readable but not writable; checked here, not in the validator shared with the read path.
         if conversation.get("status") == "terminated":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -323,47 +252,35 @@ class MessageService:
                 detail="Conversation must be accepted before sending messages"
             )
 
-        # IMPORTANT: Check if conversation is blocked (prevents sending, but reading is OK)
+        # IMPORTANT: blocked conversations refuse sends, but reading stays allowed.
         if conversation.get("is_blocked", False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot send messages: this conversation is blocked"
             )
 
-        # Expiry is a send-only restriction. The authoritative four-hour clock is
-        # the match's own ``expires_at`` -- the same timestamp the rest of
-        # matchmaking treats as the end of the chat -- not a second value derived
-        # from the conversation row. Kept out of validate_conversation_participant()
-        # so an expired conversation stays readable for its retention window.
+        # Expiry is send-only, on the match's own ``expires_at``, so expired threads stay readable.
         match_expires_at = self._match_expiry(db, conversation["match_id"])
         if datetime.now(timezone.utc) >= match_expires_at:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Conversation has expired"
             )
-        # Determine receiver
         receiver_id = (
             conversation["receiver_regno"] 
             if conversation["initiator_regno"] == sender.regno 
             else conversation["initiator_regno"]
         )
         
-        # A conversation accepted before the receiver was blocked stops here. The block is
-        # re-read rather than inferred from the conversation row, which knows nothing about
-        # the account state.
+        # The block is re-read from the account; the conversation row does not track it.
         if self.is_partner_blocked(db, conversation, sender.regno):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=ACCOUNT_UNAVAILABLE_DETAIL
             )
 
-        # Central moderation: one call handles config + analyze + per-item policy,
-        # exactly like confessions and their comments. Runs BEFORE persistence so a
-        # flagged message is born hidden (never observable in the transcript and
-        # never published to Redis) and a provider failure is unknown, never safe:
-        # abort before any row exists or anything is delivered. The chat path
-        # carries no local endpoint/key/timeout handling and never branches on raw
-        # severities -- only on the decision flags. Never log body/secrets.
+        # Moderation runs before persistence: a flagged message is born hidden, a provider
+        # failure aborts before any row exists, and bodies/secrets are never logged.
         from .content_safety_service import (
             AUTOMATED_REMOVED_BY,
             AUTOMATED_REPORTER_DISPLAY_NAME,
@@ -393,9 +310,7 @@ class MessageService:
                 detail="Content moderation is temporarily unavailable. Please retry shortly.",
             ) from exc
 
-        # Create message document. The plaintext stays in this local variable only:
-        # moderation has already seen it, and the database row below receives the
-        # AES-256-GCM payload instead.
+        # Plaintext lives only in this local variable; the row stores the AES-256-GCM payload.
         message_doc = {
             "conversation_id": str(conversation_id),
             "sender_regno": sender.regno,
@@ -404,21 +319,10 @@ class MessageService:
             "is_read": False
         }
         
-        # Insert into PostgreSQL
-        #
-        # The conversation row is taken FOR UPDATE before the counts are read. The cap is
-        # enforced by counting rows that already exist, so without the lock two sends racing
-        # past the same check would both see 99 and both insert -- the same reason
-        # matchmaking claims its cooldown window with a conditional UPDATE rather than a read
-        # followed by a write. The lock is on the conversation, so sends into *different*
-        # conversations do not contend.
-        #
-        # A flagged message is stored born hidden (the same removed_at write a moderator's
-        # removal performs) together with its automated report, in this one transaction, so
-        # a report/hide bookkeeping failure rolls the whole send back rather than leaving a
-        # visible message that should have been hidden or a hidden one with no audit trail.
-        # Its separately encrypted evidence is written in the same transaction, so a report
-        # never exists without the individual message it names.
+        # The row is locked FOR UPDATE before counts are read: two racing sends could
+        # otherwise both see 99 and both insert (per-conversation lock, no cross-thread
+        # contention). A flagged send's hidden row, report and evidence land in this same
+        # transaction; bookkeeping failure rolls the whole send back.
         automated_report_id: Optional[str] = None
         try:
             with db.sessions.begin() as session:
@@ -433,8 +337,7 @@ class MessageService:
                         detail="Cannot send messages: this conversation is blocked"
                     )
 
-                # The match is re-read under its own lock so a send racing the
-                # four-hour boundary cannot commit a message into an expired chat.
+                # Re-read the match under its own lock so a send racing expiry cannot commit into an expired chat.
                 match_row = session.scalar(
                     select(MatchRecord)
                     .where(MatchRecord.id == str(conversation["match_id"]))
@@ -460,9 +363,7 @@ class MessageService:
                 if refusal is not None:
                     raise refusal
 
-                # Allocate the id before encrypting: it is authenticated as part of
-                # the record's AAD, so the ciphertext is bound to this row from the
-                # moment it exists.
+                # Allocate the id before encrypting: it is the AAD binding ciphertext to this row.
                 message_id = new_id()
                 encrypted = encrypt_matchmaking_message(
                     message_id=message_id,
@@ -482,17 +383,12 @@ class MessageService:
                     is_read=False,
                 )
                 if decision.should_hide:
-                    # Born hidden: the same removed_at write a moderator's removal performs,
-                    # so every participant read (removed_at IS NULL) excludes it from the
-                    # first commit and it is never published.
+                    # Born hidden via the same removed_at write a moderator uses; never published.
                     row.removed_at = message_doc["created_at"]
                     row.removed_by_regno = AUTOMATED_REMOVED_BY
                 session.add(row)
                 if conversation_row and not decision.should_hide:
-                    # A hidden message must not become the conversation preview: that preview
-                    # is an encrypted copy of the newest *visible* message and is read by
-                    # both participants and staff. It carries the same retention deadline as
-                    # the message it copies.
+                    # Only visible messages become the preview, which carries the retention deadline.
                     preview = encrypt_matchmaking_preview(
                         conversation_id=str(conversation_id),
                         message_id=message_id,
@@ -509,9 +405,7 @@ class MessageService:
                 session.flush()
                 message_doc["id"] = message_id
                 if decision.should_report:
-                    # Idempotent: exactly one automated report per message. A new message
-                    # cannot already have one, but the check makes retries safe and the
-                    # partial unique index backstops races. Manual reports are untouched.
+                    # Idempotent: the check makes retries safe and the partial unique index backstops races.
                     existing = session.scalar(
                         select(MessageReportRecord.id).where(
                             MessageReportRecord.message_id == str(message_doc["id"]),
@@ -533,9 +427,7 @@ class MessageService:
                         session.add(report_row)
                         session.flush()
                         automated_report_id = str(report_row.id)
-                        # The blocked/flagged message itself is preserved for review
-                        # under the evidence retention rule, separate from ordinary
-                        # chat history.
+                        # Preserved for review under the evidence retention rule, separate from chat history.
                         capture_report_evidence(
                             session,
                             report_id=automated_report_id,
@@ -556,15 +448,12 @@ class MessageService:
                             )
                     else:
                         automated_report_id = str(existing)
-                # Reported after the insert rather than recounted, so the response describes the
-                # state this send actually left behind.
+                # Reported after the insert rather than recounted, so the response describes this send's end state.
                 quota = self._quota(quota, messages_just_sent=1)
         except HTTPException:
             raise
         except ChatEncryptionError as exc:
-            # Encryption is configured at startup, so this is an operational failure
-            # (for example a rotated-away active key). The transaction rolled back and
-            # nothing was delivered; never fall back to storing plaintext.
+            # Encryption is configured at startup, so this is operational; never fall back to plaintext.
             logger.error(
                 "Chat encryption failed for a new message (%s); send aborted", exc.code
             )
@@ -573,9 +462,7 @@ class MessageService:
                 detail="Could not securely store this message.",
             ) from exc
         except Exception as exc:
-            # Report/hide bookkeeping failed after a successful moderation result: never
-            # silently treat as successful. The transaction above rolled back, so no partial
-            # visible message survives; surface a retryable error (no body/secrets logged).
+            # Moderation succeeded but bookkeeping rolled back; surface a retryable error, never a silent success.
             logger.error(
                 "Automated moderation bookkeeping failed for new message: %s",
                 type(exc).__name__,
@@ -585,8 +472,7 @@ class MessageService:
                 detail="Could not complete moderation for this message.",
             ) from exc
 
-        # Best-effort staff/author notices: failures never unwind the committed moderation
-        # outcome (report + hidden state are already durable).
+        # Best-effort notices: their failure must never unwind the committed report/hidden state.
         if automated_report_id is not None:
             try:
                 from .staff_notification_service import notify_report_filed
@@ -605,8 +491,7 @@ class MessageService:
                 )
             if decision.should_hide:
                 try:
-                    # Same neutral copy the direct-hide path sends: no policy is cited
-                    # because no human ruled on a report.
+                    # Neutral copy: no policy is cited because no human ruled on a report.
                     from .notification_service import (
                         create_notification_service as _notify,
                     )
@@ -624,9 +509,7 @@ class MessageService:
                     )
 
         if decision.should_hide:
-            # Flagged+hidden: the row stays hidden for audit (report + removed_at already
-            # committed), and it is never published to Redis, so the recipient never sees it.
-            # The caller is told plainly so the frontend shows a violation popup.
+            # The row stays hidden for audit and is never published; the 422 drives the violation popup.
             logger.info(
                 "Chat message %s withheld by content safety for %s -> %s "
                 "(conversation %s, max=%s action=%s)",
@@ -638,7 +521,7 @@ class MessageService:
                 detail="Your chat message was removed because it violated our content policies.",
             )
 
-        # Publish to Redis for real-time delivery (only reached for a visible message).
+        # Publish to Redis for real-time delivery (visible messages only).
         redis_message = {
             "id": str(message_doc["id"]),
             "conversation_id": conversation_id,
@@ -652,9 +535,7 @@ class MessageService:
         
         published = redis_service.publish_message(conversation_id, redis_message)
         if not published:
-            # Persistence already committed above; this is a realtime outage, not
-            # data loss. Logged loudly so a chat outage cannot hide behind the
-            # boolean publish_message returns.
+            # Persistence committed, so this is a realtime outage, not data loss; logged loudly.
             logger.error(
                 f"Chat realtime outage: message {message_doc['id']} persisted "
                 f"but Redis publish failed (conversation {conversation_id})"
@@ -670,14 +551,9 @@ class MessageService:
             "body": body,
             "created_at": isoformat_datetime(message_doc["created_at"]),
             "is_read": False,
-            # Sent with the message so a client that has just used up its allowance learns
-            # it here rather than by being refused on the next send.
+            # Sent with the message so a client that just used its last allowance learns here.
             "quota": quota,
-            # Whether the live echo went out. The message is stored either way;
-            # this says whether an open socket will show it without the thread
-            # being read again. A publisher that cannot get a connection is a
-            # realtime degradation, and saying so is the difference between a
-            # visible outage and a message that looks lost.
+            # Stored either way; "unavailable" means an open socket needs a re-read to show it.
             "realtime": "delivered" if published else "unavailable",
         }
     
@@ -690,32 +566,14 @@ class MessageService:
         before: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        One thread window for the dialog, oldest first with the newest last, plus the total.
+        One thread window, oldest first with the newest last, plus the total.
 
-        The dialog opens on the newest window and grows upwards: ``before`` names the
-        oldest message on screen and the read answers the next older page, so the
-        reader's place never moves. A skip offset would shift under concurrent sends --
-        a new message landing between two reads would push every row one slot down and
-        the second page would repeat one -- while an anchor names a row that cannot
-        move. ``total`` counts every visible message in the thread, loaded or not, so
-        the dialog knows how many older ones remain.
-
-        A conversation cannot hold more than CONVERSATION_MESSAGE_MAX messages -- the
-        send path refuses past it -- so no window here ever needs to consider more.
-
-        Enforces:
-        - User is participant in conversation
-        - Conversation is accepted
+        ``before`` anchors on a message id rather than an offset: concurrent sends shift offsets and would repeat a row.
         """
-        # Participant-only. There is no staff bypass here: a moderator is not a party to a
-        # private thread, and ``reports:review`` -- which they do hold -- governs what they
-        # may see *about* a conversation they have been asked to rule on, not a transcript
-        # of every thread in the database. The report queue carries the reported message and
-        # its surrounding context; nothing else is readable by staff.
+        # Participant-only: ``reports:review`` exposes a reported message plus context, not whole transcripts.
         conversation = self.validate_conversation_participant(db, conversation_id, user.regno)
 
-        # Reading a thread with a blocked partner is refused for the same reason sending is:
-        # the conversation is not reachable from this account any more.
+        # A blocked partner makes the thread unreachable for reading as well as sending.
         if self.is_partner_blocked(db, conversation, user.regno):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -724,9 +582,7 @@ class MessageService:
 
         limit = max(1, min(int(limit or CONVERSATION_MESSAGE_MAX), CONVERSATION_MESSAGE_MAX))
         now = datetime.now(timezone.utc)
-        # Logical expiry, independent of physical cleanup: a message past its
-        # retention deadline is unreachable through this read even if the next
-        # daily scheduler run has not removed the row yet.
+        # Logical expiry: rows past retention are unreachable even before the daily purge removes them.
         visible = [
             MessageRecord.conversation_id == str(conversation_id),
             MessageRecord.removed_at.is_(None),
@@ -746,8 +602,7 @@ class MessageService:
                         detail="Message not found.",
                     )
             if anchor is not None:
-                # Strictly older than the anchor, ties broken by id: two messages stamped
-                # in the same instant still page without repeating or skipping one.
+                # Strictly older than the anchor, ties broken by id, so equal timestamps page cleanly.
                 visible.append(or_(
                     MessageRecord.created_at < anchor.created_at,
                     and_(
@@ -762,12 +617,8 @@ class MessageService:
                     MessageRecord.delete_after > now,
                 )
             ) or 0
-            # Newest first for the slice, then back to oldest-first for the reply: the
-            # dialog renders latest-last, and the slice has to be taken from the newest
-            # end for the opening window to be the newest one.
+            # Slice newest-first, then reverse so the reply reads oldest-first.
             newest_first = session.scalars(
-                # A removed message is invisible on the participant read, which is the only
-                # read there is.
                 select(MessageRecord).where(*visible)
                 .order_by(MessageRecord.created_at.desc(), MessageRecord.id.desc())
                 .limit(limit)
@@ -779,9 +630,7 @@ class MessageService:
             try:
                 plaintext = decrypt_matchmaking_message(row)
             except ChatDecryptionError as exc:
-                # A corrupted or unauthenticated row is withheld, not delivered
-                # with a placeholder body that could be mistaken for content.
-                # Only ids and the sanitized code are logged.
+                # Withhold a corrupted row rather than deliver a placeholder; log ids and the sanitized code only.
                 logger.error(
                     "Chat message decryption failed for message %s in conversation %s (%s)",
                     row.id,
@@ -797,10 +646,7 @@ class MessageService:
             })
         returned_ids = [str(msg["id"]) for msg in messages]
 
-        # Mark messages as read for receiver, scoped to the ids actually returned above.
-        # Reading an older page must not mark newer, unloaded messages as though they were
-        # seen: the unread badge answers what is unread, and a page that cleared it for
-        # rows nobody opened would be lying about that.
+        # Mark read only the returned ids: an older page must not clear newer unloaded messages.
         with db.sessions.begin() as session:
             if returned_ids:
                 rows = session.scalars(select(MessageRecord).where(
@@ -811,7 +657,6 @@ class MessageService:
                 for row in rows:
                     row.is_read = True
 
-        # Format response
         return {
             "messages": [
                 {
@@ -836,17 +681,8 @@ class MessageService:
         reporter: UserDetails,
         reason: str
     ) -> Dict[str, Any]:
-        """
-        Report a message
-        
-        Enforces:
-        - Reporter is the receiver of the message
-        - Message exists in an accepted conversation
-        - No duplicate reports
-        """
-        # Read only the metadata needed to authorise the report. The ciphertext
-        # is not decrypted until the report is actually being committed, so an
-        # unauthorised caller never causes plaintext to be produced.
+        """Report a message: receiver-only, readable thread, no duplicate reports."""
+        # Authorise on metadata only; decrypt when committing so an unauthorised caller never yields plaintext.
         try:
             with db.sessions() as session:
                 row = session.get(MessageRecord, str(message_id))
@@ -868,16 +704,13 @@ class MessageService:
                 detail="Message not found"
             )
         
-        # Validate reporter is receiver
         if message["receiver_regno"] != reporter.regno:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only report messages sent to you"
             )
         
-        # The thread has to be one whose transcript the reader can see at all. Reporting is
-        # a note to a moderator about something already written, so a terminated thread
-        # qualifies: the report menu is offered on exactly the messages the reader can open.
+        # Terminated threads qualify: the report menu is offered on exactly the messages the reader can open.
         with db.sessions() as session:
             row = session.get(ConversationRecord, message["conversation_id"])
             conversation = self._conversation_payload(row) if row else None
@@ -888,7 +721,6 @@ class MessageService:
                 detail="Can only report messages in an accepted or terminated conversation"
             )
         
-        # Check for duplicate report
         with db.sessions() as session:
             existing_report = session.scalar(select(MessageReportRecord).where(
                 MessageReportRecord.message_id == str(message_id),
@@ -901,7 +733,6 @@ class MessageService:
                 detail="You have already reported this message"
             )
         
-        # Create report
         report_doc = {
             "message_id": str(message_id),
             "reporter_regno": reporter.regno,
@@ -928,8 +759,7 @@ class MessageService:
                 session.add(row)
                 session.flush()
                 report_id = str(row.id)
-                # Preserve only the reported message, encrypted separately, so the
-                # report remains reviewable after ordinary chat history is purged.
+                # Preserve only the reported message so the report stays reviewable after history is purged.
                 capture_report_evidence(
                     session,
                     report_id=report_id,
@@ -941,8 +771,7 @@ class MessageService:
                     message_created_at=message_row.created_at,
                     reported_at=report_doc["reported_at"],
                 )
-                # Charged to the sender, not the receiver: the receiver filed the complaint. By
-                # regno because that is how ``messages`` names its author -- see report_counters.
+                # Charged to the sender (the receiver filed); keyed by regno, see report_counters.
                 record_report_filed(
                     session, kind=MESSAGE, author_regno=report_doc["reported_user_regno"]
                 )
@@ -957,19 +786,10 @@ class MessageService:
                 detail="This message could not be reported.",
             ) from exc
         except IntegrityError as exc:
-            # The duplicate check above is a read, and a read cannot settle a question
-            # two clicks are asking at the same time: both read "no report yet" and
-            # both insert. The unique constraint on (message_id, reporter_regno) is
-            # the authority, so the loser of that race trips it here.
-            #
-            # Without this the second report answers 500 -- a server fault for a
-            # complaint that is already filed, and the participant is left believing
-            # their report failed when it did not. It is the same answer the check
-            # above gives, which is the point: the two paths are the same decision
-            # reached by different means.
-            #
-            # Only that constraint is translated. Any other integrity failure is a
-            # real fault and is left to be one.
+            # Two concurrent reports both read "no report yet" and both insert: the unique
+            # constraint on (message_id, reporter_regno) is the authority, and the loser
+            # trips it here, answering 409 like the check above. Only that constraint is
+            # translated; other integrity failures stay faults.
             detail = str(exc.orig)
             if "message_id" not in detail or "reporter_regno" not in detail:
                 raise
@@ -983,12 +803,10 @@ class MessageService:
                 detail="You have already reported this message",
             ) from exc
         
-        # The report reason is free text a participant wrote; the message body is
-        # never logged at all. Neither belongs in an application log.
+        # Free-text reason and message body never reach the application log.
         logger.info("Message %s reported by %s", message_id, reporter.regno)
 
-        # Staff-facing notice (role-based, best-effort): a failed write here must
-        # never unwind the report that was just committed.
+        # Best-effort staff notice: a failed write must not unwind the committed report.
         try:
             from .staff_notification_service import notify_report_filed
 

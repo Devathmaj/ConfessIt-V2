@@ -16,10 +16,9 @@ from ..services.authorization import require_participant
 router = APIRouter(prefix="/games/wordle", tags=["Wordle"])
 
 # The player-facing surface of the feature. Every route resolves the caller as a participant
-# and reads and writes only that caller's own participation: there is no leaderboard here,
-# no way to play another player's board, and no way to ask what the answer is -- the answer
-# is carried by the puzzle the caller was shown, and revealed only by a completed
-# participation.
+# and reads and writes only that caller's own participation: no leaderboard, no way to
+# play another player's board, and no way to ask what the answer is -- it is carried by
+# the puzzle the caller was shown and revealed only by a completed participation.
 
 
 @router.get("", response_model=WordleCurrentGame)
@@ -43,9 +42,9 @@ def guess(
 ) -> WordleGuessResponse:
     """Score one guess against the named puzzle, for this player.
 
-    The guess is recorded against this player's participation (created on the first guess)
-    and the response carries the new row of the board plus the ``guess`` and ``result``
-    that just happened, so the screen can flip the tiles and colour the keyboard in one
+    The guess is recorded against this player's participation (created on the first
+    guess); the response carries the new board row plus the ``guess`` and ``result``
+    that just happened, so the screen flips tiles and colours the keyboard in one
     round trip.
     """
     return wordle_gameplay.submit_guess(db, user.id, payload)

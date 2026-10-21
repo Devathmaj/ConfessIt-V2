@@ -23,13 +23,12 @@ from ..services.couple_gameplay import COUPLE_PARTNERS_MAX_LIMIT
 
 router = APIRouter(prefix="/games/two-key-escape", tags=["Two-Key Escape"])
 
-# The player-facing surface of the feature. Every route resolves the caller
-# as a participant and derives the couple from the caller's own
-# mutual-selection session -- never from an id the client supplied -- so an
-# unrelated user can neither join, modify nor view another couple's game.
-# Reads never create anything; the screen polls the state after every write
-# and on an interval while waiting, which is the realtime the reference
-# games use (no game owns a WebSocket; only chat streams over Redis).
+# The player-facing surface of the feature. Every route resolves the caller as a
+# participant and derives the couple from the caller's own mutual-selection session --
+# never a client-supplied id -- so an unrelated user can neither join, modify nor view
+# another couple's game. Reads never create anything; the screen polls after every
+# write and on an interval while waiting (no game owns a WebSocket; only chat streams
+# over Redis).
 
 
 @router.get("", response_model=TwoKeyEscapeState)
@@ -39,11 +38,10 @@ def current_state(
 ) -> TwoKeyEscapeState:
     """This caller's place in the couple's maze.
 
-    Reading this never creates anything: a caller with no couple session
-    reads ``no_couple``, a couple that never confirmed a role reads
-    ``selecting_roles`` with the shared template, and a playing couple reads
-    the same authoritative overlay on every load -- refresh, return or
-    reconnect.
+    Reading never creates anything: a caller with no couple session reads
+    ``no_couple``, a couple that never confirmed a role reads ``selecting_roles``
+    with the shared template, and a playing couple reads the same authoritative
+    overlay on every load -- refresh, return or reconnect.
     """
     return two_key_escape_gameplay.current_state(db, user)
 
@@ -77,10 +75,10 @@ def partner_candidates(
 ) -> CouplePartnerPage:
     """One page of participants the caller may choose, excluding only themselves.
 
-    Declared before ``/{...}``-style routes so ``partners`` is never read as
-    an id. The questionnaire's own candidate list: settling the pairing here
-    or there chooses from the same people under the same rules, and the page,
-    search and filters are its SQL ones (see ``couple_gameplay.list_partners``).
+    Declared before ``/{...}``-style routes so ``partners`` is never read as an id.
+    The questionnaire's own candidate list: settling the pairing here or there
+    chooses from the same people under the same rules -- SQL page, search and
+    filters (see ``couple_gameplay.list_partners``).
     """
     return two_key_escape_gameplay.partner_candidates(
         db,
@@ -102,10 +100,9 @@ def choose_partner(
 ) -> TwoKeyEscapeState:
     """Record this caller's partner choice through the questionnaire's selection.
 
-    A changed mind replaces the previous pick, and a mutual pick creates the
-    one session for the pair -- visible in both games at once, because both
-    read the same session row. Answers the caller's escape state, so the
-    screen advances in one round trip.
+    A changed mind replaces the previous pick; a mutual pick creates the one session
+    for the pair -- visible in both games at once, both reading the same session row.
+    Answers the caller's escape state, so the screen advances in one round trip.
     """
     return two_key_escape_gameplay.choose_partner(db, user, payload.selected_user_id)
 
@@ -118,11 +115,11 @@ def submit_role(
 ) -> TwoKeyEscapeState:
     """Record this caller's confirmed role choice.
 
-    Writes only the caller's own submission -- never the partner's. When both
-    submissions are stored and distinct, the assignment finalizes atomically
-    in the same transaction; identical submissions finalize nothing and the
-    response carries the conflict both sides resolve. Safe to retry: a
-    finalized assignment is returned unchanged.
+    Writes only the caller's own submission, never the partner's. When both
+    submissions are stored and distinct, the assignment finalizes atomically in
+    the same transaction; identical ones finalize nothing and the response carries
+    the conflict both sides resolve. Safe to retry: a finalized assignment is
+    returned unchanged.
     """
     return two_key_escape_gameplay.submit_role(db, user, payload.role)
 
@@ -164,13 +161,11 @@ def use_key(
 ) -> TwoKeyEscapeState:
     """Use one key for the assigned Key Operator.
 
-    Keys are reusable: every use costs the cooldown, never a charge.
-    Opens the *different* lock the maze's hidden mapping assigns to the
-    clicked lock -- never the clicked lock itself -- and sends any
-    previously opened lock back, then blocks a different eligible cell
-    chosen by the game logic after verifying the maze stays solvable.
-    Refusals change nothing: only a successful activation stamps the
-    server-side cooldown.
+    Keys are reusable: every use costs the cooldown, never a charge. Opens the
+    *different* lock the maze's hidden mapping assigns to the clicked lock -- never
+    the clicked itself -- sends any previously opened lock back, then blocks a
+    different eligible cell after verifying the maze stays solvable. Refusals change
+    nothing: only a successful activation stamps the server-side cooldown.
     """
     return two_key_escape_gameplay.use_key(db, user, payload.key_index)
 

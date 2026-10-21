@@ -1,37 +1,4 @@
-"""Per-game leaderboard categories: metric rankings across sessions.
-
-Where :mod:`league_boards` aggregates award points (global and game halves),
-this module ranks *native results* -- solves, attempts, milliseconds, words
-placed, predictions correct -- read from the authoritative game tables across
-a window. Nothing here compares players inside one session or converts a
-placement into points: ordering keys are the metrics themselves, so a
-four-guess Wordle in one session always outranks a five-guess Wordle in
-another.
-
-Two scopes:
-
-* ``period`` categories aggregate finalized results inside the selected
-  UTC window (daily / weekly / monthly / all_time period).
-* ``record`` categories are all-time personal records (fastest solves and
-  reactions): they query all eligible finalized history irrespective of the
-  selected rolling period and must be labelled as such in the UI.
-
-Only finalized results qualify: every query joins (or filters) the parent
-session/question on ``ended`` status, so active puzzles, live questions and
-in-progress attempts can never appear -- and neither can their answers
-(see the active-answer redaction below).
-
-Disclosure safety: record details may name solved words and trivia
-questions because they only ever come from ended opportunities. As a second
-lock, words matching a currently *active* session's answer are redacted
-from details (aggregates are unaffected): an ended word that happens to
-equal today's live word is never the leak that spoils it.
-
-Scores shown here never feed the global leaderboard: ``global_points``
-aggregation is untouched, and the internal performance sums below exist
-only to order these boards (Wordle/Anagram/Two-Key sums are deliberately
-withheld from responses in favour of the achievement metrics).
-"""
+"""Per-game leaderboard categories: ranking native gameplay metrics across ended sessions."""
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -81,9 +48,7 @@ class CategoryDef:
     id: str
     label: str
     description: str
-    # 'period': aggregates finalized results inside the selected UTC window.
-    # 'record': all-time personal record across all finalized history,
-    # ignoring the selected rolling period (the UI must label it as such).
+    # Scopes: 'period' (window-filtered) vs 'record' (all-time personal record).
     scope: str
     is_default: bool = False
 
@@ -108,9 +73,7 @@ CATEGORIES: dict[str, list[CategoryDef]] = {
     "connections": [
         CategoryDef("performance", "Performance", "Total puzzle quality in the window.", "period", True),
         CategoryDef("best_quality", "Best Quality", "Best single puzzle in the window.", "period"),
-        # No fastest_completion: submissions carry only submitted_at, with no
-        # per-player start timestamp, so completion duration is not derivable
-        # from stored data and must not be invented.
+        # No fastest_completion: submissions lack per-player start timestamps.
     ],
     "trivia-drop": [
         CategoryDef("answer_performance", "Answer Performance", "Total answer performance in the window.", "period", True),
@@ -194,14 +157,12 @@ def validate_category_request(game_id: str, category: str, period: str) -> Categ
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-# Wordle/Anagram attempt multiplier: solving dominates; each extra attempt
-# shaves a small fixed factor. Six Wordle attempts: 1.00 .. 0.90.
+# Attempt multiplier: solving dominates; each extra attempt shaves a small fixed factor.
 def _attempt_multiplier(attempts: int) -> float:
     return max(0.90, 1.00 - 0.02 * (int(attempts) - 1))
 
 
-# Anagram active-time multiplier: bounded adjustment that can never outweigh
-# solving or cross attempt tiers (tiers are 10 points apart; bonus spans 6).
+# Anagram active-time multiplier: bounded bonus that cannot cross attempt tiers.
 def _anagram_time_multiplier(active_seconds: Any) -> float:
     try:
         seconds = float(active_seconds)
@@ -216,8 +177,7 @@ def _anagram_time_multiplier(active_seconds: Any) -> float:
     return 0.94
 
 
-# Two-Key escape time multiplier: faster escapes gain modestly, slow escapes
-# keep substantial completion credit (floor 0.90 at one hour and beyond).
+# Two-Key escape time multiplier: speed bonus retaining a 0.90 completion floor.
 def _escape_time_multiplier(elapsed_seconds: float) -> float:
     return max(0.90, 1.0 - float(elapsed_seconds) / 3600.0)
 
@@ -262,12 +222,7 @@ def _active_answers(session, game_id: str) -> set[str]:
 def _competition_ranks(
     items: list[tuple[tuple, tuple, Any]],
 ) -> list[tuple[int, tuple, Any]]:
-    """Competition ranking (1, 1, 3) over ``(order, tie, payload)`` triples.
-
-    Sorted ascending by the full order tuple (which must end with a unique
-    subject breaker for determinism); ranks are shared while the tie tuple
-    is equal.
-    """
+    """Competition ranking (1, 1, 3) over (order, tie, payload) triples."""
     ordered = sorted(items, key=lambda item: item[0])
     ranked: list[tuple[int, tuple, Any]] = []
     previous: Optional[tuple] = None
@@ -980,8 +935,7 @@ def _build_trivia(session, category: str, start: Optional[date], end: Optional[d
 
 
 def _trivia_record(answer: dict) -> dict:
-    # Ended questions only: text and the player's own selection are safe.
-    # The answer key itself is never included.
+    # Ended questions only: options and selection are safe; answer keys are omitted.
     return {
         "question_text": answer["question_text"],
         "selected_options": answer["selected_options"],
@@ -1287,11 +1241,7 @@ def category_board(
     skip: int = 0,
     limit: int = 50,
 ) -> dict:
-    """One game's category leaderboard: ranks over the full filtered set.
-
-    Record-scope categories always answer all-time history; the response
-    says so (``period: "all_time"``) rather than echoing an ignored window.
-    """
+    """One game's category leaderboard ranked over the full filtered set."""
     definition, ranked = _ranked_items(db, game_id, category, period, anchor)
     entries, _ = _entries_with_names(db, ranked, skip, limit)
     return {
@@ -1339,10 +1289,7 @@ def category_me(
 # Headline records: one game's best result at a glance, for the admin overview
 # ---------------------------------------------------------------------------
 
-# The board each game is represented by when one "best result" is wanted:
-# the record-style view where a game has one (fastest solve, fastest answer,
-# fastest escape), otherwise the board whose top row is the game's best
-# single result. Case Closed has no category boards yet and is absent.
+# Headline record board mapping for single top result per game.
 HEADLINE_RECORD_CATEGORIES: dict[str, str] = {
     "wordle": "fastest_solve",
     "anagram": "fastest_solve",
@@ -1356,13 +1303,7 @@ HEADLINE_RECORD_CATEGORIES: dict[str, str] = {
 
 
 def record_highlights(db: Database, *, limit_per_game: int = 1) -> list[dict]:
-    """The top of every game's headline record board, all-time.
-
-    One pass through the same category builders the expanded rankings use, so
-    the overview's "fastest time" can never disagree with the board it links
-    to. A game with no finalized results keeps its highlight with a null
-    entry rather than disappearing from the list.
-    """
+    """Top of every game's headline record board across all-time history."""
     highlights = []
     for game_id, category in HEADLINE_RECORD_CATEGORIES.items():
         definition = category_def(game_id, category)

@@ -47,12 +47,11 @@ def preview_anagram_answer(
 ) -> AnagramDraw:
     """Draw a word for ``game_date`` from the word list, signed for that day.
 
-    This is the "show me what will be saved" half of the flow. The word is chosen here, on
-    the server, and the token that comes back is an HMAC over the word and the date -- so the
-    screen can display the answer before anything is written, and ``POST`` can then store
-    exactly that answer without taking the client's word for what it is.
-
-    Declared before ``/{game_id}`` so ``preview`` is never read as an id.
+    The "show me what will be saved" half of the flow: the word is chosen on the server
+    and the returned token is an HMAC over the word and the date -- so the screen shows
+    the answer before anything is written and ``POST`` stores exactly that answer
+    without taking the client's word for it. Declared before ``/{game_id}`` so
+    ``preview`` is never read as an id.
     """
     return anagram_service.draw_answer(game_date)
 
@@ -67,12 +66,11 @@ def create_anagram_game(
 
     ``mode="custom"`` stores the supplied word, normalized to uppercase; ``mode="random"``
     stores the word the preview drew, verified against its signature. The old session is
-    stamped ended and kept as history; the new session starts from scratch for today's
-    UTC date under the game's own reset cadence. An explicit ``game_date`` other than
-    today is refused -- future words belong on the schedule endpoint below.
-
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken from the payload:
-    an administrator cannot publish a puzzle attributed to somebody else.
+    stamped ended and kept as history; the new one starts from scratch for today's UTC
+    date under the game's reset cadence, and an explicit ``game_date`` other than today
+    is refused -- future words belong on the schedule endpoint below. The caller's
+    ``regno`` is recorded as ``created_by``, not taken from the payload: an administrator
+    cannot publish a puzzle attributed to somebody else.
     """
     return anagram_service.create_anagram_game(db, payload, created_by=account.regno)
 
@@ -102,9 +100,8 @@ def schedule_anagram_word(
 ) -> ScheduledWord:
     """Schedule a manual word for a future session period.
 
-    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced
-    server-side. The word waits until its period opens and never activates a
-    session early.
+    Bounded by ``MAX_FUTURE_SCHEDULE_DAYS`` ahead of today (UTC), enforced server-side:
+    the word waits until its period opens and never activates a session early.
     """
     return ScheduledWord(
         **schedule_word(

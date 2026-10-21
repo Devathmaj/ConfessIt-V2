@@ -18,11 +18,10 @@ from ..services.authorization import require_participant
 router = APIRouter(prefix="/games/anagram", tags=["Anagram"])
 
 # The player-facing surface of the feature. Every route resolves the caller as a participant
-# and reads and writes only that caller's own participation: there is no leaderboard here,
-# no way to play another player's scramble, and no way to ask what the answer is -- the
-# answer is carried by the puzzle the caller was shown, and revealed only by a completed
-# participation. The clock is banked server-side on every transition, so the one thing a
-# client can do with the timer is ask for the current numbers.
+# and reads and writes only that caller's own participation: no leaderboard, no way to
+# play another player's scramble, and no way to ask what the answer is -- it is revealed
+# only by a completed participation. The clock is banked server-side on every transition,
+# so the one thing a client can do with the timer is ask for the current numbers.
 
 
 @router.get("", response_model=AnagramCurrentGame)
@@ -47,8 +46,8 @@ def start(
     """Reveal the puzzle: deal this player's scramble and start -- or resume -- the clock.
 
     The first call creates the participation; a later call on a paused game re-opens the
-    clock, which is the RESUME half of the screen's single control. Returning to the page
-    never restarts the timer by itself -- only this explicit press does.
+    clock (the RESUME half of the screen's single control). Returning to the page never
+    restarts the timer by itself -- only this explicit press does.
     """
     return anagram_gameplay.start_participation(db, user.id, payload.game_id)
 
@@ -89,10 +88,9 @@ def guess(
 ) -> AnagramGuessResponse:
     """Score one tile arrangement against the named puzzle, for this player.
 
-    The guess is recorded against this player's participation -- created by the reveal,
-    never here -- and the response carries the new attempt count plus whether it matched,
-    so the screen can advance in one round trip. The fifth wrong guess ends the game and
-    reveals the answer; anything earlier leaves the scramble, the attempts left and the
-    running clock exactly where they were.
+    Recorded against this player's participation -- created by the reveal, never here --
+    and the response carries the new attempt count plus whether it matched. The fifth
+    wrong guess ends the game and reveals the answer; anything earlier leaves the
+    scramble, attempts and running clock exactly where they were.
     """
     return anagram_gameplay.submit_guess(db, user.id, payload)

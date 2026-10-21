@@ -5,14 +5,12 @@ Logical expiry is enforced by every read and send path using the same
 the physical purge that runs as part of the existing 00:01 UTC game scheduler;
 it never decides a deadline from the run time.
 
-Matchmaking: ``messages.delete_after = match.expires_at +
-MATCHMAKING_CHAT_RETENTION_HOURS``.
-
-Case Closed: ``case_closed_messages.delete_after = session.expires_at``, the
-pinned event's exclusive end. A chat lock does not touch it.
-
-Reported evidence: ``chat_message_evidence.expires_at = reported_at +
-REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``.
+* Matchmaking: ``messages.delete_after = match.expires_at +
+  MATCHMAKING_CHAT_RETENTION_HOURS``.
+* Case Closed: ``case_closed_messages.delete_after = session.expires_at``, the
+  pinned event's exclusive end. A chat lock does not touch it.
+* Reported evidence: ``chat_message_evidence.expires_at = reported_at +
+  REPORTED_MESSAGE_EVIDENCE_RETENTION_DAYS``.
 
 Deleting a chat message does not delete its report: the report foreign key is
 ``ON DELETE SET NULL`` and the separately encrypted evidence row is keyed by
@@ -47,9 +45,9 @@ def _now(now: Optional[datetime] = None) -> datetime:
 def _delete_matchmaking_batch(session, now: datetime, batch_size: int) -> int:
     """Delete one bounded batch of expired matchmaking messages.
 
-    A conversation preview is a copy of one specific message. When that message
-    is purged its preview must go too, or an encrypted excerpt would outlive the
-    retention rule it was copied under. The update and the delete share this
+    A conversation preview is a copy of one specific message: when that message
+    is purged, its preview must go too or an encrypted excerpt would outlive
+    the retention rule it was copied under. Update and delete share this
     transaction, so a failure rolls both back.
     """
     ids = session.scalars(
@@ -132,10 +130,10 @@ def cleanup_expired_chat_messages(
 ) -> dict:
     """Purge expired ordinary chat rows and expired report evidence.
 
-    Bounded batches keep each transaction short. The function is idempotent:
-    a rerun finds the remaining backlog (or none) and is always safe. Partial
-    failure is surfaced to the caller, which logs it and continues the rest of
-    the scheduler pass; rows that were not reached stay for the next run.
+    Bounded batches keep each transaction short. Idempotent: a rerun finds the
+    remaining backlog (or none) and is always safe. Partial failure is surfaced
+    to the caller, which logs it and continues the scheduler pass; rows not
+    reached stay for the next run.
     """
     moment = _now(now)
     size = max(1, int(batch_size or settings.CHAT_CLEANUP_BATCH_SIZE))

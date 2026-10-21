@@ -1,52 +1,10 @@
-"""Playing Plot Twist: the participant-facing half of the feature.
+"""Participant gameplay for Plot Twist.
 
-The pairing half belongs to the Couple Questionnaire and is reused, not
-reimplemented: a couple here is a mutual-selection session in
-``couple_game_sessions`` for the current global questionnaire period, read
-through ``couple_gameplay``'s own lookup. This module never decides who
-forms a couple and never creates a pairing.
-
-The story half belongs to a published, versioned story package pinned by
-the current global Plot Twist period. Gameplay executes that package
-deterministically: choices are validated against the current scene and the
-assigned participant, state changes use only the closed operator set, and
-the scene sequence per couple is selected once from a persisted seed and
-never reshuffled.
-
-Rules holding at the bottom of everything here.
-
-**Reads never create gameplay rows.** Partner selection reuses the
-questionnaire's storage; the Plot Twist session row is created when a
-mutual pair enters an active event (on selection, or on the first choice
-submit for pairs formed earlier).
-
-**One couple, one session per global game.** The pair is stored in
-canonical order with a unique constraint. Creation runs under the
-per-game advisory lock first and the pair lock second (ENG-001 order),
-so concurrent enters serialize into exactly one session.
-
-**Turns strictly alternate between the two members.** ``participant_one``
-means user_a and ``participant_two`` means user_b; ``either``/``joint``
-scenes resolve to whoever's turn it is, so they never let one side answer
-twice in a row either. Anything else is a 403: a participant answers only
-on their own turn, and only after their partner has answered theirs.
-
-**Loops cannot run forever.** A choice leading back to a scene the couple
-has already seen twice is no longer offered -- the least-visited way
-forward always remains, so the story funnels out instead of stranding.
-Past the package's decision budget (default 24), a non-terminal scene
-concludes the story at the best qualifying ending rather than playing on.
-
-**Submits are atomic and idempotent.** The session row is locked
-``FOR UPDATE``; the choice is re-validated inside the transaction;
-``state_version`` is optimistic concurrency (a stale version is a 409);
-and a repeated submit of an already-recorded turn answers the stored
-outcome instead of applying consequences twice.
-
-**Scores settle once.** Completion stores deterministic ``base_points``
-from the ending tier plus treasure bonuses (capped at 100). League
-finalization reads those rows; retries cannot award twice because the
-ledger is written once per opportunity.
+Pairing is reused from ``couple_gameplay``. A versioned package and persisted
+seed make play deterministic; turns alternate, choices are revalidated under
+the session lock, retries are idempotent, loops are bounded, and rewards
+settle once. Session creation takes the per-game lock before the pair lock
+(ENG-001); reads never create rows.
 """
 
 import random
@@ -874,12 +832,8 @@ def submit_choice(
                 detail="The current scene is missing from the published story.",
             )
         if int(row.state_version) != int(state_version):
-            # Idempotent replay comes before the turn-ownership check: the
-            # recorded turn's actor is compared against the caller, so only
-            # the participant who actually made that decision can replay it
-            # -- and a retry after success answers the stored outcome
-            # instead of applying consequences twice. Anything else with a
-            # stale version is a 409, whoever sends it.
+            # Only the original actor can replay a recorded turn; retries return
+            # its outcome without applying consequences twice.
             prior = session.scalar(
                 select(PlotTwistDecisionRecord).where(
                     PlotTwistDecisionRecord.session_id == row.id,
@@ -996,12 +950,8 @@ def _apply_choice(session, row, user, scene, scenes, endings, var_map, package, 
         row.completed_at = _now()
         row.assigned_actor = _member_role(row, user.id)
     elif seq >= max_decisions:
-        # Decision budget reached on a non-terminal scene: conclude now
-        # rather than letting a loop run past it. Prefer the best qualifying
-        # ending, but never strand: with no qualifier the highest-priority
-        # ending still settles the story instead of playing forever (the old
-        # code advanced the turn here, so unqualified budgets looped past
-        # the cap until some state happened to qualify).
+            # At the decision cap, choose the best qualifying ending or the
+            # highest-priority fallback so the story always concludes.
         ending = _resolve_ending(endings, None, state_after) or _best_effort_ending(endings)
         if ending is not None:
             row.ending_id = ending.get("id")

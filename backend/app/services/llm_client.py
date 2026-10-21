@@ -1,56 +1,8 @@
-"""Provider-configurable LLM client for pre-publication story generation.
+"""Provider-neutral LLM client for pre-publication story generation.
 
-One module owns every provider-specific setting so story-generation logic
-never does. Configuration comes from the environment only::
-
-    LLM_PROVIDER  groq (default) | foundry. ``groq`` is Groq's own SDK
-                  (Strict Structured Outputs); ``foundry`` is Microsoft
-                  Foundry through the official OpenAI Python SDK. The legacy
-                  spellings ``openai`` (the same path as foundry) and ``auto``
-                  (Groq when the base URL names it, else the
-                  OpenAI-compatible client) keep old deployments working.
-    LLM_BASE_URL  e.g. https://api.groq.com/openai/v1 (Groq, OpenAI-compatible)
-                  or https://<resource>.services.ai.azure.com/openai/v1
-                  (Microsoft Foundry; a trailing /responses or
-                  /chat/completions on a stored endpoint is normalised away)
-    LLM_API_KEY   the provider secret; never logged, never sent to clients
-    LLM_MODEL     e.g. openai/gpt-oss-120b (Groq) or the Foundry *deployment*
-                  name (initial development: gpt-5-mini)
-
-Switching providers is configuration, never a code change: both providers
-implement the same ``generate_structured_json`` contract, and story logic
-only ever calls that.
-
-Provider-specific differences that require configuration changes (not code):
-
-* Groq serves Structured Outputs (strict JSON Schema) through its own SDK
-  for the current models; the same strict payload sent through a generic
-  OpenAI client is refused, so the Groq SDK is the Groq path. Reasoning
-  models take ``reasoning_effort="medium"``, except ``qwen/qwen3.8-27b``
-  (and Qwen chat models generally), which take ``temperature=0.6``,
-  ``top_p=0.95`` and ``reasoning_effort="default"``. Set ``LLM_MODEL`` to
-  the Groq model id (initial development: ``openai/gpt-oss-120b``).
-* Microsoft Foundry serves an OpenAI-compatible chat-completions surface
-  (``https://<resource>.services.ai.azure.com/openai/v1`` or the older
-  ``https://<resource>.openai.azure.com/openai/v1``), and ``LLM_MODEL``
-  must be the *deployment name*, not the underlying model id. The OpenAI
-  SDK appends the route itself, so an endpoint copy that already names one
-  (``.../openai/v1/responses``) is trimmed back to the base. Some Foundry
-  deployments do not support strict JSON Schema mode; the client then
-  falls back to plain JSON-object mode and validates locally, recording
-  the fallback. The fallback prompt carries the full JSON Schema (the
-  provider no longer enforces it), and reasoning deployments (gpt-5 /
-  o-series names) run at low reasoning effort so hidden reasoning cannot
-  consume the whole output budget. Verify structured-output support for
-  the chosen deployment.
-
-Structured Outputs are requested with a strict JSON Schema whenever the
-provider accepts one. Every payload is still validated locally with
-Pydantic: a model that drifts from the schema is a validation failure,
-never an exception in gameplay.
-
-Nothing here runs during gameplay. Generation happens before publication;
-the engine executes published packages deterministically.
+Settings select Groq or Microsoft Foundry through one structured-JSON contract. The client
+uses strict schema output when supported, validates every response locally, and reports
+provider-safe errors; gameplay executes only validated, published packages.
 """
 
 import json

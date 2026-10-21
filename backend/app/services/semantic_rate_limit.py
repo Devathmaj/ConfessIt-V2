@@ -1,14 +1,4 @@
-"""Per-bucket fixed-window budgets for hybrid-search embedding calls.
-
-Staff and public traffic get separate buckets (``"admin"`` vs ``"user"``) so one
-cannot starve the other. Same fixed-window shape as the global flood brake
-(``GlobalRateLimitMiddleware``: one counter per key per minute), but in-process
-rather than Redis-shared: search must stay fast and dependency-free, and the
-window is short enough that per-worker counting is an acceptable brake rather
-than a precise quota. A limit of zero disables the limiter (fail-open).
-
-Thread-safe; call :func:`reset_buckets` in tests for determinism.
-"""
+"""Per-bucket fixed-window budgets for hybrid-search embedding calls."""
 
 import threading
 import time
@@ -16,8 +6,7 @@ import time
 _buckets: dict[tuple[str, str], tuple[int, float]] = {}
 _lock = threading.Lock()
 
-# The two traffic classes. Anything else is a caller bug, refused loudly rather
-# than silently sharing a bucket.
+# Traffic classes for user and admin embedding budgets.
 USER_BUCKET = "user"
 ADMIN_BUCKET = "admin"
 
@@ -33,13 +22,7 @@ def _limit_for(bucket: str) -> int:
 
 
 def check_budget(bucket: str, key: str) -> tuple[bool, int]:
-    """Consume one embedding call from ``bucket`` for ``key``.
-
-    Returns ``(allowed, retry_after_seconds)``. ``key`` is typically the client
-    IP, or the authenticated user/regno id. Expired windows are reset lazily on
-    the next call, so idle keys cost one dict entry until they are touched
-    again (bounded below by opportunistic eviction).
-    """
+    """Check and consume one embedding call budget for the given bucket and key."""
     limit = _limit_for(bucket)
     if limit <= 0:
         return True, 0
@@ -65,6 +48,6 @@ def check_budget(bucket: str, key: str) -> tuple[bool, int]:
 
 
 def reset_buckets() -> None:
-    """Empty all counters. Tests only; never called in production paths."""
+    """Clear all bucket counters for test isolation."""
     with _lock:
         _buckets.clear()

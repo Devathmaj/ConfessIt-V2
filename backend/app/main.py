@@ -60,41 +60,11 @@ from opentelemetry.semconv.attributes.url_attributes import (
 # Initialize logger
 logger = get_logger(__name__)
 
-# Diagnostic endpoints are opt-in so raw database/driver internals are never reachable
-# from an unauthenticated request in a deployed environment.
+# Debug endpoints are opt-in; database and driver details must not be exposed publicly.
 ENABLE_DEBUG_ENDPOINTS = bool(settings.ENABLE_DEBUG_ENDPOINTS)
 
-# The dimensions the http.server.* instruments are allowed to keep. The
-# instrumentation's own modern attribute set for the duration histogram is
-# ['error.type', 'http.request.method', 'http.response.status_code', 'http.route',
-# 'network.protocol.version', 'url.scheme']; the body-size histograms and
-# http.server.active_requests use subsets of it.
-#
-# The bound is still worth having even in modern-only mode. The middleware builds
-# its attribute list per stability mode, so http.server_name and the other Host-
-# derived names are not currently among the dimensions it records -- but they were
-# the reason this View exists, and the cost of keeping the allowlist is that it
-# keeps failing closed if a future release puts one of them back. The View is also
-# what guarantees the bound rather than relying on the current default.
-#
-# An allowlist rather than a denylist because the SDK's View offers no
-# drop_attribute_keys, which is how "drop exactly this one key" would normally be
-# written. It fails closed: an attribute a future instrumentation release starts
-# emitting is excluded until someone decides it belongs here.
-#
-# Only the current conventions are listed, because the backend runs with
-# OTEL_SEMCONV_STABILITY_OPT_IN=http (see docker-compose.yml) and the pre-1.20
-# names are no longer emitted at all. Listing them would be dead configuration.
-#
-# error.type is left out even though the instrumentation's attribute set includes
-# it: nothing in this stack queries it, and the error-rate rule keys off
-# http.response.status_code. Excluding it keeps the emitted label set to exactly
-# what the derivations in README.md need.
-#
-# The route dimension is http.route, the route *template* the middleware reads from
-# route.path_format, so one series covers every confession id rather than one per
-# id. It is not a request target and cannot reintroduce the query string that
-# app.telemetry removes from spans.
+# Allowlist http.server metric dimensions to bound cardinality and fail closed on unknown labels.
+# Keep only modern conventions; ``http.route`` is a route template, not a request URL.
 BOUNDED_HTTP_METRIC_ATTRIBUTES = {
     HTTP_REQUEST_METHOD,
     HTTP_RESPONSE_STATUS_CODE,
@@ -124,25 +94,7 @@ _init_tracing()
 
 
 def _init_metrics():
-    """Register the MeterProvider that the HTTP instrumentation records through.
-
-    Without this the SDK leaves a NoOp MeterProvider in place, so the middleware's
-    instruments are created against a provider that discards every measurement. The
-    ASGI middleware already builds the standard http.server.* instruments (duration,
-    request/response size, active requests) and takes a meter when
-    FastAPIInstrumentor runs, so registering the provider is all the HTTP metrics
-    need: there is no counter to add per route and no new dependency.
-
-    Metrics go out over the same OTLP gRPC endpoint and the same resource as the
-    traces, so the collector's existing metrics pipeline carries them to the
-    prometheus exporter on :8889, which prometheus.yml already scrapes. Nothing in
-    the collector configuration had to change.
-
-    This must run before FastAPIInstrumentor.instrument_app below. The instrumentor
-    resolves the global meter provider when it runs, not when a measurement is
-    recorded, so a provider registered afterwards would never be seen and the
-    instruments would stay bound to the NoOp one.
-    """
+    """Register the meter provider before FastAPIInstrumentor binds its HTTP instruments."""
     endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
     if not endpoint:
         return
@@ -153,10 +105,7 @@ def _init_metrics():
     insecure, credentials = otlp_transport()
 
     exporter = OTLPMetricExporter(endpoint=endpoint, insecure=insecure, credentials=credentials)
-    # 15s matches the scrape interval in prometheus.yml and the default datasource
-    # timeInterval. The SDK default of 60s would mean a point is often exported
-    # after the scrape that would have collected it, so a restarted backend looks
-    # empty for a minute.
+    # Match the 15-second Prometheus scrape interval; the SDK's 60-second default can miss a scrape.
     reader = PeriodicExportingMetricReader(exporter, export_interval_millis=15000)
     metrics.set_meter_provider(
         MeterProvider(
@@ -174,44 +123,13 @@ def _init_metrics():
 _init_metrics()
 
 
-# ---------------------------------------------------------------------------
-# Scrape endpoint
-# ---------------------------------------------------------------------------
-# Why this exists. The backend's metrics are *pushed* over OTLP to the collector, and
-# the collector re-exports them on :8889 for Prometheus to scrape. A pushed pipeline has
-# no "is the producer alive?" series anywhere in it: the only thing that observes the
-# backend is the collector, and the collector is perfectly healthy when the backend that
-# feeds it is dead. Until this endpoint existed the availability rule could only watch
-# the collector, so "the backend died" and "the collector died" looked identical, and the
-# comment in alerting-rules.yml had to admit it could not tell them apart.
-#
-# What it deliberately does NOT do is re-export the OTel instruments. Adding a
-# PrometheusMetricReader to the same MeterProvider would serve a second copy of every
-# http_server_* series under a different job label, so the same request would be counted
-# twice by any query that does not pin exported_job. Two sources for one measurement is a
-# worse problem than the one being solved, so the application metrics stay on the OTLP
-# path and this endpoint carries only what that path structurally cannot provide.
-#
-# Three series, written out by hand in the Prometheus text exposition format 0.0.4 rather
-# than by a client library. The format is three lines per series and is stable; pulling
-# in prometheus_client, or the opentelemetry-exporter-prometheus package that would drag
-# the whole MeterProvider along, would add a dependency to produce a payload this small.
-# A test asserts the body parses and that the OTLP-only series are absent, so the
-# hand-written part cannot quietly drift.
-#
-# confessit_backend_up is 1 by construction -- it exists to be *absent* when the process
-# cannot answer, which Prometheus records as up{job="confessit-backend"} == 0. Keeping
-# the explicit gauge as well means the signal is legible from the series itself, and not
-# only from the scrape bookkeeping.
-#
-# confessit_backend_start_time_seconds is what makes a *restart* visible: a series that
-# silently resets to 1 is easy to miss in a dashboard, a start time that jumps is not.
+# Prometheus scrapes these process-health series because pushed OTLP metrics alone cannot
+# distinguish a dead backend from a healthy collector. Do not re-export HTTP instruments here:
+# a second job would double-count them. The small exposition stays hand-written to avoid a dependency.
 
 _PROCESS_START_TIME_SECONDS = time.time()
 
-# The exposition content type. The version is part of the media type because that is how
-# a scrape declares the format it is speaking; Prometheus rejects a body it cannot parse,
-# and charset is stated explicitly so Starlette does not append a second one.
+# Declare the exposition version and charset so Starlette does not append a second charset.
 _METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
@@ -388,7 +306,7 @@ async def on_startup():
     try:
         from .services.game_scheduler import ensure_game_sessions
 
-        boot_resets = ensure_game_sessions(postgres)
+        boot_resets = ensure_game_sessions(postgres, startup=True)
         logger.info("Game sessions ensured at boot: %s", boot_resets)
     except Exception as exc:
         logger.warning("Game session boot ensure skipped: %s", exc)

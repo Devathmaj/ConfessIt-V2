@@ -1,28 +1,4 @@
-"""One-off migration from the single role-bearing ``users`` table to three account tables.
-
-Before this change, every account -- participant, admin and moderator alike -- was a row in
-``users`` with a ``role`` column saying which. The split moves staff into their own tables
-(``admin`` and ``moderator``) and deletes the column. That is not a shape change the running
-application can absorb on its own, because two things about it are decisions about data
-rather than about schema:
-
-* the staff rows have to *move*, carrying their primary keys with them, so every foreign key
-  and every magic-link token that already points at them still resolves; and
-* ``login_tokens`` was keyed on ``users.id`` through a foreign key. A token can now belong to
-  an account in any of the three tables, so the column becomes a plain uuid plus an
-  ``account_type`` saying where to read it. The old column cannot simply be dropped first,
-  because that is the only record of which account a live token belongs to.
-
-Everything is done in one transaction, and ``--dry-run`` rolls that transaction back, so the
-whole script is safe to run on a database that has already been migrated: each step checks
-what is actually present first and skips what is not needed.
-
-Usage::
-
-    python -m scripts.migrate_account_tables                  # migrate settings.DATABASE_URL
-    python -m scripts.migrate_account_tables --dry-run        # report, change nothing
-    python -m scripts.migrate_account_tables --database-url postgresql+psycopg://...
-"""
+"""One-off migration from the single role-bearing ``users`` table to three account tables."""
 
 from __future__ import annotations
 
@@ -40,15 +16,10 @@ from app.postgres import RETIRED_COLUMNS, PostgresClient
 # which is the same fail-closed reading the application uses for an unrecognised value.
 ROLE_TO_ACCOUNT_TABLE: dict[str, str] = {"admin": "admin", "moderator": "moderator"}
 
-# The columns every account table has. Copied verbatim from the users row so a staff account
-# keeps its id, its timestamps and its last-login record through the move.
+# The columns every account table has, copied verbatim from the users row so a
+# staff account keeps its id, timestamps and last-login record through the move.
 #
-# ``gender`` and the two profile-picture columns are deliberately absent. They are participant
-# fields now -- only a participant is a matchmaking candidate and only a participant can upload
-# a picture -- so a staff table created from ``Base.metadata`` has no such column, and copying
-# one across would fail the INSERT on a fresh run. On a database split by an earlier run of
-# this script the columns are still there; ``PostgresClient.apply_retired_columns`` drops them
-# on the next boot, which is where that cleanup lives rather than here.
+# ``gender`` and the two profile-picture columns are deliberately absent: they
 SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     "id",
     "regno",
@@ -65,15 +36,14 @@ SHARED_ACCOUNT_COLUMNS: tuple[str, ...] = (
     "updated_at",
 )
 
-# The columns a staff row must not carry. They are dropped from ``users`` at the end of the
-# run, and anything holding a value for them in ``login_tokens``-style references is what the
-# pre-flight check below looks for.
+# The columns a staff row must not carry: dropped from ``users`` at the end of
+# the run.
 PARTICIPANT_ONLY_COLUMNS: tuple[str, ...] = (
     "bio",
-    # Two columns where there was once one ``class_name``. Both are NOT NULL on ``users`` and both
-    # describe only a participant, so both are dropped from a staff row rather than being carried
-    # across as empty strings -- a moderator is not in a year and a department, and a row that
-    # said so would be a cohort of one.
+    # Two columns where there was once one ``class_name``. Both are NOT NULL on
+    # ``users`` and both describe only a participant, so both are dropped from
+    # a staff row rather than carried across as empty strings -- a moderator is
+    # not in a year or a department, and a row that said so would be a cohort
     "year",
     "department",
     "interests",
@@ -175,11 +145,10 @@ def _preflight(connection) -> list[str]:
                     "a staff account cannot be a participant of a confession, note or match"
                 )
 
-    # A regno already taken in the destination table would make the move ambiguous, because
-    # regno is what a caller logs in with. The same id on both sides is not ambiguous, though:
-    # that is a move that already happened and only the old copy is left behind, which the
-    # delete below clears. Two different ids under one regno is two accounts a person cannot
-    # tell apart at login, and which one they meant is not a question this script can answer.
+    # A regno already taken in the destination table would make the move
+    # ambiguous, because regno is what a caller logs in with. The same id on
+    # both sides is not ambiguous -- that is a move that already happened and
+    # only the old copy is left behind, which the delete below clears. Two
     for role, table in ROLE_TO_ACCOUNT_TABLE.items():
         if not _table_exists(connection, table):
             continue
@@ -206,9 +175,9 @@ def _preflight(connection) -> list[str]:
 def _create_staff_tables(connection, steps: list[str]) -> None:
     """Create ``admin`` and ``moderator`` if they are absent.
 
-    A deployment that has never run the new code has neither table, and the move below
-    writes into them. The shape is taken from the models rather than written out here, so
-    this cannot drift from what the application expects.
+    A deployment that has never run the new code has neither table, and the
+    move below writes into them. The shape is taken from the models so this
+    cannot drift from what the application expects.
     """
     from app.db_models import Base
 
@@ -226,24 +195,7 @@ def _create_staff_tables(connection, steps: list[str]) -> None:
 
 
 def _add_shared_email_column(connection, steps: list[str]) -> None:
-    """Give every account table an ``email`` column, keeping ``email`` NOT NULL.
-
-    An address is how a person is reached, which is true of a moderator as much as a student,
-    so all three tables carry one now. A staff table created by an earlier run of this script
-    predates that and would not have the column at all, so it is added here rather than being
-    left to the boot path.
-
-    Two things this deliberately does not do. It does not deduplicate: a staff table cannot
-    already hold two rows with one address, because the column did not exist. And it does not
-    refuse if ``users`` holds a duplicate -- that cannot happen either, the column has been
-    unique there throughout.
-
-    NOT NULL is kept on all three tables, matching ``db_models`` and the boot
-    backfill (``PostgresClient.apply_not_null_constraints`` backfills legacy NULLs
-    with placeholders then SETs NOT NULL). Relaxing ``users.email`` here would
-    contradict that path: the next boot would backfill and re-tighten it, so the
-    churn buys nothing and leaves the constraint flapping between runs.
-    """
+    """Give every account table an ``email`` column, keeping ``email`` NOT NULL."""
     for table in ("users", "admin", "moderator"):
         if not _table_exists(connection, table):
             continue
@@ -255,15 +207,7 @@ def _add_shared_email_column(connection, steps: list[str]) -> None:
 
 
 def _drop_participant_fields_from_staff(connection, steps: list[str]) -> None:
-    """Remove ``RETIRED_COLUMNS`` from a staff table an earlier run gave them to.
-
-    The column split that made these participant-only is applied at boot by
-    ``PostgresClient.apply_retired_columns``, but this script can reach a state the boot path
-    cannot: a database where ``users.role`` is still present (so the move below is about to
-    run) and the staff tables were created by a version that put ``gender`` on all three. The
-    copy would then omit a NOT NULL column and fail. Dropping them here, before the move, is
-    what keeps the script's own promise that it is safe to run on any database in any order.
-    """
+    """Remove ``RETIRED_COLUMNS`` from a staff table an earlier run gave them to."""
     for table in ROLE_TO_ACCOUNT_TABLE.values():
         if not _table_exists(connection, table):
             continue
@@ -281,13 +225,7 @@ def _drop_participant_fields_from_staff(connection, steps: list[str]) -> None:
 
 
 def _move_staff_rows(connection, steps: list[str]) -> None:
-    """Copy staff rows out of ``users`` into their own tables, keeping the primary key.
-
-    The id is preserved deliberately. Eleven tables reference a participant by id, and the
-    magic-link tokens reference an account by id; moving the row with its key means none of
-    those have to be rewritten, and an account that was an admin yesterday is still the same
-    account today.
-    """
+    """Copy staff rows out of ``users`` into their own tables, keeping the primary key."""
     if "role" not in _columns(connection, "users"):
         _report(steps, "users has no role column; nothing to move")
         return
@@ -311,13 +249,7 @@ def _move_staff_rows(connection, steps: list[str]) -> None:
 
 
 def _migrate_login_tokens(connection, steps: list[str]) -> None:
-    """Give every login token an account id and the account table it belongs to.
-
-    ``account_id`` is added nullable first, backfilled from the old ``user_id``, and only
-    made NOT NULL once it is actually populated -- a token whose account no longer exists is
-    reported and left alone rather than having an id invented for it. ``user_id`` goes last,
-    because until the backfill has run it is the only record of who the token is for.
-    """
+    """Give every login token an account id and the account table it belongs to."""
     columns = _columns(connection, "login_tokens")
     if "user_id" not in columns:
         _report(steps, "login_tokens has no user_id column; token identity already migrated")
@@ -394,17 +326,7 @@ def _drop_staff_from_users(connection, steps: list[str]) -> None:
 
 
 def _check_cross_table_regnos(connection, steps: list[str]) -> None:
-    """Report a regno that exists in more than one account table.
-
-    Informational only, and deliberately not a failure. Sign-in is category scoped -- each
-    login page looks the regno up in the one table it is for -- and a session is then pinned
-    to that row by primary key, so a regno shared by a participant and a moderator resolves
-    correctly on both pages. Such a regno is a supported state.
-
-    It is still worth printing, because it is the kind of thing that surprises a human reading
-    a moderation queue ("two people, same regno?") and because it is the shape of data that
-    any future code that searches tables by regno would mishandle.
-    """
+    """Report a regno that exists in more than one account table."""
     tables = ["users", *ROLE_TO_ACCOUNT_TABLE.values()]
     present = [table for table in tables if _table_exists(connection, table)]
     for index, first in enumerate(present):

@@ -1,30 +1,4 @@
-"""Case Closed detective thread: per-couple chat inside the game window.
-
-Reuses the matchmaking chat's implementation shape (quota derivation,
-FOR UPDATE quota lock, anchor paging, Redis pub/sub realtime) without
-reusing its tables or its allowances:
-
-- Scope is the couple's Case Closed session (``session_id``), which already
-  pins the game event, so the game id, session id and couple travel together.
-- Storage is ``case_closed_messages`` (one thread per session).
-- Quotas are 400 per thread / 200 per detective (``CASE_CLOSED_*``), double
-  the matchmaking 200/100 so a full investigation plus accusation debate fits.
-- Every turn is moderated by the central Content Safety dispatcher before it is
-  persisted: a flagged turn is born hidden (never delivered, never in the
-  transcript) yet still counts against the sender's allowance, exactly like a
-  matchmaking chat message.
-- Realtime rides the same ``redis_service`` pub/sub infrastructure on a
-  distinct channel namespace (``case-closed:{session_id}``), so matchmaking
-  threads and detective threads never cross.
-- The thread is session-aware and short-lived by design: the first accusation
-  confirmation from either detective ends it (the case ending does too), and
-  the websocket handshake, the send path and the live ping re-check all read
-  the same ``thread_state``. The transcript stays readable after closure --
-  there is simply no live connection to keep and no new turn to send.
-
-Sending never consumes an investigation action. Reading never marks the game
-as started: the timer still starts only on the first successful investigation.
-"""
+"""In-game detective chat for Case Closed with moderation, encryption, and pub/sub."""
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -75,11 +49,7 @@ MESSAGE_LIMIT_CONVERSATION_DETAIL = (
     f"This detective thread has reached its limit of {CASE_CLOSED_CONVERSATION_MESSAGE_MAX} messages"
 )
 
-# The thread lives exactly as long as the accusation is open. The first
-# confirmation from either detective ends it -- even before both sides agree --
-# because the decision has been made and further lobbying would be out of place.
-# The end of the case ends it too. Reads stay open either way: the transcript is
-# the pair's record, only new turns stop.
+# Thread closes upon first accusation confirmation or case expiration.
 THREAD_CLOSED_ACCUSATION_DETAIL = "The detective thread closed when an accusation was confirmed"
 THREAD_CLOSED_CASE_DETAIL = "The detective thread closed when the case ended"
 THREAD_CLOSED_SESSION_DETAIL = "The Case Closed session has expired"
@@ -100,14 +70,7 @@ def thread_state(
     now: Optional[datetime] = None,
     expires_at: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Whether the thread still accepts turns, and the reason it stopped.
-
-    Session expiry is checked first: once the game window is over the whole
-    thread is finished, even if this row has not yet been finalized by the
-    scheduler. A lock from a confirmed accusation is deliberately separate --
-    it closes writes immediately but leaves messages readable until the session
-    itself expires.
-    """
+    """Whether the thread still accepts turns, and reason if stopped."""
     moment = now or datetime.now(timezone.utc)
     # ``expires_at`` lets a caller that already resolved the pinned event supply
     # the authoritative deadline for a row created before the column existed.
@@ -162,12 +125,7 @@ def _resolve_thread(session, user_id: str) -> tuple[CaseClosedGameRecord, CaseCl
 
 
 def thread_closed_reason(db: Database, user) -> Optional[str]:
-    """Why the caller's thread takes no new turns, or None while it is open.
-
-    Cheap pre-flight for the send path: refusing here keeps a closed thread from
-    spending a Content Safety round trip on a turn that can never be stored. The
-    authoritative check still runs inside the send transaction's row lock.
-    """
+    """Pre-flight check for thread closure before running safety moderation."""
     with db.sessions() as session:
         game, row = _resolve_thread(session, str(user.id))
         return thread_state(
@@ -176,12 +134,7 @@ def thread_closed_reason(db: Database, user) -> Optional[str]:
 
 
 def get_thread(db: Database, user) -> Dict[str, Any]:
-    """The caller's detective thread identity (game + session + partner).
-
-    Carries the thread's open/closed state as well, so both the transcript read
-    (which the dialog renders from) and the websocket handshake can tell a live
-    thread from a finished one without re-deriving it.
-    """
+    """Resolve caller's detective thread identity and open/closed status."""
     with db.sessions() as session:
         game, row = _resolve_thread(session, str(user.id))
         partner_id = str(row.user_b_id) if str(row.user_a_id) == str(user.id) else str(row.user_a_id)
@@ -197,13 +150,7 @@ def get_thread(db: Database, user) -> Dict[str, Any]:
 
 
 def _usage(session, session_id: str, user_id: str) -> Dict[str, int]:
-    """How much of a detective thread's allowance is spent, removed rows included.
-
-    Counts every row in the thread on purpose, exactly like matchmaking chat: a
-    turn Azure Content Safety took down is still a turn that was written, and
-    letting its removal hand the allowance back would make the ceiling depend on
-    how many turns the system happened to flag.
-    """
+    """Calculate thread message allowance usage, including removed rows."""
     total = session.scalar(
         select(func.count()).select_from(CaseClosedMessageRecord).where(
             CaseClosedMessageRecord.session_id == str(session_id)
@@ -250,13 +197,7 @@ def _refusal(quota: Dict[str, Any]) -> Optional[HTTPException]:
 
 
 def _partner_blocked(session, row: CaseClosedSessionRecord, user_id: str) -> bool:
-    """Whether the other detective's account is blocked.
-
-    The session row knows the couple but not account state, so this is a live
-    read. The matchmaking chat path refuses a send to a blocked partner for the
-    same reason: a block must stop new turns reaching them, not merely hide the
-    thread from their next request.
-    """
+    """Check if partner's account is currently blocked."""
     partner_id = (
         str(row.user_b_id) if str(row.user_a_id) == str(user_id) else str(row.user_a_id)
     )
@@ -268,15 +209,7 @@ def _partner_blocked(session, row: CaseClosedSessionRecord, user_id: str) -> boo
 
 
 def _session_expiry(row: CaseClosedSessionRecord, game: CaseClosedGameRecord) -> datetime:
-    """The session's own end, from the stored explicit column or the event.
-
-    New sessions copy the pinned event's exclusive end date into
-    ``CaseClosedSessionRecord.expires_at``. The fallback exists only for a row
-    created by an older build; it uses the same authoritative event deadline
-    rather than inventing a duration. A missing deadline is treated as "not
-    expired" (the game itself is unreachable in that state) so a data problem
-    can never delete a live conversation early.
-    """
+    """Return effective session expiry from stored column or pinned event."""
     try:
         from .case_closed_gameplay import _event_deadline
 
@@ -296,31 +229,19 @@ def conversation_quota(db: Database, user) -> Dict[str, Any]:
 
 
 def send_message(db: Database, user, body: str) -> Dict[str, Any]:
-    """Send one detective-thread turn, moderated before it is persisted.
-
-    Same principal as matchmaking chat (everything >1 flagged+hidden): a flagged
-    turn is stored born hidden -- never delivered and never in the transcript --
-    but still counts against the sender's allowance, because a removed turn is
-    still a turn that was written. A provider failure is unknown, never safe, so
-    it aborts before anything is stored. Sending never charges an investigation
-    action.
-    """
+    """Send one detective-thread turn with pre-persistence moderation."""
     text = (body or "").strip()
     if not text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message body is required.")
     if len(text) > MESSAGE_BODY_MAX:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message is too long.")
 
-    # The thread is over once either detective has confirmed (or the case has
-    # ended). Refuse before moderation so a closed thread never spends a safety
-    # call; the transaction below re-checks under the row lock.
+    # Refuse closed threads before invoking moderation.
     closed_reason = thread_closed_reason(db, user)
     if closed_reason is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=closed_reason)
 
-    # A partner blocked after the thread opened stops new turns, exactly as in
-    # matchmaking chat. Refused before moderation so a blocked pair spends no
-    # safety call, then re-checked under the send transaction's row lock.
+    # Refuse sends to blocked partners before running moderation.
     with db.sessions() as session:
         _, row = _resolve_thread(session, str(user.id))
         if _partner_blocked(session, row, str(user.id)):
@@ -329,10 +250,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
                 detail=ACCOUNT_UNAVAILABLE_DETAIL,
             )
 
-    # Central moderation, before persistence: a flagged turn must never reach
-    # the recipient, and a provider failure must abort before any row exists.
-    # Imported locally (like the matchmaking path) so tests can patch the module
-    # attribute; never branch on raw severities, only on the decision flags.
+    # Moderate content before persisting row.
     from .content_safety_service import (
         AUTOMATED_REMOVED_BY,
         AUTOMATED_SOURCE,
@@ -360,8 +278,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
     try:
         with db.sessions.begin() as session:
             game, row = _resolve_thread(session, str(user.id))
-            # Serialize quota checks per thread: count-then-insert races past the
-            # same check would both see 399 and both insert without this lock.
+            # Serialize quota checks under row lock.
             locked = session.scalar(
                 select(CaseClosedSessionRecord).where(CaseClosedSessionRecord.id == str(row.id)).with_for_update()
             )
@@ -385,8 +302,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
                     status_code=status.HTTP_409_CONFLICT,
                     detail=THREAD_CLOSED_SESSION_DETAIL,
                 )
-            # Allocate the id first: it is part of the authenticated metadata, so
-            # the ciphertext cannot later be moved to another row unnoticed.
+            # Pre-allocate message ID for inclusion in AAD ciphertext binding.
             message_id = new_id()
             encrypted = encrypt_case_closed_message(
                 message_id=message_id,
@@ -403,16 +319,13 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
                 created_at=now, delete_after=expires_at, is_read=False,
             )
             if decision.should_hide:
-                # Born hidden: the same removed_at write a moderator's removal
-                # performs, so the transcript read (removed_at IS NULL) excludes
-                # it from the first commit. The quota read does not filter it.
+                # Flagged turns are born hidden (removed_at set on insert).
                 record.removed_at = now
                 record.removed_by_regno = AUTOMATED_REMOVED_BY
             session.add(record)
             session.flush()
             if decision.should_report:
-                # Idempotent: exactly one automated report per turn. A new turn
-                # cannot already have one, but the check keeps retries safe.
+                # Record automated report idempotently.
                 existing = session.scalar(
                     select(CaseClosedMessageReportRecord.id).where(
                         CaseClosedMessageReportRecord.message_id == message_id,
@@ -465,9 +378,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
             detail="Could not securely store this message.",
         ) from exc
     except Exception as exc:
-        # Bookkeeping failed after a successful moderation result: never treat it
-        # as success. The transaction above rolled back, so no partial row
-        # survives; surface a retryable error (no body/secrets logged).
+        # Surface retryable error if persistence failed after moderation.
         logger.error(
             "Automated moderation bookkeeping failed for new Case Closed message: %s",
             type(exc).__name__,
@@ -477,8 +388,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
             detail="Could not complete moderation for this message.",
         ) from exc
 
-    # Best-effort staff/author notices: failures never unwind the committed
-    # moderation outcome (report + hidden state are already durable).
+    # Best-effort staff and author notifications.
     if automated_report_id is not None:
         try:
             from .staff_notification_service import notify_report_filed
@@ -511,9 +421,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
                 )
 
     if decision.should_hide:
-        # Flagged+hidden: the row stays hidden for audit (report + removed_at
-        # already committed) and is never published, so the partner never sees
-        # it. The caller is told plainly so the frontend shows a violation popup.
+        # Flagged turns remain hidden and trigger violation response.
         logger.info(
             "Case Closed message %s withheld by content safety for %s "
             "(session %s, max=%s action=%s)",
@@ -541,9 +449,7 @@ def send_message(db: Database, user, body: str) -> Dict[str, Any]:
             message_id, session_id,
         )
     logger.info("Case Closed message sent in session %s by %s", session_id, user.id)
-    # `realtime` says whether the live echo went out: the message is stored
-    # either way, so a client that reads the field knows whether the partner's
-    # open socket will show it without the thread being read again.
+    # realtime indicates whether WebSocket echo succeeded.
     return {
         **payload,
         "quota": quota,
@@ -561,13 +467,10 @@ def get_messages(
     with db.sessions() as session:
         game, row = _resolve_thread(session, str(user.id))
         session_id = str(row.id)
-        # Once the game session expires the transcript is no longer readable at
-        # all, even if the next scheduler purge has not touched the rows yet.
+        # Expired sessions withhold transcripts immediately.
         if now >= _session_expiry(row, game):
             return {"messages": [], "total": 0}
-        # A removed turn is invisible on the participant read, which is the only
-        # read there is (its quota weight survives in ``_usage``). ``delete_after``
-        # is the session expiry captured when each turn was written.
+        # Removed turns are excluded from participant transcript reads.
         visible = [
             CaseClosedMessageRecord.session_id == session_id,
             CaseClosedMessageRecord.removed_at.is_(None),
@@ -638,17 +541,7 @@ def get_messages(
 
 
 def report_message(db: Database, user, message_id: str, reason: str) -> Dict[str, Any]:
-    """File a complaint against a partner's detective-thread turn.
-
-    Mirrors matchmaking chat: only the participant who *received* a turn may
-    report it, one report per participant per turn. A report records the
-    complaint and nothing else -- nothing is hidden here. A moderator rules on
-    it from the admin report queue, exactly as for a matchmaking chat message.
-
-    Authorisation reads the couple row directly rather than ``_resolve_thread``:
-    a report has to stay possible after the event closed, which is the same
-    window in which the transcript itself is still readable.
-    """
+    """File a complaint against a partner's detective-thread turn."""
     if not is_valid_id(message_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message ID")
     text = (reason or "").strip()

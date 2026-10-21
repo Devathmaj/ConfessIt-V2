@@ -24,76 +24,40 @@ from .limits import (
 )
 from .accounts import AccountType, capabilities_for, normalize_account_type
 
-# The closed gender vocabulary, as a Pydantic type rather than a validator.
-#
-# A ``Literal`` rather than a ``field_validator`` over a plain ``str`` so the constraint is
-# part of the field's declared type: the generated OpenAPI schema becomes an enum, so the
-# client is handed the three legal values instead of a free-text string it has to guess the
-# contents of, and a value outside the set is a 422 at validation rather than a check some
-# other layer might forget to run.
-#
-# Mirrors ``limits.USER_GENDER_VALUES``, which is what the CHECK constraint and the frontend
-# Select are generated from. All three must agree.
+# Closed ``Literal`` so the OpenAPI schema is an enum and an out-of-set value is a 422 at
+# validation. Mirrors ``limits.USER_GENDER_VALUES`` (CHECK constraint + frontend Select):
+# all three must agree.
 Gender = Literal["male", "female", "other"]
 
-# Same treatment for a participant's year of study, and closed for the same reason: matchmaking
-# groups participants by it, so "2" and "02" would be two cohorts that never meet and no screen
-# could tell them apart.
-#
-# A bounded ``int`` rather than a ``Literal`` of names, because the bounds have to hold a school as
-# well as an undergraduate programme: 1-12 covers Class 1 through Class 12, where a list written
-# out would have had to be extended -- and re-extended in three mirrored places -- for a deployment
-# that differs only in how it spells the same field. The CHECK constraint and the frontend select
-# are generated from the same ``limits`` bounds. All three must agree.
-#
-# ``ge``/``le`` rather than ``Field(..., multiple_of=1)`` or a hand-written membership test because
-# the error they produce names the field and the offending value, which is the whole reason
-# ``Gender`` above is a type and not a validator.
-#
-# Unlike ``department``, which stays a plain string: the departments that exist belong to the
-# institution rather than to this codebase, so enumerating them here would be a guess.
+# Bounded ``int`` (1-12 covers Class 1-12) rather than a name ``Literal``, so a school
+# deployment needs no re-extension in three mirrored places; ``ge``/``le`` errors name the
+# field and the offending value. Not a string, and not open like ``department``: matchmaking
+# groups by year, so "2" and "02" would be two cohorts that never meet.
 Year = Annotated[int, Field(ge=USER_YEAR_MIN, le=USER_YEAR_MAX)]
 
-# Same treatment for interests: an enum on the array's members rather than a hand-written
-# membership test, so "not one of ours" is a validation error naming the offending value.
+# An enum on the array's members rather than a membership test, so "not one of ours" is a
+# validation error naming the offending value.
 Interest = Literal[
     "Music", "Movies", "Reading", "Gaming", "Traveling", "Cooking",
     "Sports", "Art", "Photography", "Dancing", "Writing", "Coding",
 ]
 
 class Cohort(BaseModel):
-    """A ``(year, department)`` pair, as returned by ``/love-notes/cohorts``.
-
-    Modelled rather than left as ``Dict[str, str]`` because that annotation is what hid the type
-    change: Pydantic v2 does not coerce ``int`` into ``str``, so a heterogeneous pair returned under
-    a homogeneous annotation is a ``ResponseValidationError`` -- a 500 on a screen whose only job is
-    to list cohorts. Naming the halves also stops the next caller from re-deriving "which field is
-    the number" from a dictionary.
-
-    ``year`` is a plain ``int`` and not the bounded ``Year`` for the reason ``UserDetails.year`` is:
-    this is a response, and a row that predates the CHECK constraint being validated would turn a
-    legacy out-of-range value into a 500 on a read. Refusing to *write* such a row is the
-    constraint's job; describing one that already exists must not be able to take the endpoint down.
-    """
+    """Structured ``(year, department)`` cohort returned by ``/love-notes/cohorts``."""
     year: int
     department: str
 
 class Token(BaseModel):
-    """
-    Pydantic model for the JWT access token response sent to the client.
-    """
+    """The JWT access token response sent to the client."""
     access_token: str
     token_type: str
 
 
 def _is_non_character(codepoint: int) -> bool:
-    """Unicode non-characters: reserved forever, guaranteed never to be assigned a meaning.
+    """Unicode non-characters: reserved forever, never assigned a meaning.
 
-    There are two families and the second is the one that gets forgotten. Sixty-six of them sit
-    in a contiguous block at U+FDD0-U+FDEF; the rest are the last two code points of every
-    plane, so U+FFFE and U+FFFF in the BMP but also U+1FFFE, U+2FFFE and so on up to
-    U+10FFFE and U+10FFFF. Testing only the BMP pair would accept a text that a reader on a
-    strict implementation is entitled to replace with U+FFFD.
+    Both families: U+FDD0-U+FDEF contiguous, and the last two code points of every plane --
+    testing only the BMP pair would accept text a strict reader may replace with U+FFFD.
     """
     if 0xFDD0 <= codepoint <= 0xFDEF:
         return True
@@ -101,24 +65,11 @@ def _is_non_character(codepoint: int) -> bool:
 
 
 def _reject_unchangeable_characters(value: Optional[str], field_name: str) -> Optional[str]:
-    """Reject text that cannot survive the trip to the database.
+    """Reject text that cannot survive the trip to the database; the length cap covers only half of "storable".
 
-    The length cap is only half of "is this storable". A string can be well within the limit
-    and still be impossible to persist:
-
-    * a NUL byte is rejected by PostgreSQL outright -- ``text`` cannot hold 0x00, and the
-      failure surfaces as an unhandled driver error rather than a validation message;
-    * an unpaired surrogate (U+D800-U+DFFF) cannot be encoded to UTF-8 at all, so the
-      driver raises ``UnicodeEncodeError`` while binding the parameter;
-    * the remaining C0 controls, DEL and the C1 block are storable but have no meaning in a
-      confession, and they are what terminal-escape and log-injection payloads are built from.
-
-    Everything else is allowed on purpose. Emoji, Devanagari, right-to-left text and its
-    directional marks are ordinary content, and a filter that rejected them would be
-    rejecting the people most likely to be confessing in a language that is not English.
-
-    Only *unchangeable* characters are refused here. Content that is merely unwelcome is a
-    moderation question, and moderation already has a screen for it.
+    NUL is rejected by PostgreSQL outright (driver error, not a validation message); unpaired
+    surrogates fail UTF-8 encoding at bind time; other C0/DEL/C1 controls feed escape/injection
+    payloads. Emoji and non-Latin scripts pass on purpose (not a moderation question here).
     """
     if value is None:
         return None
@@ -136,27 +87,11 @@ def _reject_unchangeable_characters(value: Optional[str], field_name: str) -> Op
 
 
 def clean_interests(value: Optional[List[Interest]]) -> Optional[List[Interest]]:
-    """Normalise a submitted interest list, or refuse it.
+    """Normalise a submitted interest list, or refuse it; shared by every intake payload so one rule cannot drift.
 
-    Shared by every payload that accepts interests -- the admin create and update forms and the
-    participant's own profile update -- because a rule about what a participant may hold has to
-    hold identically no matter which door the write came through, and three copies of the same
-    three checks is three chances for one of them to drift.
-
-    Membership is already settled by the ``List[Interest]`` annotation on each field; what is
-    left is what a *list of* them has to mean:
-
-    * a repeat is collapsed rather than stored twice. ``["Music", "Music"]`` is one interest
-      the client sent twice, and storing it verbatim puts two identical badges on somebody's
-      profile and makes an interest count wrong for matchmaking scoring. First occurrence wins,
-      so the stored order stays the order the vocabulary declares.
-    * a list longer than the vocabulary is refused. ``INTEREST_MAX_SELECTED`` is the size of
-      ``INTEREST_VALUES``, so this cannot reject a real selection once the repeats above are
-      gone; it exists so a client posting the same twelve values four times over gets a
-      validation error rather than an array nobody has a sane way to render.
-
-    ``None`` passes through untouched so a caller can distinguish "no interests supplied" from
-    "the empty set"; which of the two reaches the column is decided by the caller.
+    Repeats collapse first-occurrence-wins (kept order matches the vocabulary) and the cap
+    -- equal to the vocabulary size -- exists to catch duplicate-spam lists, never a real
+    selection. ``None`` passes through so callers can tell "none supplied" from "empty set".
     """
     if value is None:
         return None
@@ -173,10 +108,8 @@ class ConfessionCreate(BaseModel):
     """
     Model for creating a confession (input from the client).
 
-    ``recipient_name`` is optional: most confessions are addressed to someone, but a
-    confession is also something a user simply wants to put down. So a blank or absent
-    recipient is stored as NULL rather than rejected -- the client is not asked to invent
-    a name to satisfy a constraint that has no product meaning.
+    A blank/absent ``recipient_name`` is stored as NULL rather than rejected -- the client
+    is not asked to invent a name with no product meaning.
     """
     body: str = Field(max_length=CONFESSION_BODY_MAX)
     anonymous: bool
@@ -189,8 +122,7 @@ class ConfessionCreate(BaseModel):
         if value is None:
             return None
         _reject_unchangeable_characters(value, "recipient_name")
-        # A field the client left blank and a field it left absent mean the same thing,
-        # so both land in the column as NULL rather than as "".
+        # Blank and absent mean the same thing: both land in the column as NULL, not "".
         normalized = value.strip()
         return normalized or None
 
@@ -203,9 +135,8 @@ class ConfessionUpdate(BaseModel):
     """
     Model for updating a confession's settings.
 
-    Both fields are optional, because a patch names only what it changes. An
-    *explicit* null is not an omission, though, and it is refused rather than
-    treated as one -- see the validator below.
+    Both fields optional (a patch names only what it changes); an explicit null is refused,
+    not treated as an omission -- see the validator.
     """
 
     anonymous: Optional[bool] = None
@@ -213,30 +144,11 @@ class ConfessionUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _reject_explicit_nulls(self) -> "ConfessionUpdate":
-        """Refuse a field that was sent as null, as distinct from one that was left out.
+        """Refuse a field sent as null, as distinct from one left out (the service reads ``exclude_unset``).
 
-        Both fields are ``Optional[bool]``, so ``None`` is a legal *value* for them --
-        but it is not a legal *answer*. The two settings are booleans in the database
-        and neither column accepts null, so "off" is ``false`` and there is no third
-        state a client could be asking for.
-
-        Leaving the field out is how a client says "I am not touching this", and that
-        stays allowed: the service reads ``exclude_unset``, so an absent field is
-        never written. Sending the field as ``null`` is a different statement, and it
-        used to be read as one of the two booleans rather than as a mistake:
-
-        * ``comments_enabled: null`` was written into a NOT NULL column, so the
-          request answered 500 -- a server fault for a payload that was simply
-          wrong;
-        * ``anonymous: null`` was read as "not anonymous", which de-anonymised a
-          post that had been posted anonymously, because ``not None`` is ``True``.
-
-        The second is the reason this is refused rather than coerced: there is no
-        safe default to replace a null with, because the two defaults are opposites
-        and one of them is a privacy decision the participant made.
-
-        The refusal is a validation error, so it answers 422 naming the field --
-        rather than a 500 from the database, or a silent change to somebody's post.
+        No safe default exists -- the two defaults are opposites and one is a privacy call.
+        Historical misfires: ``comments_enabled: null`` wrote into the NOT NULL column (500);
+        ``anonymous: null`` read as "not anonymous" (``not None`` is ``True``), de-anonymising a post.
         """
         for field in ("anonymous", "comments_enabled"):
             if field in self.model_fields_set and getattr(self, field) is None:
@@ -252,20 +164,15 @@ class CommentCreate(BaseModel):
     body: str = Field(max_length=COMMENT_BODY_MAX)
 
 class ReportCreate(BaseModel):
-    """
-    Model for creating a report (input from the client).
-    """
+    """Model for creating a report (input from the client)."""
     reason: str = Field(max_length=REPORT_REASON_MAX)
 
 
 class SemanticSearchRequest(BaseModel):
-    """Natural-language semantic search over confessions.
+    """Natural-language semantic search over confessions (text-embedding-3-small + pgvector cosine distance).
 
-    ``query`` is embedded with text-embedding-3-small and ranked by pgvector
-    cosine distance. ``limit`` is bounded so one request can never materialize
-    the whole corpus. Only legitimate public dimensions are supported: ranking
-    is always semantic relevance (no sort picker), and visibility/moderation
-    filters are enforced in SQL, not by the caller.
+    ``limit`` is bounded so one request cannot materialize the whole corpus; visibility and
+    moderation filters are enforced in SQL, never trusted to the caller.
     """
 
     query: str = Field(min_length=1, max_length=1000)
@@ -283,9 +190,8 @@ class SemanticSearchRequest(BaseModel):
 class SemanticSearchResponse(BaseModel):
     """Ranked confessions for a semantic query, in existing public shape.
 
-    Legacy shape for the semantic-only endpoint era; the live endpoint now
-    answers :class:`HybridSearchResponse`. Kept so older clients and tests
-    importing this name do not break.
+    Legacy shape kept so older clients and tests importing this name do not break; the live
+    endpoint answers :class:`HybridSearchResponse`.
     """
 
     confessions: List["Confession"] = Field(default_factory=list)
@@ -308,10 +214,8 @@ class KeywordSearchSection(BaseModel):
 class SemanticSearchSection(BaseModel):
     """Semantic half of a hybrid answer: vector matches with a status.
 
-    ``status`` is ``ok`` when the embedding pipeline ran, otherwise the reason
-    the semantic half is empty: ``disabled`` (flag off), ``unavailable``
-    (misconfigured / blocked / provider error), ``rate_limited`` (budget spent),
-    or ``skipped_short`` (query too short to embed meaningfully).
+    ``status`` is ``ok`` when the embedding pipeline ran, else the reason the half is empty:
+    ``disabled`` / ``unavailable`` / ``rate_limited`` / ``skipped_short`` (query too short to embed).
     """
 
     items: List["Confession"] = Field(default_factory=list)
@@ -323,9 +227,8 @@ class SemanticSearchSection(BaseModel):
 class HybridSearchResponse(BaseModel):
     """One search box, both signals: keyword first, semantic underneath.
 
-    Keyword items never reappear in semantic (deduped). Both lists carry the
-    existing public confession shape; semantic degradation never fails the
-    keyword half.
+    Keyword items never reappear in semantic (deduped); both lists carry the public
+    confession shape; semantic degradation never fails the keyword half.
     """
 
     query: str = ""
@@ -337,28 +240,27 @@ class HybridSearchResponse(BaseModel):
 
 class UserInfo(BaseModel):
     """
-    Represents denormalized user information embedded in comments and posts.
+    Denormalized user information embedded in comments and posts.
 
-    For an anonymous confession the server emits a fixed, non-identifying placeholder
-    (``id="anonymous"``, ``name="Anonymous"``, no photo) rather than the author's real
-    values. The client is not what protects the identity: the fields simply never carry it.
+    For an anonymous confession the server emits a fixed non-identifying placeholder
+    (``id="anonymous"``, ``name="Anonymous"``, no photo) -- the fields never carry the
+    identity, so the client is not what protects it.
     """
     id: str
     name: str
-    # Derived on read from the stored Cloudinary identity, never stored on the post. It is
-    # always None for an anonymous confession, alongside the placeholder name and id.
+    # Derived on read from the stored Cloudinary identity, never stored; always None for
+    # an anonymous confession, alongside its placeholder name and id.
     profile_picture_url: Optional[str] = None
 
 
 class ConfessionComment(BaseModel):
     """
-    Represents a comment on a confession post.
+    A comment on a confession post.
 
-    Participant-scoped: ``likes``/``dislikes``/``reported_by`` are always empty on
-    participant reads -- the caller's own state travels as ``user_reaction`` and
-    ``has_reported`` plus the public counts, so one participant can never enumerate
-    who else voted or reported. Staff surfaces carry the full lists under the same
-    field names.
+    Participant-scoped: ``likes``/``dislikes``/``reported_by`` are always empty on participant
+    reads -- the caller's own state travels as ``user_reaction``/``has_reported`` plus the
+    public counts, so no participant can enumerate who else voted or reported; staff surfaces
+    carry the full lists under the same field names.
     """
     id: str = Field(default_factory=new_id)
     confession_id: str
@@ -383,12 +285,11 @@ class ConfessionComment(BaseModel):
 
 class Confession(BaseModel):
     """
-    Represents a single confession post within the application.
+    A single confession post.
 
-    Participant-scoped: ``reactions``/``reported_by`` are always empty on participant
-    reads -- the caller's own state travels as ``user_reaction`` and ``has_reported``
-    plus the public counts, so one participant can never enumerate who else reacted
-    or reported. Staff surfaces carry the full lists under the same field names.
+    Participant-scoped: ``reactions``/``reported_by`` are always empty on participant reads
+    -- own state travels as ``user_reaction``/``has_reported`` plus public counts; staff
+    surfaces carry the full lists under the same field names.
     """
     id: str = Field(default_factory=new_id)
     body: str
@@ -396,13 +297,12 @@ class Confession(BaseModel):
     anonymous: bool
     comments_enabled: bool
     created_at: Optional[datetime] = None
-    # Omitted (None) for an anonymous confession. Participant responses carry ``is_mine``
-    # instead, so ownership controls never require the client to receive the author's id.
+    # None for an anonymous confession; participant responses carry ``is_mine`` so the
+    # client never needs the author's id.
     author_id: Optional[str] = None
     approved: bool = True
     user_info: Optional[UserInfo] = None
-    # Whether the caller of this response wrote the post. Computed server-side from the
-    # authenticated participant, never from a client-supplied author id.
+    # Whether the caller wrote this post: computed server-side, never a client-supplied id.
     is_mine: bool = False
     report_count: int = 0
     reported_by: List[str] = Field(default_factory=list)
@@ -424,54 +324,11 @@ class Confession(BaseModel):
 class AdminUserCreate(BaseModel):
     """Payload for creating an account in any of the three account tables.
 
-    ``account_type`` is the table the row is written to, and it is the only way an account
-    becomes staff: there is no ``role`` to set, so a payload cannot half-create a staff
-    account by naming a privilege instead of a table.
-
-    ``email`` is required of *every* account type and is declared unconditionally rather than
-    through the validator below: it is a non-null column on all three tables, which is what makes
-    it a property of being an account at all rather than of being a particular kind of one; a
-    moderator nobody can be contacted about is an account that cannot be recovered when its
-    holder leaves.
-
-    ``gender`` is participant-only, and follows the same rule ``year`` and ``department`` do
-    below: optional in the type, required by the validator only when ``account_type`` is
-    ``users``. It is a matchmaking filter on ``users`` and nothing else, so a staff table has no
-    such column -- and a payload required to answer a question about a row that cannot hold the
-    answer is a required field that can only ever be dropped on arrival.
-
-    **Everything an account owns about itself is absent, and the model refuses it by name.**
-    There is no ``profile_picture_url``, no ``bio``, no ``interests``, and none of
-    the four preference flags (``notifications_enabled``, ``matchmaking_enabled``,
-    ``love_notes_receive_enabled``, ``love_notes_send_enabled``). An admin mints the identity
-    of an account -- who it is, which cohort it belongs to, how to reach it -- and the account
-    then fills in the rest itself through ``PUT /profile/update``. Anything an admin does not
-    belong in, therefore, is not merely ignored here: ``extra="forbid"`` turns it into a 422.
-
-    That is the part worth being explicit about. Pydantic's default is ``extra="ignore"``, so a
-    payload carrying ``bio`` would be accepted, the key dropped, and the caller told ``201``.
-    The write would not happen -- so the column would be unreachable either way -- but the
-    response would be a lie about what the request asked for, and an admin watching the list
-    refresh would conclude the bio saved. Forbidding the key is what makes a refused request
-    look refused.
-
-    ``is_blocked`` is gone for the same reason, and blocking keeps its own route
-    (``PUT /admin/users/{id}/block``) with its own confirmation. Block state is not a property
-    you fill in when the account is born; it is a later act, on an existing account, and
-    "create this participant already blocked" is not a thing that needs to exist.
-
-    Every removed column still has a value on the new row, because the database declares the
-    default rather than the payload: ``notifications_enabled``, ``matchmaking_enabled`` and
-    ``love_notes_receive_enabled`` default to true, ``love_notes_send_enabled`` to false, and
-    ``interests`` to the empty set -- see ``db_models.UserRecord``. ``bio`` and
-    ``profile_picture_url`` are nullable and start NULL. The defaults live in one place and are
-    stated identically in Pydantic's ``UserDetails``, so a participant and an admin-created
-    account begin life in the same state.
-
-    The participant-only fields are optional here and required by the validator below only
-    when ``account_type`` is ``users``. Declaring them conditionally in the type system is
-    not something Pydantic can express without a discriminated union, and a union would
-    make the OpenAPI schema unreadable for a payload that is, in practice, one form.
+    ``account_type`` names the table written to and is the only way an account becomes staff;
+    ``email`` is required of every type (a staff row nobody can contact is unrecoverable);
+    ``gender``/``year``/``department`` are validator-required for ``users`` only. Bio/interests/
+    flags/``is_blocked`` are deliberately absent, refused by name via ``extra="forbid"``, filled
+    in by the account itself (``PUT /profile/update``) from the ``UserRecord`` defaults.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -488,16 +345,12 @@ class AdminUserCreate(BaseModel):
     def _require_participant_fields(self) -> "AdminUserCreate":
         if self.account_type is not AccountType.USERS:
             return self
-        # Gender joins the cohort pair below: it is NOT NULL on ``users`` and closed to three
-        # values, so letting it through unset would be a 500 from the insert rather than a
-        # validation message.
+        # NOT NULL on ``users`` and closed to three values; unset would be a 500 from the
+        # insert rather than a validation message.
         if not self.gender:
             raise ValueError("gender is required for a participant account.")
-        # Both halves of what used to be one ``class_name``. Storing "CSE 2nd Year" in a single
-        # column meant the value could only be grouped by whatever a person typed, so two
-        # spellings of the same cohort were two cohorts; requiring them separately is what makes
-        # them independently addressable. The database holds both as NOT NULL, so letting one
-        # through here would be a 500 from the insert rather than a validation message.
+        # Split halves of the old single ``class_name`` (two spellings of one cohort were
+        # two cohorts); both NOT NULL, so a half left unset is a 500 from the insert.
         if not self.year:
             raise ValueError("year is required for a participant account.")
         if not self.department:
@@ -508,12 +361,9 @@ class AdminUserCreate(BaseModel):
 class ConfessionCooldown(BaseModel):
     """How long this participant has to wait before their next confession.
 
-    ``status`` is ``cooldown`` or ``eligible``, which is the same two-word vocabulary
-    ``GET /matchmaking/check`` uses, so a client reading either answer checks one field.
-
-    The seconds are in the response as well as the formatted sentence. The message is what a
-    user reads; the number is what a countdown needs, and a countdown cannot subtract
-    "1 hour and 58 minutes" out of a string that gets re-rounded on every render.
+    ``status`` shares the ``cooldown``/``eligible`` vocabulary of ``GET /matchmaking/check``
+    so a client reading either answer checks one field. Seconds travel beside the formatted
+    sentence: a countdown cannot subtract "1 hour and 58 minutes" from a re-rounded string.
     """
 
     status: str
@@ -524,31 +374,12 @@ class ConfessionCooldown(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
-    """Payload for editing an account that already exists.
+    """Editing an account found by id across all three tables, so one shape edits participant or staff.
 
-    Every field is optional, and the account is found by id across all three tables, so one
-    payload shape edits a participant or a staff account. The editable set is exactly the
-    identity of the account: ``regno``, ``name``, ``email``, and ``gender``, ``year`` and
-    ``department`` for a participant -- the router drops those three for a staff row, for the
-    same reason it drops them from any request that names a moderator: the staff tables have no
-    such columns, and an edit that tried to write one would be a 500 rather than a save.
-
-    There is deliberately no ``account_type`` here. Moving a row between tables is not a
-    field edit: eleven other tables hold foreign keys into ``users`` by both id and regno, so
-    relocating a row would either orphan them or require rewriting every reference under the
-    hood. Which table an account lives in is therefore fixed when it is created; minting a
-    staff account is a create, and demoting one is a matter of not using it.
-
-    For the same reasons as :class:`AdminUserCreate`, there is no ``profile_picture_url``,
-    no ``bio``, no ``interests``, no ``is_blocked``, and none of the four preference
-    flags. A picture is bytes through a participant-only upload route rather than a string
-    named in a JSON body; the profile fields belong to the participant; and blocking is its own
-    route. ``extra="forbid"`` refuses any of them by name rather than accepting the request and
-    dropping the key, so a caller that still sends one is told 422 instead of being answered
-    ``200`` for an edit that never happened.
-
-    ``gender`` is narrowed to the closed vocabulary, so an edit cannot write a value the create
-    payload would have refused.
+    Deliberately no ``account_type``: eleven other tables hold FKs into ``users`` by id and
+    regno, so relocating a row would orphan them -- the table is fixed at creation. No
+    bio/picture/interests/``is_blocked``/flags either; ``extra="forbid"`` refuses them by name
+    (422, not a silent no-op 200); the router drops participant-field edits for staff rows.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -563,29 +394,11 @@ class AdminUserUpdate(BaseModel):
     @field_validator("name", "regno", "gender", "year", "department", "email")
     @classmethod
     def _blank_is_not_a_value(cls, value):
-        """Treat an empty string as "not supplied" rather than as a value to write.
+        """Treat an empty string as "not supplied", never as a value to write.
 
-        Three spellings, three meanings (disambiguated with exclude_unset in the
-        router): absent means "leave alone"; ``""`` (blank/whitespace, e.g. an
-        untouched form field) means "leave alone" -- normalised here to None so
-        the model stays valid; explicit JSON ``null`` also means "leave alone"
-        for these NOT NULL columns and is dropped by the router. None of the
-        three ever becomes a NULL write: ``name``, ``regno``, ``gender``,
-        ``year``, ``department`` and ``email`` are NOT NULL, so writing the
-        ``None`` this validator produces would be a 500 from PostgreSQL rather
-        than a validation message. Dropping the key is the honest reading. See
-        ``update_user_details``, which drops these keys outright as a second
-        line of defence.
-
-        ``bio`` is deliberately absent from this validator and from this model
-        (extra="forbid"): a participant clearing their bio sends ``""`` on the
-        profile path, which must stay ``""`` (or be handled there) and must
-        never be coerced to NULL here.
-
-        ``year`` needs this more than any of the others. The participant-shaped editor submits a
-        ``<select>`` with no blank option, so the only way an empty string arrives is a client
-        that has not caught up with the split; letting it through would fail the year CHECK
-        constraint as a 500 rather than being read as "leave it alone".
+        Three "leave alone" spellings (absent; ``""`` normalised to None here; explicit null
+        dropped by the router) must never become a NULL write: the columns are NOT NULL, so
+        that is a 500 from PostgreSQL. ``bio`` is excluded so an intentional ``""`` stays.
         """
         if isinstance(value, str) and not value.strip():
             return None
@@ -593,25 +406,11 @@ class AdminUserUpdate(BaseModel):
 
 
 class AccountDetails(BaseModel):
-    """The fields every account has, whatever table it lives in.
+    """The fields every account has, whatever table it lives in (every authenticated caller resolves to this shape).
 
-    This is the shape every authenticated caller is resolved to, because the three tables
-    share exactly these columns and nothing more. Participant-only fields are deliberately
-    absent rather than null: an admin has no ``year`` or ``department``, and returning ``null``
-    for them would describe a value the row does not have.
-
-    ``email`` is shared and *required*, like the column underneath it. It used to be optional
-    for a staff account, on the reasoning that creating one is a deliberate act by somebody who
-    already knows the regno and nothing in sign-in needs an address. That turned out to be the
-    wrong trade: a staff row with no address is an account nobody can be contacted about when its
-    holder leaves or loses access, and the fix for that later is far harder than requiring an
-    address at the moment an operator is already typing one. It is NOT NULL on all three tables
-    for the same reason.
-
-    ``gender`` and ``profile_picture_url`` are deliberately absent rather than null, for the
-    same reason ``year`` and ``department`` are: the staff tables have no gender column and no
-    picture columns, so ``null`` here would describe a value the row does not have rather than a
-    value it holds as empty. Both belong to ``UserDetails`` below.
+    Participant-only fields are deliberately absent, not null: staff rows have no such
+    columns, so ``null`` would describe a value the row does not have. ``email`` is required
+    everywhere -- a staff row without an address is one nobody can be contacted about.
     """
     id: str = Field(default_factory=new_id)
     regno: str
@@ -624,8 +423,7 @@ class AccountDetails(BaseModel):
     last_login_user_agent: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    # The account table this row was read from. Not a privilege and not a label: the
-    # privilege answer is ``capabilities`` below, derived from it.
+    # The table this row was read from -- not a privilege; that answer is ``capabilities``.
     account_type: str = AccountType.USERS.value
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
@@ -635,11 +433,8 @@ class AccountDetails(BaseModel):
     def _normalize_stored_account_type(cls, value: Any) -> str:
         """Resolve the account table read out of the database to a defined one.
 
-        Reduced here so every consumer of an account payload -- the ``/auth/me`` response,
-        the conversation payloads, the profile response -- sees one of the three tables and
-        cannot be handed a value that matches no branch. Unrecognised values become
-        ``users``: an account keeps working, it just keeps no privileges it was never
-        validly granted.
+        Unrecognised values become ``users``, so no consumer is handed a value matching no
+        branch -- the account keeps working, just with no privileges it was never granted.
         """
         return normalize_account_type(value)
 
@@ -648,23 +443,18 @@ class AccountDetails(BaseModel):
     def capabilities(self) -> List[str]:
         """The capabilities this account's table grants, as sent to the client.
 
-        Derived on read rather than stored so it cannot drift from ``account_type``. The
-        frontend uses this to decide which moderation screens to render, which keeps the
-        browser's idea of what is allowed in step with the server's without the client
-        holding a second, separately-maintained copy of the privilege table. It is a
-        display concern only: the server re-checks every one of these against the database
-        on every request. Sorted so the value is stable and diffable.
+        Derived (never stored) so it cannot drift from ``account_type``; sorted for stable
+        diffing. Display-only -- the server re-checks every one against the database per request.
         """
         return sorted(capabilities_for(self.account_type))
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def is_staff(self) -> bool:
-        """Whether this account is staff rather than a participant.
+        """Whether this account is staff rather than a participant, for display.
 
-        Sent so the client can hide participant-only screens without re-deriving the rule.
-        The server gates those routes on the account table itself; this is the same answer,
-        for display.
+        The server gates routes on the account table itself; this is the same answer, so the
+        client can hide participant-only screens without re-deriving the rule.
         """
         return bool(capabilities_for(self.account_type)) and self.account_type != AccountType.USERS.value
 
@@ -672,36 +462,18 @@ class AccountDetails(BaseModel):
 class UserDetails(AccountDetails):
     """A participant account: everything in ``AccountDetails`` plus the participant fields.
 
-    Participant routes resolve the caller to *this* model, via a dependency that refuses any
-    account not in the ``users`` table. That is the whole point of the split: a staff
-    account cannot reach a participant feature not because a role string said so, but
-    because there is no row for it in the table the feature reads.
-
-    ``gender`` and ``profile_picture_url`` are declared here rather than on ``AccountDetails``
-    because only ``users`` has the columns underneath them: gender is a matchmaking filter and a
-    picture is uploaded through a participant-only route, so on a staff row both would be
-    answers about columns that do not exist. ``gender`` is required, like the column -- NOT NULL
-    and closed to ``Gender`` by ``ck_accounts_gender``.
-
-    ``interests`` stays a plain list of strings rather than a list of the closed vocabulary,
-    deliberately. A CHECK constraint added by ``apply_check_constraints`` lands ``NOT VALID``,
-    so rows written before it existed keep whatever they held; if this response model refused
-    them, reading one such participant's profile would be a 500 on every request, which is the
-    worst possible place to discover a legacy value. The write paths -- every payload that
-    accepts interests -- enforce the vocabulary, which is where enforcing it does any good.
+    Participant routes resolve via a dependency that refuses any account not in ``users``.
+    ``interests`` and ``year`` stay plain because CHECK constraints added by
+    ``apply_check_constraints`` land NOT VALID: a legacy row can hold out-of-set values, and
+    refusing them in this response model would make every profile read a 500.
     """
     gender: Gender
-    # Derived on read from the stored Cloudinary identity (``profile_picture_public_id`` plus
-    # ``profile_picture_format``), never stored as a URL. Nullable because a participant who has
-    # never uploaded has no picture, which is a real state and not a missing answer.
+    # Derived on read from the stored Cloudinary identity, never stored as a URL. Nullable
+    # because never having uploaded is a real state.
     profile_picture_url: Optional[str] = None
     bio: Optional[str] = None
-    # Both NOT NULL on ``users``, so both are required here. ``year`` is a plain ``int`` rather
-    # than narrowed to ``Year`` for the reason ``interests`` is: a CHECK constraint added by
-    # ``apply_check_constraints`` lands ``NOT VALID``, so a row written before it existed can hold a
-    # year outside the range, and refusing it here would turn reading that participant's profile
-    # into a 500 on every request. The write paths enforce the range, which is where enforcing it
-    # does any good.
+    # Both NOT NULL on ``users``. ``year`` is a plain ``int`` for the same NOT VALID reason
+    # as ``interests`` above: write paths enforce the range, not this read shape.
     year: int
     department: str
     interests: List[str] = Field(default_factory=list)
@@ -710,17 +482,13 @@ class UserDetails(AccountDetails):
     love_notes_send_enabled: bool = False
     last_matchmaking_at: Optional[datetime] = None
     last_confession_at: Optional[datetime] = None
-    # When the participant last changed their profile picture. Read by the profile screen to
-    # show the wait before anybody picks a file; the refusal itself is the conditional UPDATE
-    # on the column, which answers for itself. Nullable because never having uploaded is a
-    # real state -- see ``db_models.UserRecord``.
+    # When the participant last changed their picture; the profile screen shows this wait
+    # before anyone picks a file. Nullable: never having uploaded is a real state.
     last_profile_picture_at: Optional[datetime] = None
 
 
 class LoginToken(BaseModel):
-    """
-    Represents a securely stored authentication token in the database.
-    """
+    """A securely stored authentication token in the database."""
     id: str = Field(default_factory=new_id)
     account_id: str
     account_type: str = AccountType.USERS.value
@@ -744,9 +512,7 @@ class LoginToken(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class LoveNoteTemplate(BaseModel):
-    """
-    Stores predefined templates for Love Notes.
-    """
+    """A predefined Love Notes template."""
     id: str = Field(default_factory=new_id)
     name: str
     image_url: str
@@ -758,12 +524,9 @@ class LoveNoteTemplate(BaseModel):
 class LoveNoteImageIdentity(BaseModel):
     """The durable identity of a love note's image, and nothing derived from it.
 
-    A love note image is an ``authenticated`` Cloudinary object, so the only thing worth keeping
-    about it is *which object it is*. A usable address for it is short-lived, signed by
-    Cloudinary against a token this application mints per viewer, and therefore cannot be stored:
-    it would be a credential in a database column, and in every response that ever read it back.
-    The delivery URL is derived at the moment it is handed out, after the viewer has been
-    authorised -- see ``storage_service.love_note_delivery_url``.
+    A usable address is a short-lived signed URL minted per viewer, so storing one would
+    bake a credential into the column (and into every response reading it back); the URL is
+    derived at hand-out time, after the viewer is authorised.
     """
 
     public_id: str
@@ -773,9 +536,8 @@ class LoveNoteImageIdentity(BaseModel):
 class LoveNote(BaseModel):
     """A love note as it is stored: identity for the image, no address for it.
 
-    ``image`` replaces the ``image_url`` this used to carry. Nothing on the read path takes a
-    stored note and needs an address without first deciding the reader is entitled to one, so
-    holding one here would only invite a caller to hand it out unchecked.
+    ``image`` replaces the ``image_url`` this used to carry -- holding an address here would
+    invite a caller to hand it out unchecked; authorisation happens before any URL is minted.
     """
 
     id: str = Field(default_factory=new_id)
@@ -783,10 +545,8 @@ class LoveNote(BaseModel):
     recipient_id: str
     image: LoveNoteImageIdentity
     body: str
-    # The privacy-safe preview of ``body`` shown to reviewers (see
-    # ``db_models.LoveNoteRecord.moderation_body``). Optional because a failed or
-    # not-yet-run redaction legitimately has no preview to show; the moderation
-    # screen renders an explicit unavailable state rather than reading ``body``.
+    # Privacy-safe preview shown to reviewers (``db_models.LoveNoteRecord.moderation_body``).
+    # Optional: absent redaction renders an explicit unavailable state, never a ``body`` read.
     moderation_body: Optional[str] = None
     anonymous: bool = False
     status: str = "pending_review"
@@ -797,9 +557,7 @@ class LoveNote(BaseModel):
 
 
 class Match(BaseModel):
-    """
-    Represents a match between two users from matchmaking.
-    """
+    """A match between two users from matchmaking."""
     id: str = Field(default_factory=new_id)
     user_1_regno: str
     user_2_regno: str
@@ -809,14 +567,12 @@ class Match(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class Conversation(BaseModel):
-    """
-    Represents a conversation request and its state between two matched users.
-    """
+    """A conversation request and its state between two matched users."""
     id: str = Field(default_factory=new_id)
     match_id: str
     initiator_regno: str
     receiver_regno: str
-    status: str = "pending"  # Can be 'pending' (not requested yet), 'requested' (waiting for response), 'accepted', 'rejected', or 'terminated' (closed by a moderator; readable, not writable)
+    status: str = "pending"  # 'pending', 'requested', 'accepted', 'rejected', or 'terminated' (moderator-closed; readable, not writable)
     requested_at: Optional[datetime] = None  # When initiator clicked "Send Message Request"
     accepted_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -824,9 +580,7 @@ class Conversation(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class Message(BaseModel):
-    """
-    Defines the structure for a single message within a conversation.
-    """
+    """A single message within a conversation."""
     id: str = Field(default_factory=new_id)
     conversation_id: str
     sender_regno: str
@@ -838,16 +592,12 @@ class Message(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
 class ConversationCreate(BaseModel):
-    """
-    Model for creating a conversation request.
-    """
+    """Model for creating a conversation request."""
     match_id: str
 
 
 class Notification(BaseModel):
-    """
-    Represents a notification for a user.
-    """
+    """A notification for a user."""
     id: str = Field(default_factory=new_id)
     recipient_regno: str
     heading: str
@@ -868,40 +618,22 @@ HybridSearchResponse.model_rebuild()
 
 # --- Wordle configuration ------------------------------------------------------
 #
-# Admin-side only. These describe a *puzzle* -- a day, a word, and how the word was chosen --
-# and nothing about playing one: no guess, no attempt, no result, because none of those exist
-# yet and a field here would be a promise the rest of the application does not keep.
+# Admin-side only: a *puzzle* -- a day, a word, where the word came from -- and nothing
+# about playing one (no guess/attempt/result exists yet).
 
-# Same treatment as ``Gender`` above: a ``Literal`` so the generated schema hands the client
-# the two legal modes instead of a free-text string, and a value outside the set is a 422 at
-# validation rather than a check some other layer might forget to run. Mirrors the CHECK
-# constraint on ``wordle_games.mode`` -- all three must agree.
+# A ``Literal`` like ``Gender``: the schema hands the client the two legal modes (422
+# otherwise). Mirrors the CHECK constraint on ``wordle_games.mode``.
 WordleMode = Literal["custom", "random"]
 
 
 class WordleGameCreate(BaseModel):
     """Configuring the answer for one day.
 
-    ``game_date`` is optional and defaults to the current day in UTC, because the usual
-    request *is* "today's puzzle" and making every caller restate the date would be a field
-    that is never anything else. Supplying it is for scheduling a day ahead or correcting a
-    save, and the date -- not the request, and not the row id -- is what identifies the
-    puzzle, so it is the field uniqueness is enforced on.
-
-    ``word`` and ``token`` are both optional in the type and required by the *mode*, which is
-    why neither is a ``model_validator`` here. Whether a word is five letters and on the
-    approved list is a question about the server's own list rather than about the shape of the
-    request, so it is answered in the service with a 400 that says which rule failed; a 422
-    from a length constraint would answer a question this payload is not asking.
-
-    ``token`` is the proof of a draw: the server signed it for exactly this word and date, and
-    ``mode="random"`` without one is refused rather than re-drawn. Re-drawing at save time
-    would mean the answer the admin was shown is not the answer that was published, which is
-    the one outcome this whole flow exists to prevent.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
-    accepted and dropped -- a caller told 201 for a field that never landed is a caller who
-    believes something false about the stored row.
+    ``game_date`` is optional (defaults to today UTC) and, not the request or row id, is what
+    uniqueness is enforced on. ``word``/``token`` are optional in the type, required by the
+    *mode*; word sanity is answered with a 400 naming the rule, not a 422. ``token`` is the
+    proof of a draw: a re-draw at save time would publish an answer the admin never saw;
+    ``extra="forbid"`` so a dropped key never answers 201.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -913,16 +645,12 @@ class WordleGameCreate(BaseModel):
 
 
 class WordleGame(BaseModel):
-    """A Wordle session as it is stored: the day, the word, and where the word came from.
+    """A Wordle session as stored: the day, the word, where the word came from.
 
-    ``answer`` is returned deliberately. This is the administrator's own configuration screen
-    -- the whole point of which is that the admin can see what will be published -- and the
-    endpoint is gated on the capability that may publish it. There is no participant-facing
-    read of this model; when one exists it will not be this one.
-
-    ``answer`` is null while the session is pending (manual mode, word not yet
-    provided). ``status`` is the lifecycle state; ``period_*`` is the calendar
-    period the session covers, which an Update shortens rather than renews.
+    ``answer`` is returned deliberately: this is the admin's configuration screen, gated on
+    the publish capability (no participant-facing read of this model exists). It is null
+    while pending (manual mode, word not yet provided); ``period_*`` is the calendar period,
+    which an Update shortens rather than renews.
     """
 
     id: str
@@ -939,11 +667,8 @@ class WordleGame(BaseModel):
 class WordleDraw(BaseModel):
     """A word the server drew, plus the signature that lets it be saved unchanged.
 
-    The two halves travel together and only the server can produce either: ``word`` is chosen
-    from the approved list here, and ``token`` is an HMAC over that word and the date it was
-    drawn for. The client shows the word, sends both back, and the service re-derives the
-    signature -- so what the admin saw is what gets stored, and nothing the client sends can
-    become an answer the server did not pick.
+    Only the server can produce either: ``token`` is an HMAC over word and date, so what the
+    admin saw is what gets stored -- nothing the client sends can become the answer.
     """
 
     word: str
@@ -952,15 +677,8 @@ class WordleDraw(BaseModel):
 
 # --- Anagram configuration -----------------------------------------------------
 #
-# Admin-side only, and the same boundary the Wordle models above hold: these describe a
-# puzzle -- a day, a word, and where the word came from -- and nothing about playing one.
-# No scramble, no guess, no attempt, no result, because each of those belongs to a
-# *player's* relationship with the puzzle and there is no player-side table yet.
-#
-# ``AnagramMode`` is a ``Literal`` for the reason ``WordleMode`` is: the generated schema
-# hands the client the two legal modes instead of a free-text string, a value outside the
-# set is a 422 at validation, and all three of the payload, the service and the CHECK
-# constraint on ``anagram_games.mode`` agree on the same two words.
+# Admin-side only, same boundary as Wordle: a puzzle and nothing about playing one. Also
+# mirrors the CHECK constraint on ``anagram_games.mode`` -- payload, service and schema agree.
 
 AnagramMode = Literal["custom", "random"]
 
@@ -968,18 +686,10 @@ AnagramMode = Literal["custom", "random"]
 class AnagramGameCreate(BaseModel):
     """Configuring the answer for one day's Anagram.
 
-    ``word`` and ``token`` are both optional here and required by the *mode*, which is why
-    neither is validated above: whether a supplied word is non-empty, letters only and short
-    enough is a rule about the answer rather than about the shape of the request, so it is
-    answered in the service with a 400 that says which rule failed. The minimum length a
-    *random* draw obeys is likewise a rule about the word list, not about this payload.
-
-    ``mode="random"`` carries the word a preview drew together with that draw's token. The
-    server re-derives the signature, so a token minted for another day -- or one a client
-    made up -- is a 400 rather than a second chance to choose the answer.
-
-    ``extra="forbid"`` for the same reason ``WordleGameCreate`` sets it: a key the payload
-    does not carry is refused outright rather than accepted and dropped.
+    ``word``/``token`` are optional in the type, required by the *mode*; word rules (non-empty,
+    letters only, short enough) are answered in the service with a 400 naming the failed rule.
+    ``mode="random"`` must carry the drawn word and its token -- the server re-derives the
+    signature, so a wrong-day or invented token is a 400, not a second draw. ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -991,16 +701,11 @@ class AnagramGameCreate(BaseModel):
 
 
 class AnagramGame(BaseModel):
-    """A configured puzzle as it is stored: the day, the word, and who published it.
+    """A configured puzzle as stored: the day, the word, who published it.
 
-    ``answer`` is returned deliberately, for the reason the Wordle model returns its own:
-    this is the administrator's configuration screen, and the endpoint it comes from is
-    closed to everyone who may not publish. It is always the canonical, uppercase word --
-    never a scramble, because each player's arrangement is generated per user and does not
-    exist yet.
-
-    ``created_by`` is the publishing account's ``regno``, so the list can show who set each
-    day's word without a second lookup.
+    ``answer`` is returned deliberately (admin-only configuration screen) and is always the
+    canonical uppercase word -- each player's scramble is generated per user. ``created_by``
+    is the publisher's ``regno``.
     """
 
     id: str
@@ -1018,11 +723,8 @@ class AnagramGame(BaseModel):
 class AnagramDraw(BaseModel):
     """A word the server drew, plus the signature that lets it be saved unchanged.
 
-    The two halves travel together and only the server can produce either: ``word`` is chosen
-    from the eligible pool here, and ``token`` is an HMAC over that word and the date it was
-    drawn for. The client shows the word, sends both back, and the service re-derives the
-    signature -- so what the admin saw is what gets stored, and nothing the client sends can
-    become an answer the server did not pick.
+    Only the server can produce either: ``token`` is an HMAC over word and date, so nothing
+    the client sends can become an answer the server did not pick.
     """
 
     word: str
@@ -1031,26 +733,14 @@ class AnagramDraw(BaseModel):
 
 # --- Couple configuration ------------------------------------------------------
 #
-# Admin-side only, and a smaller surface than either puzzle above: these describe a
-# *featured date* -- which day the game is active for -- and nothing else. There is
-# no mode, no word, no answer and no per-day content selection, because there is
-# nothing per-day for an administrator to choose: the 50-question bank is shared
-# application content seeded at startup, and a featured date simply marks the game
-# active for that day.
+# Admin-side only: a featured *date* and nothing else -- the 50-question bank is shared
+# seeded content, so there is no mode, word or per-day choice to make.
 
 class CoupleGameCreate(BaseModel):
     """Marking the Couple Prediction game featured for one day.
 
-    ``game_date`` is optional and defaults to the current day in UTC, because the
-    usual request *is* "feature it today" and making every caller restate the date
-    would be a field that is never anything else. Supplying it is for scheduling a
-    day ahead or correcting a save, and the date -- not the request, and not the
-    row id -- is what identifies the featured instance, so it is the field
-    uniqueness is enforced on.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped -- a caller told 201 for a field that never
-    landed is a caller who believes something false about the stored row.
+    ``game_date`` defaults to today UTC and -- not the request or row id -- identifies the
+    featured instance, so it is what uniqueness is enforced on. ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1059,12 +749,10 @@ class CoupleGameCreate(BaseModel):
 
 
 class CoupleGame(BaseModel):
-    """A featured Couple game as it is stored: the day, and who marked it so.
+    """A featured Couple game as stored: the day, and who marked it so.
 
-    There is no answer to return here, because there is nothing per-day to hide:
-    the question bank is shared and static, and the player surface does not exist
-    yet. ``created_by`` is the publishing account's ``regno``, so the list can show
-    who featured each day without a second lookup.
+    Nothing per-day to hide (the bank is shared and static); ``created_by`` is the
+    publisher's ``regno``.
     """
 
     id: str
@@ -1076,20 +764,14 @@ class CoupleGame(BaseModel):
 
 # --- Couple question bank ------------------------------------------------------
 #
-# The static, shared content the featured game runs on. These are read shapes for
-# the bank seeded at startup -- fifty templates naming ``X`` with exactly four
-# options each -- and the answer a participant selected for one of them. There is
-# no player workflow here yet: no pairing, no prediction submission, no scoring,
-# no completion state, no timer. The answer model below is the storage foundation
-# that workflow will later build on.
+# Read shapes for the bank seeded at startup: fifty templates naming ``X`` with four options
+# each, and a participant's selected answer. No player workflow exists yet.
 
 class CoupleGameQuestion(BaseModel):
-    """One bank template as it is stored: the question naming ``X``, its options,
-    and where it sits in the sequence.
+    """One bank template as stored: the question naming ``X``, its options, its position.
 
-    ``options`` is always four entries in display order. ``stable_key`` is the
-    deterministic identity (``couple-q-01`` … ``couple-q-50``) the startup seed
-    uses to decide whether the predefined question already exists.
+    ``options`` is always four entries in display order; ``stable_key`` (``couple-q-01``,
+    ``couple-q-02`` …) is the seed's check for "already exists".
     """
 
     id: str
@@ -1104,10 +786,8 @@ class CoupleGameQuestion(BaseModel):
 class CoupleGameAnswer(BaseModel):
     """The answer one participant selected for one bank question.
 
-    ``selected_option_index`` is positional into the question's four options (0 for
-    the first … 3 for the fourth) rather than a copy of the option text, so the
-    stored answer keeps pointing at the right option even if bank wording is
-    ever corrected.
+    ``selected_option_index`` is positional into the question's options rather than a copy
+    of its text, so a wording correction can never re-point the stored answer.
     """
 
     id: str
@@ -1119,18 +799,12 @@ class CoupleGameAnswer(BaseModel):
 
 
 # --- Couple gameplay -----------------------------------------------------------
-#
-# The participant side of the Couple Questionnaire. The admin models above mark a
-# day as featured and the bank holds the fifty shared templates; everything here
-# describes one player's *place* in that day's game: who they chose, the session
-# a mutual choice created, their own questions, their predictions of their
-# partner, and the score derived from the two. The partner's original answers
-# never travel on a read that is not the completed result -- they are the thing
-# the prediction phase exists to keep hidden.
+# One player's *place* in a featured day: partner choice, own questions, predictions of the
+# partner, the derived score. The partner's originals never travel before the completed
+# result -- hiding them is the point of the prediction phase.
 
-# Where the caller stands in the day's game. The database's CHECK constraint on
-# ``couple_game_sessions.status`` mirrors the three in-session states; the other
-# three describe the absence of a session or of a playable day.
+# Where the caller stands; the CHECK on ``couple_game_sessions.status`` mirrors the three
+# in-session states (the rest mean no session / no playable day).
 CoupleStage = Literal[
     "no_game",
     "selecting_partner",
@@ -1154,9 +828,7 @@ class CouplePartnerCandidate(BaseModel):
 class CouplePartnerPage(BaseModel):
     """One page of partner candidates, with the total behind the current filters.
 
-    An envelope rather than a bare list because the picker pages: ``total`` is
-    what tells the screen how many candidates are left below the page it
-    already holds, so "load more" can say what remains and stop at the end.
+    ``total`` is what tells "load more" how many remain and to stop at the end.
     """
 
     partners: List[CouplePartnerCandidate]
@@ -1168,8 +840,7 @@ class CouplePartnerPage(BaseModel):
 class CoupleSelectionRequest(BaseModel):
     """Choosing a partner: the one user this caller wants to play with.
 
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped, matching ``WordleGuessRequest``.
+    ``extra="forbid"`` -- unknown keys are refused, matching ``WordleGuessRequest``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1180,11 +851,9 @@ class CoupleSelectionRequest(BaseModel):
 class CoupleAnswerRequest(BaseModel):
     """Answering one of this caller's own session questions.
 
-    ``session_question_id`` names the session question -- one of the fifteen this
-    caller was assigned -- and ``selected_option_index`` is positional into its
-    four options. Which session the question belongs to is derived from the
-    caller, never from the payload, so a caller cannot answer into someone
-    else's game by naming its ids.
+    ``session_question_id`` names one of the fifteen questions assigned to this caller; the
+    session is derived from the caller, never the payload, so nobody can answer into someone
+    else's game.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1196,10 +865,8 @@ class CoupleAnswerRequest(BaseModel):
 class CouplePredictionRequest(BaseModel):
     """Predicting the partner's answer to one of the partner's session questions.
 
-    ``session_question_id`` names one of the fifteen questions the *partner*
-    answered, and ``predicted_option_index`` is the caller's guess at which
-    option the partner picked. The verdict is computed server-side against the
-    stored original, so nothing the client sends can mark itself correct.
+    The verdict is computed server-side against the stored original, so nothing the client
+    sends can mark itself correct.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1211,11 +878,8 @@ class CouplePredictionRequest(BaseModel):
 class CoupleQuestionView(BaseModel):
     """One of this caller's own questions, as the answering screen renders it.
 
-    ``question_text`` is already personalised: the bank's ``X`` reads as "you"
-    here, because the person answering is the one being asked about. The stored
-    template is untouched -- this rendering exists only on the read.
-    ``selected_option_index`` is this caller's submitted answer, or null when
-    unanswered.
+    ``question_text`` is personalised on the read (the bank's ``X`` reads as "you"); the
+    stored template is untouched.
     """
 
     session_question_id: str
@@ -1229,10 +893,7 @@ class CoupleQuestionView(BaseModel):
 class CouplePredictionView(BaseModel):
     """One of the partner's questions, as this caller predicts it.
 
-    ``question_text`` names the partner, because the caller is guessing what the
-    partner chose. ``predicted_option_index`` is this caller's submitted
-    prediction, or null when unpredicted. The partner's original answer is never
-    carried here -- not while predicting -- it surfaces only in the completed
+    The partner's original answer never travels here -- it surfaces only in the completed
     review.
     """
 
@@ -1247,10 +908,8 @@ class CouplePredictionView(BaseModel):
 class CoupleReviewItem(BaseModel):
     """One settled prediction, visible only once the session is completed.
 
-    The three halves of the verdict together: what the partner actually picked,
-    what this caller guessed, and whether the two matched. Emitted only in the
-    completed result, which is the single moment the feature exists to reveal the
-    partner's originals.
+    What the partner picked, what the caller guessed, whether they matched -- emitted only
+    in the completed result, the single moment the originals are revealed.
     """
 
     session_question_id: str
@@ -1266,9 +925,8 @@ class CoupleReviewItem(BaseModel):
 class CoupleResultView(BaseModel):
     """The settled score, derived from persisted rows rather than trusted input.
 
-    Each side is scored out of the fifteen predictions they owed: one point per
-    prediction matching the partner's stored original. ``review`` replays this
-    caller's fifteen predictions against those originals.
+    One point per prediction matching the partner's stored original; ``review`` replays the
+    predictions against those originals.
     """
 
     my_score: int
@@ -1299,14 +957,10 @@ class CouplePartnerView(BaseModel):
 class CoupleCurrentState(BaseModel):
     """Where this caller stands in the featured Couple Questionnaire, as the page opens.
 
-    Reading this never creates anything but answers nothing twice: a fresh caller
-    reads ``selecting_partner`` with no selection, a choosing caller reads their
-    pending pick, and a paired caller reads their questions, their predictions or
-    their score depending on how far both sides have played. ``questions`` holds
-    this caller's own fifteen while answering, ``predictions`` the partner's
-    fifteen in stable random order while predicting, and ``result`` the settled
-    score once both sides are done -- each present only in its phase, so a screen
-    renders what it is given rather than deciding what the caller may see.
+    Reading never creates anything. ``questions`` holds this caller's own fifteen while
+    answering, ``predictions`` the partner's fifteen in stable random order, ``result`` the
+    settled score -- each present only in its phase, so the screen renders what it is given
+    rather than deciding what the caller may see.
     """
 
     stage: CoupleStage
@@ -1329,35 +983,20 @@ class CoupleCurrentState(BaseModel):
 
 # --- Anagram gameplay ----------------------------------------------------------
 #
-# The player-facing half of Anagram. The admin models above describe a puzzle -- a day, a
-# word, where the word came from -- and these describe one player's *place* in that
-# puzzle: their private scramble, their guesses, whether they are done, and how long they
-# have actually played. ``anagram_games.answer`` never travels on a participation that is
-# still in progress; it is present only on a completed one, which is the single moment the
-# feature exists to reveal it.
+# One player's *place* in a puzzle: private scramble, guesses, time actually played. The
+# answer travels only on a completed participation -- the single moment it may be revealed.
 
-# Whether a participation is still being played or has been settled. The database's CHECK
-# constraint on ``anagram_user_games.status`` mirrors this set; all three must agree.
+# Played vs settled; the CHECK constraint on ``anagram_user_games.status`` mirrors this set.
 AnagramStatus = Literal["in_progress", "won", "lost"]
 
 
 class AnagramParticipation(BaseModel):
-    """One player's place in one day's puzzle: their scramble, their guesses, their time.
+    """One player's place in one day's puzzle: scramble, guesses, time actually played.
 
-    ``scrambled_word`` is the private permutation this player was dealt at reveal: the
-    tiles on their screen, in the order they arrived. It is dealt once and never re-dealt,
-    so a returning player -- refresh, navigation, logout and back -- always sees the same
-    tiles.
-
-    ``active_time_seconds`` is finished timing segments, summed; ``timer_started_at`` opens
-    the current segment and is NULL while paused or finished. ``timer_running`` restates
-    "there is an open, non-stale segment" as one boolean so the screen knows whether to
-    tick or to offer RESUME without doing clock arithmetic of its own. The client still
-    owns the visible ticking; the server owns every number that persists.
-
-    ``answer`` is the reveal. It is NULL on a participation still in progress and set only
-    once the game is over -- and then only a loss needs it shown, since a winner already
-    typed it. The service is the only place that decides when it is no longer a secret.
+    ``scrambled_word`` is dealt once, never re-dealt. ``active_time_seconds`` sums finished
+    segments; ``timer_running`` restates "an open, non-stale segment" so the screen ticks or
+    offers RESUME without clock arithmetic. ``answer`` is shown on completion only for a loss
+    (the winner typed it); the service decides when it stops being a secret.
     """
 
     anagram_game_id: str
@@ -1381,12 +1020,9 @@ class AnagramParticipation(BaseModel):
 class AnagramCurrentGame(BaseModel):
     """Today's puzzle and this player's participation, as the game screen opens.
 
-    ``game_id`` and ``game_date`` are nullable because there may be *no* playable puzzle:
-    an administrator has not published anything, or published one ahead and the day has not
-    arrived. ``participation`` is NULL until the player presses REVEAL WORD -- reading the
-    screen must not create a row, or opening it twice would start two timers' worth of
-    confusion. ``max_attempts`` is carried so the screen can draw its attempts line without
-    a second round trip and without hardcoding the shape of the game in the client.
+    Nullable ids because there may be no playable puzzle. ``participation`` is NULL until
+    REVEAL WORD -- reading must not create a row, or opening twice would start two timers.
+    ``max_attempts`` is carried so the screen draws its attempts line without a round trip.
     """
 
     game_id: Optional[str] = None
@@ -1400,13 +1036,9 @@ class AnagramCurrentGame(BaseModel):
 class AnagramActionRequest(BaseModel):
     """Starting, pausing or checkpointing one puzzle for this player.
 
-    ``game_id`` names the puzzle -- the one the player was shown -- so a stale screen
-    cannot start a timer on yesterday's game after midnight has moved the current one on.
-    The three timer transitions share this one shape because they differ only in which
-    segment edge they move; the guess, which also scores, carries its own payload below.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
-    accepted and dropped, matching ``WordleGuessRequest``.
+    ``game_id`` is the puzzle the player was shown, so a stale screen cannot start a timer
+    on yesterday's game after midnight. The three timer transitions share this shape;
+    ``extra="forbid"`` as on ``WordleGuessRequest``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1417,14 +1049,9 @@ class AnagramActionRequest(BaseModel):
 class AnagramGuessRequest(BaseModel):
     """Guessing one arrangement against one puzzle.
 
-    ``game_id`` names the puzzle the guess is for -- the one the player was shown -- and
-    ``guess`` is submitted raw. The uppercase letters-only normalisation happens in the
-    service rather than on the model, because the reason a guess is refused (not letters,
-    wrong length, not a rearrangement of the puzzle at all) is meant to reach the client as
-    a readable 400 rather than a generic 422 about the field's shape.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
-    accepted and dropped, matching ``WordleGuessRequest``.
+    ``guess`` is submitted raw; normalisation and refusal reasons happen in the service so
+    they reach the client as a readable 400, not a generic 422 about field shape.
+    ``extra="forbid"`` as on ``WordleGuessRequest``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1436,10 +1063,8 @@ class AnagramGuessRequest(BaseModel):
 class AnagramGuessResponse(AnagramParticipation):
     """A participation after one guess, plus the verdict the guess earned.
 
-    The extra pair is redundant -- a correct guess is always the tail of ``guesses`` -- but
-    the toast needs the *one* outcome that just happened, and re-deriving "was the last
-    guess right" client-side is exactly the trust-the-client the server exists to avoid.
-    ``guess`` restates the submitted arrangement and ``correct`` whether it matched.
+    ``correct`` is redundant with the tail of ``guesses``, but the toast needs the one
+    outcome -- re-deriving it client-side is exactly the trust-the-client trap.
     """
 
     guess: str
@@ -1448,38 +1073,25 @@ class AnagramGuessResponse(AnagramParticipation):
 
 # --- Wordle gameplay --------------------------------------------------------------
 #
-# The participant side of the game. Everything these models describe is derived from two
-# tables -- ``wordle_games`` and ``wordle_user_games`` -- and the one rule that binds them:
-# a participant has at most one attempt at a puzzle, enforced by the unique pair. ``answer``
-# never travels on a row that is still being played: it is present only on a completed
-# participation, which is the single moment the feature exists to reveal it.
+# One participant's attempt: at most one per puzzle (unique pair). The answer travels only
+# on a completed participation -- the single moment it may be revealed.
 
 
-# A tile's colour accounts for one letter of one guess, rated against the day's answer.
-# Closed like the genders above: the client renders exactly these three, and a value outside
-# the set is a 422 rather than a colour some screen has to guess at.
+# A tile's colour for one guess letter. Closed like ``Gender``: the client renders exactly
+# these three; anything else is a 422 rather than a guessed colour.
 WordleTile = Literal["absent", "present", "correct"]
 
-# Whether a participation is still being played or has been settled. The database's CHECK
-# constraint on ``wordle_user_games.status`` mirrors this set; all three must agree.
+# Played vs settled; the CHECK constraint on ``wordle_user_games.status`` mirrors this set.
 WordleStatus = Literal["in_progress", "won", "lost"]
 
 
 class WordleParticipation(BaseModel):
-    """One player's place in one day's puzzle: how far they got, and what got them there.
+    """One player's place in one day's puzzle: guesses and per-letter verdicts.
 
-    ``guesses`` is the played history in order and ``results`` its per-letter verdicts in
-    the same order and at the same length, so the screen renders the board straight from
-    the pair. Results are re-derived on every read rather than stored, which is why there
-    is exactly one history and why a re-reading client cannot receive a verdict that
-    disagrees with the letters above it.
-
-    ``answer`` is the reveal. It is NULL on a participation still in progress and set only
-    once the game is over -- a completed puzzle has nothing left to hide, and the answer is
-    the one field a player who lost the game is owed. The service is the only place that
-    decides when it is no longer a secret, and that decision is what the GET and POST
-    handlers share rather than restating. ``success`` restates ``status = 'won'`` as a
-    boolean so a loss -- which also finishes the game -- is not mistaken for a win.
+    ``results`` is re-derived on every read at the same order/length as ``guesses``, so a
+    re-reading client cannot see a verdict disagreeing with the letters above it. ``answer``
+    is owed only to a finished game (the loser reads it); ``success`` restates
+    ``status = 'won'`` so a finished loss is not mistaken for a win.
     """
 
     wordle_game_id: str
@@ -1500,17 +1112,10 @@ class WordleParticipation(BaseModel):
 class WordleCurrentGame(BaseModel):
     """Today's puzzle and this player's participation, as the game screen opens.
 
-    ``game_id`` and ``game_date`` are nullable because there may be *no* playable puzzle:
-    an administrator has not published anything, or published one ahead and the day has not
-    arrived. ``participation`` is NULL until the player commits a first guess -- reading the
-    board must not create a row, or opening the screen twice would count as two attempts.
-
-    ``session_status`` mirrors the session lifecycle: ``pending`` means today's
-    word has not been configured yet and the board is not playable, in which
-    case ``message`` carries the sentence the screen shows.
-
-    ``max_attempts`` and ``word_length`` are carried so the screen can draw its empty board
-    without a second round trip and without hardcoding the shape of the game in the client.
+    Nullable ids because there may be no playable puzzle. ``participation`` is NULL until
+    the first guess commits -- reading must not create a row, or opening twice would count
+    two attempts. ``session_status='pending'`` means today's word is not configured;
+    ``max_attempts``/``word_length`` spare the screen a round trip.
     """
 
     game_id: Optional[str] = None
@@ -1525,15 +1130,9 @@ class WordleCurrentGame(BaseModel):
 class WordleGuessRequest(BaseModel):
     """Guessing one word against one puzzle.
 
-    ``game_id`` names the puzzle the guess is for -- the one the player was shown -- and
-    ``guess`` is submitted raw. The five-letter lowercase normalisation happens in the
-    service rather than on the model, because the reason a guess is refused (length, case,
-    not a word at all) is meant to reach the client as a readable 400 rather than a generic
-    422 about the field's shape -- see the message on ``WordleGameCreate`` for the same
-    choice.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright rather than
-    accepted and dropped, matching ``WordleGameCreate``.
+    ``guess`` is submitted raw; normalisation and refusal reasons (length, case, not a word)
+    answer as a readable 400 from the service, not a generic 422 about field shape.
+    ``extra="forbid"`` matching ``WordleGameCreate``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1545,11 +1144,9 @@ class WordleGuessRequest(BaseModel):
 class WordleGuessResponse(WordleParticipation):
     """A participation after one guess, plus the verdict the guess earned.
 
-    The extra pair is redundant with the tail of ``results`` -- the new guess is always its
-    own last row -- but both the toast and the keyboard need the *one* verdict that just
-    happened, and munging the last row back out of the history is the kind of off-by-one
-    the server should not make the client do. ``guess`` and ``result`` restate the last
-    entry of ``guesses`` and ``results`` explicitly.
+    ``result`` is redundant with the tail of ``results``, but the toast and keyboard need the
+    one verdict that just happened -- munging the last row out of the history is off-by-one
+    the client should not be asked to perform.
     """
 
     guess: str
@@ -1557,18 +1154,14 @@ class WordleGuessResponse(WordleParticipation):
 
 
 # --- Game configuration, featured games, scheduling and selection ---------------
-#
-# The admin and player surfaces of the separated model. Configuration owns
-# per-game availability and cadence, featured owns the one-spotlight-per-day
-# schedule, scheduled content owns future manual words inside the finite
-# horizon, and the selection response is what ``GET /games/select`` serves so a
-# screen never has to re-derive availability client-side.
+# Configuration owns availability/cadence, featured owns the one-spotlight-per-day schedule,
+# scheduled words own future manual words; the selection response spares the screen
+# re-deriving availability client-side.
 
 GameResetCadence = Literal["daily", "every_2_days", "every_3_days", "every_5_days", "weekly"]
 GameContentMode = Literal["random", "manual"]
-# The difficulty vocabulary the automated AI pipeline reads for Plot Twist and
-# Case Closed. It mirrors ``limits.PLOT_TWIST_DIFFICULTIES``; the service layer
-# re-validates server-side, so this literal only shapes the API contract.
+# The difficulty the AI pipeline reads for Plot Twist / Case Closed; mirrors
+# ``limits.PLOT_TWIST_DIFFICULTIES`` (the service re-validates; this shapes the contract).
 GameDifficulty = Literal["easy", "medium", "hard"]
 GameId = Literal["wordle", "anagram", "couple-questionnaire", "reaction-time", "connections", "trivia-drop", "two-key-escape", "plot-twist", "case-closed"]
 
@@ -1581,12 +1174,10 @@ class GameConfig(BaseModel):
     is_hidden: bool = False
     content_mode: Optional[GameContentMode] = None
     reset_cadence: GameResetCadence = "daily"
-    # The Two-Key Escape maze edge length. None for every other game: it is
-    # that game's own knob, not a second content mode, and no other screen
-    # may read or write it.
+    # Two-Key Escape maze edge length (None elsewhere): that game's own knob, not a
+    # second content mode.
     grid_size: Optional[int] = None
-    # The difficulty the automated generation pipeline uses for the next
-    # Plot Twist / Case Closed cycle. None for every other game.
+    # Difficulty the generation pipeline uses for the next Plot Twist / Case Closed cycle.
     difficulty: Optional[GameDifficulty] = None
 
 
@@ -1655,10 +1246,8 @@ class ScheduledWordCreate(BaseModel):
 class GameSelectEntry(BaseModel):
     """One game as the selection screen sees it: visibility and playability.
 
-    Hidden games never appear here at all -- the list carries only what the
-    caller may discover. ``playable`` is false for disabled games and for
-    games with no configured session, and ``message`` is the sentence the
-    screen shows for either case.
+    Hidden games never appear at all; ``playable`` is false for disabled games and games
+    with no configured session, with ``message`` the sentence to show for either.
     """
 
     game_id: str
@@ -1680,23 +1269,14 @@ class GameSelectResponse(BaseModel):
 
 # --- Reaction Time configuration ------------------------------------------------
 #
-# Admin-side only, and the smallest surface of any game: these describe a
-# *featured date* -- which day holds the spotlight -- and nothing else. There
-# is no mode, no word, no answer, no timing range, no difficulty and no
-# attempt budget, because the mechanics are fixed by the application and the
-# sessions roll on the game's own cadence with a fresh five-submission budget
-# per player per session. Featuring never touches a session.
+# Admin-side only: a featured date and nothing else -- mechanics are fixed by the app;
+# sessions roll on the game's own cadence and featuring never touches a session.
 
 class ReactionTimeGameCreate(BaseModel):
-    """Featuring the Reaction Time game for one day.
+    """Featuring the Reaction Time game for one day (defaults to today UTC).
 
-    ``game_date`` is optional and defaults to the current day in UTC, because
-    the usual request *is* "feature it today". One game holds the spotlight
-    per date across all games, so a day that already features anything is
-    refused.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped.
+    One game holds the spotlight per date across all games, so an already-featured day
+    is refused; ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1715,26 +1295,19 @@ class ReactionTimeGame(BaseModel):
 
 
 # --- Reaction Time gameplay -----------------------------------------------------
-#
-# The participant side of the game. Sessions roll on the game's own cadence
-# whether or not the day is featured; everything here describes one player's
-# *place* in the current session: their five-or-fewer submissions, each born
-# pending on the blue-screen click and settled later as valid (a click after
-# green, carrying the client-measured reaction time) or too early (a click
-# before green, carrying only informational elapsed time that is never a
-# score).
+# One player's *place* in the current session: at most five submissions, each born pending
+# on the blue-screen click and settled valid or too_early; a too_early elapsed time is
+# never a score.
 
-# Whether a submission is still waiting for its result or has been settled.
-# Mirrors the CHECK constraint on ``reaction_time_submissions.status``.
+# Pending vs settled; mirrors the CHECK constraint on ``reaction_time_submissions.status``.
 ReactionTimeStatus = Literal["pending", "valid", "too_early"]
 
 
 class ReactionTimeAttempt(BaseModel):
     """One submission, as the player screen renders it.
 
-    ``reaction_time_ms`` is set only on ``valid`` rows; ``elapsed_ms`` only on
-    ``too_early`` rows, where it says how quickly the user clicked after the
-    red/waiting state began rather than any kind of score.
+    ``reaction_time_ms`` set only on ``valid``; ``elapsed_ms`` only on ``too_early``
+    (informational, never a score).
     """
 
     submission_id: str
@@ -1751,14 +1324,9 @@ class ReactionTimeAttempt(BaseModel):
 class ReactionTimeState(BaseModel):
     """Where this caller stands in the current Reaction Time session, as the page opens.
 
-    Reading this never creates anything: a fresh caller reads zero submissions
-    and a blue start screen, a returning caller reads the submissions they
-    left -- including a ``pending`` one when they navigated away mid-attempt,
-    which still counts as consumed. A new session means a fresh budget of
-    five. ``best_ms`` is the minimum valid reaction time and ``average_ms``
-    the mean of valid reaction times only; both are null when the caller has
-    no valid attempt yet. Every number here is derived server-side from the
-    stored submissions, never trusted from the client.
+    Reading never creates anything; a ``pending`` submission left mid-attempt still counts
+    as consumed. ``best_ms``/``average_ms`` cover valid attempts only and stay null until
+    one exists; every number is derived server-side, never trusted from the client.
     """
 
     game_id: Optional[str] = None
@@ -1778,10 +1346,8 @@ class ReactionTimeState(BaseModel):
 class ReactionTimeStartRequest(BaseModel):
     """Starting one attempt: the blue-screen click that consumes a submission.
 
-    ``game_id`` names the session -- the one the player was shown -- so a
-    stale screen cannot start an attempt on an ended session. The attempt
-    number is assigned server-side from the stored count, never from the
-    payload, because there is no payload field that could honestly know it.
+    ``game_id`` names the session the player was shown, so a stale screen cannot start on an
+    ended one; attempt numbers are server-assigned, never sent by the client.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1792,14 +1358,10 @@ class ReactionTimeStartRequest(BaseModel):
 class ReactionTimeCompleteRequest(BaseModel):
     """Settling a pending attempt with its measured result.
 
-    ``submission_id`` names the pending submission this caller owns; settled
-    rows are immutable, so a second submit for the same id is refused rather
-    than overwritten. ``status="valid"`` carries the client-measured
-    ``reaction_time_ms`` (green transition until click); ``status="too_early"``
-    carries only the informational ``elapsed_ms`` (red start until the early
-    click), which is never a score. Bounds are enforced in the service with a
-    readable 400; the column CHECKs guard writes that never went through the
-    API.
+    ``submission_id`` names the pending submission this caller owns; settled rows are
+    immutable, so a second submit is refused. ``valid`` carries the client-measured
+    ``reaction_time_ms``; ``too_early`` carries only ``elapsed_ms`` (informational, never a
+    score). Bounds are a readable 400 in the service; column CHECKs guard non-API writes.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1814,12 +1376,8 @@ class ReactionTimeCompleteRequest(BaseModel):
 
 # --- Plot Twist -------------------------------------------------------------------
 #
-# The participant side and the admin side of the asynchronous cooperative
-# storytelling game. Admin models describe generation (blueprint config,
-# approval, package publication); player models describe one couple's place
-# in the published story (current scene, whose turn, history, outcome).
-# Scores and leaderboard subjects travel through the existing league
-# service, never through these models.
+# Admin models describe generation (config, approval, publication); player models describe
+# one couple's place in the published story. Scores travel through the league service only.
 
 PlotTwistStage = Literal[
     "no_game",
@@ -1833,9 +1391,8 @@ PlotTwistStage = Literal[
 class PlotTwistGenerationConfig(BaseModel):
     """Parameters for Stage A blueprint generation.
 
-    Only ``difficulty`` is required -- and the only knob the admin UI
-    offers. Everything else is optional so tests and power users may pin
-    it while the console stays a single difficulty picker.
+    Only ``difficulty`` is required (the admin UI's single knob); the rest exist so tests
+    and power users can pin values.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1925,11 +1482,8 @@ class PlotTwistResultView(BaseModel):
 class PlotTwistCurrentState(BaseModel):
     """This caller's place in Plot Twist, as the page opens.
 
-    Reading never creates gameplay rows: partner selection reuses the
-    questionnaire's mutual-selection storage, and the session row is created
-    on entering the event or submitting the first choice. Hidden future
-    scenes and the other participant's pending choice never travel here --
-    only the current scene, whose turn it is, and settled history.
+    Reading never creates gameplay rows. Hidden future scenes and the partner's pending
+    choice never travel here -- only the current scene, whose turn, and settled history.
     """
 
     stage: PlotTwistStage
@@ -1947,10 +1501,8 @@ class PlotTwistCurrentState(BaseModel):
 class PlotTwistChoiceSubmitRequest(BaseModel):
     """Submitting the assigned turn's choice.
 
-    ``state_version`` is optimistic concurrency: it must match the stored
-    version, so a stale screen cannot overwrite newer game state. A repeat
-    submit of an already-recorded turn resolves to the stored outcome
-    instead of applying consequences twice.
+    ``state_version`` is optimistic concurrency (must match the stored version); a repeat
+    submit of a recorded turn resolves to the stored outcome rather than applying twice.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2041,26 +1593,16 @@ class CaseClosedConfirmRequest(BaseModel):
 
 # --- Connections configuration --------------------------------------------------
 #
-# Admin-side only, and the same boundary the Wordle models hold: these describe a
-# puzzle -- sixteen words in four canonical answer groups -- and nothing about
-# playing one. No scores, no scrambles, no arrangements, because each of those
-# belongs to a *player's* relationship with the puzzle. There is no random mode:
-# every session needs an administrator to supply its own sixteen words, and a
-# session with no valid puzzle stays pending and unplayable rather than drawing
-# anything.
+# Admin-side only: a puzzle -- sixteen words in four canonical answer groups -- and nothing
+# about playing one. No random mode: every session needs its own admin-supplied puzzle.
 
 class ConnectionsPuzzleCreate(BaseModel):
     """Configuring one Connections puzzle: sixteen words in four groups of four.
 
-    ``groups`` holds the four canonical answer groups in order; each group is
-    exactly four words. Words are submitted raw -- the service trims them,
-    refuses empties and duplicates (case-insensitively), and stores both the
-    display spelling and the normalized spelling comparison runs on. Omitted
-    entirely, the update instead consumes the earliest scheduled puzzle inside
-    the new window, or opens the session pending when the window holds none.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped.
+    Words are submitted raw; the service trims, refuses empties/duplicates (case-insensitive)
+    and stores both display and normalised spellings. ``groups`` omitted (update path)
+    consumes the earliest scheduled puzzle in the new window, or opens the session pending.
+    ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2069,14 +1611,11 @@ class ConnectionsPuzzleCreate(BaseModel):
 
 
 class ConnectionsGame(BaseModel):
-    """A Connections session as it is stored: the day, its puzzle, its lifecycle.
+    """A Connections session as stored: the day, its puzzle, its lifecycle.
 
-    ``groups`` is returned deliberately -- this is the administrator's own
-    configuration screen, and the endpoint it comes from is closed to everyone
-    who may not publish. There is no participant-facing read of this model.
-    ``groups`` is empty while the session is pending (manual content not yet
-    provided). ``status`` is the lifecycle state; ``period_*`` is the calendar
-    period the session covers.
+    ``groups`` is returned deliberately (admin-only configuration screen; no participant-
+    facing read). Empty while pending (manual content not yet provided); ``period_*`` the
+    calendar period.
     """
 
     id: str
@@ -2109,28 +1648,16 @@ class ConnectionsScheduledPuzzleCreate(BaseModel):
 
 
 # --- Connections gameplay -------------------------------------------------------
-#
-# The participant side of the game. The admin models above describe a puzzle --
-# sixteen words and where each belongs -- and these describe one player's
-# *place* in that puzzle: the shuffled tiles they were dealt and whether they
-# have submitted. The canonical groups never travel on any of these reads;
-# ``words`` is display spellings only, in this player's own stable shuffled
-# order. Scores are computed and persisted server-side but never returned to
-# the player -- the submit response is a confirmation and nothing more.
+# One player's *place*: the tiles they were dealt (display spellings in their stable
+# shuffled order -- the canonical groups never travel) and whether they submitted. Scores
+# persist server-side but are never returned to the player.
 
 class ConnectionsCurrentGame(BaseModel):
     """Today's puzzle and this player's submission state, as the screen opens.
 
-    ``game_id`` and ``game_date`` are nullable because there may be *no*
-    playable puzzle: no session, or a pending session still waiting for its
-    puzzle. ``words`` is this player's stable shuffled tile order -- empty
-    when there is nothing playable or once they have submitted. ``submitted``
-    is whether this player already consumed their one submission for this
-    session; a submitted player reads a confirmation rather than a board.
-
-    ``session_status`` mirrors the session lifecycle: ``pending`` means the
-    puzzle has not been configured yet, in which case ``message`` carries the
-    sentence the screen shows.
+    Nullable ids because there may be no playable puzzle. ``words`` is this player's stable
+    shuffled order (empty once submitted); ``submitted`` marks the one submission consumed.
+    ``session_status='pending'`` means the puzzle is not configured yet.
     """
 
     game_id: Optional[str] = None
@@ -2144,14 +1671,8 @@ class ConnectionsCurrentGame(BaseModel):
 class ConnectionsSubmitRequest(BaseModel):
     """Submitting one final arrangement against one puzzle.
 
-    ``game_id`` names the puzzle the arrangement is for -- the one the player
-    was shown -- and ``groups`` is the player's final assignment as four lists
-    of four words each. Words are submitted as displayed; the service
-    normalizes and validates them against the stored puzzle (all sixteen
-    distinct puzzle words exactly once, no unknown words).
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped.
+    Words are submitted as displayed; the service normalises and validates against the
+    stored puzzle (all sixteen distinct words exactly once, no unknowns). ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2163,10 +1684,8 @@ class ConnectionsSubmitRequest(BaseModel):
 class ConnectionsSubmitResponse(BaseModel):
     """The confirmation a submitted player reads -- and all they read.
 
-    Deliberately carries no score, no correctness, and no answer key: not how
-    many groups or words were correct, not which groups matched, not the
-    canonical memberships. Those values are persisted server-side for a future
-    leaderboard, never returned here.
+    No score, correctness or answer key here: those are persisted server-side for a future
+    leaderboard and never returned.
     """
 
     game_id: str
@@ -2177,15 +1696,8 @@ class ConnectionsSubmitResponse(BaseModel):
 
 # --- Trivia Drop configuration --------------------------------------------------
 #
-# Admin-side only, and the same boundary the other puzzle models hold: these
-# describe a question -- its text, its four options, its correct-option set --
-# and nothing about answering one. There is no reset cadence and no
-# random-content mode: each question carries its own release schedule and
-# becomes an individual live session.
-#
-# The answer mode is derived, never configured: exactly one correct option is
-# a single-answer question, more than one is multiple-answer. No payload here
-# carries a mode, so no mode can disagree with the key.
+# Admin-side only: a question and its correct-option key, and nothing about answering one.
+# The answer mode is derived from the key's size, never configured, so no mode can disagree.
 
 TriviaDropAnswerMode = Literal["single", "multiple"]
 TriviaDropReleaseMode = Literal["now", "scheduled", "draft"]
@@ -2201,19 +1713,12 @@ class TriviaDropOption(BaseModel):
 
 
 class TriviaDropQuestionCreate(BaseModel):
-    """Authoring one Trivia Drop question: text, four options, the correct set.
+    """Authoring one Trivia Drop question: text, options, the correct set.
 
-    ``correct_indexes`` names the correct options by their 0-3 positions into
-    ``options`` -- one or more, with at least one required. Whether the
-    question plays single- or multiple-answer is derived from how many are
-    named, so no mode is configured. ``release_mode="now"`` deploys
-    immediately (ending any live question); ``"scheduled"`` needs
-    ``scheduled_for`` and waits for the scheduler; ``"draft"`` stores it for
-    later. Options are submitted raw; trimming, emptiness, duplicates and
-    key-membership are all answered in the service with a 400.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped.
+    ``correct_indexes`` are 0-3 positions; the single/multiple answer mode is derived from
+    how many are named. ``release_mode``: ``now`` deploys immediately (ending any live
+    question), ``scheduled`` waits for the scheduler, ``draft`` stores for later. Raw
+    options are validated in the service with a 400. ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2226,14 +1731,11 @@ class TriviaDropQuestionCreate(BaseModel):
 
 
 class TriviaDropQuestion(BaseModel):
-    """A Trivia Drop question as it is stored: text, options, key, lifecycle.
+    """A Trivia Drop question as stored: text, options, key, lifecycle.
 
-    ``correct_indexes`` is returned deliberately -- this is the
-    administrator's own configuration screen, and the endpoint it comes from
-    is closed to everyone who may not publish. ``answer_mode`` restates
-    "one correct" vs "several correct" so the console can label the question
-    without counting. ``scheduled_for`` is the intended release;
-    ``released_at`` the authoritative activation instant, written once.
+    ``correct_indexes`` returned deliberately (admin-only configuration screen); ``answer_
+    mode`` restates one-vs-several correct so the console need not count. ``released_at`` is
+    the authoritative activation instant, written once.
     """
 
     id: str
@@ -2251,14 +1753,10 @@ class TriviaDropQuestion(BaseModel):
 
 
 class TriviaDropQuestionUpdate(BaseModel):
-    """Editing a draft: text, options and the correct set, all replaceable.
+    """Editing a draft: fields supplied replace their stored counterpart wholesale.
 
-    Only drafts with no submissions may be edited -- anything live or answered
-    is immutable for its session, and corrections arrive as a new question.
-    Every field supplied replaces its stored counterpart wholesale, so the
-    four-option invariant and the key-membership rule are re-validated as one.
-
-    ``extra="forbid"`` for the same reason the create payload sets it.
+    Only drafts with no submissions may be edited (live/answered are immutable; corrections
+    arrive as a new question). ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2271,11 +1769,8 @@ class TriviaDropQuestionUpdate(BaseModel):
 class TriviaDropScheduleRequest(BaseModel):
     """Scheduling (or rescheduling) one question's release.
 
-    The instant is stored as UTC; the admin screen labels the control as UTC
-    so an entered time converts consistently rather than by the operator's
-    local clock.
-
-    ``extra="forbid"`` for the same reason the create payload sets it.
+    Stored as UTC, and the admin screen labels the control UTC so conversion does not ride
+    the operator's local clock. ``extra="forbid"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2285,12 +1780,8 @@ class TriviaDropScheduleRequest(BaseModel):
 
 # --- Trivia Drop gameplay -------------------------------------------------------
 #
-# The participant side of the game. The admin models above describe questions;
-# these describe one player's *place* in the live one. The correct-option set
-# never travels on any of these reads: the live question carries display
-# options plus the derived mode (single vs multiple) the screen needs to
-# render its instruction and its controls, and nothing that names the key --
-# not the correct indexes, not even how many of them there are.
+# One player's place in the live question. The correct-option set never travels: display
+# options plus the derived mode only -- not the key, not even how many correct options exist.
 
 class TriviaDropPublicOption(BaseModel):
     """One answer option as a player sees it: its stable index and its text."""
@@ -2302,12 +1793,8 @@ class TriviaDropPublicOption(BaseModel):
 class TriviaDropCurrentQuestion(BaseModel):
     """The live question and this player's submission state, as the screen opens.
 
-    ``question_id`` is null when no question is live -- the waiting state, not
-    a puzzle to invent. ``options`` are display only; ``answer_mode`` tells the
-    screen whether to render "Select one answer" with single-selection or
-    "Select all that apply" with multi-selection. ``submitted`` is whether
-    this player already consumed their one submission for this question; a
-    submitted player reads a confirmation rather than a board.
+    ``question_id`` is null in the waiting state; ``answer_mode`` picks single vs
+    multi-selection controls. ``submitted`` marks the one submission consumed.
     """
 
     question_id: Optional[str] = None
@@ -2323,17 +1810,10 @@ class TriviaDropCurrentQuestion(BaseModel):
 class TriviaDropSubmitRequest(BaseModel):
     """Answering the live question: one complete selection in one request.
 
-    ``question_id`` names the question -- the one the player was shown -- and
-    ``selected_indexes`` is the whole selection: one index for a
-    single-answer question, the complete set for a multiple-answer one.
-    Several checked boxes never become several requests; the one request is
-    the one submission. Normalization and key comparison happen in the
-    service, so the reason a selection is refused reaches the client as a
-    readable 400 rather than a generic 422.
-
-    ``extra="forbid"`` so a key the payload does not carry is refused outright
-    rather than accepted and dropped -- in particular no client-supplied
-    correctness, score, timestamp or user id is accepted here.
+    ``selected_indexes`` is the whole selection (one index, or the full set for
+    multiple-answer). Normalisation and key comparison happen in the service, so reasons
+    reach the client as a readable 400. ``extra="forbid"`` keeps out any client-supplied
+    correctness, score, timestamp or user id.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2345,9 +1825,8 @@ class TriviaDropSubmitRequest(BaseModel):
 class TriviaDropSubmitResponse(BaseModel):
     """The confirmation an answered player reads -- and all they read.
 
-    Deliberately carries no correctness and no response time while the
-    question is live: those would expose the key to other users. They are
-    persisted server-side and surface on the ended question's results.
+    No correctness or response time while the question is live: those would expose the key;
+    they are persisted server-side and surface on the ended question's results.
     """
 
     question_id: str
@@ -2359,10 +1838,9 @@ class TriviaDropSubmitResponse(BaseModel):
 class TriviaDropLeaderboardEntry(BaseModel):
     """One ranked submission on an ended question's results.
 
-    Correct answers rank above incorrect ones, faster correct responses above
-    slower ones, with the authoritative submission instant breaking ties.
-    ``selected_indexes`` is the player's own complete selection, echoed so a
-    historical result stays reconstructable without a second lookup.
+    Correct ranks above incorrect, faster above slower, with the submission instant breaking
+    ties. ``selected_indexes`` is echoed so the historical result stays reconstructable
+    without a second lookup.
     """
 
     rank: int
@@ -2375,12 +1853,7 @@ class TriviaDropLeaderboardEntry(BaseModel):
 
 
 class TriviaDropMySubmission(BaseModel):
-    """This caller's own settled answer on one question.
-
-    A slice of the leaderboard entry without rank or identity: whether it was
-    correct, how long after release it landed, and the complete selection it
-    carried.
-    """
+    """This caller's own settled answer on one question: correct, response time, selection."""
 
     is_correct: bool
     response_time_ms: int
@@ -2391,10 +1864,8 @@ class TriviaDropMySubmission(BaseModel):
 class TriviaDropPreviousQuestion(BaseModel):
     """The most recently ended question, with its answer key revealed.
 
-    The key belongs to history once the session ends, so this is public to
-    players -- unlike the live question, which never names it. Empty
-    (``question_id`` null) when no question has ended yet, in which case the
-    screen shows nothing at all.
+    The key belongs to history once the session ends, so this is player-visible (unlike the
+    live question, which never names it); null ids when nothing has ended yet.
     """
 
     question_id: Optional[str] = None
@@ -2408,13 +1879,10 @@ class TriviaDropPreviousQuestion(BaseModel):
 
 
 class TriviaDropResults(BaseModel):
-    """An ended question with its key revealed and its leaderboard settled.
+    """An ended question with its key revealed and leaderboard settled.
 
-    Served only once the session has ended: the correct indexes and the
-    per-submission correctness would expose the live key, so a live question
-    is never answered here. ``my_submission`` is this caller's own entry, or
-    null when they never answered; ``leaderboard`` is every accepted
-    submission in rank order.
+    Served only once ended: the key and per-submission correctness would expose a live key.
+    ``leaderboard`` is every accepted submission in rank order.
     """
 
     question_id: str
@@ -2428,14 +1896,9 @@ class TriviaDropResults(BaseModel):
     leaderboard: List[TriviaDropLeaderboardEntry] = []
 
 # --- Two-Key Escape ------------------------------------------------------------
-#
-# The participant side of the cooperative maze. One global session period owns
-# a single maze template (edge length, seed, walls, locked cells); each
-# mutually selected couple owns one live overlay on it. Roles are submitted
-# then finalized: each side confirms one of ``navigator`` / ``key_operator``,
-# and the assignment becomes real only when both are stored and distinct.
-# Clients submit actions (move, key), never state; the service validates and
-# commits each one atomically under row lock.
+# One global period owns one maze template; each couple owns a live overlay on it. Roles
+# finalize only when both sides' choices are stored and distinct; clients submit actions,
+# never state.
 
 TwoKeyEscapeRole = Literal["navigator", "key_operator"]
 TwoKeyEscapeDirection = Literal["up", "down", "left", "right"]
@@ -2466,11 +1929,10 @@ class TwoKeyEscapeKeyRequest(BaseModel):
 
 
 class TwoKeyEscapeKeyView(BaseModel):
-    """One key as the Key Operator sees it: the lock it is spent on.
+    """One key as the Key Operator sees it.
 
-    Keys are reusable -- every use costs the cooldown and a Navigator move
-    -- so there is no spent state. Which lock each key *opens* stays hidden:
-    only trial reveals the mapping.
+    Keys are reusable (cooldown plus a Navigator move per use), so there is no spent state
+    and which lock each opens stays hidden until trial reveals the mapping.
     """
 
     key_index: int
@@ -2481,10 +1943,8 @@ class TwoKeyEscapeKeyView(BaseModel):
 class TwoKeyEscapeResultView(BaseModel):
     """The settled couple result, finalized exactly once at the exit.
 
-    ``elapsed_seconds`` is the whole ranking: seconds from the first valid
-    move to the exit, including any time away. ``total_moves`` and
-    ``total_keys`` are progress facts, never tiebreaks. There is no score:
-    no other game carries one.
+    ``elapsed_seconds`` (first valid move to exit, time away included) is the whole
+    ranking; move/key counts are progress facts, never tiebreaks. There is no score.
     """
 
     completed: bool
@@ -2495,25 +1955,19 @@ class TwoKeyEscapeResultView(BaseModel):
 
 
 class TwoKeyEscapeState(BaseModel):
-    """This caller`s place in the couple`s maze, as the page opens and after
-    every write. Reading this never creates an escape game for a caller with
-    no couple session; the first confirmed role submission creates it.
+    """This caller's place in the couple's maze, as the page opens and after every write.
 
-    ``stage`` is ``no_couple`` (no mutual-selection session yet),
-    ``selecting_roles`` (roles unfinalized, with both sides` confirmed
-    choices carried so a conflict names itself), ``playing`` or
-    ``completed``. The board (walls, locked, blocked, player, exit, keys,
-    cooldown, movement gate) is the same authoritative overlay for both
-    participants; ``my_role`` is the caller`s own finalized role, or null
-    before finalization.
+    Reading never creates an escape game; the first confirmed role submission does.
+    ``stage`` is ``no_couple`` / ``selecting_roles`` / ``playing`` / ``completed``; the board
+    is the same authoritative overlay for both participants, and ``my_role`` is the caller's
+    own finalized role (null before finalization).
     """
 
     stage: Literal["no_couple", "selecting_roles", "playing", "completed"]
     game_id: Optional[str] = None
     session_id: Optional[str] = None
-    # This caller's pending questionnaire partner choice, if they made one.
-    # Choosing here and choosing in the Couple Questionnaire are the same
-    # act on the same row, so a pair formed in either game opens the other.
+    # Pending questionnaire partner choice: choosing here and in the Couple Questionnaire
+    # is the same act on the same row.
     my_selection: Optional[CoupleSelectionView] = None
     partner: Optional[CouplePartnerView] = None
     my_role: Optional[TwoKeyEscapeRole] = None
@@ -2539,11 +1993,10 @@ class TwoKeyEscapeState(BaseModel):
 
 
 class TwoKeyEscapeLeaderboardEntry(BaseModel):
-    """One couple`s standing in the current period, in rank order.
+    """One couple's standing in the current period, in rank order.
 
-    Completed couples rank above incomplete ones; among completed, the
-    shorter start-to-finish time wins. There is no score: no other game
-    carries one.
+    Completed couples rank above incomplete; among completed, the shorter start-to-finish
+    time wins. No score: no other game carries one.
     """
 
     rank: int
@@ -2556,12 +2009,8 @@ class TwoKeyEscapeLeaderboardEntry(BaseModel):
 
 # --- League leaderboards ------------------------------------------------------
 #
-# The unified scoring layer across all games. Individual boards rank users;
-# couple boards rank canonical pairs; per-game boards rank one game's
-# normalized contribution. Scores are server-calculated league points read
-# from the persisted award ledger -- the frontend never computes them.
-# ``native`` carries performance numbers only (attempts, times, correctness):
-# answers, words, prompts and selections never travel through these models.
+# Scores are server-calculated league points read from the persisted award ledger -- the
+# frontend never computes them. ``native`` carries performance numbers only, never answers.
 
 LeaguePeriod = Literal["daily", "weekly", "monthly", "all_time"]
 LeagueCompetitionType = Literal["individual", "couple"]
@@ -2638,13 +2087,10 @@ class GameCategoryInfo(BaseModel):
 
 
 class GameCategoryEntry(BaseModel):
-    """One ranked row on a category board.
+    """One ranked row on a category board: individual or canonical-couple identity.
 
-    Identity is individual (user_id) or canonical couple (member pair).
-    ``metrics`` carries the category's documented ranking and supporting
-    values (counts, averages, bests -- never an ambiguous mixed `score`);
-    ``records`` carries the underlying finalized detail rows (words, times,
-    questions) where the category defines them.
+    ``metrics`` carries the category's documented ranking and supporting values (never an
+    ambiguous mixed "score"); ``records`` carries the underlying finalized detail rows.
     """
 
     rank: int
@@ -2682,9 +2128,8 @@ class GameCategoryMe(BaseModel):
 class GameRecordHighlight(BaseModel):
     """One game's headline record board and its current top row.
 
-    The admin overview reads these, so an operator sees "fastest time",
-    "fewest guesses" and the like without opening every game's board.
-    ``entry`` is null when the game has no finalized result yet.
+    Spares the admin overview opening every game's board; ``entry`` is null when the game
+    has no finalized result yet.
     """
 
     game_id: str
@@ -2718,11 +2163,8 @@ class LeagueSummary(BaseModel):
 
 # --- Player activity summary ---------------------------------------------------
 #
-# The caller's own play history for the Games dashboard. Composed from the
-# games' native participation tables (see services/player_stats.py) rather
-# than the league ledger, so a round played today shows immediately instead
-# of waiting for finalization. Performance numbers only: answers, words,
-# scrambles, prompts and selections never travel through these models.
+# Composed from native participation tables (services/player_stats.py) rather than the
+# league ledger, so a round played today shows before finalization. Performance numbers only.
 
 
 class PlayerRecentPlay(BaseModel):
@@ -2748,11 +2190,9 @@ class PlayerGameSummary(BaseModel):
 
 
 # --- Games console telemetry ---------------------------------------------------
-#
-# The admin overview's play figures. Composed by the same collectors as the
-# player summary (see services/player_stats.py), so "a finished round" is
-# defined once and the console cannot disagree with a player's own history.
-# Only counts travel: no answers, prompts, words or identities.
+# Composed by the same collectors as the player summary (services/player_stats.py), so
+# "a finished round" is defined once and the console cannot disagree with it. Only counts
+# travel: no answers, prompts, words or identities.
 
 
 class GamePlayTotals(BaseModel):
@@ -2767,10 +2207,8 @@ class GamePlayTotals(BaseModel):
 class GameStatsSummary(BaseModel):
     """Live play telemetry across every game, for the games console overview.
 
-    ``players_*`` counts distinct people, not sessions: a couple round is one
-    play but two players. ``games`` carries only titles with at least one
-    finished round, since a game nobody has played contributes nothing to the
-    play panels.
+    ``players_*`` counts distinct people, not sessions (a couple round is one play, two
+    players); ``games`` lists only titles with at least one finished round.
     """
 
     server_date: date

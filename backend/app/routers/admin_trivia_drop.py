@@ -36,14 +36,12 @@ def create_trivia_question(
 ) -> TriviaDropQuestion:
     """Author one question: draft it, schedule it, or deploy it right now.
 
-    ``release_mode="now"`` validates everything and activates the question in
-    the same transaction, ending any live question. ``"scheduled"`` needs a
-    future ``scheduled_for`` and waits for the release loop. ``"draft"``
-    stores it for later. The answer mode is derived from how many correct
-    options are named -- it is never configured separately.
-
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken
-    from the payload: an administrator cannot publish a question attributed to
+    ``release_mode="now"`` validates everything and activates the question in the same
+    transaction, ending any live question; ``"scheduled"`` needs a future
+    ``scheduled_for`` and waits for the release loop; ``"draft"`` stores it for later.
+    The answer mode is derived from how many correct options are named -- never
+    configured separately. The caller's ``regno`` is recorded as ``created_by``, not
+    taken from the payload: an administrator cannot publish a question attributed to
     somebody else.
     """
     return trivia_service.create_question(
@@ -152,9 +150,9 @@ def list_trivia_questions(
 ) -> Dict[str, Any]:
     """One page of every question, newest first, with the total beside it.
 
-    ``status`` optionally narrows to a lifecycle subset so the screen reads its small
-    working set (drafts, scheduled, live) separately from its unbounded history
-    (ended, cancelled) instead of loading the bank to split it by hand.
+    ``status`` optionally narrows to a lifecycle subset (draft, scheduled, active,
+    ended, cancelled) so the screen reads its small working set separately from its
+    unbounded history instead of loading the bank to split it by hand.
     """
     statuses = [part.strip() for part in (status or "").split(",") if part.strip()] or None
     return trivia_service.list_questions(db, skip=skip, limit=limit, statuses=statuses)

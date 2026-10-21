@@ -1,38 +1,9 @@
-"""Playing the Reaction Time game: the participant-facing half of the feature.
+"""Participant gameplay for Reaction Time.
 
-Sessions are opened by the reset loop under the game's own cadence and are
-independent of the featured spotlight: a session exists -- and is playable --
-whether or not Reaction Time is featured today, exactly like the other
-games. This module is everything that happens *afterwards*: reading the
-current session's game without creating anything, consuming one of the five
-per-session submissions on the blue-screen click, and settling the pending
-attempt as a valid reaction or a false start.
-
-Four rules hold at the bottom of everything here.
-
-**One start click is one consumed submission.** The pending row is born the
-moment the blue screen is clicked -- ``POST /start`` inserts it -- so the
-submission is spent before the red wait even begins. A false start still
-consumed its submission, because the attempt had already started; only
-completed valid reactions count toward best/average.
-
-**Five submissions per user per session, enforced in the database.** The
-attempt number is assigned server-side from the stored count, and a
-``UniqueConstraint(game, user, attempt_number)`` plus an
-``attempt_number BETWEEN 1 AND 5`` check hold the shape. Creation runs under
-a transaction-scoped advisory lock keyed by session and user, so two rapid
-starts serialize instead of both reading "four used" and minting attempts
-five and six. A new session means a fresh budget of five.
-
-**Completed rows are immutable.** Settling a pending attempt writes it once;
-a second submit for the same id is refused rather than overwritten, so a
-``too_early`` can never become ``valid`` and a reaction time can never be
-edited after the fact.
-
-**Statistics come from the rows, never from the client.** Best is the minimum
-valid reaction time, average the mean of valid reaction times only, and both
-are null when the caller has no valid attempt. The frontend measures with a
-high-resolution clock; the backend validates the bounds and persists.
+Sessions follow the game's own cadence, independent of the featured spotlight.
+Each start consumes one of five database-enforced attempts; advisory locking
+serializes starts per user and session. Completed attempts are immutable, and
+best/average use valid stored rows only.
 """
 
 from datetime import datetime, timezone

@@ -1,20 +1,4 @@
-"""Shared embed + vector-query + threshold + dedupe for hybrid search.
-
-One function serves both the public and the staff hybrid paths so the two cannot
-drift: the same normalization, short-query skip, per-bucket rate budget, model /
-dimension validation, cosine-distance query, similarity floor, top-K cap, and
-keyword-dedupe run everywhere. Only visibility differs by caller:
-
-* users pass ``include_removed=False`` and no extra filters;
-* admins pass ``include_removed=True`` plus the active status-filter clauses.
-
-Returns ``(candidates, status)`` where each candidate is
-``(confession_id, distance, similarity)`` ordered by relevance, and ``status``
-is one of ``ok | disabled | unavailable | rate_limited | skipped_short``.
-Blank or over-long queries raise :class:`EmbeddingError` (``invalid_input``)
-so routers still answer 422; every other failure degrades to a status with an
-empty candidate list instead of failing the whole request.
-"""
+"""Shared embed, vector-query, and thresholding helpers for hybrid search."""
 
 from typing import Any, Callable, Sequence
 
@@ -84,9 +68,7 @@ def get_semantic_candidates(
 
     min_similarity = float(_settings.EMBEDDING_MIN_SIMILARITY)
     top_k = max(1, min(int(cap or 1), int(_settings.EMBEDDING_SEMANTIC_TOP_K)))
-    # Over-fetch so a caller that dedupes in Python (rather than in SQL via
-    # exclude_ids) still fills the promised top-K after dropping overlaps.
-    # The return is always truncated back to top_k.
+    # Over-fetch so Python-side deduplication can still meet top_k.
     fetch = min(top_k + max(0, int(fetch_extra or 0)), 100)
     # Cosine distance for normalized embeddings is ``1 - cosine_similarity``.
     max_distance = 1.0 - min_similarity
@@ -127,7 +109,5 @@ def get_semantic_candidates(
         except (TypeError, ValueError):
             continue
         candidates.append((str(row_id), dist, 1.0 - dist))
-    # Up to ``fetch`` rows: exactly top_k when the caller dedupes in SQL via
-    # exclude_ids, or top_k plus spare rows when the caller dedupes in Python
-    # against results that only exist after a concurrent query finishes.
+    # Return candidates capped at fetch limit for caller deduplication.
     return candidates, "ok"

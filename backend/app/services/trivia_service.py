@@ -1,27 +1,4 @@
-"""Configuring Trivia Drop questions: text, options, key, and release.
-
-The rows this writes are *questions* -- text, four options, which of them are
-correct -- and each released question is its own session. There is no attempt,
-no selection and no score here, because none of those exist yet: every write
-below is an administrator publishing something, and none of it is ever
-triggered by a participant.
-
-**There is no reset cadence and no random mode.** Each question carries its
-own release: ``now`` deploys immediately (ending any live question),
-``scheduled`` waits for the release loop, ``draft`` waits for an explicit
-decision. A question with no release stays invisible -- the scheduler never
-invents content, and the player surface never serves a board for one.
-
-**The answer mode is derived, never configured.** Exactly one correct option
-is a single-answer question, more than one is multiple-answer. No payload
-carries a mode, so no mode can disagree with the key.
-
-**Live and answered questions are immutable.** Only a draft with no
-submissions may be edited; anything released or answered is history, and
-corrections arrive as a new question. Scheduling never ends the current
-session early -- the previous question ends when the new one actually goes
-live, in the same transaction, so the two are never live together.
-"""
+"""Question authoring, scheduling, and lifecycle management for Trivia Drop."""
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -49,12 +26,7 @@ def _now() -> datetime:
 
 
 def _as_utc(moment: datetime) -> datetime:
-    """Interpret a naive timestamp as UTC; pass aware ones through.
-
-    The admin screen labels its release control as UTC, so a naive
-    ``datetime-local`` value converts consistently rather than by the
-    operator's local clock. Storage stays UTC end to end.
-    """
+    """Ensure datetime has UTC timezone."""
     if moment.tzinfo is None:
         return moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc)
@@ -82,11 +54,7 @@ def validate_question_text(raw: object) -> str:
 
 
 def validate_options(raw_options: object) -> List[str]:
-    """Four trimmed, distinct option texts, or why they cannot be published.
-
-    Duplicates are compared after trimming and lowercasing, so "Mars",
-    " mars " and "MARS" are one option rather than three.
-    """
+    """Validate and return four trimmed, distinct option texts."""
     if not isinstance(raw_options, list) or len(raw_options) != TRIVIA_OPTIONS_COUNT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -118,12 +86,7 @@ def validate_options(raw_options: object) -> List[str]:
 
 
 def validate_correct_indexes(raw: object) -> List[int]:
-    """The correct-option set as sorted unique indexes, or why it is invalid.
-
-    At least one correct option is required; every index must name one of the
-    four options. Duplicates are normalized away -- naming an option twice is
-    the same key stated twice, not a second correct answer.
-    """
+    """Validate and return sorted unique indices for correct options."""
     if not isinstance(raw, list) or not raw:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -175,8 +138,7 @@ def _as_model(
 
 
 def _active_row(session) -> Optional[TriviaDropQuestionRecord]:
-    """The one live question, or None. The partial unique index says there is
-    at most one; this read never assumes it, it just takes the first."""
+    """Return the active question row, or None."""
     return session.scalar(
         select(TriviaDropQuestionRecord)
         .where(TriviaDropQuestionRecord.status == "active")
@@ -185,12 +147,7 @@ def _active_row(session) -> Optional[TriviaDropQuestionRecord]:
 
 
 def _get_row(session, question_id: str) -> TriviaDropQuestionRecord:
-    """One question by id, or why it cannot be named.
-
-    A malformed id is a 400 and a well-formed one that matches nothing is a
-    404, so a typo in a URL and a withdrawn question are told apart rather
-    than both reported as "not found".
-    """
+    """Fetch question row by ID or raise HTTPException."""
     if not is_valid_id(question_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Trivia Drop question id"
@@ -233,18 +190,7 @@ def _attach_options(session, question_id: str, options: List[str], correct: List
 
 
 def _activate(session, row: TriviaDropQuestionRecord, moment: datetime) -> None:
-    """End the live question, if any, and activate ``row`` -- atomically.
-
-    The previous session stops accepting answers in the same transaction the
-    new one goes live, so there is no window in which both accept answers and
-    no window in which the game is accidentally dark. The caller holds the
-    game's advisory lock; the partial unique index is the backstop behind it.
-
-    The end is flushed before the activation is written: the unit of work
-    makes no promise about statement order inside one flush, and an INSERT of
-    the new live row emitted before the UPDATE ending the old one would trip
-    the single-active index on a transition that is perfectly legal.
-    """
+    """End any live question and activate the target question."""
     current = _active_row(session)
     if current is not None and str(current.id) != str(row.id):
         _end_row(current, moment)
@@ -253,10 +199,7 @@ def _activate(session, row: TriviaDropQuestionRecord, moment: datetime) -> None:
     row.released_at = moment
     row.ended_at = None
     session.flush()
-    # Snapshot the released question's league opportunity in the same
-    # transaction: the featured designation awards multiply later is the one
-    # in force at release. Best-effort -- publishing must never fail on
-    # league bookkeeping, and the due scan backfills any miss.
+    # Snapshot the released question's league opportunity.
     from . import league_finalization
 
     league_finalization.snapshot_opened_safely(
@@ -265,12 +208,7 @@ def _activate(session, row: TriviaDropQuestionRecord, moment: datetime) -> None:
 
 
 def _check_schedule_conflict(session, scheduled_for: datetime, exclude_id: Optional[str] = None) -> None:
-    """Refuse a release time another scheduled question already holds.
-
-    Two questions for one instant would race the activation -- one replacing
-    the other within the same run -- so the ambiguity is refused up front and
-    the administrator picks distinct times instead.
-    """
+    """Ensure no duplicate scheduled question exists at the given release time."""
     query = select(TriviaDropQuestionRecord).where(
         TriviaDropQuestionRecord.status == "scheduled",
         TriviaDropQuestionRecord.scheduled_for == scheduled_for,
@@ -296,13 +234,7 @@ def create_question(
     created_by: str,
     now: Optional[datetime] = None,
 ) -> TriviaDropQuestion:
-    """Author one question: store it, and optionally release it right away.
-
-    ``release_mode="now"`` validates everything and deploys in the same
-    transaction, ending any live question. ``"scheduled"`` needs a future
-    ``scheduled_for`` and waits for the release loop. ``"draft"`` stores it
-    for later. The whole exchange runs under the game's advisory lock.
-    """
+    """Create a new trivia question in draft, scheduled, or active status."""
     from sqlalchemy import text as _text
 
     from .game_configs import game_lock_key
@@ -350,8 +282,7 @@ def create_question(
             if release_mode == "now":
                 _activate(session, row, moment)
             result = _as_model(row, _options_for(session, str(row.id)))
-        # Deploying now deliberately ends the live question, so its awards
-        # finalize now rather than waiting for the next reset run.
+        # Finalize previous question awards immediately on deployment.
         if release_mode == "now":
             from . import league_finalization
 
@@ -372,13 +303,7 @@ def update_draft(
     options: Optional[List[str]] = None,
     correct_indexes: Optional[List[int]] = None,
 ) -> TriviaDropQuestion:
-    """Revise a draft in place: text, options and key are all replaceable.
-
-    Only a draft with no submissions may be edited. Anything released or
-    answered is immutable for its session -- corrections arrive as a new
-    question, because rewriting a live key would invalidate the correctness
-    already recorded against it.
-    """
+    """Update question text, options, and key for an uncommitted draft."""
     with db.sessions.begin() as session:
         row = _get_row(session, question_id)
         if row.status != "draft":
@@ -420,12 +345,7 @@ def update_draft(
 
 
 def deploy_question(db: Database, question_id: str, now: Optional[datetime] = None) -> TriviaDropQuestion:
-    """Deploy one draft or scheduled question right now ("Deploy Now").
-
-    Ends the live question, if any, and activates this one in the same
-    transaction. Atomic under the game's advisory lock, so a Deploy racing a
-    scheduled release cannot leave two live questions.
-    """
+    """Deploy and immediately activate a draft or scheduled question."""
     from sqlalchemy import text as _text
 
     from .game_configs import game_lock_key
@@ -447,8 +367,7 @@ def deploy_question(db: Database, question_id: str, now: Optional[datetime] = No
                 )
             _activate(session, row, moment)
             result = _as_model(row, _options_for(session, str(row.id)))
-        # Deploying deliberately ends the live question, so its awards
-        # finalize now rather than waiting for the next reset run.
+        # Finalize previous question awards immediately on deployment.
         from . import league_finalization
 
         league_finalization.finalize_game_safely(db, "trivia-drop")
@@ -463,11 +382,7 @@ def deploy_question(db: Database, question_id: str, now: Optional[datetime] = No
 def schedule_question(
     db: Database, question_id: str, scheduled_for: datetime, now: Optional[datetime] = None
 ) -> TriviaDropQuestion:
-    """Hold one draft for a future release. The live question is untouched.
-
-    Scheduling never ends the current session: the previous question ends
-    when this one actually goes live, not when it is scheduled.
-    """
+    """Schedule a draft question for future release."""
     from sqlalchemy import text as _text
 
     from .game_configs import game_lock_key
@@ -480,10 +395,7 @@ def schedule_question(
             detail="A scheduled release must be in the future.",
         )
     with db.sessions.begin() as session:
-        # Same advisory lock as create/deploy/release (ENG-005): the conflict
-        # check is read-then-write, so two concurrent schedules for one instant
-        # would both pass it and both land. Serialized, the loser re-reads the
-        # winner's committed row and gets the 409 it was promised.
+        # Hold advisory lock across conflict check and update.
         session.execute(
             _text("SELECT pg_advisory_xact_lock(:key)"),
             {"key": game_lock_key("trivia-drop")},
@@ -517,9 +429,7 @@ def reschedule_question(
             detail="A scheduled release must be in the future.",
         )
     with db.sessions.begin() as session:
-        # Same advisory lock as create/deploy/release (ENG-005): see
-        # schedule_question above -- without it two concurrent reschedules to
-        # one instant both pass the conflict check and both land.
+        # Hold advisory lock across conflict check and update.
         session.execute(
             _text("SELECT pg_advisory_xact_lock(:key)"),
             {"key": game_lock_key("trivia-drop")},
@@ -550,23 +460,15 @@ def cancel_question(db: Database, question_id: str) -> TriviaDropQuestion:
         return _as_model(row, _options_for(session, str(row.id)))
 
 
-# Hard ceiling for one page of the question list. The endpoint clamps anything
-# larger, so no client can ask for every question at once and make the backend
-# materialise the whole bank in one response.
+# Maximum page size limit for questions listing.
 TRIVIA_QUESTIONS_MAX_LIMIT = 100
 
-# Every lifecycle value a question row can hold. The screen reads its working set
-# (drafts, scheduled, live) separately from its history (ended, cancelled), and both
-# reads name the same vocabulary.
+# Allowed question lifecycle statuses.
 TRIVIA_QUESTION_STATUSES = frozenset({"draft", "scheduled", "active", "ended", "cancelled"})
 
 
 def _options_for_many(session, question_ids: List[str]) -> Dict[str, List]:
-    """Every option row for a page of questions, grouped by question, in one read.
-
-    The single-row ``_options_for`` stays for the single-row readers; fanning it out per
-    row of a page would turn one bounded read into a query per question.
-    """
+    """Batch-fetch and group options by question ID."""
     by_question: Dict[str, List] = {}
     if not question_ids:
         return by_question
@@ -586,15 +488,7 @@ def list_questions(
     limit: int = 50,
     statuses: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """One page of every question, newest first -- drafts, scheduled, live and history alike.
-
-    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter, so the
-    screen loads history downwards without ever holding the questions it is not showing.
-    ``statuses`` optionally narrows to a subset of the lifecycle (comma-separated on the
-    wire); anything outside the vocabulary is a 422 rather than a silent empty page.
-    ``id`` seconds the order so two questions stamped in the same instant still page
-    deterministically.
-    """
+    """Return a paginated list of trivia questions filtered by status."""
     skip = max(0, int(skip or 0))
     limit = max(1, min(int(limit or 50), TRIVIA_QUESTIONS_MAX_LIMIT))
     wanted = list(statuses or [])
@@ -644,15 +538,7 @@ def get_active_question(db: Database) -> Optional[TriviaDropQuestion]:
 
 
 def release_due_questions(db: Database, now: Optional[datetime] = None) -> dict:
-    """Activate due scheduled questions: the release loop's entry point.
-
-    Called by the same background path as the period games (boot ensure plus
-    the run-resets trigger), so scheduled Trivia Drop releases need no second
-    scheduler. Hidden games release nothing -- the row waits until the game is
-    visible again. Idempotent per run: at most one question activates per
-    execution (the earliest due), so a backlog never ends two questions in
-    one pass and a repeated run with nothing due changes nothing.
-    """
+    """Activate due scheduled trivia questions in priority order."""
     from sqlalchemy import text as _text
 
     from .game_configs import game_lock_key, get_config

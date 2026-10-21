@@ -37,10 +37,9 @@ def get_confessions(
 ):
     """One page of the participant feed, sorted and counted in SQL.
 
-    The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET: the backend
-    reads at most one page -- with only its comments, authors and reporter ids
-    attached -- no matter how many confessions exist, and ``total`` counts the visible
-    posts so the screen can load more downwards without holding the feed behind it.
+    The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET, with only
+    the page's comments, authors and reporter ids attached; ``total`` counts the
+    visible posts so the screen loads more downwards without holding the feed behind it.
     """
     user_id = str(current_user.id) if current_user else None
     return service.get_confessions(sort_by, user_id, skip=skip, limit=limit)
@@ -54,13 +53,11 @@ def semantic_search_confessions(
 ):
     """Hybrid search: keyword matches first, similar-in-meaning underneath.
 
-    Keyword runs over body/recipient only (never identity) with trigram
-    relevance ordering; semantic runs the shared embed + pgvector pipeline with
-    a similarity floor and top-K cap, deduped against the keyword page. Both
-    lists carry the existing public confession shape; anonymity is preserved.
-
-    Semantic degradation never fails the keyword half: a disabled, blocked, or
-    rate-limited embedding pipeline returns keyword results with
+    Keyword runs over body/recipient only (never identity), trigram-ordered;
+    semantic runs the shared embed + pgvector pipeline (similarity floor, top-K,
+    deduped against the keyword page), carrying the public confession shape to
+    preserve anonymity. Degradation never fails the keyword half: a disabled,
+    blocked or rate-limited embedding pipeline returns keyword results with
     ``semantic.status`` naming the reason. Blank or over-long queries still
     answer 422.
     """
@@ -78,12 +75,11 @@ def semantic_search_confessions(
 
 @router.get("/confessions/cooldown", response_model=ConfessionCooldown)
 def get_confession_cooldown(service: ConfessionService = Depends(get_confession_service), current_user: UserDetails = Depends(require_participant)):
-    """
-    Used by the compose screen to show the wait before anything is typed.
+    """Show the compose screen the wait before anything is typed.
 
-    Advisory only. The write claims the window with a conditional UPDATE and re-derives the
-    answer itself, so this cannot be raced into a second post -- it just lets the UI say so
-    in advance instead of refusing after the fact.
+    Advisory only: the write claims the window with a conditional UPDATE and
+    re-derives the answer, so this cannot be raced into a second post -- the UI
+    just says so in advance instead of refusing after the fact.
     """
     return service.get_confession_cooldown(str(current_user.id))
 
@@ -98,9 +94,9 @@ def get_confession_comments(
 ):
     """One thread page for the dialog, with the total beside it.
 
-    The feed embeds only the opening window of each thread; this is what the "show
-    more" beneath it reads, in either order. A missing or taken-down confession reads
-    as absent here, exactly as the feed treats it.
+    The feed embeds only the opening window of each thread; this is what "show
+    more" reads, in either order. A missing or taken-down confession reads as
+    absent here, exactly as the feed treats it.
     """
     user_id = str(current_user.id) if current_user else None
     page = service.get_confession_comments(confession_id, user_id, skip=skip, limit=limit, sort=sort)

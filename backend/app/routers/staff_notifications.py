@@ -2,17 +2,12 @@
 
 """Staff notifications: the role-based inbox for admins and moderators.
 
-One feed per role rather than per person. A moderator sees ``report`` notices
-(every report filed) and ``love_note`` notices (every note awaiting approval);
-an admin sees those plus stored ``game`` notices (a missing featured pick, a
-manual-mode session waiting for its word, an empty Trivia Drop pipeline) written
-by the scheduler and start-up checks.
-
-Three endpoints besides the feed: the category switches (three for an admin,
-two for a moderator), the master on/off switch (the account's own
-``notifications_enabled``), and marking one notice read. Preferences are
-stored but deliberately not wired to delivery -- the feed returns every
-notice regardless of the switches.
+One feed per role rather than per person: a moderator sees ``report`` notices (every
+report filed) and ``love_note`` notices (every note awaiting approval); an admin sees
+those plus scheduler/start-up-written ``game`` notices (missing featured pick, a
+manual-mode session waiting for its word, an empty Trivia Drop pipeline). The
+category switches and the master ``notifications_enabled`` switch are stored but
+deliberately not wired to delivery -- the feed returns every notice regardless.
 """
 
 from typing import Annotated, Any, Dict, Optional

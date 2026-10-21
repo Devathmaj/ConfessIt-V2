@@ -1,51 +1,8 @@
-"""Ruling on a report: dismiss it, or take the reported content down.
+"""Resolve reports consistently across confession, love-note, and chat queues.
 
-There are three report queues -- confessions and their comments, love notes, chat messages --
-and until now each one closed out its own report in its own service function, with the three
-copies agreeing only by hand. They have to agree, because the screen that renders all three is
-one screen and a moderator who gets different behaviour per tab has learned to distrust it.
-
-So the shared part lives here, once:
-
-* the vocabulary -- ``dismissed`` and ``removed``, and nothing else can be written;
-* what removal *means* -- the content row is marked removed, not deleted;
-* who is told *what* -- the author on a removal, the reporter on both outcomes.
-
-The asymmetry in the notifications is deliberate and is the whole point of the split. A
-removal has two interested parties and both need to know: the author, because their post is
-gone and the reason is a rule rather than a bug, and the reporter, because they took the
-trouble and an answer is the only thing that closes the loop. A dismissal has one: the author
-of a post that was fine is not to be troubled about a report that was closed in their
-favour, and telling them they were reported is a small punishment for someone else's
-complaint. Only the reporter is told, and what they are told is that it was reviewed.
-
-**Removal is soft, everywhere.** The content row stays in the database and so does the report
-about it, because the report's foreign key cascades from the content -- deleting the post
-would delete the record that it was reported and ruled on, and the audit trail with it. What
-changes is visibility: every participant-facing read filters on ``removed_at IS NULL``, staff
-surfaces do not and carry the flag instead, and the image itself is destroyed at the store, so
-a delivery URL that was minted while the note was live stops resolving rather than going on
-serving a picture of something a moderator took down.
-
-**What the author is told depends on how the content came down, not on what happened to it.**
-The same write is reached two ways: a ``removed`` ruling on a report, and a direct hide from a
-review screen with no report behind it. A ruling cites the policy, because a moderator read the
-post and decided it broke a rule and the author is owed the reason. A direct hide says only
-that the content was removed, because no rule was cited against it and asserting one would be
-the application claiming a decision nobody made. ``hide_confession`` and ``hide_comment`` are
-the two direct-hide paths; both send the neutral copy.
-
-**Taking content down is one event, and the database says so.** Every path here ends in the
-same write -- the row is marked removed -- and each of them has to know whether *this call*
-is the one that did it, because the things that follow a removal (the parent's comment count,
-the author's tally, the notice to the author) are one-per-removal, not one-per-click. Two
-moderators acting on the same content at the same moment, or a double click on "hide", used to
-both read ``removed_at IS NULL`` before either committed, so both were told they had taken it
-down and both charged the author for it: an inflated tally, a comment count that disagrees
-with the thread, a duplicate notice, and an account blocked one removal early. The transition
-is therefore a single conditional ``UPDATE`` (``WHERE removed_at IS NULL``), which PostgreSQL
-settles by re-checking the predicate after the row lock is taken -- of two racers exactly one
-wins, and the loser is told the content was already down.
+Dismissal notifies the reporter; removal notifies both parties and soft-removes content while
+preserving its audit row. Direct hides use neutral wording. A conditional UPDATE gates
+counters and notices so concurrent rulings count one removal only.
 """
 
 from datetime import datetime, timezone

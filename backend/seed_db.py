@@ -1,40 +1,35 @@
 """Seed a development database with participants and staff accounts.
 
-Accounts are spread over three tables -- ``users``, ``admin`` and ``moderator`` -- because the
-table a row is written to *is* its account type. There is no ``role`` column to set, and no
-privilege that can be named in a payload: an account is staff or it is not, by existing.
+Accounts are spread over three tables -- ``users``, ``admin`` and ``moderator``
+-- because the table a row is written to *is* its account type. There is no
+``role`` column and no privilege that can be named in a payload: an account is
+staff or it is not, by existing.
 
-Five things about the current schema are easy to get wrong from memory, and each of them is a
-crash rather than a slightly wrong row:
+Five things about the current schema are easy to get wrong from memory, and
+each is a crash rather than a slightly wrong row:
 
-* **No ``role`` column.** The previous version of this script passed ``role="user"``, which the
-  account tables have not had for some time. SQLAlchemy rejects an unknown keyword outright, so
-  the script could not have run at all.
-* **Interests are a closed vocabulary.** ``ck_users_interests_known`` requires every element to be
-  one of ``limits.INTEREST_VALUES`` -- case included, so "music" is not "Music". A hand-written
-  list of interests is a ``CheckViolation`` on the first insert, which aborts the whole
-  transaction and leaves the database empty. This is not hypothetical: the sibling seeder
-  ``app/test.py`` still carries the pre-vocabulary values and fails exactly this way. The
-  interests here are *derived* from the constant instead, so widening the vocabulary needs no
-  edit here and cannot drift out of step with it.
-* **Email is required and unique.** Every account table has a NOT NULL, uniquely indexed
-  ``email``, so a seed that omits it is rejected by the column rather than defaulted.
-* **Staff rows have no participant columns.** ``year``, ``department``, ``bio``,
-  ``interests`` and the matchmaking toggles exist only on ``users``. Passing one to
-  ``ModeratorRecord`` is a ``TypeError``, so staff seeds carry only the shared columns.
-  (``emoji`` is not a participant column either -- the profile-emoji option was removed
-  entirely, so no account table has it anymore.)
-* **Year is a bounded number, like interests are a closed set.** ``users.year`` is an ``Integer`` and
-  ``ck_users_year_known`` holds it between ``limits.USER_YEAR_MIN`` and ``limits.USER_YEAR_MAX``. A
-  hand-written year outside that range is a ``CheckViolation`` on the first insert, which aborts the
-  transaction and leaves the database empty, so the years here are derived from those bounds rather
-  than typed. Department has no such constraint and stays free text -- the departments that exist
-  belong to the institution, not to this schema.
+* **No ``role`` column.** A previous version of this script passed
+  ``role="user"``; SQLAlchemy rejects an unknown keyword outright.
+* **Interests are a closed vocabulary.** ``ck_users_interests_known`` requires
+  every element of ``limits.INTEREST_VALUES``, case included. A hand-written
+  list is a ``CheckViolation`` on the first insert, which aborts the whole
+  transaction and leaves the database empty -- that is exactly how the sibling
+  seeder ``app/test.py`` fails. The interests here are *derived* from the
+  constant instead, so widening the vocabulary needs no edit here.
+* **Email is required and unique.** Every account table has a NOT NULL,
+  uniquely indexed ``email``.
+* **Staff rows have no participant columns.** ``year``, ``department``,
+  ``bio``, ``interests`` and the matchmaking toggles exist only on ``users``;
+  passing one to ``ModeratorRecord`` is a ``TypeError``. (``emoji`` is not a
+  participant column either -- the profile-emoji option was removed entirely.)
+* **Year is a bounded number, like interests are a closed set.**
+  ``ck_users_year_known`` holds ``users.year`` between ``limits.USER_YEAR_MIN``
+  and ``USER_YEAR_MAX``, so the years here are derived from those bounds
+  rather than typed. Department has no such constraint and stays free text.
 
-Re-running is the normal case while working on a schema, so an account that already exists is
-left untouched rather than overwritten, and uniqueness is checked *per table* -- which is how
-PostgreSQL enforces it here, since ``regno`` and ``email`` are unique within a table and never
-across the three.
+Re-running is the normal case while working on a schema: an account that
+already exists is left untouched rather than overwritten, and uniqueness is
+checked *per table* -- which is how PostgreSQL enforces it here.
 """
 
 import os
@@ -49,38 +44,36 @@ from app.db_models import ACCOUNT_MODELS
 from app.limits import INTEREST_VALUES, USER_YEAR_MAX, USER_YEAR_MIN
 from app.postgres import PostgresClient
 
-# A school run of this app has a real gender mix, and the matchmaking and filtering screens sort
-# and group by gender, so a seed that is all one value hides layout and filter bugs. Each year is
-# given a slightly different split for the same reason.
+# A real gender mix matters: the matchmaking and filtering screens sort and
+# group by gender, so an all-one-value seed hides layout and filter bugs, and
+# each year gets a slightly different split for the same reason.
 #
-# Derived from the year rather than written out as a twelve-row table, which is what the previous
-# four-row version was. A table that has to be kept in step with the range is a second place to
-# forget: raising the bounds to thirteen would have left the seed silently filling twelve years,
-# with no error and one year that simply had nobody in it. Deriving it means widening the range in
-# ``limits.py`` is the only edit, and this follows.
+# Derived from the year rather than written out as a twelve-row table. A table
+# kept in step with the range is a second place to forget; deriving it means
+# widening the range in ``limits.py`` is the only edit, and this follows.
 def _year_gender_counts(year: int) -> tuple[int, int]:
     """Male and female participants to seed in ``year``.
 
-    The variation is real rather than cosmetic: a seed where every year holds the same number of
-    people hides the sort order and the row count of every year-grouped screen, and a cohort filter
-    where all twelve options have identical counts looks like a rendering bug when it is not.
+    The variation is real rather than cosmetic: a seed where every year holds
+    the same number of people hides sort order and row counts on every
+    year-grouped screen.
     """
     return (10 + year % 3, 11 + (year + 1) % 3)
 
 
-# Departments are free text, so these are typed here and only here. Three is enough for the
-# matchmaking palette and the cohort filter to have something to group by, and with twelve years
-# they give thirty-six cohorts -- enough that the cohort filter is a real filter rather than a
-# lookup.
+# Departments are free text, so these are typed here and only here: enough for
+# the matchmaking palette and cohort filter to group by, giving twelve years x
+# three departments = thirty-six cohorts, a real filter rather than a lookup.
 SEED_DEPARTMENTS = ("CSE", "ECE", "MECH")
 
-# How many interests a seeded participant holds. Two is enough for a profile to show something
-# and for matchmaking to have something to match on, without making the seed data look curated.
+# Two interests per participant: enough for a profile to show something and
+# for matchmaking to match on, without looking curated.
 SEED_INTEREST_COUNT = 2
 
-# The staff a developer needs to sign in as to reach the moderation and admin screens at all.
-# The admin regno is the bare word "admin" because that is what the docs and the walkthroughs
-# tell people to type; the moderators are numbered so there is more than one to switch between.
+# The staff sign-ins needed to reach the moderation and admin screens. The
+# admin regno is the bare word "admin" because that is what the docs and
+# walkthroughs tell people to type; moderators are numbered so there is more
+# than one to switch between.
 ADMIN_SEED = {
     "regno": "admin",
     "name": "Test Admin",
@@ -109,11 +102,11 @@ MODERATOR_SEEDS = (
 def _interests_for(index: int) -> list[str]:
     """Two interests for the participant at ``index``, rotating through the vocabulary.
 
-    Built from ``INTEREST_VALUES`` rather than written out, which is the only way this stays
-    correct: a literal list is a list that eventually disagrees with the constraint enforcing it,
-    and the failure is a ``CheckViolation`` on the first insert with nothing to indicate which
-    value was wrong. Taking a rotating window also means the whole vocabulary is covered once the
-    seed runs, instead of the first two entries over and over.
+    Built from ``INTEREST_VALUES`` rather than written out: a literal list is
+    eventually a list that disagrees with the constraint enforcing it, and the
+    failure is a ``CheckViolation`` with nothing to indicate which value was
+    wrong. A rotating window also covers the whole vocabulary once the seed
+    runs, instead of the first two entries over and over.
     """
     size = len(INTEREST_VALUES)
     start = index % size
@@ -123,11 +116,10 @@ def _interests_for(index: int) -> list[str]:
 def _split_count(count: int, parts: int, rotate: int) -> list[int]:
     """``count`` divided across ``parts`` buckets, as evenly as the number divides at all.
 
-    ``divmod`` keeps the split exact: the parts always sum back to ``count``, so widening
-    ``SEED_DEPARTMENTS`` thins out the cohorts instead of changing how many participants the
-    year was supposed to hold. The remainder goes to consecutive buckets starting at ``rotate``
-    rather than always to the first, so the uneven cohorts do not all pile into CSE and leave
-    MECH uniformly short in every year.
+    ``divmod`` keeps the split exact, so widening ``SEED_DEPARTMENTS`` thins
+    out the cohorts instead of changing the year's total. The remainder goes to
+    consecutive buckets starting at ``rotate``, so the uneven cohorts do not
+    all pile into CSE and leave MECH uniformly short.
     """
     base, remainder = divmod(count, parts)
     counts = [base] * parts
@@ -139,15 +131,11 @@ def _split_count(count: int, parts: int, rotate: int) -> list[int]:
 def _cohort_distributions() -> list[tuple[int, str, int, int]]:
     """Every ``(year, department, male_count, female_count)`` cohort the seed fills.
 
-    The full cross-product of the year range and the departments, so each year holds every
-    department and each department spans every year. That is what makes the two fields worth having
-    separate: with one joined ``class_name`` there was no way to ask either question, and a seed
-    that only ever paired a year with a single department could not answer them either. It is also
-    the only shape that exercises the filtering it exists for -- a cohort filter over a handful of
-    non-overlapping cohorts is a lookup, not a filter, and would pass while the pair comparison
-    were wrong.
-
-    The two halves are rotated differently so a cohort is not systematically the male-heavy one.
+    The full cross-product of the year range and the departments, so each year
+    holds every department -- the only shape that exercises the filtering this
+    exists for: a cohort filter over a handful of non-overlapping cohorts is a
+    lookup, not a filter. The two halves are rotated differently so a cohort is
+    not systematically the male-heavy one.
     """
     size = len(SEED_DEPARTMENTS)
     distributions: list[tuple[int, str, int, int]] = []
@@ -165,9 +153,9 @@ def _cohort_distributions() -> list[tuple[int, str, int, int]]:
 def _participant_seeds() -> list[dict]:
     """Build the participant rows, one dict per row, keyed to the ``users`` columns.
 
-    Regnos are prefixed by gender (``MA``/``FE``) so somebody reading a login table can tell at a
-    glance which half of a cohort a regno belongs to, and so a participant regno can never
-    collide with a seeded staff one.
+    Regnos are prefixed by gender (``MA``/``FE``) so a login table shows at a
+    glance which half of a cohort a regno belongs to, and a participant regno
+    can never collide with a seeded staff one.
     """
     seeds: list[dict] = []
     counters = {"male": 0, "female": 0}
@@ -206,11 +194,11 @@ def _participant(regno: str, gender: str, year: int, department: str, index: int
 def _staff_seeds() -> list[tuple[str, dict]]:
     """The admin and the three moderators, as ``(account_type, values)`` pairs.
 
-    Each moderator dict is completed from ``ADMIN_SEED``'s shape rather than repeated, because a
-    staff row carries exactly the columns ``AccountRecord`` declares -- and a value in here that
-    is not one of those columns is a ``TypeError`` at insert rather than a silently ignored key.
-    Gender and the two picture columns are deliberately absent from every entry: they exist on
-    ``users`` only, so a staff seed that carried them would be writing columns the staff tables
+    Each moderator dict is completed from ``ADMIN_SEED``'s shape rather than
+    repeated: a staff row carries exactly the columns ``AccountRecord``
+    declares, and anything else is a ``TypeError`` at insert. Gender and the
+    two picture columns are deliberately absent -- they exist on ``users``
+    only, so a staff seed carrying them would write columns the staff tables
     do not have.
     """
     shared = {

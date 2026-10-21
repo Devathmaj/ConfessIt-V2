@@ -19,36 +19,21 @@ from ..services.storage_service import storage_service
 from ..utils import ilike_contains
 from .report_counters import REMOVAL_AUTO_BLOCK_THRESHOLD, tally_for_row
 
-# Above how many upheld removals a participant lands in the flagged work queue. It reads the
-# threshold the automatic block uses rather than restating it: the queue exists to surface the
-# participants at the line, and the two disagreeing would mean a participant the system blocked
-# was not in the queue for it, or vice versa. Mirrors FLAGGED_REMOVAL_THRESHOLD on the
-# profile-review screen: strictly more than this, summed across the three content kinds.
+# Auto-block threshold for participants: strictly more than this, summed across the three content kinds.
 FLAGGED_REMOVAL_THRESHOLD = REMOVAL_AUTO_BLOCK_THRESHOLD
 
-# Hard ceiling for one page of the admin user list. The endpoint clamps anything larger,
-# so no client -- present or future, well-meaning or not -- can ask for 10 000 rows and
-# make the backend materialise them all at once. 102 is a multiple of three, which the
-# profile-review screen's three-column card grid asks for so no row is left ragged.
+# Hard ceiling for one admin user page; larger requests are clamped (102 fits the card grid).
 ADMIN_USERS_MAX_LIMIT = 102
 
-# Deep-OFFSET guard: a skip past this is refused (422) rather than executed, so a
-# client cannot force the database to scan-and-discard an unbounded prefix on every
-# page. Cursor pagination (created_at,id) is the path for deep traversal; OFFSET
-# remains for the admin screens' shallow load-more. Counts are cached briefly (below)
-# so a page does not pay COUNT(*) on every request.
+# Deep-OFFSET guard: skips past this are refused (422) so the database never
+# scan-and-discards an unbounded prefix; use cursor pagination for deep traversal.
 ADMIN_MAX_SKIP = 5000
 _COUNT_CACHE_TTL_SECONDS = 30.0
 _count_cache: dict[tuple, tuple[float, int]] = {}
 
 
 def _cached_count(key: tuple, compute) -> int:
-    """Return a cached COUNT(*) for ``key``, recomputing at most every 30s.
-
-    The key must capture the filter (status/query/sort); the value is the total
-    under that filter. Stale-by-seconds is acceptable for an admin total beside
-    a page, and it turns a per-page full-table COUNT into one per window.
-    """
+    """Return a cached COUNT(*), recomputed at most every 30s; seconds-stale is acceptable beside a page."""
     now = time.monotonic()
     hit = _count_cache.get(key)
     if hit is not None and (now - hit[0]) < _COUNT_CACHE_TTL_SECONDS:
@@ -64,14 +49,7 @@ def _cached_count(key: tuple, compute) -> int:
 
 
 def invalidate_admin_user_count_cache() -> None:
-    """Drop cached account-page totals after a write that changes the users table.
-
-    The cache is deliberately seconds-stale for paging, but a write the operator just made
-    is not a page turn: a bulk upload that reports twenty created accounts followed by a
-    list that still says zero is a screen contradicting itself. Clearing the whole small
-    cache rather than only the participant keys keeps this correct for every filter shape
-    without teaching this module about the upload's semantics.
-    """
+    """Drop cached account-page totals after a users-table write; the whole small cache is cleared so every filter shape stays correct."""
     _count_cache.clear()
 
 
@@ -94,11 +72,7 @@ ADMIN_USERS_FLAG_FILTERS = frozenset({"all", "flagged", "ordinary"})
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
-    """Convert datetime to ISO format string (canonical: utils.isoformat_datetime).
-
-    Thin wrapper preserving this module's historical contract (unparseable str
-    -> None) over the single shared implementation, so the two cannot drift.
-    """
+    """Convert datetime to ISO string; thin wrapper over utils.isoformat_datetime keeping the unparseable-str -> None contract."""
     from ..utils import isoformat_datetime as _isoformat_datetime
 
     result = _isoformat_datetime(value)
@@ -114,14 +88,7 @@ def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
 
 
 def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
-    """Flatten an account row from any of the three tables into a dict.
-
-    The shared fields are read off whatever table the row came from; the participant fields
-    are read only when the row is a participant, because a staff row does not have them to
-    read. Building the dict this way -- rather than one serialiser per table -- is what lets
-    the admin list render staff and participants through a single code path, and is why
-    there is no ``role`` to fill in: the table is reported as ``account_type``.
-    """
+    """Flatten an account row from any of the three tables into a dict; participant fields exist only when the row is a participant, and the table is reported as ``account_type``."""
     payload: Dict[str, Any] = {
         "id": str(row.id),
         "regno": row.regno,
@@ -140,11 +107,8 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
         payload.update({
             "email": row.email,
             "gender": row.gender,
-            # Derived here rather than read from a column: the row holds the picture's identity,
-            # and the address the admin client renders is built from it on the way out. Nothing
-            # is authorised by this -- a profile picture is a public Cloudinary object -- so the
-            # same URL goes to every account that can see the profile. Participant-only, because
-            # the upload route is: a staff row has neither column to derive from.
+            # Derived from the stored identity, not a column: a profile picture is a public
+            # CDN object that authorises nothing. Participant-only: a staff row has neither column.
             "profile_picture_url": storage_service.profile_delivery_url(
                 row.profile_picture_public_id, row.profile_picture_format
             ),
@@ -158,22 +122,15 @@ def _account_row_payload(account_type: str, row: Any) -> Dict[str, Any]:
             "last_matchmaking_at": serialize_datetime(row.last_matchmaking_at),
             "last_confession_at": serialize_datetime(row.last_confession_at),
             "last_profile_picture_at": serialize_datetime(row.last_profile_picture_at),
-            # Six counts, grouped by the kind of content they are about. Participant-only
-            # because only a participant has content anyone can report: a staff row would show
-            # "0 removals", which reads as a clean record rather than as a field that does not
-            # apply. Maintained by app.services.report_counters.
+            # Six counts, grouped by content kind; participant-only because a staff row would
+            # show "0 removals" -- reading as a clean record, not a non-applicable field.
             "report_history": tally_for_row(row),
         })
     return payload
 
 
 def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialise an account document to a JSON-friendly format.
-
-    Participant-only keys are present only for participant documents. The admin client
-    reads them with fallbacks, so a staff row simply has nothing to show there -- which is
-    the honest answer, since the column does not exist on that table.
-    """
+    """Serialise an account document to a JSON-friendly format; participant-only keys appear only for participants."""
     if not doc:
         return {}
 
@@ -209,10 +166,8 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
             "last_matchmaking_at": serialize_datetime(doc.get("last_matchmaking_at")),
             "last_confession_at": serialize_datetime(doc.get("last_confession_at")),
             "last_profile_picture_at": serialize_datetime(doc.get("last_profile_picture_at")),
-            # Passed through rather than recomputed: these are denormalised columns written by
-            # report_counters at filing and removal time, and the number an administrator is
-            # shown has to be the stored one. ``{}`` rather than omitted for a participant
-            # whose row predates the fields, so the client always has all three kinds to read.
+            # Passed through rather than recomputed: denormalised columns written by report_counters,
+            # and the number shown must be the stored one. ``{}`` for pre-field rows keeps the shape uniform.
             "report_history": doc.get("report_history") or {},
         })
 
@@ -220,20 +175,11 @@ def serialize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def count_active_sessions(db: Database, window_hours: int = 24) -> int:
-    """How many accounts held a live session at some point inside the window.
-
-    Counts distinct accounts rather than tokens, because one account signing in twice is one
-    person, not two. The dashboard reads this as a single figure and no longer needs the
-    session rows behind it -- who was online, from where, on what -- so nothing is resolved
-    per token here: no account lookup, no per-row write, and nothing session-shaped leaves
-    this function.
-    """
+    """How many distinct accounts held a live session inside the window; counts accounts, not tokens."""
     now = datetime.now(timezone.utc)
     active_threshold = now - timedelta(hours=window_hours)
     with db.sessions.begin() as session:
-        # A session that was last seen before the window is over, whatever it says about
-        # itself, so it stops being counted as live. This is the one write the count needs,
-        # and it is why an account's presence expires even when nobody is reading the list.
+        # A session last seen before the window is expired here -- the one write that expires presence without readers.
         session.execute(update(LoginTokenRecord).where(
             LoginTokenRecord.session_status == "active",
             LoginTokenRecord.consumed_at < active_threshold,
@@ -252,10 +198,7 @@ def count_active_sessions(db: Database, window_hours: int = 24) -> int:
     return len(account_ids)
 
 
-# Hard ceiling for one page of the admin confession list. The endpoint clamps anything
-# larger, so no client -- present or future, well-meaning or not -- can ask for every
-# confession, with every comment, report and reactor row attached, and make the backend
-# materialise them all at once.
+# Hard ceiling for one admin confession page; clamped so no client can force a full-table materialisation.
 CONFESSIONS_MAX_LIMIT = 100
 
 CONFESSION_FILTERS = frozenset({"all", "reported", "anonymous", "with-comments"})
@@ -264,22 +207,9 @@ CONFESSION_SORTS = frozenset({"recent", "reports", "comments", "reactions"})
 
 
 def _load_admin_confession_relations(session, confessions):
-    """Comments, reports and user rows for exactly the confessions handed in.
+    """Comments, reports and user rows for exactly the confessions handed in, one bulk read per table.
 
-    One bulk read per related table rather than a query per row: a page of confessions
-    with a hundred comments each must not cost a hundred queries to render. The author of
-    an anonymous confession is never loaded at all, so the identity is absent from this
-    process rather than filtered out of the payload later; commenters are a different
-    population and are always resolved.
-
-    Reactors are resolved too, with one exception applied later per confession: an
-    anonymous confession's author reacting to their own post is the most likely reactor
-    on any anonymous confession, and naming them in a reactor list would de-anonymise
-    the post on the same screen that promises it cannot. That exception cannot be
-    applied here by excluding the id from the query -- someone who has written a public
-    confession is loaded legitimately for it, and dropping their id here would strip the
-    name off that public post as well -- so the decision belongs where the confession
-    is, which is why the build step below makes it per confession.
+    An anonymous confession's author is never loaded, so the identity is absent from this process rather than filtered out later. An anonymous author reacting to their own post must also stay unnamed (naming them would de-anonymise the post), but the exception is per confession -- a public confession's author is loaded legitimately -- so the check happens in the build step.
     """
     confession_ids = [row.id for row in confessions]
     comments = session.scalars(select(ConfessionCommentRecord).where(
@@ -304,15 +234,7 @@ def _load_admin_confession_relations(session, confessions):
 def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
     """Fetch all confessions with comments and reports.
 
-    An anonymous confession is anonymous to staff too: the author row is never loaded, the
-    sender fields are emitted empty, and ``sender_hidden`` is set so the client can render
-    "no sender to show" instead of guessing from ``anonymous``. Review is still fully possible
-    on such a post -- body, timestamps, reports, comments and engagement all come back -- it
-    is only the identity that is withheld, and it is withheld here rather than in the client so
-    it cannot be recovered by reading the response.
-
-    A confession that was never anonymous is unaffected: it still names its author, and the
-    review screen still decides for itself when to show that name.
+    An anonymous confession is anonymous to staff too: the author row is never loaded and ``sender_hidden`` marks the empty sender, so the identity cannot be recovered by reading the response.
     """
     with db.sessions() as session:
         confessions = session.scalars(select(ConfessionRecord).order_by(ConfessionRecord.created_at.desc())).all()
@@ -321,14 +243,7 @@ def get_all_confessions_data(db: Database) -> List[Dict[str, Any]]:
 
 
 def _build_admin_confession_items(confessions, comments, reports, users) -> List[Dict[str, Any]]:
-    """Assemble staff-facing confession payloads from loaded rows.
-
-    One builder for both readers -- the unfiltered list and the filtered page -- so the
-    anonymity promise has exactly one implementation: an anonymous sender is never named,
-    reactors resolve with the per-confession author exception, and removed rows arrive
-    flagged rather than filtered. What differs between the readers is only which
-    confessions are handed in.
-    """
+    """Assemble staff-facing confession payloads from loaded rows; one builder for both readers keeps the anonymity promise in one implementation."""
     reaction_keys = ["heart", "haha", "whoa", "heartbreak"]
     items: List[Dict[str, Any]] = []
     users_by_id = {user.id: user for user in users}
@@ -356,16 +271,9 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
         confession_id = str(doc.id)
         reactions = {key: (doc.reactions or {}).get(key, []) for key in reaction_keys}
 
-        # Who reacted, resolved to a name so the Engagement snapshot can answer "who is this"
-        # without a second round trip per emoji. Built here rather than exposed as raw ids
-        # because an id in a moderator's hands identifies nobody they can act on: the point is
-        # to see whether one account is behind a pile of reactions.
-        #
-        # An id can fail to resolve for two reasons and neither is a bug: an anonymous post's
-        # author is withheld on purpose, and a participant who has since been deleted is gone
-        # from `users` while their id remains in the JSONB array. Both keep their place in the
-        # list so it still adds up to the count beside it, and each reports which of the two it
-        # is, so a reviewer can tell a privacy decision from a data fault.
+        # Reactors resolved to names so a reviewer can spot one account behind a pile of
+        # reactions. Unresolved ids (anonymous author withheld, or a deleted participant
+        # whose id remains in the JSONB) stay listed with a reason: privacy vs data fault.
         reactor_entries: Dict[str, List[Dict[str, Any]]] = {}
         for key in reaction_keys:
             entries = []
@@ -398,9 +306,8 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                 "reason": report.reason,
                 "created_at": serialize_datetime(report.created_at),
                 "reporter": {
-                    # Automated reports carry reported_by_id IS NULL and the
-                    # exact display name "Azure Content Safety"; the snapshot
-                    # is the display contract, not the live users row.
+                    # Automated reports: reported_by_id IS NULL, and the snapshot name
+                    # "Azure Content Safety" is the display contract.
                     "id": str(report.reported_by_id) if report.reported_by_id is not None else None,
                     "name": report.reported_by_name,
                 },
@@ -408,7 +315,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
             for report in confession_reports_docs
         ]
 
-        # Process comments
+        # Comments under the confession
         comment_entries: List[Dict[str, Any]] = []
         comment_docs = sorted(
             comments_by_confession.get(confession_id, []),
@@ -446,7 +353,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                     "like_count": comment_doc.like_count,
                     "dislike_count": comment_doc.dislike_count,
                     "reports": comment_reports,
-                    # Same reasoning as the parent post: staff see removed comments, flagged.
+                            # As for the parent post: staff see removed comments, flagged.
                     "content_removed": comment_doc.removed_at is not None,
                     "removed_at": serialize_datetime(comment_doc.removed_at),
                     "removed_by_regno": comment_doc.removed_by_regno,
@@ -466,8 +373,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                 "report_count": doc.report_count,
                 "reported_by": [str(report.reported_by_id) for report in reports_by_content.get(confession_id, []) if report.reported_by_id is not None],
                 "reports": confession_reports,
-                # The raw id list is kept: `heart_count` and friends are denormalised counters
-                # and can disagree with the array, so anything auditing engagement needs both.
+                # Raw id list kept: denormalised counters can disagree with the array, so audit needs both.
                 "reactions": {key: [str(user) for user in value] for key, value in reactions.items()},
                 "reaction_users": reactor_entries,
                 "heart_count": doc.heart_count,
@@ -476,9 +382,7 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
                 "heartbreak_count": doc.heartbreak_count,
                 "comment_count": doc.comment_count,
                 "comments": comment_entries,
-                # Not filtered out, flagged. This is the staff view: a moderator deciding
-                # whether to remove something has to be able to see what is already removed,
-                # and the same row is also how a removal gets audited after the fact.
+                # Removed rows are flagged, not filtered: staff must see what is already removed and audit it.
                 "content_removed": doc.removed_at is not None,
                 "removed_at": serialize_datetime(doc.removed_at),
                 "removed_by_regno": doc.removed_by_regno,
@@ -489,17 +393,9 @@ def _build_admin_confession_items(confessions, comments, reports, users) -> List
 
 
 def _admin_confession_search_filters(query: Optional[str]) -> list:
-    """A case-insensitive substring match on a confession and its sender, as SQL clauses.
+    """Case-insensitive substring match on a confession and its sender, as SQL clauses.
 
-    Done in SQL rather than in Python so a deployment with thousands of confessions never
-    loads them all to discard all but twenty. Matches the body and the recipient name on
-    the confession row, plus the sender's name, regno and email through a join that
-    instantiates no user rows.
-
-    The sender clauses apply only to non-anonymous confessions. Without that gate the
-    search would be an oracle for the withheld identity: asking for an anonymous author's
-    name would surface a row the response itself refuses to name, and the old client-side
-    search never matched one either, because the sender fields arrive empty there.
+    Matching in SQL keeps thousands of confessions from being loaded to discard all but twenty. Sender clauses apply only to non-anonymous confessions: matching an anonymous author's name would otherwise oracle the withheld identity.
     """
     cleaned = (query or "").strip()
     if not cleaned:
@@ -522,9 +418,7 @@ def _admin_confession_search_filters(query: Optional[str]) -> list:
 def _admin_confession_status_filters(filter_option: str) -> list:
     """The screen's filter picker as SQL clauses: reported, anonymous, or with-comments."""
     if filter_option == "reported":
-        # A report row for the confession itself, or for any comment under it, or a
-        # denormalised counter saying one was filed: the screen treats "reported" as any
-        # evidence a report exists, and any one of the three is that evidence.
+        # "Reported" is any evidence: a report row on the post or a comment, or the counter filed.
         confession_reported = select(ReportRecord.id).where(
             ReportRecord.confession_id == ConfessionRecord.id
         ).exists()
@@ -543,9 +437,7 @@ def _admin_confession_status_filters(filter_option: str) -> list:
     if filter_option == "anonymous":
         return [ConfessionRecord.anonymous.is_(True)]
     if filter_option == "with-comments":
-        # A comment row under the confession, not the denormalised counter: the counter is
-        # decremented when a comment is taken down while the row survives for audit, so the
-        # counter answers "how many are readable" and the row answers "is there a thread".
+        # Comment row, not the counter: a takedown decrements the counter while the row survives for audit.
         return [select(ConfessionCommentRecord.id).where(
             ConfessionCommentRecord.confession_id == ConfessionRecord.id
         ).exists()]
@@ -553,12 +445,7 @@ def _admin_confession_status_filters(filter_option: str) -> list:
 
 
 def _admin_confession_ordering(sort: str):
-    """The screen's sort picker as ORDER BY, with the id last so pages are stable.
-
-    A deterministic tail matters because the count and the page are two queries: an
-    unordered tail reshuffles between them, and a load-more list that reorders under the
-    reader shows some confessions twice.
-    """
+    """The screen's sort picker as ORDER BY, with the id last so the separate count/page queries stay ordered alike."""
     if sort == "reports":
         return [
             ConfessionRecord.report_count.desc(),
@@ -591,22 +478,9 @@ def get_admin_confessions_data(
     filter_option: str = "all",
     sort: str = "recent",
 ) -> Dict[str, Any]:
-    """One page of confessions for admin review, searched, filtered, ordered and counted in SQL.
+    """One page of confessions for admin review: searched, filtered, ordered and counted in SQL.
 
-    The search is a SQL WHERE across the confession and (through a non-instantiating
-    join) its sender, the filter picker a SQL WHERE, the sort picker a SQL ORDER BY, and
-    every page a SQL LIMIT/OFFSET: with thousands of confessions -- each carrying its
-    comments, reports and reactor rows -- the backend reads and serialises at most
-    ``limit`` of them, never the whole table, and ``total`` is a COUNT under the same
-    WHERE so the screen can load more downwards without ever holding the confessions it
-    is not showing.
-
-    The per-row payload is identical to ``get_all_confessions_data``: the same redaction
-    of anonymous senders, the same comments, reports and engagement snapshot. Only the
-    row selection changed, from "everything, newest first" to one filtered page.
-
-    ``skip`` is capped by ADMIN_MAX_SKIP (deep OFFSET refused) and ordering always
-    ends in id.asc() so pages are stable; ``total`` is cached briefly.
+    SQL-side everything keeps the backend to ``limit`` reads per page regardless of table size, with ``total`` a COUNT under the same WHERE. The payload is identical to ``get_all_confessions_data`` via the shared builder; ``skip`` is capped (deep OFFSET refused) and ordering ends in id.asc() so pages are stable.
     """
     skip = _clamp_skip(skip)
     limit = max(1, min(int(limit or 50), CONFESSIONS_MAX_LIMIT))
@@ -659,14 +533,7 @@ def get_admin_confessions_hybrid_data(
 ) -> Dict[str, Any]:
     """Hybrid keyword + semantic search for staff review, keyword first.
 
-    Keyword is the existing lexical page unchanged (same search across body,
-    recipient, and non-anonymous sender; same filter/sort/paging/total). The
-    semantic half runs the shared embed + vector-query + threshold + dedupe
-    pipeline capped at ``EMBEDDING_SEMANTIC_TOP_K`` (not paged), with staff
-    visibility: removed rows are included and flagged, anonymous senders stay
-    withheld, and the active status ``filter`` applies to both halves. Uses the
-    admin rate-limit bucket. Degrades like the public path: semantic failures
-    return keyword results with ``semantic.status`` naming the reason.
+    The keyword half is the existing lexical page unchanged; the semantic half runs the shared pipeline with staff visibility (removed rows flagged, anonymous senders withheld, the active filter applied to both halves) and degrades to keyword results with ``semantic.status`` naming the reason.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -712,8 +579,7 @@ def get_admin_confessions_hybrid_data(
             _hybrid_logger.warning("Admin hybrid semantic half failed: %s", type(exc).__name__)
             candidates, semantic_status = [], "unavailable"
     keyword_ids = {str(item["id"]) for item in keyword_page.get("confessions", [])}
-    # Dedupe against the keyword page (same rule as the public path). The shared
-    # pipeline over-fetched by the keyword page size so the top-K still fills.
+    # Dedupe against the keyword page (same rule as the public path); the pipeline over-fetched to fill top-K.
     candidates = [cand for cand in candidates if cand[0] not in keyword_ids][:top_k]
     semantic_items: list = []
     if candidates:
@@ -745,19 +611,9 @@ def get_admin_confessions_hybrid_data(
 
 
 def _confession_report_search_filters(query: Optional[str]) -> list:
-    """A case-insensitive substring match on a report and the content it points at.
+    """Case-insensitive substring match on a report and the content it points at, as SQL clauses.
 
-    Done in SQL rather than in Python so a queue with thousands of reports never loads
-    them all to discard all but twenty. Matches the reason and the reporter's snapshotted
-    name on the report row, plus the reported body through correlated EXISTS subqueries --
-    EXISTS rather than joins, so the COUNT beside the page cannot fan out and the page
-    cannot repeat a row.
-
-    The reported author is deliberately not searchable. For an anonymous confession that
-    identity is withheld from staff everywhere, and a search that matched it would be an
-    oracle for it: asking for the name would surface a row the response itself refuses to
-    name. Commenters are named on screen, but their rows arrive through the reported
-    comment, which the content search already reaches.
+    EXISTS subqueries keep the COUNT from fanning out and the page from repeating rows. The reported author is deliberately not searchable: for an anonymous confession that identity is withheld from staff everywhere, and matching it would oracle it.
     """
     cleaned = (query or "").strip()
     if not cleaned:
@@ -787,27 +643,7 @@ def get_confession_reports_data(
 ) -> Dict[str, Any]:
     """Every report filed against a confession or a comment, newest first.
 
-    One queue rather than two. The two targets live in the same table and are reviewed with
-    the same judgement, so splitting them would only mean a reviewer reading half the queue on
-    one screen and the other half somewhere they were not looking. Each row carries a
-    ``target_type`` of ``"confession"`` or ``"comment"`` and, for a comment, the confession it
-    was written under, because a comment reported out of context is not something anybody can
-    act on.
-
-    The content is carried, not referenced. The question a reviewer opens this screen to answer
-    is "what did this actually say", and a row holding only an id sends them to a second screen
-    to find out.
-
-    The author of an anonymous confession is not resolved here, for the same reason
-    ``get_all_confessions_data`` does not resolve it: an anonymous confession is anonymous to
-    staff, and a report queue is another reader of the same promise. ``author`` comes back
-    with its fields null and ``author_hidden`` set, so the client can say so rather than guess
-    from the ``anonymous`` flag. Commenters are a different population and are always named.
-
-    ``query`` narrows in SQL to reports whose reason, reporter name or reported content
-    matches, with the total counted under the same filter so the screen pages the question
-    it asked rather than the queue behind it. Ordered by (created_at desc, id asc) so
-    equal timestamps cannot reshuffle between COUNT and page; skip capped; total cached.
+    One queue for both targets (same table, same judgement), each row carrying ``target_type`` and the reported content itself so a reviewer never needs a second screen. An anonymous confession's author is not resolved here -- a report queue is another reader of the anonymity promise -- and ``query`` narrows in SQL with the total counted under the same filter.
     """
     skip = _clamp_skip(skip)
     limit = max(1, min(int(limit or 50), 200))
@@ -833,9 +669,7 @@ def get_confession_reports_data(
 
         confession_ids = {report.confession_id for report in reports if report.confession_id}
         comment_ids = {report.comment_id for report in reports if report.comment_id}
-        # One bulk read per target table rather than a query per row: this is the N+1 mistake
-        # the confession admin list is called out for, and a queue grows with every report
-        # filed rather than with the page being read.
+        # One bulk read per target table, not a query per row (the N+1 mistake).
         confessions = {
             str(row.id): row for row in session.scalars(
                 select(ConfessionRecord).where(ConfessionRecord.id.in_(confession_ids))
@@ -847,8 +681,7 @@ def get_confession_reports_data(
             ).all()
         } if comment_ids else {}
 
-        # A comment's parent confession is needed for the context line even when the comment
-        # itself is not reported, so these ids are collected before the author lookup.
+        # Parent confessions are collected even for unreported comments, for the context line.
         parent_ids = {comment.confession_id for comment in comments.values()}
         parents = {
             str(row.id): row for row in session.scalars(
@@ -856,15 +689,9 @@ def get_confession_reports_data(
             ).all()
         } if parent_ids else {}
 
-        # The author of an anonymous confession is deliberately absent from this set: the row
-        # is never loaded, so the identity is not in this process to be filtered out later.
-        #
-        # The same rule applies to a *parent* confession reached through a reported comment. A
-        # comment report points at a post, and showing that post's author would make reporting a
-        # comment on an anonymous confession a way to de-anonymise it -- which is exactly the
-        # promise this codebase refuses to break anywhere else. So a non-anonymous parent's
-        # author is loaded and an anonymous one's is not, and the payload below reports the
-        # difference as ``author: None`` with ``anonymous: true`` rather than as a missing key.
+        # Anonymous authors (post or parent) are never loaded: a comment report on an
+        # anonymous confession must not become a way to de-anonymise it. The payload
+        # reports ``author: None`` with ``anonymous: true`` rather than a missing key.
         author_ids = {row.author_id for row in confessions.values() if not row.anonymous}
         author_ids |= {row.author_id for row in parents.values() if not row.anonymous}
         author_ids |= {row.user_id for row in comments.values()}
@@ -874,10 +701,8 @@ def get_confession_reports_data(
             ).all()
         } if author_ids else {}
 
-        # The reporter's name is snapshotted on the report row, but the live row wins: a
-        # participant who has since changed their name should appear under the name they have
-        # now, not the one they filed under. The snapshot is the fallback for a reporter whose
-        # row cannot be read at all -- including automated reports, which carry
+        # The live reporter row wins over the filed-time snapshot (names change); the snapshot
+        # is the fallback when the row is unreadable -- automated reports carry
         # reported_by_id IS NULL and display exactly "Azure Content Safety".
         reporter_ids = {report.reported_by_id for report in reports if report.reported_by_id is not None}
         reporters = {
@@ -895,8 +720,7 @@ def get_confession_reports_data(
             confession = parents.get(str(comment.confession_id)) if comment else None
             content = comment.body if comment else None
             content_created_at = comment.created_at if comment else None
-            # A commenter is always named. The parent confession's anonymity governs the post,
-            # not the people replying to it in the open.
+            # A commenter is always named: the parent's anonymity governs the post, not its open replies.
             author_hidden = False
             author = authors.get(comment.user_id) if comment else None
             target_id = str(report.comment_id)
@@ -910,16 +734,11 @@ def get_confession_reports_data(
             author = None if author_hidden else authors.get(confession.author_id) if confession else None
             target_id = str(report.confession_id)
             confession_id = target_id
-        # The reported row itself, whichever kind it was, so the removal flag below reads one
-        # attribute instead of repeating the branch. It can be None even though the report
-        # exists -- see the note on ``content_removed``.
+        # Whichever target kind it was, so the removal flag below reads one attribute; may be None.
         target = comment if is_comment else confession
 
-        # The confession a reported comment sits on. Without it a moderator is judging a remark
-        # with no idea what it was a remark *about* -- and whether a comment is a threat or a
-        # joke often turns entirely on the post it answers. Present only for comment reports:
-        # for a confession report the parent is the reported content itself, already in
-        # ``content``, and repeating it would double the card for no information.
+        # The post a reported comment sits on: whether a remark is a threat or a joke often
+        # turns on what it answers. Comment reports only; a confession report's parent is its content.
         parent_confession = None
         if is_comment and confession is not None:
             parent_author = (
@@ -930,13 +749,11 @@ def get_confession_reports_data(
                 "body": confession.body,
                 "recipient_name": confession.recipient_name,
                 "created_at": serialize_datetime(confession.created_at),
-                # Denormalised on the confession already, so this costs no extra read, and it is
-                # what turns the comment from "a remark" into "the fourth of nine".
+                # Denormalised on the confession already; situates the comment in its thread.
                 "comment_count": confession.comment_count,
                 "anonymous": bool(confession.anonymous),
                 "content_removed": bool(confession.removed_at),
-                # Withheld for an anonymous parent, as above. The key is still present so the
-                # client can tell "anonymous" from "author gone".
+                # Withheld for an anonymous parent; the key is present so the client can tell "anonymous" from "author gone".
                 "author": None if parent_author is None else {
                     "id": str(parent_author.id),
                     "name": parent_author.name,
@@ -962,10 +779,7 @@ def get_confession_reports_data(
             "author_hidden": author_hidden,
             "reporter": {
                 "id": str(report.reported_by_id) if report.reported_by_id is not None else None,
-                # Prefer the live row: a participant who has since changed their name should
-                # appear under the name they have now, not the one they filed under.
-                # Automated reports have no live row; the snapshot ("Azure Content
-                # Safety") is the display contract.
+                # Live row wins over the snapshot (names change); automated reports have only the snapshot.
                 "name": reporter.name if reporter else report.reported_by_name,
                 "regno": reporter.regno if reporter else None,
             },
@@ -974,15 +788,9 @@ def get_confession_reports_data(
             "status": report.status,
             "reviewed_at": serialize_datetime(report.reviewed_at),
             "reviewed_by_regno": report.reviewed_by_regno,
-            # Whether the reported content is already taken down. The screen cannot infer it
-            # from ``status``: a content admin can remove a confession without a report ever
-            # existing, and a moderator has to see that before choosing between the two.
-            #
-            # ``target`` rather than the two branches above, so the flag reads one attribute
-            # instead of repeating the branch. The ``is not None`` is defensive: both targets are
-            # reachable only through a cascade that would have taken the report with them, so in
-            # practice the row is always there. It costs one attribute check and keeps a future
-            # non-cascading delete from turning into a 500 on the moderation screen.
+            # Already-taken-down flag; not inferable from ``status`` (content can be removed with
+            # no report ever filed). Reads ``target`` -- the ``is not None`` is defensive against
+            # a future non-cascading delete becoming a 500 on the moderation screen.
             "content_removed": bool(target.removed_at) if target is not None else False,
             "removed_at": serialize_datetime(target.removed_at) if target is not None else None,
             "removed_by_regno": target.removed_by_regno if target is not None else None,
@@ -1003,11 +811,8 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
         blocked_users = session.scalar(select(func.count()).select_from(UserRecord).where(
             UserRecord.is_blocked.is_(True)
         )) or 0
-        # Staff counted separately rather than folded into ``total_users``: the dashboard's
-        # "users" figure is the participant population, and adding moderators to it would
-        # quietly change what a number the staff reads every day means. Blocked accounts are
-        # summed across all three tables so the count still answers "how many accounts are
-        # blocked", which is a question about accounts and not about participants.
+        # Staff are counted separately: the dashboard's "users" figure is the participant
+        # population. Blocked accounts are summed across all three tables -- the question is about accounts.
         blocked_accounts = blocked_users + sum(
             session.scalar(select(func.count()).select_from(model).where(
                 model.is_blocked.is_(True)
@@ -1023,9 +828,7 @@ def get_admin_statistics_data(db: Database) -> Dict[str, Any]:
 
     active_sessions = count_active_sessions(db)
 
-    # Read through the same helper the report queues are counted by, so the dashboard's
-    # backlog figure cannot drift from the queues behind it. Only `pending` rows are counted:
-    # a report that has already been ruled on is not work anyone is waiting on.
+    # Counted via the shared queue helper so the dashboard figure cannot drift from the queues; only `pending` rows are work.
     report_queues = pending_report_totals(db)
     pending_reports = sum(report_queues.values())
 
@@ -1052,12 +855,7 @@ def _total_removals_expr(model: Any):
 
 
 def _apply_account_search(model: Any, filters: list, query: Optional[str], *, include_department: bool) -> None:
-    """Append a case-insensitive substring match on identity columns to ``filters``.
-
-    Done in SQL rather than in Python so a deployment with ten thousand participants never
-    loads them all to discard all but twenty. ``q`` matches name, regno and email on every
-    table, plus department on ``users`` where the column exists.
-    """
+    """Append a case-insensitive substring match on identity columns to ``filters``; done in SQL so ten thousand participants are never loaded to discard all but twenty."""
     cleaned = (query or "").strip()
     if not cleaned:
         return
@@ -1072,12 +870,7 @@ def _apply_account_search(model: Any, filters: list, query: Optional[str], *, in
 
 
 def _account_ordering(model: Any, account_type: str, sort: str):
-    """ORDER BY for one account table, honouring ``sort`` only where the column exists.
-
-    Staff tables have no year and no removal counters, so a participant sort requested
-    against one falls back to name order rather than erroring: the screen keeps one sort
-    control for a list that spans tables with different shapes.
-    """
+    """ORDER BY for one account table, honouring ``sort`` only where the column exists; staff tables fall back to name order."""
     if sort == "name_desc":
         return [model.name.desc(), model.id.asc()]
     if sort == "removals_desc" and account_type == AccountType.USERS.value:
@@ -1102,17 +895,7 @@ def get_admin_users_data(
 ) -> Dict[str, Any]:
     """One page of accounts for the profile-review screen, filtered and counted in SQL.
 
-    Every filter here is a WHERE and every page is a LIMIT/OFFSET on the database itself:
-    with ten thousand participants the backend reads and serialises at most ``limit``
-    participant rows (plus the handful of staff rows, which are capped per table), never
-    the whole population. The ``total`` beside the page is a COUNT with the same WHERE, so
-    the screen can page without ever holding the rows it is not showing.
-
-    ``skip``/``limit`` apply to the ``users`` page. Staff tables are tiny by construction
-    (their caps are an order of magnitude below the participant one), so when no
-    ``account_type`` is given the staff matches come back whole -- still behind a LIMIT --
-    alongside the one participant page. A caller that wants strict per-table paging asks
-    per ``account_type`` instead. Skip capped against deep-OFFSET DoS.
+    Every filter is a WHERE and every page a LIMIT/OFFSET on the database, so at most ``limit`` participant rows are read regardless of population; ``total`` is a COUNT with the same WHERE. Without ``account_type`` the (tiny, capped) staff matches come back whole alongside the one participant page; skip capped against deep-OFFSET.
     """
     skip = _clamp_skip(skip)
     limit = max(1, min(int(limit or 50), ADMIN_USERS_MAX_LIMIT))
@@ -1122,8 +905,7 @@ def get_admin_users_data(
         flagged = "all"
 
     wanted = [normalize_account_type(account_type)] if account_type else list(ACCOUNT_MODELS)
-    # An unrecognised account_type resolves to users by normalisation; refuse it instead so a
-    # typo cannot silently answer out of the participant table.
+    # An unrecognised account_type would resolve to users by normalisation; refuse so a typo cannot answer from the participant table.
     if account_type and not is_valid_account_type(account_type):
         from fastapi import HTTPException, status as _status
 
@@ -1167,8 +949,7 @@ def get_admin_users_data(
                 ).all()
             docs.extend(serialize_user_doc(_account_row_payload(current_type, row)) for row in rows)
 
-    # Stable cross-table order for the combined ("everything") shape: staff first by table,
-    # then the participant page in the order the database returned it.
+    # Stable cross-table order for the combined shape: staff first by table, then the participant page as the database returned it.
     if not account_type:
         order = {AccountType.ADMIN.value: 0, AccountType.MODERATOR.value: 1, AccountType.USERS.value: 2}
         docs.sort(key=lambda doc: (order.get(doc.get("account_type"), 9), str(doc.get("name") or "")))

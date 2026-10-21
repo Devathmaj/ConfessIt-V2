@@ -1,18 +1,4 @@
-"""The spotlight schedule: at most one featured game per UTC calendar date.
-
-Featured records are independent of sessions by design. Setting Wordle as the
-featured game for a date never creates, expires or otherwise touches any
-session; it only decides what the featured page highlights that day. The same
-game may be featured on many dates, but two games may never share one date --
-and that rule is a UNIQUE constraint on ``game_date``, not a UI convention, so
-two administrators pinning one day race the database and one of them is refused.
-
-A single game may not hold the spotlight more than seven days in a row: a
-write that would stretch its consecutive run past a week is refused, so the
-spotlight keeps rotating. Week-per-game blocks are still possible -- one game
-for a week, another for a day, then the first game again -- because only the
-unbroken run matters, never the total.
-"""
+"""Spotlight schedule: at most one featured game per UTC date with max 7 consecutive days."""
 
 from datetime import date, timedelta
 from typing import Optional
@@ -43,13 +29,7 @@ def _as_dict(row: FeaturedGameRecord) -> dict:
 def _chain_length(
     by_date: dict[date, str], game_id: str, day: date
 ) -> int:
-    """The consecutive-day run of ``game_id`` containing ``day``.
-
-    ``by_date`` maps the dates around ``day`` to the game holding each one,
-    already overlaid with whatever the write under validation would store.
-    Only the unbroken run through ``day`` counts: a gap or another game on
-    either side ends it.
-    """
+    """Calculate unbroken consecutive days game_id holds spotlight around day."""
     run = 1
     cursor = day - timedelta(days=1)
     while by_date.get(cursor) == game_id:
@@ -90,12 +70,7 @@ def _window_map(session, start: date, end: date) -> dict[date, str]:
 def set_featured(
     db: Database, game_date: date, game_id: str, created_by: str
 ) -> dict:
-    """Pin ``game_id`` as the featured game for ``game_date``.
-
-    A date that already has a featured game is a 409 naming the date -- checked
-    here for the message, enforced by the schema for the race. A pin that
-    would stretch the game's consecutive run past a week is a 422.
-    """
+    """Pin game_id as featured game for date, enforcing uniqueness and run limits."""
     validate_game_id(game_id)
     with db.sessions() as session:
         existing = session.scalar(
@@ -134,16 +109,7 @@ def set_featured(
 def replace_featured(
     db: Database, game_date: date, game_id: str, created_by: str
 ) -> dict:
-    """Set ``game_id`` as the featured game for ``game_date``, replacing any pick.
-
-    Unlike :func:`set_featured` this never 409s: when another game holds the
-    date it is removed in the same transaction and the new pick is stored.
-    When the same game already holds the date the existing row is returned
-    unchanged (idempotent). League awards already finalized keep the snapshot
-    they were scored with -- finalization reads the schedule once at scoring
-    time and never re-derives it -- so replacing the spotlight only changes
-    which game earns 2x from now on.
-    """
+    """Set game_id as featured game for date, replacing existing pick if present."""
     validate_game_id(game_id)
     with db.sessions.begin() as session:
         existing = session.scalar(
@@ -172,10 +138,7 @@ def replace_featured(
                 session.add(row)
                 session.flush()
         except IntegrityError:
-            # Lost a replace race for this date (ENG-005): a concurrent replace
-            # committed first. Re-read the winner -- same game means converged
-            # (return it); another game won, so apply this replace onto the new
-            # state once more rather than answering 500.
+            # Retry replacement on concurrent race conflict.
             winner = session.scalar(
                 select(FeaturedGameRecord).where(
                     FeaturedGameRecord.game_date == game_date
@@ -205,14 +168,7 @@ def replace_featured(
 def set_featured_range(
     db: Database, start_date: date, end_date: date, game_id: str, created_by: str
 ) -> list[dict]:
-    """Feature ``game_id`` for every date from ``start_date`` to ``end_date``.
-
-    Each date in the span must be free of other games: the first date held by
-    another game is a 409 naming it, and nothing is stored. Dates the same
-    game already holds are kept as-is. A span whose consecutive run -- merged
-    with the same game's picks bordering it -- passes a week is a 422, like
-    the single-date pins.
-    """
+    """Feature game_id across date range, failing if any date is already taken."""
     validate_game_id(game_id)
     if start_date > end_date:
         raise HTTPException(
@@ -265,15 +221,7 @@ def set_featured_range(
 def replace_featured_range(
     db: Database, start_date: date, end_date: date, game_id: str, created_by: str
 ) -> list[dict]:
-    """Feature ``game_id`` for ``[start_date, end_date]``, erasing other picks.
-
-    Unlike :func:`set_featured_range` this never 409s: dates held by other
-    games are removed in the same transaction and the new picks stored. Dates
-    the same game already holds are kept as-is. A span whose consecutive run
-    -- merged with the same game's picks bordering it -- passes a week is a
-    422, like every other featuring write. League history is untouched:
-    awards snapshot ``is_featured`` at finalization time.
-    """
+    """Feature game_id across date range, overwriting conflicting picks."""
     validate_game_id(game_id)
     if start_date > end_date:
         raise HTTPException(

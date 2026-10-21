@@ -18,21 +18,18 @@ class RedisService:
     """Service for handling Redis Pub/Sub operations.
 
     Two pools, not one, because the two kinds of connection want opposite
-    things.
+    things. A *command* connection is short-lived (a publish, a rate-limit
+    counter, a ping); a *subscriber* connection is held for the life of a chat
+    socket, which can be minutes. Sharing one pool meant a busy chat drained
+    it for everybody on that worker: the REST send still answered 201, but the
+    publish could not get a connection, so the live echo never went out and
+    every conversation silently became poll-only -- the sender's own message
+    appeared to vanish, and the login rate limiter degraded with it.
 
-    A *command* connection is short-lived: a publish, a rate-limit counter, a
-    ping. A *subscriber* connection is held for the life of a chat socket, which
-    can be minutes. Sharing a single pool between them meant a busy chat drained
-    the pool for everybody on that worker: the REST send still stored the message
-    and still answered 201, but the publish could not get a connection, so the
-    live echo never went out and every conversation on the worker silently
-    became poll-only. The sender's own message appeared to vanish, and the
-    login rate limiter -- which rides the same pool -- degraded with it.
-
-    So the publishers have a pool of their own and the subscribers have a
-    ceiling of their own. The subscriber ceiling is the number of concurrent
-    live chats one worker serves: past it a new socket is refused, loudly and
-    only for that socket, while the open ones keep working.
+    So publishers get a pool of their own and subscribers get a ceiling of
+    their own: the number of concurrent live chats one worker serves. Past it
+    a new socket is refused, loudly and only for that socket, while the open
+    ones keep working.
     """
 
     def __init__(
@@ -62,13 +59,8 @@ class RedisService:
         """A pool with the deployment's connection options."""
         extra: dict[str, Any] = {}
         if self.redis_url.lower().startswith("rediss://"):
-            # TLS is the point of the scheme, so it is enforced rather than
-            # negotiated: the server must present a valid certificate for its
-            # hostname, and a handshake that cannot prove that fails instead of
-            # falling back to cleartext. Anything that must cross a network --
-            # chat traffic included -- belongs on a rediss:// URL.
-            # Password (from the URL userinfo) and TLS are both honoured by
-            # from_url; nothing here downgrades or strips them.
+            # Require certificate verification; never downgrade to cleartext.
+            # URL credentials and TLS settings are passed through to ``from_url``.
             extra["ssl_cert_reqs"] = ssl.CERT_REQUIRED
             extra["ssl_check_hostname"] = True
         return redis.connection.ConnectionPool.from_url(
@@ -133,14 +125,9 @@ class RedisService:
         """
         Publish a message to a conversation channel.
 
-        Args:
-            conversation_id: PostgreSQL conversation str as string
-            message_data: Message data dictionary
-
-        Returns:
-            True if published successfully, False on outage (explicit, never
-            silent: failures are logged at error level so a chat outage pages
-            rather than hiding behind a boolean the caller ignores).
+        Returns True if published, False on outage -- an explicit signal,
+        logged at error level so a chat outage pages rather than hiding behind
+        a boolean the caller ignores.
         """
         try:
             channel = f"conversation:{conversation_id}"
@@ -167,14 +154,11 @@ class RedisService:
         """
         Subscribe to a conversation channel.
 
-        The subscription holds its connection for as long as the socket lives, so
-        it comes from the subscriber pool -- never from the one the publishers
-        use. A full subscriber pool means this worker is already serving as many
-        live chats as it can: the socket is refused, and the refusal says so
-        rather than quietly turning the whole worker poll-only.
-
-        Args:
-            conversation_id: PostgreSQL conversation str as string
+        The subscription holds its connection for as long as the socket lives,
+        so it comes from the subscriber pool -- never from the publishers'.
+        A full subscriber pool means this worker already serves as many live
+        chats as it can: the socket is refused, and the refusal says so rather
+        than quietly turning the whole worker poll-only.
 
         Returns:
             PubSub object or None
@@ -202,11 +186,10 @@ class RedisService:
         return pubsub
 
     def subscriber_capacity_reached(self) -> bool:
-        """Whether this worker is already serving as many live chats as it can.
+        """Whether this worker already serves as many live chats as its ceiling.
 
-        The subscriber pool's ceiling is the live-chat ceiling: past it a new
-        socket is refused, while the open ones carry on. Callers read this to
-        tell a capacity refusal from a Redis outage.
+        Callers read this to tell a capacity refusal from a Redis outage;
+        past the ceiling a new socket is refused while open ones carry on.
         """
         with self._lock:
             return self._live_subscriptions >= self.pubsub_pool_max

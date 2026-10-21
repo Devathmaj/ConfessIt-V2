@@ -23,12 +23,7 @@ from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
 
 router = APIRouter(prefix="/leaderboards", tags=["Leaderboards"])
 
-# Server-calculated league standings, read from the persisted award ledger.
-# Every route resolves the caller as a participant like the rest of the
-# player-facing games surface. Scores are never computed from raw
-# browser-side results: finalization writes awards first, these endpoints
-# only query them. Native answers, words, prompts and selections never
-# travel through these responses -- only performance numbers.
+# Server-calculated league standings read from the persisted award ledger.
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
@@ -50,12 +45,7 @@ def individual_board(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> LeagueIndividualBoard:
-    """Ranked individual standings: global, or one game's board.
-
-    ``period`` is daily, weekly, monthly or all-time in UTC; ``anchor``
-    selects the day/week/month (default: today UTC). ``game_id`` narrows an
-    individual game to its own board -- a couple game is refused here.
-    """
+    """Ranked individual standings: global or a single game's board."""
     del user  # identity gates the route; standings are not per-user.
     if game_id is not None:
         board = league_boards.game_board(
@@ -80,12 +70,7 @@ def couples_board(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> LeagueCoupleBoard:
-    """Ranked couple standings: global, or one couple game's board.
-
-    Each canonical pair is one entry; member order never duplicates a
-    couple. ``game_id`` narrows a couple game to its own board -- an
-    individual game is refused here.
-    """
+    """Ranked couple standings: global or a single couple game's board."""
     del user
     if game_id is not None:
         board = league_boards.game_board(
@@ -114,11 +99,7 @@ def game_board(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ):
-    """One game's normalized leaderboard for one period and subject type.
-
-    Unavailable combinations are refused: individual games have no couple
-    board and couple games have no individual board.
-    """
+    """One game's normalized leaderboard for a period and competition type."""
     del user
     board = league_boards.game_board(
         db, game_id=game_id, competition_type=competition_type,
@@ -135,10 +116,7 @@ def my_standing(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> LeagueMyStanding:
-    """The caller's own entries on one board, with ranks.
-
-    For couples, every canonical pair the caller belongs to is returned.
-    """
+    """The caller's own entries and ranks on one board."""
     board = league_boards.my_standing(
         db, user_id=user.id, competition_type=competition_type,
         period=period, anchor=anchor,
@@ -154,12 +132,7 @@ def game_categories(
     game_id: str,
     user: UserDetails = Depends(require_participant),
 ) -> List[GameCategoryInfo]:
-    """The selectable leaderboard views for one game.
-
-    Each category names its scope: ``period`` aggregates the selected UTC
-    window, ``record`` is an all-time personal record across all finalized
-    history. Unknown games are refused.
-    """
+    """Selectable leaderboard category views for one game."""
     del user
     return [
         GameCategoryInfo(**info)
@@ -181,12 +154,7 @@ def game_category_board(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> GameCategoryBoard:
-    """One game's category leaderboard, ranked over the full filtered set.
-
-    Categories rank finalized native results by their own metric -- never
-    session placements -- and never feed the global leaderboard. Record
-    categories answer all-time history regardless of the rolling window.
-    """
+    """One game's category leaderboard ranked by native metrics."""
     del user
     board = league_game_boards.category_board(
         db, game_id=game_id, category=category,
@@ -207,10 +175,7 @@ def game_category_me(
     db: Database = Depends(get_db),
     user: UserDetails = Depends(require_participant),
 ) -> GameCategoryMe:
-    """The caller's own rows on one category board, with full-dataset ranks.
-
-    For couples, every canonical pair the caller belongs to is returned.
-    """
+    """The caller's own entries and ranks on one category board."""
     board = league_game_boards.category_me(
         db, game_id=game_id, category=category, user_id=user.id,
         period=period, anchor=anchor,

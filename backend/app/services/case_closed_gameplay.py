@@ -153,12 +153,11 @@ def _canonical(a: str, b: str) -> tuple[str, str]:
 def _event_deadline(game: CaseClosedGameRecord) -> Optional[datetime]:
     """The session's actual end instant.
 
-    Game periods use an *exclusive* end date: a session whose
-    ``period_end_date`` is January 3 is playable through January 2 and ends at
-    00:00 UTC on January 3, which is when the scheduler is due to roll it over.
-    Chat retention and the deadline shown to players share this one value;
-    there is no separate end-of-day timestamp that could disagree with the
-    scheduler.
+    Game periods use an *exclusive* end date: a ``period_end_date`` of
+    January 3 is playable through January 2 and ends at 00:00 UTC on January
+    3, when the scheduler is due to roll it over. Chat retention and the
+    deadline shown to players share this one value, so there is no separate
+    timestamp that could disagree with the scheduler.
     """
     if game.period_end_date is None:
         return None
@@ -192,8 +191,9 @@ def _available_lead_ids(
         if not req.issubset(discovered_evidence_ids):
             continue
         out.append(nxt)
-    # Fallback: unvisited initials remain прыгable when the cursor dead-ends,
-    # so a couple can still use all five actions across openers.
+    # Fallback: unvisited initials remain enterable when the cursor dead-ends,
+    # so a couple can still use all five actions across openers. Initials are
+    # always enterable at any time -- no prereqs on depth-0.
     for lid in initials:
         if lid not in my_visited and lid not in out and lid in by_lead:
             # Only add if not already the cursor's child set; initials are
@@ -865,11 +865,10 @@ def _notify_culprit_reveal(
     """Tell every participant who the culprit was, best effort.
 
     The notice names the culprit (and the reveal's title) and nothing about
-    the reader -- not their accusation, not whether it was right, not their
-    score; those live behind the game's own screen. When the package cannot
-    name the culprit there is nothing honest to send, so nothing is sent. A
-    failed write is logged, never raised: the reveal is already committed
-    and the inbox is not the result.
+    the reader -- not their accusation, correctness or score. When the
+    package cannot name the culprit there is nothing honest to send, so
+    nothing is sent. A failed write is logged, never raised: the reveal is
+    already committed and the inbox is not the result.
     """
     if not recipient_ids:
         return

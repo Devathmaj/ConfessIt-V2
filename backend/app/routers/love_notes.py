@@ -37,12 +37,7 @@ class UserRecipient(BaseModel):
     id: str
     name: str
     emoji: Optional[str] = None
-    # Both NOT NULL on ``users``. Kept as separate fields rather than one display string so the
-    # cohort filter on this screen can compare either half independently -- which it could not do
-    # when they were one ``class_name`` column.
-    # ``year`` is an ``int`` because that is what ``users.year`` holds. Declaring it ``str`` here
-    # does not quietly stringify it -- Pydantic v2 refuses int->str -- so it fails response
-    # validation and takes the whole recipient list down with a 500.
+    # Keep year and department separate for cohort filters; year matches the DB integer type.
     year: int
     department: str
     gender: str
@@ -56,9 +51,8 @@ class RecipientListPage(BaseModel):
     """
     One page of the recipient list, with the total behind it.
 
-    An envelope rather than a bare list because the picker pages: ``total`` is what tells
-    the screen how many people are left below the page it already holds, and the rows
-    themselves are still validated one by one as ``UserRecipient``.
+    An envelope rather than a bare list because the picker pages: ``total``
+    tells the screen how many people are left below the page it already holds.
     """
     users: List[UserRecipient]
     total: int
@@ -77,11 +71,11 @@ def get_all_users(
     department: Optional[str] = Query(None, max_length=USER_DEPARTMENT_MAX, description="Exact department, case-insensitive."),
 ):
     """
-    Used to fetch one page of users available as note recipients, excluding the current user.
+    Fetch one page of users available as note recipients, excluding the current user.
 
-    Every filter is a SQL WHERE and the page a SQL LIMIT/OFFSET: with thousands of
-    participants the backend reads and serialises at most ``limit`` rows, never the whole
-    table, and the search matches names in the database rather than over a loaded list.
+    Every filter is a SQL WHERE and the page a SQL LIMIT/OFFSET, so the backend
+    reads and serialises at most ``limit`` rows, and the search matches names
+    in the database rather than over a loaded list.
     """
     return get_all_users_service(
         db,
@@ -102,10 +96,9 @@ def get_all_cohorts(
     """
     Every ``(year, department)`` pair a recipient on this screen belongs to.
 
-    Renamed from ``/classes`` along with the column it was derived from. The old name described a
-    single column that no longer exists, and the filter on the client is now genuinely over two
-    fields -- the year and "CSE" are chosen separately rather than by picking one pre-joined
-    string that happened to contain both.
+    Renamed from ``/classes`` along with the column it was derived from; year
+    and department are now chosen separately rather than by picking one
+    pre-joined string that contained both.
     """
     return get_all_cohorts_service(db)
 
@@ -119,22 +112,11 @@ def send_love_note(
     """
     Used to send a love note. The note is marked as 'pending_review'.
     """
-    # A signed image URL does not expire, so the response that carries it must not be cached:
-    # a copy in a browser or proxy cache would keep the capability alive long after the user
-    # closed the page. ``no-store`` is the point, not ``no-cache`` -- revalidation only helps
-    # if the revalidation is against a server that can *retract* the URL, and this one cannot.
+    # Signed URLs never expire, so disable caching.
     response.headers["Cache-Control"] = "no-store"
-    # The URL is also a bearer credential that must not leak sideways: a ``Referer`` header
-    # sent with a later navigation would deposit it in a third party's logs, so responses
-    # that mint one ask for no referrer (the ``referrerpolicy`` attributes on the love-note
-    # images themselves are what enforce this on the actual image fetches).
+    # Prevent the URL from leaking to later navigations through the Referer header.
     response.headers["Referrer-Policy"] = "no-referrer"
-    # A fast-fail, not the rule. The season is claimed by a conditional update in the
-    # service, inside the note's own transaction, because a read on the way in is a
-    # read-then-write: two sends in flight both see an unspent season and both believe
-    # they hold it. This check exists only so that the ordinary second send of the
-    # season is turned away before it uploads an image -- the service refuses it either
-    # way, and refuses it authoritatively.
+    # Fast-fail before upload; the service's conditional update enforces the limit.
     if current_user.love_notes_send_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -172,24 +154,24 @@ def get_received_love_notes(
     limit: int = Query(50, ge=1, le=100, description="How many of the reader's notes to return. Clamped so one request can never mint delivery URLs for the whole inbox at once."),
 ):
     """
-    Used to fetch one page of accepted love notes sent to the current user.
+    Fetch one page of accepted love notes sent to the current user.
 
-    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter, so a
-    much-loved reader loads downwards instead of all at once -- which matters doubly
-    here, because every row carries a freshly minted image URL.
+    The page is a SQL LIMIT/OFFSET and ``total`` a COUNT under the same filter,
+    so a much-loved reader loads downwards instead of all at once -- which
+    matters doubly here, because every row carries a freshly minted image URL.
     """
-    # Same reasoning as the send response: the signed URLs in this body do not expire, so
-    # nothing downstream may cache them. The inbox is also exactly where the URLs *cluster*,
-    # which is why the header matters as much here as on the response that first issued one.
+    # Same reasoning as the send response: these signed URLs do not expire, so
+    # nothing downstream may cache them -- and the inbox is exactly where the
+    # URLs cluster.
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     # Find all love notes sent to current user with status 'approved'
     filters = [
         LoveNoteRecord.recipient_id == current_user.id,
         LoveNoteRecord.status == "approved",
-        # A note taken down for a report leaves the inbox. ``status == "approved"`` is
-        # not enough on its own: the removal is a separate decision from approval, and a
-        # note can be approved and then removed later, which is the case this catches.
+        # A note taken down for a report leaves the inbox: removal is a separate
+        # decision from approval, and a note can be approved and then removed
+        # later.
         LoveNoteRecord.removed_at.is_(None),
     ]
     with db.sessions() as session:
@@ -209,12 +191,7 @@ def get_received_love_notes(
             sender_name = "Anonymous" if note.anonymous or not sender else sender.name or "Unknown"
             result.append({
                 "id": str(note.id), "from": sender_name, "body": note.body,
-                # The address is minted here, per reader, from the note's stored identity -- and
-                # only because this query has already established that the caller is the recipient
-                # of an approved, not-removed note. The signature inside it covers this one image's
-                # path and cannot be moved onto another, but it does **not** expire, which is why
-                # the response carrying it is ``Cache-Control: no-store`` and why minting a URL for
-                # an unentitled viewer would be a permanent leak, not a bounded one.
+    # Mint only for the approved recipient; this signed URL is a non-expiring bearer credential.
                 "image_url": love_note_image_url(
                     note,
                     viewer_id=current_user.id,
@@ -272,8 +249,8 @@ def report_received_love_note(
     """
     Report a love note the current user received.
 
-    A note can be reported by the recipient only, and only once. The report is not a
-    moderation action on the note: the note stays exactly as it was until staff act on the
-    report, so filing one does not silently retract a note somebody was shown.
+    Only the recipient can report, and only once. The report is not itself a
+    moderation action: the note stays exactly as it was until staff act, so
+    filing one does not silently retract a note somebody was shown.
     """
     return report_love_note_service(note_id, report_data, current_user, db)

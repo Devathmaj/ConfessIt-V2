@@ -1,43 +1,29 @@
 """Playing the Couple Questionnaire: the participant-facing half of the feature.
 
-``couple_service`` marks a day as featured and seeds the fifty shared templates.
-This module is everything that happens *afterwards*: choosing a partner without
-telling them, recognising two independent choices as mutual, dealing each mutual
-pair its own fixed set of 25 questions, collecting each side's original answers,
-asking each side to predict the other's, and scoring the predictions against the
-stored originals.
+``couple_service`` marks a day as featured and seeds the fifty shared templates;
+this module is everything afterwards -- partner selection, mutual matching,
+question dealing, original answers, predictions, and scoring.
 
-Five rules hold at the bottom of everything here.
+Five rules hold here:
 
-**A selection is pending, never a session.** Choosing someone writes one
-``couple_game_selections`` row keyed by the chooser -- no notification, no
-session, no questions, nothing the chosen user can see. Changing the choice
-updates the row, so the previous pick simply stops being active.
-
-**Mutual selection is the only thing that starts a game.** ``A → B`` plus
-``B → A`` creates exactly one session holding both users and the featured game
-it belongs to. ``A → B`` plus ``C → B`` plus ``B → C`` is a game for ``B + C``
-and nothing for A, because B never chose A back.
-
-**One pair, one session per game -- and one session per participant per game.**
-The pair is stored in canonical order with a unique constraint, and creation
-additionally refuses anyone who already plays in another session for the same
-featured game. Creation runs under one transaction-scoped advisory lock, so two
-simultaneous mutual completions serialize: the later committer sees the
-earlier one's committed choice and creates the one session, instead of both
-reading a one-sided board and creating none -- or minting two.
-
-**The session's questions are dealt once and read forever.** Twenty-five bank
-ids are drawn at creation -- five shared, ten exclusive per player -- and stored
-in ``couple_game_session_questions``. Every later read joins those rows; a
-refresh can never re-deal them. The prediction order is a seeded shuffle of the
-partner's fifteen, so it reads randomly yet identically on every load.
-
-**Originals and predictions are different rows.** An original answer is what a
-participant picked for their own question; a prediction is what the partner
-guessed they picked. Both are insert-only, the verdict is computed server-side
-at submit time against the stored original, and the partner's originals travel
-to a reader only inside the completed result.
+- **A selection is pending, never a session.** Choosing someone writes one
+  ``couple_game_selections`` row keyed by the chooser -- no notification, no
+  session, nothing the chosen user can see. Changing the choice updates the row.
+- **Mutual selection is the only thing that starts a game.** ``A → B`` plus
+  ``B → A`` creates exactly one session for that pair and the featured game;
+  unreciprocated choices are still games for whoever *did* pair up.
+- **One pair, one session per game -- and one session per participant per game.**
+  The pair is stored in canonical order with a unique constraint, creation
+  refuses anyone already in another session for the same game, and it runs
+  under a transaction-scoped advisory lock so two simultaneous mutual
+  completions serialize into exactly one session, never two or zero.
+- **The session's questions are dealt once and read forever.** Twenty-five bank
+  ids (five shared, ten exclusive per player) are stored in
+  ``couple_game_session_questions`` at creation; a refresh can never re-deal
+  them, and the prediction order is a seeded shuffle of the partner's fifteen.
+- **Originals and predictions are different rows.** Both are insert-only, the
+  verdict is computed server-side at submit time against the stored original,
+  and the partner's originals are revealed only inside the completed result.
 """
 
 import random
@@ -85,27 +71,16 @@ from ..postgres import Database, is_valid_id
 from ..utils import ilike_contains
 from .couple_service import format_couple_question
 
-# The answering-phase rendering of the bank placeholder: the person answering is
-# the one being asked about, so ``X`` reads as "you". Presentation only -- the
-# stored template is never rewritten -- and standalone-``X`` only, like the
-# partner-name substitution in ``couple_service``.
+# Answering-phase rendering of the bank placeholder: the person answering is the
+# one being asked about, so standalone ``X`` reads as "you". Presentation only --
+# the stored template is never rewritten; mirrors ``couple_service`` substitution.
 _YOU_PATTERN = re.compile(r"\bX\b")
 
-# Serialises session creation across concurrent selections. Two callers
-# completing a mutual selection at the same instant each read "one-sided" when
-# neither has committed yet, so without this both walk away with no session and
-# nobody ever retries them into one. Holding one transaction-scoped advisory
-# lock around the mutual check means the later committer always sees the
-# earlier one's committed choice -- exactly one session, never two, never zero.
-# Arbitrary but fixed, namespaced beside the account-cap keys: an advisory lock
-# is a number the callers agree on, and this one must not be reused elsewhere.
+# Serializes mutual-selection completion so the second transaction sees the
+# first choice and can create the shared session. Keep this lock key unique.
 _COUPLE_SESSION_LOCK_KEY = 7_250_001
 
-# The page the partner picker gets when it asks for none, and the ceiling it is
-# clamped to. Mirrors ``LOVE_NOTE_RECIPIENTS_MAX_LIMIT``: the endpoint refuses
-# anything larger, so no client -- present or future, well-meaning or not --
-# can ask for every participant at once and make the backend materialise them
-# all.
+# Bound partner-picker pages to avoid loading every participant at once.
 COUPLE_PARTNERS_PAGE_DEFAULT = 50
 COUPLE_PARTNERS_MAX_LIMIT = 100
 
@@ -184,24 +159,17 @@ def list_partners(
 ) -> CouplePartnerPage:
     """One page of participants the caller may choose, filtered and counted in SQL.
 
-    Every filter is a WHERE and the page is a LIMIT/OFFSET on the database
-    itself, with ``total`` a COUNT under the same filters, so the backend reads
-    and serialises at most ``limit`` rows however big the participant table
-    gets -- the picker never downloads the table to search or filter it in the
-    browser.
+    Every filter is a WHERE and the page is a LIMIT/OFFSET, with ``total`` a
+    COUNT under the same filters, so the picker never downloads the participant
+    table to browse or filter it in the browser.
 
-    What the page holds, and why:
-
-    * the caller is excluded -- nobody partners with themselves;
-    * ``query`` is a case-insensitive substring match on the name, run in SQL;
-    * ``gender_mode`` is the discovery aid the screen's toggle drives:
-      ``"different"`` (the default) hides the caller's own gender -- and only
-      that, so an ``other`` caller still sees everyone -- while ``"same"``
-      shows only it. Neither is a rule about who may be chosen: the chosen id
-      is validated on its own, and nothing about playing is decided here;
-    * ``year``/``department`` are the cohort filter, exact (department
-      case-insensitively), so the screen's single "CSE 1" option means both
-      halves at once.
+    ``gender_mode`` is the discovery aid the screen's toggle drives:
+    ``"different"`` (the default) hides the caller's own gender -- and only
+    that, so an ``other`` caller still sees everyone -- while ``"same"`` shows
+    only it. Neither is a rule about who may be chosen: the chosen id is
+    validated on its own. ``year``/``department`` are the exact cohort filter
+    (department case-insensitively), so the screen's single "CSE 1" option
+    means both halves at once.
 
     No opt-out filtering: blocked accounts stay listed for the same reason
     love-note recipients do -- visibility is not entitlement.
@@ -231,11 +199,7 @@ def list_partners(
         rows = session.scalars(
             select(UserRecord)
             .where(*filters)
-            # ``id`` seconds the name so two participants who share one still
-            # come back in the same order on every page: an unordered tail
-            # reshuffles between the count and the read, and a load-more list
-            # that reorders under the reader shows some people twice and skips
-            # others.
+        # Use ID as a stable tie-breaker so pagination cannot duplicate or skip rows.
             .order_by(UserRecord.name.asc(), UserRecord.id.asc())
             .offset(skip)
             .limit(limit)
@@ -260,10 +224,10 @@ def list_partners(
 def list_partner_cohorts(db: Database) -> List[Cohort]:
     """Every ``(year, department)`` pair a partner candidate can belong to.
 
-    The same distinct pairs the love-note recipient filter offers, from the
-    same query (``matchmaking_slot_service.list_participant_cohorts``): the
-    picker's single "CSE 1" option is a pair, so it is fed by the pairs that
-    actually exist in ``users`` rather than a hand-typed list that can drift.
+    Reuses ``matchmaking_slot_service.list_participant_cohorts`` -- the same
+    distinct pairs the love-note recipient filter offers, from the same query
+    -- so the picker's single "CSE 1" option is fed by the pairs that actually
+    exist in ``users`` rather than a hand-typed list that can drift.
     """
     from .matchmaking_slot_service import list_participant_cohorts
 
@@ -274,10 +238,10 @@ def _assemble_state(session, user: UserDetails) -> CoupleCurrentState:
     """Where the caller stands, derived from stored rows and nothing else.
 
     Reading creates nothing: a fresh caller reads ``selecting_partner`` with no
-    selection, and a returning one reads the same questions, predictions and
-    score they left. The partner's original answers are never carried except
-    inside the completed ``result`` -- that is the single moment the feature
-    exists to reveal them.
+    selection, a returning one reads the same questions, predictions and score
+    they left. The partner's original answers are never carried except inside
+    the completed ``result`` -- the one moment the feature exists to reveal
+    them.
     """
     _require_playable(session)
     game = _latest_playable_game(session)
@@ -557,17 +521,13 @@ def select_partner(
     """Record this caller's partner choice, creating a session only on mutual selection.
 
     The choice itself is an upsert of the caller's one selection row: no
-    notification goes out, no session is created, and nothing is revealed to the
-    chosen user. When the chosen user has already chosen this caller back, the
-    pair is mutual and one session is created holding both users and the current
-    featured game -- unless either side already plays in another session for
-    that game, in which case no second session is made.
-
-    The mutual check runs under one transaction-scoped advisory lock, so two
-    simultaneous completions serialize: the later committer sees the earlier
-    one's committed choice and creates the one session, while the earlier one
-    -- which could only see a one-sided board -- created none. Exactly one
-    session either way, never two and never zero.
+    notification, no session, nothing revealed to the chosen user. When the
+    chosen user has already chosen this caller back, one session is created
+    holding both users and the current featured game -- unless either side
+    already plays in another session for that game. The mutual check runs under
+    the session-creation advisory lock so simultaneous completions serialize
+    (see the module docstring); only the earlier committer's view could be
+    one-sided, and it correctly creates nothing.
     """
     if not is_valid_id(selected_user_id):
         raise HTTPException(
@@ -585,10 +545,8 @@ def select_partner(
     with db.sessions.begin() as session:
         from .game_configs import lock_game_for_play
 
-        # ENG-001: hold the lifecycle lock for the whole selection -- and take
-        # it *before* the pair lock below, the same order every gameplay
-        # transaction uses -- so a period rollover cannot end the global the
-        # new pair session is about to attach to.
+        # Acquire lifecycle before pair lock, matching other gameplay writes and
+        # preventing rollover during session creation.
         lock_game_for_play(session, "couple-questionnaire")
         target = session.get(UserRecord, str(selected_user_id))
         if target is None:
@@ -640,9 +598,9 @@ def select_partner(
 def _maybe_create_session(session, game: CoupleGameRecord, first_id: str, second_id: str) -> None:
     """Create the pair's session for this game, or leave the existing state alone.
 
-    Called under the session-creation advisory lock, so a concurrent mutual
-    completion cannot interleave: exactly one caller inserts, and every other
-    caller finds the committed row -- session and dealt questions together.
+    Called under the session-creation advisory lock, so exactly one concurrent
+    mutual completion inserts and every other caller finds the committed row --
+    session and dealt questions together.
     """
     user_a_id, user_b_id = sorted([first_id, second_id])
 
@@ -672,10 +630,8 @@ def _maybe_create_session(session, game: CoupleGameRecord, first_id: str, second
     if other is not None:
         return
 
-    # Insert-or-nothing: a concurrent mutual completion racing past the pair
-    # check above lands here instead of minting a second session. The rowcount
-    # of an ON CONFLICT DO NOTHING is not meaningful through this driver, so
-    # the re-read below -- not the count -- decides who deals the questions.
+            # The unique constraint prevents duplicate sessions; reread the winner
+            # because this driver's rowcount is unreliable for DO NOTHING.
     session.execute(
         pg_insert(CoupleGameSessionRecord)
         .values(
@@ -733,9 +689,9 @@ def submit_answer(
     session for the current featured game -- derived from the caller, so naming
     another session's ids answers nothing. Answers are insert-only: a second
     submit for the same question is a 409, and a prediction never touches this
-    table, so the original stays the canonical correct answer it will be scored
-    against. When the thirtieth original (both sides' fifteen) is stored, the
-    session moves to ``prediction`` in the same transaction.
+    table, so the original stays the canonical answer predictions get scored
+    against. The thirtieth (both sides' fifteen) moves the session to
+    ``prediction`` in the same transaction.
     """
     if not is_valid_id(payload.session_question_id):
         raise HTTPException(
@@ -830,11 +786,11 @@ def submit_prediction(
 
     The question must be one of the fifteen the *partner* answered -- predicting
     one's own questions is refused -- and the partner's original for it must
-    already exist, which the ``prediction`` status guarantees for every question
-    at once. The verdict is computed here, inside the transaction, from the
-    stored original: a client can neither mark itself correct nor learn the
-    original before the completed result reveals it. When the thirtieth
-    prediction lands, the session completes in the same transaction.
+    already exist (the ``prediction`` status guarantees this for every question
+    at once). The verdict is computed inside the transaction from the stored
+    original, so a client can neither mark itself correct nor learn the original
+    before the completed result reveals it. The thirtieth prediction completes
+    the session in the same transaction.
     """
     if not is_valid_id(payload.session_question_id):
         raise HTTPException(
@@ -881,11 +837,8 @@ def submit_prediction(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="That question is not part of your session.",
             )
-        # A shared question is answered by both sides, so it is "mine" to
-        # answer -- but a prediction names the *partner's* answer to it, a
-        # different row on the same session question. Owner None (shared) or the
-        # partner means the partner has an original here to predict; an
-        # exclusive of mine means there is nothing of theirs to guess at.
+    # Shared questions have both answers; predictions target the partner's answer.
+    # A caller's exclusive question has no partner answer to predict.
         partner_id = (
             str(session_row.user_b_id)
             if str(session_row.user_a_id) == user.id

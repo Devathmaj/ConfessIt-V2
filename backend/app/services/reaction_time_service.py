@@ -1,14 +1,4 @@
-"""Featuring the Reaction Time game for a day: the administrator's half.
-
-Featuring only pins the spotlight: Reaction Time *sessions* are opened by the
-reset loop under the game's own cadence, never by featuring, and there is no
-Update action for this game -- the session carries no content to configure
-(no word, no timing range, no difficulty), so a new period is playable the
-moment it opens. This endpoint keeps its request/response shape and delegates
-to the featured store, so the admin screen pins the spotlight without
-touching any session. The same shape the Couple Questionnaire keeps, for the
-same reason: one featured-date surface across games that need nothing else.
-"""
+"""Reaction Time administration: spotlight scheduling and featured date queries."""
 
 from datetime import date, datetime, timezone
 from typing import List, Optional
@@ -49,19 +39,7 @@ def _as_featured_model(row) -> ReactionTimeGame:
 def create_reaction_time_game(
     db: Database, payload: ReactionTimeGameCreate, created_by: str
 ) -> ReactionTimeGame:
-    """Feature the Reaction Time game for one day (spotlight pin, new table).
-
-    Featured dates live in ``featured_games`` -- one game per date across all
-    games -- while Reaction Time *sessions* live in ``reaction_time_games``
-    and are opened by the reset loop, never by featuring. This endpoint keeps
-    its request/response shape and delegates to the featured store, so the
-    admin screen pins the spotlight without touching any session.
-
-    The caller's ``regno`` is recorded as ``created_by`` rather than taken
-    from the payload: an administrator cannot feature a day attributed to
-    somebody else. A day that already holds a featured game (any game) is a
-    409, because the spotlight seats one game per date.
-    """
+    """Feature Reaction Time for one date, recording spotlight pick in featured_games."""
     from .featured_games import set_featured as _set_featured
 
     game_date = payload.game_date or _today()
@@ -88,12 +66,7 @@ def list_reaction_time_games(db: Database) -> List[ReactionTimeGame]:
 
 
 def get_reaction_time_game(db: Database, game_id: str) -> ReactionTimeGame:
-    """One featured date by id.
-
-    A malformed id is a 400 and a well-formed one that matches nothing is a
-    404, so a typo in a URL and a date that was never featured are told apart
-    rather than both reported as "not found".
-    """
+    """Fetch featured Reaction Time entry by ID."""
     from ..db_models import FeaturedGameRecord
 
     if not is_valid_id(game_id):

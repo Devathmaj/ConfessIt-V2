@@ -120,14 +120,8 @@ def snapshot_opened_safely(session, *, game_id: str, opportunity_id: str) -> Non
         )
 
 
-# Games whose individual-game boards are absolute-performance boards, not
-# placement boards: their game half is scored by the versioned absolute
-# profiles (computed independently from the global half), because their
-# intended board rules -- partial-progress credit, proportional couple
-# accuracy, binary escape success, correctness-plus-speed trivia -- are
-# absolute rules. Wordle, Anagram and Reaction Time keep placement-relative
-# game halves (their established ordering rules, including Reaction Time's
-# relative comparison).
+# These games score their game half from absolute performance; Wordle, Anagram,
+# and Reaction Time retain placement-relative game scores.
 ABSOLUTE_GAME_HALVES = frozenset({
     "trivia-drop",
     "connections",
@@ -137,16 +131,7 @@ ABSOLUTE_GAME_HALVES = frozenset({
 
 
 def _ranked_awards(subjects: list, is_featured: bool, game_id: str) -> list[dict]:
-    """Order subjects best-first, share tied positions' averaged points.
-
-    Each award carries two independently calculated halves: the ``game``
-    half (per-game-board behavior: placement-relative for Wordle, Anagram
-    and Reaction Time; absolute-profile for Trivia Drop, Connections,
-    Couple Questionnaire and Two-Key Escape, whose board rules are absolute)
-    and the ``global`` half (absolute-performance base from the versioned
-    profiles, never rank or field size). The featured multiplier applies
-    once to each half; neither half is derived from the other.
-    """
+    """Rank subjects and calculate independent game and global award points."""
     ordered = sorted(subjects, key=lambda item: item.order_key, reverse=True)
     total = len(ordered)
     awards: list[dict] = []
@@ -163,14 +148,11 @@ def _ranked_awards(subjects: list, is_featured: bool, game_id: str) -> list[dict
             relative_base = base_points_for_rank(positions[0], total)
         else:
             relative_base = averaged_tie_points(positions, total)
-        # The multiplier is placement-independent (1 or 2 for the whole
-        # opportunity), so one computation serves both halves.
+        # The featured multiplier applies equally to both scoring halves.
         _, multiplier = awarded_points(relative_base, is_featured)
         for item in group:
             if game_id in ABSOLUTE_GAME_HALVES:
-                # Absolute board rule: score the native result, not the
-                # placement. Each half invokes the profile separately so
-                # the game half never reuses the global half's number.
+                # Score native performance independently from the global half.
                 item_game_base = global_base_for(game_id, item.raw_metrics)
             else:
                 item_game_base = relative_base

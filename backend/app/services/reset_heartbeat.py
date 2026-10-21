@@ -2,29 +2,24 @@
 
 """The heartbeat of the daily game-reset tick: written by the tick, read by the backend.
 
-The 00:01 UTC game-reset tick runs in the scheduler sidecar -- a separate process
-that starts, does one pass and exits. Nothing it does outlives it, so a tick that
-stopped running left no trace at all: the cron entry broke, the sidecar would not
-start, the pass died before it could say anything, and the games simply stopped
-rolling over. The only symptom was a stale leaderboard days later, and nothing in
-the stack was watching for it.
-
-This module is the trace. The tick records the outcome of every pass in one row,
-and the backend reads that row and publishes it as a metric, so "the daily job has
-not succeeded since <time>" is a thing an alert can see. The alert itself lives in
+The 00:01 UTC tick runs in the scheduler sidecar -- a process that does one
+pass and exits, leaving nothing behind. A tick that stopped running (broken
+cron entry, dead sidecar, crash mid-pass) would otherwise go unwatched: the
+games simply stop rolling over, and the only symptom is a stale leaderboard
+days later. This module is the trace: every pass records its outcome in one
+row, the backend publishes that row as a metric, and the alert reading "the
+daily job has not succeeded since <time>" lives in
 ``observability/alerting-rules.yml``.
 
 Two rules decide what the heartbeat means:
 
-* **A failure does not erase the last success.** A failed pass records the attempt
-  and the error and leaves ``last_success_at`` alone. The age of the last success
-  is what says how long the job has really been broken, and one bad night should
-  not look like the job never ran at all.
+* **A failure does not erase the last success.** A failed pass records the
+  attempt and the error and leaves ``last_success_at`` alone -- the age of the
+  last success is what says how long the job has really been broken.
 * **Only the scheduled tick moves it.** The boot-time ensure and the manual
-  ``POST /admin/games/run-resets`` trigger roll the games over too, but they are
-  different events with different cadence: a deploy is not a daily job, and an
-  administrator pressing a button is not a schedule. The heartbeat answers "did the
-  scheduled tick run?", and only the scheduled tick answers it.
+  ``POST /admin/games/run-resets`` trigger roll the games over too, but a
+  deploy is not a daily job and a button press is not a schedule: the
+  heartbeat answers "did the scheduled tick run?".
 """
 
 from datetime import datetime, timezone
@@ -158,12 +153,11 @@ def _gauges():
 def publish_reset_heartbeat(db: Database) -> Optional[float]:
     """Publish the heartbeat as metrics. Returns the last-success stamp published.
 
-    Nothing is published when there is no heartbeat to publish: a stack whose tick
-    has never run has no series, and the alert for that is written against the
-    absence of the series rather than against a sentinel value. A sentinel would be
-    indistinguishable from a real timestamp the moment anybody read the series by
-    hand, and "no successful reset has ever been recorded" is a different fact from
-    "the last successful reset was at the epoch".
+    Nothing is published when there is no heartbeat to publish: a stack whose
+    tick has never run has no series, and the alert is written against that
+    absence rather than a sentinel value -- a sentinel would be
+    indistinguishable from a real timestamp, and "no successful reset has ever
+    been recorded" is a different fact from "the last success was at the epoch".
     """
     heartbeat = read_reset_heartbeat(db)
     if heartbeat is None:

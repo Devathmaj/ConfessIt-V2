@@ -39,17 +39,12 @@ def ilike_contains(column, cleaned: str):
 def validation_error_detail(exc: ValidationError) -> list:
     """The error list FastAPI itself would have produced for this payload.
 
-    A payload checked twice -- once by the model the API publishes and again by
-    the stricter model the service uses -- has a failure the framework never
-    sees. The second check raises ``ValidationError``, which is not an
-    ``HTTPException``, and an exception nobody handles is a 500 for a payload the
-    client got wrong.
-
-    The shape is the one FastAPI's own request validation answers with -- a list
-    of ``{type, loc, msg, input}`` -- so a client that reads the first error out
-    of the list needs no second shape to understand, and the field the payload
-    got wrong is named in the ``loc`` the way it is for a request validation
-    error.
+    A payload checked twice -- by the published model and then the stricter
+    service model -- can fail in a way the framework never sees: the second
+    check raises ``ValidationError``, which is not an ``HTTPException``, and an
+    unhandled one is a 500 for a payload the client got wrong. The shape
+    (``{type, loc, msg, input}``) matches FastAPI's own request validation so a
+    client needs no second error shape.
     """
     details = []
     for error in exc.errors():
@@ -66,14 +61,12 @@ def validation_error_detail(exc: ValidationError) -> list:
 def isoformat_datetime(value):
     """Serialize PostgreSQL ISO timestamp strings and Python datetimes uniformly.
 
-    Always emits an explicit UTC offset. A naive datetime would otherwise serialise to
-    something like "2026-09-28T12:01:36" with no zone at all, and every browser reads that
-    as *its own* local time rather than UTC -- so a stored-UTC instant would render several
-    hours off for the recipient, and it is not fixable downstream because the information
-    is simply absent. Coercing here keeps the wire format unambiguous, which is what lets
-    the client's parseTimestamp assume a bare timestamp means UTC.
-
-    Matches ``admin_service.serialize_datetime``, which already did this.
+    Always emits an explicit UTC offset: a naive datetime serialises with no
+    zone, every browser reads that as *its own* local time, and the information
+    is absent so it cannot be fixed downstream. Keeping the wire format
+    unambiguous is what lets the client's parseTimestamp assume a bare timestamp
+    means UTC. Matches ``admin_service.serialize_datetime``, which already did
+    this.
     """
     if isinstance(value, str):
         try:

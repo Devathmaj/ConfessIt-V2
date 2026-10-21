@@ -34,7 +34,5 @@ async def upload_profile_picture(
     db: Database = Depends(get_db),
     file: UploadFile = File(...)
 ):
-    """
-    Used to upload and set a new profile picture for the user.
-    """
+    """Upload and set a new profile picture for the user."""
     return await upload_profile_picture_service(current_user, db, file)

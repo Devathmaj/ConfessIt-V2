@@ -154,45 +154,10 @@ def _now() -> datetime:
 
 
 class AccountColumns:
-    """The columns every account table shares.
+    """Columns shared by participant, admin, and moderator account tables.
 
-    Kept as one mixin rather than copied three times so a field that is genuinely common
-    cannot drift between the tables -- ``last_login_ip`` being present for participants and
-    absent for staff would be a bug no type checker would catch, and the whole point of
-    splitting the tables is that the shared shape stays honest.
-
-    Deliberately *not* here: bio, year, department, interests, matchmaking_enabled, the
-    love-note toggles, ``gender`` and the two profile-picture columns. Those describe a
-    participant, and a staff account is not a participant, so storing them would only create
-    columns nothing writes and nothing reads.
-
-    ``gender`` used to be here, and the argument for it -- that matchmaking reads it, so a row
-    without it is a row every query must special-case -- was the argument for *users* stated as
-    though it were an argument for accounts. A staff row is never a matchmaking candidate, so
-    the column on ``admin`` and ``moderator`` held a value no query ever read while forcing
-    every staff create and edit payload to supply one. The same is true of the picture columns:
-    only a participant can upload a picture (``POST /profile/upload-picture`` is participant-only),
-    so the staff copy of those two columns could only ever be NULL. Both groups now live on
-    ``UserRecord`` alone.
-
-    ``email`` *is* here, on all three tables, and it is NOT NULL. It is how a person is
-    reached, and that is true of a moderator as much as a student: a staff account with no
-    address on it is an account nobody can be contacted about, and the moment that is
-    discovered is long after the row was written -- usually when the holder has left and the
-    address has to be recovered from somewhere else. The column was nullable on the reasoning
-    that creating a staff account is a deliberate act by somebody who already knows the regno,
-    which is true and irrelevant: the person filling in the form has an email address in front
-    of them, and requiring it costs nothing at that moment. ``PostgresClient.apply_not_null_
-    constraints`` backfills any legacy NULL with a visibly-fake placeholder and logs what it
-    touched, so an already-deployed database reaches the same state rather than refusing to
-    boot.
-
-    Uniqueness is per table, and that is the same rule ``regno`` follows: the constraint is
-    declared on the column, so PostgreSQL enforces it within one table and never across the
-    three. An address may therefore exist as a participant and as a moderator simultaneously.
-    Nothing resolves an account by email -- sign-in is regno-based, and sessions are pinned by
-    primary key -- so a shared address is a display fact rather than an ambiguity, exactly as
-    a shared regno now is.
+    Participant-only profile and matchmaking fields live on ``UserRecord``. Shared identity
+    fields, including required email, stay aligned through this mixin; uniqueness is per table.
     """
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=_uuid)
@@ -222,48 +187,11 @@ class AccountColumns:
 
 
 class UserRecord(AccountColumns, Base):
-    """A participant, and the only account table content can be attributed to.
+    """Participant account and attribution target for user-generated content.
 
-    **On participants and not on ``AccountColumns``:** the six ``*_report_count`` and
-    ``*_removal_count`` columns below describe *what a person has been reported for*, and
-    only a participant is ever reported -- a moderator's posts are not in anybody's report
-    queue, so a staff row would have six columns nothing ever writes and nothing reads. Same
-    reasoning as ``bio`` and the matchmaking toggles being absent from the mixin,
-    and the same reasoning that moved ``gender`` and the two profile-picture columns here:
-    matchmaking reads gender, and only a participant can upload a picture, so on a staff table
-    both would be columns nothing reads and a payload field nothing can honestly answer for.
-
-    **What the two columns per kind mean, and why there are two.** For each of the three kinds
-    of content a participant can be reported for, this table holds:
-
-    ``*_report_count``
-        Every report filed against this person's content of that kind, counted the moment the
-        report row is created. Includes reports a moderator later dismisses, so it is a measure
-        of *how often people complained*, not of wrongdoing.
-    ``*_removal_count``
-        Only those reports where a moderator took the content down. This is the authoritative
-        one -- it is the "report identity" of the participant, and the only one anything should
-        be decided on -- because every report counted in the first column that was dismissed was
-        somebody being wrong about content a moderator found fine.
-
-    The split is the whole point of storing both. A single number cannot distinguish a
-    participant whose content was reported once and vindicated from one whose content was taken
-    down once, and the second is the person an administrator needs to notice.
-
-    **Confessions and comments share one pair of columns.** A report queue does not separate
-    them (``ReportRecord`` discriminates by which nullable foreign key is set, and the Reports
-    Review screen is one screen), and a moderator's judgement about somebody writing a comment
-    on a confession is the same judgement as about the confession itself. Splitting them would
-    mean two numbers that no screen ever shows side by side and an admin would have to add up
-    mentally.
-
-    **How they are kept.** ``server_default`` of zero so a row written by a script or a raw
-    insert starts at zero rather than NULL, and the increments happen as SQL ``UPDATE ... SET n
-    = n + 1`` inside the same transaction as the report row or the removal stamp. Read-modify-
-    write through the ORM would lose an increment whenever two reports for the same person were
-    filed at once. See ``app.services.report_counters``, which is the only thing that writes
-    them -- and the one place the removal total is compared against the threshold above which
-    the account is blocked automatically.
+    Profile fields and report/removal tallies belong here, not on staff tables. Report counts
+    include complaints; removal counts track upheld actions and drive automatic blocking. The
+    shared counter service updates them atomically.
     """
 
     __tablename__ = "users"

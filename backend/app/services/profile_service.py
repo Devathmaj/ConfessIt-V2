@@ -24,22 +24,18 @@ from ..services.storage_service import storage_service
 # Logger
 logger = get_logger(__name__)
 
-# A participant may replace their profile picture once every PROFILE_PICTURE_COOLDOWN_DAYS.
-# The picture is not content anybody has to read -- it sits beside everything the account
-# posts -- so the throttle is not about protecting the feed. It is about a face being an
-# identity: a picture swapped every few minutes makes an account unrecognisable to anyone
-# who was starting to attach what they read to a person, and it is cheap to churn, so the
-# rule costs a participant nothing they were going to do anyway.
+# Limit profile-picture changes to reduce churn and keep participant identities recognizable.
 PROFILE_PICTURE_COOLDOWN_DAYS = 3
 
 
 def _picture_cooldown_message(seconds_remaining: float) -> str:
     """The sentence a participant is shown, from the number of seconds left.
 
-    The wait is quoted rather than a wall-clock instant, for the same reason the confession
-    cooldown quotes it: "try again in 2 days and 4 hours" is the answer to "why was I
-    refused", and a timestamp is not. The rule itself is stated in every copy of the
-    sentence, because a refusal is also where most participants first learn the rule exists.
+    The wait is quoted, not a wall-clock instant, for the same reason the
+    confession cooldown quotes it: "try again in 2 days and 4 hours" is the
+    answer to "why was I refused", a timestamp is not. The rule itself is
+    stated in every copy, because a refusal is also where most participants
+    first learn the rule exists.
     """
     days, remainder = divmod(int(seconds_remaining), 86400)
     hours = remainder // 3600
@@ -64,11 +60,11 @@ def _picture_cooldown_message(seconds_remaining: float) -> str:
 def _consume_picture_attempt(session, regno: str, now: datetime.datetime) -> bool:
     """Atomically claim the caller's one picture change for this window.
 
-    The conditional UPDATE is the same mechanism ``confession_service`` and
-    ``matchmaking_service`` use, and for the same reason: concurrent uploads contend on the
-    row lock, PostgreSQL re-evaluates the predicate against the committed version of the
-    row, and only the winner sees a row to update. Reading the column and writing it in a
-    later transaction would let every racing request observe "eligible".
+    Same conditional UPDATE as ``confession_service``/``matchmaking_service``:
+    concurrent uploads contend on the row lock, PostgreSQL re-evaluates the
+    predicate against the committed row, and only the winner sees a row to
+    update. Reading the column and writing it in a later transaction would
+    let every racing request observe "eligible".
 
     Returns True if this caller won the window.
     """
@@ -145,19 +141,16 @@ def _discard_uploaded_picture(public_id: str, owner_regno: str) -> None:
 class UserProfileUpdate(BaseModel):
     """Allowed fields for updating profile.
 
-    ``interests`` is typed with the closed vocabulary rather than left as free text for the
-    same reason it is on the participant's own account: this is a list that something has to
-    match on, so a bad value becomes a value nothing can match.
-
-    ``bio`` is capped against the column width, and the cap lives here rather than on the
-    admin payload because this is now the only path that writes it. Without it the
-    ``String(500)`` column would be the only limit, which means the participant gets a 500
-    from the database instead of a 422 naming the field -- and a response that says
-    "Internal Server Error" for a 501st character is not a useful one.
-
-    ``extra="forbid"`` so an unknown key is a 422 instead of a KeyError in the
-    field_map below (or a silently dropped edit): the map is an allowlist, and
-    anything outside it must fail loudly.
+    ``interests`` is typed with the closed vocabulary rather than left as
+    free text: it is a list something has to match on, so a bad value becomes
+    a value nothing can match. ``bio`` is capped against the column width
+    here because this is now the only path that writes it -- without it the
+    participant gets a 500 from the ``String(500)`` column instead of a 422
+    naming the field, and "Internal Server Error" for a 501st character is
+    not a useful response. ``extra="forbid"`` makes an unknown key a 422
+    instead of a KeyError in the field_map below (or a silently dropped
+    edit): the map is an allowlist, and anything outside it must fail
+    loudly.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -173,9 +166,10 @@ class UserProfileUpdate(BaseModel):
     def _validate_interests(cls, value: Optional[List[Interest]]) -> Optional[List[Interest]]:
         """De-duplicate and bound the list, sharing one rule with the admin write path.
 
-        Returns ``None`` for ``None`` rather than coercing it to a list, because ``None`` is
-        how ``exclude_unset`` distinguishes "left this field alone" from "set it to nothing";
-        collapsing the two here would let an unrelated profile edit clear somebody's interests.
+        Returns ``None`` for ``None`` rather than coercing it to a list:
+        ``None`` is how ``exclude_unset`` distinguishes "left this field
+        alone" from "set it to nothing"; collapsing the two would let an
+        unrelated profile edit clear somebody's interests.
         """
         if value is None:
             return None
@@ -244,37 +238,15 @@ async def upload_profile_picture_service(
     db: Database,
     file: UploadFile = File(...)
 ):
-    """Service to upload and set a new profile picture for the signed-in participant.
+    """Upload a participant picture after validation and moderation.
 
-    One change every ``PROFILE_PICTURE_COOLDOWN_DAYS`` days, and the order of the steps below
-    is what makes a *refused* attempt cost the participant nothing:
-
-    1. The body is read through the bounded reader and validated. An oversized upload is a
-       413 and a file that is not an image is a 400, both before the database is touched and
-       before anything is stored -- so neither can consume the one change.
-    2. The window is read and, if it is still running, refused -- still before anything is
-       stored, so a participant who is out of the window gets a 429 without an object ever
-       coming into existence.
-    3. The prepared bytes are moderated centrally (Azure Content Safety, Analyze Image).
-       A violating verdict spends the window, tells the staff and refuses with a 422
-       before anything is stored; a provider failure refuses with a retryable 503 and
-       spends nothing.
-    4. The upload to Cloudinary, which can only now be worth doing.
-    5. The claim itself, a conditional UPDATE, inside the same transaction that writes the
-       new identity -- to the row named by the caller's own regno, and only if there is one.
-       If it loses -- the race step 2 cannot see -- the row is left as it was, the
-       transaction rolls back, and the object from step 4 is discarded because no row names
-       it.
-
-    Steps 2 and 5 are two checks rather than one because only step 5 is atomic, and step 2
-    is not there for correctness: it is there so the ordinary case (a page left open, a
-    second click a minute later) does not pay for an upload and a delete to be told no.
+    The cooldown is checked early to avoid unnecessary uploads and claimed
+    atomically with the database write to handle races. Refused or failed writes
+    discard the uploaded object; moderation failures spend the cooldown only
+    for violating content, not provider outages.
     """
-    # The upload rules -- capped read, validation, Cloudinary -- live in
-    # ``account_picture_service`` because an admin performing the same upload on a
-    # moderator's row needs those rules too, and the row this needs is in the ``users``
-    # table only. What stays here is the part that *is* participant-specific: whether this
-    # participant may change it at all, and which row to write.
+    # Shared upload validation lives in account_picture_service; this function
+    # handles participant eligibility and writes the users row.
     contents = await read_and_prepare_account_picture(
         file=file,
         owner_regno=current_user.regno,
@@ -287,11 +259,8 @@ async def upload_profile_picture_service(
     if seconds_left > 0:
         raise _picture_cooldown_rejection(seconds_left)
 
-    # Moderation runs on the prepared bytes, before anything is stored: a
-    # violating image must never reach Cloudinary, and a provider failure must
-    # abort before the one change is spent (retryable, nothing consumed).
-    # Imported inside the call so tests patching the central module's
-    # attributes keep intercepting, the same way confession_service does it.
+    # Moderate prepared bytes before storage. Provider failures abort before the
+    # cooldown is spent; keep the import local for service-level patching.
     from ..services.content_safety_service import (
         CONTENT_PROFILE_PICTURE,
         ContentSafetyError,
@@ -320,13 +289,8 @@ async def upload_profile_picture_service(
         ) from exc
 
     if decision.should_block:
-        # A refused image still spends the participant's one change for the
-        # window: the rule limits how often the picture may change at all, and
-        # having the attempt land lets staff see the try. Claimed with the
-        # same conditional UPDATE as the accepted path, so racing uploads
-        # cannot both notify or both slip past the wait; the loser is out of
-        # the window and gets the ordinary 429. Nothing is stored and no
-        # report row is written -- the staff notification is the trace.
+    # A moderation refusal spends the change window. The conditional update
+    # prevents racing uploads; no image or report row is stored.
         with db.sessions.begin() as session:
             if not _consume_picture_attempt(session, current_user.regno, now):
                 raise _picture_cooldown_rejection(
@@ -351,23 +315,16 @@ async def upload_profile_picture_service(
         actor_regno=current_user.regno,
     )
 
-    # The replacement is written and committed before the old object is retired, and the value
-    # being replaced is read inside that same transaction rather than from the caller's model.
-    # The order is the whole point: a row that still names a deleted object is worse than a
-    # leftover one, because nothing the owner does can bring the picture back. Reading it here
-    # also means two uploads racing each other cannot both decide they are replacing the same
-    # object and delete the winner's picture out from under the row.
+    # Lock and read the current object in the write transaction. Commit the replacement
+    # before retiring the old object so racing uploads cannot delete the winner's image.
     previous_public_id: Optional[str] = None
     try:
         with db.sessions.begin() as session:
             user = session.scalar(
                 select(UserRecord).where(UserRecord.regno == current_user.regno).with_for_update()
             )
-            # The only row this service can write is the one selected by the caller's own regno,
-            # so authorisation here means "there is a row for this account to be authorised
-            # against". An authenticated session whose account has since disappeared gets a
-            # refusal rather than a success that changed nothing, and the object uploaded above
-            # is dropped by the handler below along with every other refusal.
+            # The authenticated account may have been deleted since sign-in; refuse and
+            # discard the uploaded object instead of reporting a no-op success.
             if user is None:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -387,19 +344,8 @@ async def upload_profile_picture_service(
         _discard_uploaded_picture(result["public_id"], current_user.regno)
         raise
     except Exception:
-        # The same is true of a fault that is not a refusal. A dead connection, a
-        # constraint, a timeout -- anything the database answers with an exception --
-        # rolls the transaction back exactly as a refusal does, so the row names the
-        # previous picture and the object just uploaded is named by nothing. This used
-        # to be the one path that left the object behind, because the cleanup only
-        # ran for an HTTPException: every upload that failed on the database leaked
-        # a Cloudinary object that no row would ever name and no owner could ever
-        # replace, and the leak was silent -- the account kept its old picture and
-        # the storage grew.
-        #
-        # So the cleanup covers every way out of the transaction, and the original
-        # failure is re-raised: a database fault is still a database fault, and
-        # answering it as something else would hide it.
+        # The transaction rolled back, so discard the orphaned upload and preserve the
+        # original database error for the caller.
         logger.error(
             "Profile picture upload for regno_hash=%s failed after the object was stored; "
             "discarding the orphaned object",

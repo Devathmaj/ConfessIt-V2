@@ -14,18 +14,15 @@ from .services.auth_service import TOKEN_HASH_DOMAIN_MAGIC, hash_token
 def create_and_store_magic_token(
     db: Database, account_id: str, account_type: str, request: Request
 ) -> tuple[str, datetime]:
-    """
-    Used to generate a magic link token, store its hashed version in the database,
+    """Generate a magic link token, store its hashed version in the database,
     and return the unhashed token plus the exact expiry the stored row was given.
 
-    ``account_type`` is the account's own table. It is stored on the token because a regno
-    is only unique within a table: without it, a token minted for an admin and a token
-    minted for a participant carrying the same regno would be indistinguishable at
-    redemption, and "which account was this link for" would have no single answer.
-
-    The expiry comes back alongside the token because a sign-in page counts the token's
-    remaining life down, and it should count against the server's own deadline, not a
-    value it guessed at.
+    ``account_type`` is the account's own table, stored on the token because a
+    regno is only unique within a table: without it, a token minted for an admin
+    and one minted for a participant carrying the same regno would be
+    indistinguishable at redemption. The expiry comes back because a sign-in
+    page counts the token's remaining life down against the server's own
+    deadline, not a value it guessed at.
     """
     # 1. Generate a new, secure token
     token = secrets.token_urlsafe(32)
@@ -33,10 +30,10 @@ def create_and_store_magic_token(
     # 2. Hash the token for database storage
     token_hash = hash_token(token, domain=TOKEN_HASH_DOMAIN_MAGIC)
 
-    # 3. Set the token's issuance and expiration timestamps. The lifetime is short and
-    # bounded by configuration (10-15 minutes): the plaintext token is a bearer
-    # credential that exists only in the developer console and the browser that clicks
-    # it, and it must stop working on its own whether or not anybody consumes it.
+    # 3. Short, configuration-bounded lifetime (10-15 minutes): the plaintext
+    # token is a bearer credential that exists only in the developer console and
+    # the browser that clicks it, and must stop working on its own whether or
+    # not anybody consumes it.
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=settings.LOGIN_TOKEN_EXPIRE_MINUTES)
     

@@ -13,35 +13,25 @@ from .storage_service import storage_service
 
 logger = get_logger(__name__)
 
-# A participant may post one confession every CONFESSION_COOLDOWN_HOURS. The feed is
-# read one page at a time, so the throttle is what stops one account from filling it on
-# its own.
+# The feed is read one page at a time; this throttle stops one account from filling it alone.
 CONFESSION_COOLDOWN_HOURS = 2
 
-# Hard ceiling for one feed page. The endpoint clamps anything larger, so no client can
-# ask for every confession -- with every comment and user row attached -- and make the
-# backend materialise the whole feed in one response.
+# Ceiling for one feed page; the endpoint clamps larger values so a client cannot make the
+# backend materialise every confession (with comments and user rows) in one response.
 FEED_MAX_LIMIT = 100
 
-# A single confession's thread opens with this many newest comments, and grows by
-# this many per "show more" click. The dialog reads the thread, and an unbounded one
-# would let a single viral post blow past the page bound the feed is read under;
-# ``comment_count`` still carries the true total beside either window.
+# Newest comments a feed confession opens with, growing per "show more"; an unbounded thread
+# would blow past the feed page bound (``comment_count`` still carries the true total).
 FEED_COMMENTS_INITIAL = 10
 
-# The only author identity an anonymous confession may carry. Both values are constants so
-# every participant response agrees on the same non-identifying placeholder.
+# The only author identity an anonymous confession may carry, so every response agrees.
 ANONYMOUS_AUTHOR_ID = "anonymous"
 ANONYMOUS_AUTHOR_NAME = "Anonymous"
 
 
 def _cooldown_message(seconds_remaining: float) -> str:
-    """The sentence a user is shown, from the number of seconds left.
-
-    Deliberately quotes the wait rather than a bare timestamp: the cooldown is the answer to
-    "why did my post fail", and a wall-clock instant is unreadable to a person who has
-    already closed the app for an hour.
-    """
+    """The sentence a user is shown, from the number of seconds left (a wait, not a
+    wall-clock instant: the user has likely closed the app)."""
     hours, remainder = divmod(int(seconds_remaining), 3600)
     minutes = remainder // 60
     if hours > 0:
@@ -56,16 +46,12 @@ def _cooldown_message(seconds_remaining: float) -> str:
 
 
 def _consume_confession_attempt(session, user_id: str, now: datetime.datetime) -> bool:
-    """Atomically claim the caller's one confession for this window.
+    """Atomically claim the caller's one confession for this window; True means this caller won.
 
-    The conditional UPDATE is the only thing serialising the cooldown. Concurrent callers
-    contend on the same row lock, and because PostgreSQL re-evaluates the predicate against
-    the committed version of the row, only the winner sees a row to update. Reading
-    ``last_confession_at`` and writing it in a later transaction instead would leave a window
-    in which every concurrent request observes "eligible" -- which is the same reasoning, and
-    the same mechanism, as ``matchmaking_service._consume_matchmaking_attempt``.
-
-    Returns True if this caller won the window.
+    The conditional UPDATE is what serialises the cooldown: PostgreSQL re-evaluates the
+    predicate against the committed row under the lock, so read-then-write would leave a
+    window in which every concurrent caller observes "eligible" (same mechanism as
+    ``matchmaking_service._consume_matchmaking_attempt``).
     """
     cooldown_cutoff = now - datetime.timedelta(hours=CONFESSION_COOLDOWN_HOURS)
     result = session.execute(
@@ -83,10 +69,10 @@ def _consume_confession_attempt(session, user_id: str, now: datetime.datetime) -
 
 
 def _seconds_until_confession_eligible(session, user_id: str, now: datetime.datetime) -> float:
-    """How long this caller still has to wait. Zero or less means they may post now.
+    """How long this caller still has to wait; zero or less means they may post now.
 
-    Read through ``session`` when one is supplied so a caller that has just lost the claim
-    reports the wait against the committed row rather than a stale local copy.
+    Read through the supplied session so a caller that just lost the claim reports the
+    wait against the committed row, not a stale local copy.
     """
     if session is not None:
         last = session.scalar(
@@ -100,9 +86,8 @@ def _seconds_until_confession_eligible(session, user_id: str, now: datetime.date
 
     if last is None:
         return 0.0
-    # The column is TIMESTAMPTZ, but a row written by a script or a hand-edited fixture can
-    # arrive naive. Cooldown arithmetic across a naive and an aware datetime raises, and
-    # refusing to post with a 500 because of a timezone is the wrong way to be strict.
+    # A script or hand-edited fixture can write a naive datetime into this TIMESTAMPTZ
+    # column; cooldown arithmetic would raise, so coerce rather than 500 over a timezone.
     if last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
 
@@ -111,11 +96,7 @@ def _seconds_until_confession_eligible(session, user_id: str, now: datetime.date
 
 
 def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
-    """429 with the wait in the message.
-
-    429 rather than 403: nothing is wrong with the caller's right to confess, only with the
-    time. A 403 would be indistinguishable from being refused for good.
-    """
+    """429 with the wait in the message: only the timing is wrong, so not a refusal (403)."""
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=_cooldown_message(max(seconds_remaining, 0)),
@@ -126,11 +107,8 @@ def _cooldown_rejection(seconds_remaining: float) -> HTTPException:
 def _profile_picture_url(user) -> Optional[str]:
     """The author's photo as a delivery URL, or None when they have not set one.
 
-    Derived at read time from the stored public id rather than cached on the post, so a
-    picture changed or removed later is reflected immediately everywhere it is shown.
-    Accepts either a ``UserRecord`` (which holds the Cloudinary identity) or a
-    ``UserDetails`` (which already carries the derived URL, as the comment-posting caller
-    does).
+    Derived at read time from the stored public id, never cached on the post. Accepts a
+    ``UserRecord`` (Cloudinary identity) or a ``UserDetails`` (already derived URL).
     """
     if user is None:
         return None
@@ -143,8 +121,8 @@ def _profile_picture_url(user) -> Optional[str]:
 
 class ConfessionService:
     def __init__(self, client: Optional[PostgresClient] = None):
-        # Injected so the service never creates its own engine: an engine per instance
-        # would mean an unbounded pool, since this service is constructed per request.
+        # Injected so the per-request service never creates its own engine (an engine per
+        # instance would mean an unbounded pool).
         self.client = client if client is not None else get_postgres_client()
         self.sessions = self.client.sessions
         self.REACTION_TYPES = ["heart", "haha", "whoa", "heartbreak"]
@@ -153,21 +131,10 @@ class ConfessionService:
     def _confession_row(session, confession_id, *, for_update=False):
         """The confession row, or None when the id names no row at all.
 
-        A malformed id names no row, and it must not reach the database: the id goes
-        straight into a uuid column, and PostgreSQL raises ``invalid input syntax for
-        type uuid`` on a value that is not a uuid. Nothing caught that, so a request
-        that named nothing at all was answered with a 500 -- on a public route, with
-        no authentication, which is a 500 anybody can ask for on purpose.
-
-        The answer is the one these endpoints already give for a confession that is
-        not there, rather than a new one: a malformed id is an id that names no row,
-        and the endpoints' "not found" is the truth about both. A client that opens a
-        thread by id gets one answer for "there is no such confession", whatever
-        shape the id had.
-
-        ``for_update`` locks the row until the transaction ends. A caller that reads
-        a row and writes it back has to hold the lock across both halves, or two such
-        callers overwrite one another -- see :meth:`react_to_confession`.
+        Malformed ids never reach the database -- a non-uuid into a uuid column would 500 a
+        public unauthenticated route -- and answer the same "not found" as unknown ids.
+        ``for_update`` holds the row lock to transaction end, so a caller that reads a row
+        and writes it back must span both halves (see :meth:`react_to_confession`).
         """
         if not is_valid_id(confession_id):
             return None
@@ -193,10 +160,9 @@ class ConfessionService:
         return session.get(ConfessionCommentRecord, str(comment_id))
 
     def _reporter_ids(self, target_id: str) -> List[Any]:
-        # Includes automated system reports (reported_by_id IS NULL) in the
-        # count: they are real report rows. ``None`` never matches a caller id,
-        # so ``has_reported`` stays False for every participant while
-        # ``report_count`` (len of this list) still counts the automated row.
+        # Includes automated system reports (reported_by_id IS NULL): they are real rows,
+        # and None never matches a caller id, so has_reported stays False for every
+        # participant while the count includes the automated one.
         with self.sessions() as session:
             return [report.reported_by_id for report in session.scalars(select(ReportRecord).where(or_(
                 ReportRecord.confession_id == str(target_id), ReportRecord.comment_id == str(target_id)
@@ -227,8 +193,8 @@ class ConfessionService:
     ) -> Dict[str, Any]:
         """Participant-facing author info, with anonymous posts always redacted.
 
-        The real name/id/photo never enter the payload for an anonymous post, even when the
-        author row is already loaded. Public posts keep naming their author as before.
+        The real name/id/photo never enter the payload for an anonymous post, even when
+        the author row is already loaded; public posts keep naming their author.
         """
         if anonymous:
             return cls._anonymous_user_info()
@@ -242,9 +208,9 @@ class ConfessionService:
     def _confession_payload(row, viewer_id: Optional[str] = None):
         """One participant-facing confession row, without an anonymous author's identity.
 
-        ``author_id`` is withheld for anonymous posts; ``is_mine`` is derived from the
-        authenticated caller so the client can still show ownership controls. Hydration
-        must use ``row.author_id`` server-side for author lookups, never this payload.
+        ``author_id`` is withheld for anonymous posts; ``is_mine`` derives from the caller
+        so the client can show ownership controls. Hydration must use ``row.author_id``,
+        never this payload.
         """
         anonymous = bool(row.anonymous)
         return {"id": str(row.id), "body": row.body, "recipient_name": row.recipient_name,
@@ -266,17 +232,15 @@ class ConfessionService:
             "dislike_count": row.dislike_count, "report_count": row.report_count}
 
     def create_confession(self, confession_data: ConfessionCreate, user_id: str):
-        # recipient_name arrives already normalized: trimmed, or None when the confession
-        # is not addressed to anyone. Both spellings mean the same thing, so both are NULL.
+        # recipient_name arrives normalized: trimmed, or None when unaddressed; both
+        # spellings mean the same thing, so both are NULL.
         confession_dict = confession_data.model_dump()
         now = datetime.datetime.now(datetime.timezone.utc)
         confession_body_raw = confession_dict["body"]
 
-        # Central moderation: one call handles config + analyze + per-item
-        # policy. This path carries no local endpoint/key/timeout handling and
-        # never branches on raw severities -- only on the decision flags.
-        # Runs BEFORE persistence and BEFORE embedding; failures are unknown,
-        # never safe, so abort before any row exists. Never log body/secrets.
+        # Central moderation: one call handles config + analyze + per-item policy, with
+        # decisions only on the decision flags. Runs before persistence and embedding;
+        # failures are unknown, never safe, so abort before any row exists.
         from .content_safety_service import (
             AUTOMATED_REMOVED_BY,
             AUTOMATED_REPORTER_DISPLAY_NAME,
@@ -311,18 +275,10 @@ class ConfessionService:
         cs_max = decision.max_severity
         cs_action = decision.action
 
-        # One confession per participant every CONFESSION_COOLDOWN_HOURS. Read-then-write
-        # would leave a window in which two simultaneous posts both see "eligible" and both
-        # land, so the cooldown is claimed by the same conditional UPDATE that
-        # _consume_matchmaking_attempt uses: PostgreSQL re-evaluates the predicate against
-        # the committed row under the lock, so only one caller sees a row to update.
-        #
-        # Creation, automated reporting and hiding commit atomically: the
-        # high-severity row is born hidden (removed_at set in the same INSERT),
-        # so it is never observable in a feed between a visible insert and a
-        # later hide. Report/hide failures roll back the whole confession rather
-        # than leaving a visible confession that should have been hidden or a
-        # hidden confession with no audit trail.
+        # Creation, automated reporting and hiding commit atomically: a high-severity row
+        # is born hidden (removed_at set in the same INSERT), so it is never observable in
+        # a feed, and a report/hide failure rolls the whole confession back rather than
+        # leaving a visible confession that should have been hidden.
         automated_report_id: Optional[str] = None
         try:
             with self.sessions.begin() as session:
@@ -336,9 +292,9 @@ class ConfessionService:
                     created_at=now, author_id=user_id, reactions={reaction: [] for reaction in self.REACTION_TYPES},
                 )
                 if decision.should_hide:
-                    # Born hidden: the same removed_at write the review-screen
-                    # hide performs, so every participant read (removed_at IS NULL)
-                    # excludes it from the first commit. No second flag.
+                    # Born hidden: the same removed_at write the review-screen hide
+                    # performs, so participant reads (removed_at IS NULL) exclude it from
+                    # the first commit. No second flag.
                     row.removed_at = now
                     row.removed_by_regno = AUTOMATED_REMOVED_BY
                 session.add(row)
@@ -347,10 +303,9 @@ class ConfessionService:
                 confession_body = row.body
                 confession_recipient = row.recipient_name
                 if decision.should_report:
-                    # Idempotent: exactly one automated report per confession.
-                    # A new confession cannot already have one, but the check
-                    # makes retries safe and the partial unique index backstops
-                    # races. Manual reports (source="user") are untouched.
+                    # A new confession cannot already have one, but the check keeps retries
+                    # safe and the partial unique index backstops races. Manual reports
+                    # (source="user") are untouched.
                     existing = session.scalar(
                         select(ReportRecord.id).where(
                             ReportRecord.confession_id == str(confession_id),
@@ -359,10 +314,8 @@ class ConfessionService:
                     )
                     if existing is None:
                         reason = decision.report_reason
-                        # Automated action already taken (hidden): the report
-                        # is born closed as removed by Azure, not pending.
-                        # Admin queue shows "Content removed" with the system
-                        # attribution instead of "Awaiting review".
+                        # Born closed as removed by Azure: the action was already taken,
+                        # so the admin queue shows "Content removed", not "Awaiting review".
                         report_row = ReportRecord(
                             confession_id=str(confession_id),
                             reported_by_id=None,
@@ -384,9 +337,8 @@ class ConfessionService:
                             session, kind=CONFESSION, author_user_id=user_id,
                         )
                         if decision.should_hide:
-                            # Same authoritative counter the manual hide writes.
-                            # Only on this transition; re-runs find existing and
-                            # increment nothing.
+                            # Same authoritative counter the manual hide writes;
+                            # only on this transition -- re-runs increment nothing.
                             from .report_counters import record_removal as _record_removal
 
                             _record_removal(
@@ -397,10 +349,9 @@ class ConfessionService:
         except HTTPException:
             raise
         except Exception as exc:
-            # Report/hide bookkeeping failed after a successful moderation
-            # result: never silently treat as successful. The transaction above
-            # rolled back, so no partial visible confession survives; surface a
-            # retryable error with the failure in the logs (no body/secrets).
+            # Report/hide bookkeeping failed after successful moderation: the transaction
+            # above rolled back, so no partial visible confession survives; surface a
+            # retryable 500 (no body/secrets logged).
             logger.error(
                 "Automated moderation bookkeeping failed for new confession: %s",
                 type(exc).__name__,
@@ -418,8 +369,8 @@ class ConfessionService:
             f"Sexual={int(cs_scores.get('Sexual', 0) or 0)} "
             f"Violence={int(cs_scores.get('Violence', 0) or 0)})"
         )
-        # Best-effort staff/author notices: failures never unwind the committed
-        # moderation outcome (report + hidden state are already durable).
+        # Best-effort staff/author notices: failures never unwind the committed moderation
+        # outcome (report + hidden state are already durable).
         if automated_report_id is not None:
             try:
                 from .staff_notification_service import notify_report_filed
@@ -438,8 +389,8 @@ class ConfessionService:
                 )
             if decision.should_hide:
                 try:
-                    # Same neutral copy the direct-hide path sends: no policy
-                    # is cited because no human ruled on a report.
+                    # Same neutral copy the direct-hide path sends: no policy is cited
+                    # because no human ruled on a report.
                     from ..db_models import UserRecord as _UserRecord
 
                     with self.sessions() as _s:
@@ -464,23 +415,15 @@ class ConfessionService:
                         "Failed to queue removal notice for confession %s",
                         confession_id,
                     )
-        # Exactly one embedding for this eligible confession, generated
-        # synchronously so no worker infrastructure is needed. Runs for every
-        # successfully moderated confession, including flagged ones:
-        # moderation determines reporting/visibility, never whether the
-        # embedding is generated. A provider failure never fails the confession
-        # itself: the post stays and is simply not searchable (no backfill).
-        # Comments, likes, and reports never generate embeddings (only this path).
-        # An embedding retry never creates another report (reports live above).
+        # One synchronous embedding for every successfully moderated confession: moderation
+        # decides reporting/visibility, never searchability. A provider failure never fails
+        # the confession -- it just stays unsearchable (no backfill).
         self._generate_embedding_for_confession(
             confession_id, confession_body, confession_recipient
         )
         if decision.should_hide:
-            # Flagged+hidden: the row stays hidden for audit (report + removed_at
-            # already committed, embedding already attempted), but the caller
-            # is told plainly it was removed for violating policies so the
-            # frontend shows a violation popup and never renders it. Feeds,
-            # searches and later reads keep excluding it.
+            # Flagged+hidden: the row stays hidden for audit, but the caller is told plainly
+            # so the frontend shows a violation popup and never renders it.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Your confession was removed because it violated our content policies.",
@@ -489,8 +432,7 @@ class ConfessionService:
         if visible is not None:
             return visible
         if decision.should_hide:
-            # Defensive: should have raised above; kept so a hidden row can
-            # never leak as a 200 success.
+            # Defensive: should have raised above; a hidden row must never leak as a 200.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Your confession was removed because it violated our content policies.",
@@ -500,20 +442,17 @@ class ConfessionService:
     def _get_created_hidden_confession(self, confession_id: str, user_id: Optional[str]):
         """Build the creation response for a just-hidden confession.
 
-        Participant reads exclude removed rows, so ``get_confession`` answers
-        None here. Returning None would turn creation into a response-validation
-        500. This builds the same participant-scoped shape from the stored row
-        without the removed filter, used only for the creation response;
-        subsequent feeds, searches and single reads keep excluding it.
+        Participant reads exclude removed rows, so ``get_confession`` answers None here and
+        returning None would turn creation into a response-validation 500. Creation
+        response only: later feeds, searches and single reads keep excluding it.
         """
         with self.sessions() as session:
             row = session.get(ConfessionRecord, str(confession_id))
             if row is None:
                 return None
             payload = self._confession_payload(row, user_id)
-            # Participant-scoped: hide other reporters, keep the count (which
-            # includes the automated report). The caller did not file it, so
-            # has_reported is always False here.
+            # Participant-scoped: hide other reporters, keep the count (including the
+            # automated report). The caller did not file it, so has_reported is always False.
             with self.sessions() as inner:
                 reporter_ids = [
                     r.reported_by_id
@@ -590,10 +529,8 @@ class ConfessionService:
     ) -> Optional[str]:
         """Idempotent helper for tests/retries: one automated report per confession.
 
-        Returns the report id, existing or newly created. Never creates a
-        duplicate automated report for the same confession. Manual reports are
-        untouched. Used by create_confession; exposed so retry semantics are
-        directly testable without re-posting a confession.
+        Exposed so retry semantics are directly testable without re-posting; manual
+        reports are untouched, and no duplicate is ever created.
         """
         from .content_safety_service import (
             AUTOMATED_REMOVED_BY,
@@ -642,10 +579,9 @@ class ConfessionService:
     ) -> bool:
         """Generate and store the single embedding for a new confession.
 
-        Returns True when a valid embedding was stored. False when search is
-        disabled or generation failed: the confession remains created but is
-        excluded from semantic search (no valid embedding row). Never raises
-        for provider failures so creation is not permanently dependent on Azure.
+        False means search is disabled or generation failed: the confession stays created
+        but is excluded from semantic search (no valid embedding row). Never raises for
+        provider failures so creation is not permanently dependent on Azure.
         """
         from ..config import settings as _settings
         from .embedding_service import (
@@ -669,8 +605,8 @@ class ConfessionService:
                 return False
             vector = embed_confession(body, recipient_name, config=config)
         except EmbeddingError as exc:
-            # Searchability state is explicit: no row means not searchable.
-            # Never log confession text; only the id and the safe code.
+            # Explicit state: no row means not searchable. Never log confession text,
+            # only the id and the safe code.
             logger.warning(
                 "Confession %s not searchable: embedding failed (%s)",
                 confession_id, exc.code,
@@ -710,10 +646,9 @@ class ConfessionService:
     def get_confession_cooldown(self, user_id: str) -> dict:
         """Advisory: may this participant confess right now, and if not, when can they?
 
-        The decision itself is made by the conditional UPDATE in ``create_confession``, which
-        is the only thing that serialises it. This exists so the compose screen can show the
-        wait before the user has typed anything, and it therefore must not be trusted as an
-        authorization check -- the write re-derives the answer itself.
+        The decision itself is the conditional UPDATE in ``create_confession``; this exists
+        so the compose screen can show the wait early and must not be trusted as an
+        authorization check.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         seconds = _seconds_until_confession_eligible(None, str(user_id), now)
@@ -739,10 +674,9 @@ class ConfessionService:
         """Comment rows into response payloads, in input order: authors, reporter ids and
         the caller's own like/dislike, all in bulk.
 
-        One users read and one report read no matter how many comments are handed in --
-        the per-row lookups this replaces opened a fresh session for every comment on
-        every post. Shared by the feed (which hydrates one page's threads and hands in
-        the map it already read) and the single-thread read below.
+        One users read and one report read no matter how many comments, replacing the
+        per-comment session lookups the old code opened on every post. Shared by the feed
+        and the single-thread read.
         """
         if user_map is None:
             user_ids = {str(row.user_id) for row in comment_models}
@@ -764,8 +698,8 @@ class ConfessionService:
         for row in comment_models:
             payload = self._comment_payload(row, user_map.get(row.user_id))
             reporter_ids = reporters.get(str(row.id), [])
-            # Participant-scoped (SEC-002): the caller learns only whether *they*
-            # reported, never who else did; the count stays so the UI can show it.
+            # Participant-scoped (SEC-002): the caller learns only whether *they* reported,
+            # never who else did; the count stays so the UI can show it.
             payload["has_reported"] = bool(user_id and user_id in reporter_ids)
             payload["reported_by"] = []
             payload["report_count"] = len(reporter_ids)
@@ -786,21 +720,13 @@ class ConfessionService:
         self, confession_id: str, user_id: Optional[str] = None,
         skip: int = 0, limit: int = 10, sort: str = 'latest',
     ) -> Optional[dict]:
-        """One thread page for the dialog, with the total beside it.
+        """One thread page for the dialog, with the total beside it; None when the
+        confession is missing or taken down.
 
-        The feed embeds only the opening window of each thread; this is what the "show
-        more" beneath it reads -- one SQL page plus the same bulk hydration as the feed,
-        so opening a thread never loads what the dialog is not showing. ``total`` counts
-        every visible comment on the post, loaded or not, under no order at all.
-
-        ``sort`` is ``latest`` (newest first) or ``relevant``: the share of likes among
-        all votes, so a comment with 3 likes and no dislikes outranks one with 6 likes
-        and 4 dislikes. Votes are the denormalised counters, coalesced for hand-written
-        rows; a comment with no votes at all scores zero rather than dividing by it.
-        Ties break toward more likes, then newest, then id, so pages are stable.
-
-        None when the confession is missing or taken down: a removed post reads as
-        absent rather than as a placeholder, exactly as ``get_confession`` answers it.
+        The "show more" read behind the feed's opening window: one SQL page plus the same
+        bulk hydration as the feed. ``sort`` is ``latest`` or ``relevant`` (share of likes
+        among all votes, coalesced so a no-vote row scores zero); ties break toward more
+        likes, then newest, then id.
         """
         skip = max(0, int(skip or 0))
         limit = max(1, min(int(limit or 10), FEED_MAX_LIMIT))
@@ -852,22 +778,15 @@ class ConfessionService:
     ) -> dict:
         """One feed page, sorted and counted in SQL.
 
-        The sort picker is a SQL ORDER BY and every page a SQL LIMIT/OFFSET: with
-        thousands of confessions the backend reads and serialises at most one page, never
-        the whole feed, and ``total`` is a COUNT under the same filter so the screen can
-        load more downwards without ever holding the posts it is not showing. Every
-        relation behind a page -- comments, authors and commenters, reporter ids -- is one
-        bulk read grouped in Python rather than a query per row, which is what the old
-        full-table read did once per confession and once per comment on top of loading
-        the entire users table for every visitor.
+        The sort picker is a SQL ORDER BY, every page a LIMIT/OFFSET, and ``total`` a COUNT
+        under the same filter; every relation behind the page (comments, authors,
+        commenters, reporter ids) is one bulk read grouped in Python, not a query per row.
         """
         skip = max(0, int(skip or 0))
         limit = max(1, min(int(limit or 50), FEED_MAX_LIMIT))
-        # Both tables are filtered on removed_at rather than deleted: a confession taken
-        # down by a moderator still has a report pointing at it, and the row has to stay
-        # for that report to mean anything. What changes is that it is no longer a thing
-        # a participant can read, react to, or count. Staff surfaces deliberately do not
-        # filter -- see app.services.report_resolution_service for why.
+        # Both tables filter on removed_at rather than deleted: a taken-down confession
+        # keeps its report rows meaningful; only participant readability changes. Staff
+        # surfaces deliberately do not filter -- see app.services.report_resolution_service.
         visible = [ConfessionRecord.removed_at.is_(None)]
         if sort_by == "popularity":
             engagement = sum(
@@ -881,9 +800,8 @@ class ConfessionService:
                 ConfessionRecord.created_at.asc(), ConfessionRecord.id.asc(),
             ]
         else:
-            # Newest first; the old Python sort broke creation-time ties by author name,
-            # which no reader could observe and no index could serve, so the stable tail
-            # is the id instead.
+            # Newest first; ties break by id (the old author-name tiebreak was unobservable
+            # and unindexable).
             ordering = [ConfessionRecord.created_at.desc(), ConfessionRecord.id.asc()]
         with self.sessions() as session:
             total = session.scalar(
@@ -894,9 +812,8 @@ class ConfessionService:
                 .order_by(*ordering).offset(skip).limit(limit)
             ).all()
             confession_ids = [str(row.id) for row in confession_models]
-            # Newest N comments per confession on the page, ranked in SQL: two bounded
-            # reads no matter how long any single thread is, instead of every comment on
-            # every post. ``comment_count`` on the row still carries the true total.
+            # Newest N comments per confession, ranked in SQL: two bounded reads however
+            # long the thread; ``comment_count`` still carries the true total.
             ranked = (
                 select(
                     ConfessionCommentRecord.id,
@@ -920,9 +837,9 @@ class ConfessionService:
                 .where(ConfessionCommentRecord.id.in_(kept_ids))
                 .order_by(ConfessionCommentRecord.created_at.desc())
             ).all() if kept_ids else []
-            # Only the accounts this page actually names: its non-anonymous authors and its
-            # commenters. An anonymous author row is never read here, and reactors need no
-            # rows -- the feed carries counts plus id lists, never names.
+            # Only the accounts this page names: non-anonymous authors and commenters.
+            # Anonymous author rows are never read; reactors need no rows (counts + id
+            # lists, never names).
             wanted_user_ids = {
                 str(row.author_id) for row in confession_models if not row.anonymous
             }
@@ -932,8 +849,8 @@ class ConfessionService:
                     select(UserRecord).where(UserRecord.id.in_(wanted_user_ids))
                 ).all()
             } if wanted_user_ids else {}
-            # Reporter ids in two grouped reads: one for the page's confessions, one for
-            # its comments. The old code opened a fresh session per row for this.
+            # Reporter ids in two grouped reads (one for confessions, one for comments);
+            # the old code opened a fresh session per row for this.
             confession_reporters: dict = {}
             if confession_ids:
                 for target_id, reporter_id in session.execute(
@@ -950,7 +867,7 @@ class ConfessionService:
         for confession in confession_rows:
             reporter_ids = confession_reporters.get(str(confession["id"]), [])
             # Participant-scoped (SEC-002): only the caller's own report state is
-            # disclosed; reporter identities stay server-side. Counts are preserved.
+            # disclosed; reporter identities stay server-side, counts preserved.
             confession["has_reported"] = bool(user_id and user_id in reporter_ids)
             confession["reported_by"] = []
             confession["report_count"] = len(reporter_ids)
@@ -962,7 +879,7 @@ class ConfessionService:
             )
             anonymous = bool(confession.get("anonymous"))
             # The author id is absent from an anonymous payload, so it is only looked up
-            # for public posts. Anonymous posts get the fixed placeholder below.
+            # for public posts; anonymous posts get the fixed placeholder.
             author = None if anonymous else user_map.get(str(confession.get("author_id")))
             confession["user_info"] = self._author_user_info(
                 author, anonymous=anonymous, author_id=confession.get("author_id"),
@@ -972,8 +889,8 @@ class ConfessionService:
         for confession_doc in confession_rows:
             comments_list = []
             for comment_doc in sorted(confession_doc.get('comments', []), key=lambda c: c['created_at'], reverse=True):
-                # _hydrate_comments already derived this from the full voter lists
-                # before stripping them; keep it rather than re-deriving from [].
+                # _hydrate_comments already derived user_reaction before stripping the
+                # voter lists; keep it rather than re-deriving from [].
                 if comment_doc.get('user_reaction') is None and user_id:
                     if user_id in comment_doc.get('likes', []):
                         comment_doc['user_reaction'] = 'like'
@@ -989,8 +906,8 @@ class ConfessionService:
                         user_reaction = reaction_type
                         break
             confession_doc['user_reaction'] = user_reaction
-            # Participant-scoped (SEC-002): reactor identities never leave the
-            # server on participant reads; counts + the caller's own reaction do.
+            # Participant-scoped (SEC-002): reactor identities never leave the server;
+            # counts and the caller's own reaction do.
             confession_doc['reactions'] = {}
 
             confessions.append(Confession(**confession_doc))
@@ -1001,9 +918,9 @@ class ConfessionService:
     def get_confession(self, confession_id: str, user_id: Optional[str] = None) -> Optional[Confession]:
         with self.sessions() as session:
             row = self._confession_row(session, confession_id)
-            # A removed confession reads as absent rather than as a placeholder. The row is
-            # still there for the report about it, but this is the participant-facing getter
-            # and "not found" is the honest answer for a post that has been taken down.
+            # A removed confession reads as absent: the row stays for the report about it,
+            # but this is the participant-facing getter, and "not found" is the honest
+            # answer for a post taken down.
             if row is not None and row.removed_at is not None:
                 row = None
             confession_doc = self._confession_payload(row, user_id) if row else None
@@ -1050,8 +967,8 @@ class ConfessionService:
                 comments_list.append(ConfessionComment(**comment_doc))
             confession_doc['comments'] = comments_list
 
-            # Author info, with anonymous posts carrying only the fixed placeholder. The
-            # real account row is not even read for an anonymous confession.
+            # Anonymous posts carry only the fixed placeholder; the real account row is
+            # not even read for them.
             anonymous = bool(confession_doc.get('anonymous'))
             if anonymous:
                 confession_doc['user_info'] = self._anonymous_user_info()
@@ -1064,9 +981,7 @@ class ConfessionService:
         return None
 
     def update_confession(self, confession_id: str, update_data: ConfessionUpdate, user_id: str) -> Optional[Confession]:
-        """
-        Used to update a confession's settings, such as toggling comments or anonymity.
-        """
+        """Update a confession's settings, such as toggling comments or anonymity."""
         with self.sessions() as session:
             row = self._confession_row(session, confession_id)
             confession = self._confession_payload(row) if row else None
@@ -1083,11 +998,9 @@ class ConfessionService:
         update_fields = {}
         update_data_dict = update_data.model_dump(exclude_unset=True)
 
-        # Handle 'comments_enabled' update - this is straightforward
         if "comments_enabled" in update_data_dict:
             update_fields["comments_enabled"] = update_data_dict["comments_enabled"]
 
-        # Handle 'anonymous' update with explicit logic
         if "anonymous" in update_data_dict:
             is_currently_anonymous = confession.get("anonymous", False)
             wants_to_be_anonymous = update_data_dict["anonymous"]
@@ -1098,7 +1011,6 @@ class ConfessionService:
             # All other cases (e.g., trying to make a public post anonymous) are ignored for security.
 
         if not update_fields:
-            # No valid changes were made, so we can return early.
             return self.get_confession(confession_id, user_id)
 
         with self.sessions.begin() as session:
@@ -1111,12 +1023,10 @@ class ConfessionService:
         return self.get_confession(confession_id, user_id)
 
     def get_total_confessions_count(self) -> int:
-        """
-        Used to get the total number of confessions in the database.
+        """Count what a participant can see.
 
-        Counts what a participant can see. A removed confession is still a row, so counting
-        all rows would make this disagree with the feed it is supposed to describe -- and it
-        is the number that gets shown next to the feed.
+        A removed confession is still a row; counting all would make this disagree with
+        the feed it is shown next to.
         """
         with self.sessions() as session:
             count = session.scalar(
@@ -1130,33 +1040,24 @@ class ConfessionService:
     def react_to_confession(self, confession_id: str, reaction: str, user_id: str):
         """Set, switch or clear one user's reaction, then return the updated confession.
 
-        A reaction is a toggle: sending the same kind twice clears it, sending a different
-        kind moves the user to that one. A user is in at most one kind at a time.
+        A reaction is a toggle: the same kind twice clears it, a different kind moves the
+        user; a user is in at most one kind at a time.
         """
         if reaction not in self.REACTION_TYPES:
             return None
 
         with self.sessions.begin() as session:
-            # The row is locked for the rest of the transaction. The reaction map is a
-            # read-modify-write -- read the map, rebuild it, write it back -- so without
-            # the lock two reactions that land together both read the same map and the
-            # second write erases the first: one participant's reaction disappears, and
-            # the denormalised counts, which are recomputed from that same map, go with
-            # it. The lock is held from the read to the write, so the second reaction
-            # reads what the first wrote.
+            # Locked for the rest of the transaction: the reaction map is a read-modify-
+            # write, and without the lock the second of two concurrent reactions erases
+            # the first (and the counts recomputed from the same map go with it).
             row = self._confession_row(session, confession_id, for_update=True)
-            # A removed confession no longer exists as far as a participant is concerned, so
-            # reacting to it fails the same way reacting to a deleted one does. Leaving the
-            # write open would let engagement accumulate on a post nobody can see, and the
-            # counts would then disagree with the feed for the same reason as above.
+            # A removed confession reacts like a deleted one: engagement must not
+            # accumulate on a post nobody can see.
             if not row or row.removed_at is not None:
                 return None
-            # The map has to be built fresh and assigned. Mutating the dict already loaded
-            # on the row in place does not mark the JSONB column dirty, so the flush below
-            # would write only the denormalised counts, leaving the map itself empty in the
-            # database. The next request would then read that empty map, recompute every
-            # count from it, and put them all back to zero, so no confession could ever hold
-            # more than one reaction. Same reason _react_to_comment rebuilds its lists.
+            # The map must be rebuilt and assigned: mutating the loaded dict in place does
+            # not mark the JSONB dirty, so the flush would write only the counts and the
+            # next read would zero them all (see also _react_to_comment).
             stored_reactions = row.reactions or {}
             user_previous_reaction = next(
                 (kind for kind, ids in stored_reactions.items() if user_id in ids), None
@@ -1178,9 +1079,8 @@ class ConfessionService:
         with self.sessions() as session:
             row = self._confession_row(session, confession_id)
             confession = self._confession_payload(row) if row else None
-        # Commenting on removed content is refused for the same reason reacting to it is:
-        # the post is not in the participant's view, so a new comment on it is a write into a
-        # conversation they cannot reach.
+        # Commenting on removed content is refused like reacting to it: a write into a
+        # conversation the participant cannot reach.
         if not confession or row.removed_at is not None:
             return "CONFESSION_NOT_FOUND"
         if not confession.get("comments_enabled", True):
@@ -1196,15 +1096,12 @@ class ConfessionService:
         if existing_comments_count >= 3:
             logger.warning(f"User {user_id} tried to post more than 3 comments on confession {confession_id}")
             return "COMMENT_LIMIT_REACHED"
-        # This count is a fast fail, not the rule. It is read here, before the moderation
-        # call below, and the comment itself is written in a later transaction -- so two
-        # requests from the same participant can both read "two so far" and both go on to
-        # insert. The authoritative check is repeated under the parent's row lock, in the
+        # This count is a fast fail, not the rule: two requests can both read "two so far".
+        # The authoritative check is repeated under the parent's row lock, in the
         # transaction that inserts.
 
-        # Central comment moderation: same principal/logic as confessions
-        # (everything >1 flagged+hidden). Runs BEFORE persistence; failures
-        # are unknown, never safe, so abort before any row exists.
+        # Central comment moderation, same as confessions. Runs before persistence;
+        # failures are unknown, never safe, so abort before any row exists.
         from .content_safety_service import (
             AUTOMATED_REMOVED_BY as _AUTO_REMOVED_BY,
             AUTOMATED_REPORTER_DISPLAY_NAME as _AUTO_NAME,
@@ -1240,11 +1137,8 @@ class ConfessionService:
         try:
             with self.sessions.begin() as session:
                 # The parent row is locked for the rest of this transaction, so the
-                # participant's own comment count and the parent's counter are both
-                # decided under one lock. Every comment on this confession queues behind
-                # the same row, which is what makes the limit below a rule rather than a
-                # suggestion: two comments from the same participant cannot both see "two
-                # so far" and both insert.
+                # participant's comment count and the parent's counter are both decided
+                # under one lock; two comments cannot both race past the limit.
                 confession_row = self._confession_row(session, confession_id, for_update=True)
                 if confession_row is None:
                     logger.warning(
@@ -1267,22 +1161,18 @@ class ConfessionService:
                 row = ConfessionCommentRecord(confession_id=str(confession_id), user_id=user_id,
                     body=comment_data.body, created_at=now)
                 if decision.should_hide:
-                    # Born hidden: same removed_at write hide_comment performs,
-                    # so participant reads (removed_at IS NULL) exclude it from
-                    # the first commit. No second flag.
+                    # Born hidden: same removed_at write hide_comment performs, so
+                    # participant reads (removed_at IS NULL) exclude it from the first
+                    # commit. No second flag.
                     row.removed_at = now
                     row.removed_by_regno = _AUTO_REMOVED_BY
                 session.add(row)
                 session.flush()
                 comment_id = str(row.id)
-                # Visible comments advertise in the parent count; born-hidden
-                # ones never do (hide_comment decrements on transition, so
-                # not incrementing here lands in the same state).
-                #
-                # The increment is relative, for the same reason the matching decrement
-                # in report_resolution_service is: a read followed by a write of "the value
-                # I read plus one" loses the other comment whenever two land on the same
-                # parent at once, and this column is exactly the number the feed shows.
+                # Visible comments advertise in the parent count; born-hidden ones never do
+                # (hide_comment decrements on transition, so not incrementing here lands in
+                # the same state). Relative increment, not read-then-write: two concurrent
+                # comments would otherwise lose one's write.
                 if not decision.should_hide:
                     session.execute(
                         update(ConfessionRecord)
@@ -1397,9 +1287,8 @@ class ConfessionService:
                         new_comment.get("id"),
                     )
         if decision.should_hide:
-            # Flagged+hidden: row stays hidden for audit, but the caller is
-            # told plainly so the frontend shows a violation popup and never
-            # renders it.
+            # Flagged+hidden: row stays hidden for audit, but the caller is told plainly
+            # so the frontend shows a violation popup and never renders it.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Your comment was removed because it violated our content policies.",
@@ -1409,14 +1298,12 @@ class ConfessionService:
     def _react_to_comment(self, comment_id: str, user_id: str, reaction_type: str) -> Optional[ConfessionComment]:
         user_new_reaction = None
         with self.sessions.begin() as session:
-            # The comment row is locked for the rest of the transaction. The like and
-            # dislike lists are read, rebuilt and written back, so without the lock two
-            # participants reacting at the same time both read the same lists and the
-            # second write erases the first -- and the counts, which are derived from
-            # those same lists, with it.
+            # Locked for the rest of the transaction: the like/dislike lists are read,
+            # rebuilt and written back; without the lock the second of two concurrent
+            # reactions erases the first (and the counts derived from them).
             row = self._comment_row(session, comment_id, for_update=True)
-            # As with a removed confession: no reaction lands on content a participant can no
-            # longer see, so the like count cannot quietly drift away from the visible list.
+            # No reaction lands on removed content: the like count must not drift away
+            # from the visible list.
             if not row or row.removed_at is not None:
                 return None
             likes = [str(value) for value in (row.likes or [])]
@@ -1464,15 +1351,14 @@ class ConfessionService:
             comment = self._comment_row(session, comment_id)
         if not comment:
             return None
-        # Nobody reports their own writing, whatever state it is in: a self-report has nothing
-        # for a moderator to rule on. Checked before the removed-content guard so the answer is
-        # the same for a comment that has since been taken down, and answered with its own
-        # detail rather than the duplicate failure below, so the client can say what happened.
+        # Nobody reports their own writing: a self-report has nothing for a moderator to
+        # rule on. Checked before the removed-content guard so it answers with this
+        # detail, not the duplicate failure below.
         if str(comment.user_id) == user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                 detail="You cannot report your own comment.")
-        # Removed content cannot be reported: there is nothing left for a moderator to rule
-        # on, and a report against it would sit in the queue forever.
+        # Removed content cannot be reported: nothing left to rule on, so the report would
+        # sit in the queue forever.
         if comment.removed_at is not None:
             return None
 
@@ -1492,9 +1378,9 @@ class ConfessionService:
             comment_row = session.get(ConfessionCommentRecord, str(comment_id))
             if comment_row:
                 comment_row.report_count += 1
-            # The complaint is against the comment, but what an administrator needs to see is
-            # who is being complained about, so it lands on the comment's author. Same column
-            # bucket as the confession itself -- see ``report_counters``.
+            # The complaint is against the comment, but the administrator needs to see who
+            # is complained about, so it lands on the comment's author (same bucket as the
+            # confession -- see ``report_counters``).
             record_report_filed(
                 session,
                 kind=CONFESSION,
@@ -1502,8 +1388,8 @@ class ConfessionService:
             )
 
         logger.info(f"User {user_id} reported comment {comment_id}")
-        # Staff-facing notice (role-based, best-effort): a failed write here must
-        # never unwind the report that was just committed.
+        # Staff-facing notice (role-based, best-effort): a failed write must never unwind
+        # the report that was just committed.
         try:
             from .staff_notification_service import notify_report_filed
 
@@ -1520,8 +1406,8 @@ class ConfessionService:
             return None
         updated_comment_doc = self._comment_payload(row, author)
         comment_reporter_ids = self._reporter_ids(comment_id)
-        # Participant-scoped (SEC-002): the reporter just filed, so has_reported is
-        # True by construction; identities still stay server-side.
+        # Participant-scoped (SEC-002): the reporter just filed, so has_reported is True
+        # by construction; identities still stay server-side.
         updated_comment_doc["has_reported"] = True
         updated_comment_doc["reported_by"] = []
         updated_comment_doc["report_count"] = len(comment_reporter_ids)
@@ -1535,8 +1421,7 @@ class ConfessionService:
             confession = self._confession_row(session, confession_id)
         if not confession:
             return None
-        # Nobody reports their own post either -- see report_comment for why the check sits
-        # before the removed-content guard and carries its own detail.
+        # Nobody reports their own post -- see report_comment for check ordering.
         if str(confession.author_id) == user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                 detail="You cannot report your own confession.")
@@ -1585,14 +1470,9 @@ class ConfessionService:
    ) -> Dict[str, Any]:
         """Semantic search over eligible confessions ranked by cosine distance.
 
-        Ranking uses pgvector cosine distance (``<=>``) ascending: the smallest
-        distance is the most semantically similar. Cosine distance for
-        length-normalized embeddings equals ``1 - cosine_similarity``; no
-        calibrated probability or confidence percentage is implied. Results
-        exclude confessions without a valid current embedding and any row that
-        is hidden, deleted (hard-deleted rows vanish via CASCADE), or otherwise
-        ineligible (``removed_at IS NULL`` is enforced in the database search
-        itself). Ties break by newest first, then id, so pages are stable.
+        Distance ascending (for length-normalized embeddings, ``1 - cosine_similarity``;
+        no calibrated confidence). Results exclude rows without a valid current embedding
+        and hidden ones (``removed_at IS NULL`` enforced in SQL); ties break newest, then id.
         """
         from ..config import settings as _settings
         from .embedding_service import (
@@ -1621,13 +1501,12 @@ class ConfessionService:
                 "Semantic search is disabled (EMBEDDING_SEARCH_ENABLED is not true).",
                 code="disabled",
             )
-        # Generates the query embedding with the same model; validates 1536 dims.
-        # No provider call happens when disabled (checked above).
+        # Query embedding with the same model; no provider call when disabled (checked above).
         query_vector = embed_query(normalized, config=config)
 
-        # Vector ranking in the database: inner join excludes confessions without
-        # a valid embedding; removed_at IS NULL enforces moderation/visibility in
-        # SQL, not in frontend code. Safe ORM expression, never string SQL.
+        # Vector ranking in the database: the inner join excludes rows without a valid
+        # embedding, removed_at IS NULL enforces visibility in SQL, and ORM expressions
+        # are used, never string SQL.
         try:
             with self.sessions() as session:
                 distance = ConfessionEmbeddingRecord.embedding.cosine_distance(query_vector)
@@ -1662,9 +1541,8 @@ class ConfessionService:
             raise
         if not ordered_models:
             return {"confessions": [], "total": 0, "query": normalized, "limit": limit}
-        # Hydrate the ranked page with the same bulk reads as the feed: newest N
-        # comments per confession, authors, and reporter ids -- one bulk read per
-        # relation, never per row. Order is semantic relevance, not time.
+        # Bulk hydration as the feed: newest N comments per confession, authors, reporter
+        # ids -- one read per relation. Order is semantic relevance, not time.
         with self.sessions() as session:
             confession_ids = ordered_ids
             ranked = (
@@ -1759,11 +1637,9 @@ class ConfessionService:
     def _user_keyword_id_page(self, cleaned: str, limit: int) -> tuple[list, int]:
         """Keyword ids over body/recipient only, trigram-relevance ordered.
 
-        Participant-safe by construction: author identity columns are never
-        referenced, so a confession cannot be found by who wrote it. Uses the
-        same ILIKE + pg_trgm approach as the rest of the app, with
-        ``removed_at IS NULL`` enforced in SQL. Relevance is trigram similarity
-        (best of body/recipient) with recency as the tiebreak.
+        Participant-safe: identity columns are never referenced, so a confession cannot
+        be found by who wrote it. Relevance is trigram similarity (best of
+        body/recipient), recency as the tiebreak.
         """
         from ..utils import ilike_contains
 
@@ -1802,10 +1678,9 @@ class ConfessionService:
     ) -> list:
         """Bulk-hydrate confession ids into public ``Confession`` models, in order.
 
-        Same participant-scoped shape as the feed (comments window, authors,
-        reporter counts, caller's own reaction/report state; no identities, no
-        vectors). Removed rows encountered here are skipped, so the page never
-        names content its reader cannot open.
+        Same participant-scoped shape as the feed (comments window, authors, reporter
+        counts, caller's own state; no identities, no vectors). Removed rows are skipped
+        so the page never names content its reader cannot open.
         """
         if not ordered_ids:
             return []
@@ -1930,15 +1805,11 @@ class ConfessionService:
     ) -> Dict[str, Any]:
         """Hybrid keyword + semantic search, keyword first and deduped.
 
-        Keyword runs over body/recipient only (never identity) with trigram
-        relevance ordering; semantic runs through the shared
-        embed + vector-query + threshold + dedupe pipeline capped at
-        ``min(limit, EMBEDDING_SEMANTIC_TOP_K)``. The two halves run
-        concurrently (keyword hydration overlaps the embedding provider call).
-        Semantic degradation (disabled / unavailable / rate-limited / too-short)
-        still returns keyword results with ``semantic.status`` naming the reason
-        instead of failing the request. Blank or over-long queries raise
-        ``invalid_input`` (422).
+        Keyword runs over body/recipient only (never identity) with trigram relevance;
+        semantic runs the shared embed + vector-query pipeline capped at
+        ``min(limit, EMBEDDING_SEMANTIC_TOP_K)``. The halves run concurrently, and semantic
+        degradation still returns keyword results with ``semantic.status`` naming the
+        reason instead of failing the request (blank/over-long queries raise 422).
         """
         from concurrent.futures import ThreadPoolExecutor
 
