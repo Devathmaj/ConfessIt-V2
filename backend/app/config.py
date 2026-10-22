@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     # Bounds how long a request waits for a pooled connection: a saturated pool becomes a
     # fast, visible 5xx instead of an unbounded backlog.
     DATABASE_POOL_TIMEOUT: int = 10
+    # Stop one expensive or stalled statement from occupying a request worker forever.
+    DATABASE_STATEMENT_TIMEOUT_MS: int = Field(default=120_000, ge=1_000)
     # Recycle before a proxy, load balancer or server idle timeout drops connections, so a
     # stale socket is never handed to a request.
     DATABASE_POOL_RECYCLE: int = 300
@@ -106,6 +108,8 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str | None = None
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None
+    # Upper bound for each Cloudinary upload/delete API operation, in seconds.
+    CLOUDINARY_API_TIMEOUT_SECONDS: int = Field(default=60, ge=1)
     CLOUDINARY_URL: str | None = None
     MAX_IMAGE_SIZE_MB: int | None = None
     # A byte limit does not bound decode cost: a small compressed file can describe a
@@ -117,6 +121,8 @@ class Settings(BaseSettings):
     MAX_REQUEST_BODY_BYTES: int | None = None
     # Uvicorn's connection ceiling: the second line of defence if the body cap is probed.
     MAX_CONCURRENCY: int = Field(default=100, ge=1)
+    # Generous whole-request ceiling; individual dependencies have shorter limits too.
+    HTTP_REQUEST_TIMEOUT_SECONDS: int = Field(default=900, ge=1)
     PUBLIC_BASE_URL: str | None = None
     CLOUDINARY_ALLOWED_FORMATS: str | None = None
 

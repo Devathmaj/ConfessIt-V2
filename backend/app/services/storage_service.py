@@ -554,6 +554,7 @@ class CloudinaryStorageService:
                 # public default for an ``upload`` object; an explicit mode can 401 while the URL looks broken.
                 filename=f"profile.{image_format}",
                 tags=self._asset_tags(settings.CLOUDINARY_PROFILE_ASSET_TAG),
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error(
@@ -613,6 +614,7 @@ class CloudinaryStorageService:
                 overwrite=False,
                 filename=f"love-note.{image_format}",
                 tags=self._asset_tags(settings.CLOUDINARY_LOVE_NOTE_ASSET_TAG),
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error("Cloudinary love note upload failed for note %s: %s", love_note_id, exc)
@@ -655,7 +657,8 @@ class CloudinaryStorageService:
         """Destroy one object, raising on failure; ``invalidate=True`` drops the cached rendition too."""
         try:
             cloudinary_destroy(
-                public_id, resource_type="image", type=delivery_type, invalidate=True
+                public_id, resource_type="image", type=delivery_type, invalidate=True,
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error(
@@ -691,7 +694,8 @@ class CloudinaryStorageService:
 
         try:
             result = cloudinary_destroy(
-                public_id, resource_type="image", type="upload", invalidate=True
+                public_id, resource_type="image", type="upload", invalidate=True,
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error(
@@ -721,7 +725,8 @@ class CloudinaryStorageService:
 
         try:
             result = cloudinary_destroy(
-                public_id, resource_type="image", type="authenticated", invalidate=True
+                public_id, resource_type="image", type="authenticated", invalidate=True,
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error("Cloudinary love note delete failed for %s: %s", public_id, exc, exc_info=True)
@@ -770,6 +775,7 @@ class CloudinaryStorageService:
                 invalidate=True,
                 filename=f"love-note.{(image_format or 'png').lower()}",
                 tags=self._asset_tags(settings.CLOUDINARY_LOVE_NOTE_ASSET_TAG),
+                timeout=settings.CLOUDINARY_API_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             logger.error("Love note asset rotation upload failed for %s: %s", public_id, exc)

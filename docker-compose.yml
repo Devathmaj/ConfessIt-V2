@@ -14,7 +14,6 @@ services:
 
   nginx:
     networks: [edge]
-    pids_limit: 128
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -59,10 +58,10 @@ services:
         limits:
           cpus: "0.50"
           memory: 256M
+          pids: 128
 
   backend:
     networks: [edge, app, observability]
-    pids_limit: 256
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -78,6 +77,8 @@ services:
       "${WEB_WORKERS:-2}",
       "--limit-concurrency",
       "100",
+      "--timeout-worker-healthcheck",
+      "10",
       "--h11-max-incomplete-event-size",
       "16384"
     ]
@@ -118,10 +119,10 @@ services:
         limits:
           cpus: "2"
           memory: 1G
+          pids: 256
 
   game-scheduler:
     networks: [app, observability]
-    pids_limit: 64
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -160,6 +161,7 @@ services:
         limits:
           cpus: "0.50"
           memory: 512M
+          pids: 64
 
   # postgres:
   #   image: pgvector/pgvector:pg16
@@ -179,7 +181,6 @@ services:
 
   redis:
     networks: [app]
-    pids_limit: 128
     image: redis:7.2.16-alpine
     container_name: confessit_redis
     restart: unless-stopped
@@ -207,6 +208,7 @@ services:
         limits:
           cpus: "1"
           memory: 256M
+          pids: 128
 
   otel-collector:
     networks: [observability]

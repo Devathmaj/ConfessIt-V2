@@ -184,7 +184,13 @@ class PostgresClient:
         # timezone is pinned to UTC: every column is TIMESTAMPTZ so the instant is always
         # correct, but a non-UTC session changes how values are read back in logs/psql.
         # Kept on the instance for :meth:`schema_lock`, which connects the same way.
-        self._connect_args = {"options": "-c timezone=UTC", "connect_timeout": 10}
+        self._connect_args = {
+            "options": (
+                f"-c timezone=UTC "
+                f"-c statement_timeout={settings.DATABASE_STATEMENT_TIMEOUT_MS}"
+            ),
+            "connect_timeout": 10,
+        }
         self.engine = create_engine(
             database_url or settings.DATABASE_URL,
             pool_pre_ping=True,

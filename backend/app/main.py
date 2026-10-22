@@ -488,6 +488,16 @@ def _limiter_redis():
     return redis_service.client
 
 
+def _increment_global_rate_limit(ip: str, window: int) -> int:
+    """Run the blocking Redis counter off the ASGI event loop."""
+    store = _limiter_redis()
+    key = f"rl:global:{ip}:{window}"
+    count = int(store.incr(key))
+    if count == 1:
+        store.expire(key, 70)
+    return count
+
+
 class GlobalRateLimitMiddleware:
     """A per-IP flood brake across all paths, counted in Redis.
 
@@ -525,10 +535,7 @@ class GlobalRateLimitMiddleware:
 
         window = int(time.time() // 60)
         try:
-            store = _limiter_redis()
-            count = int(store.incr(f"rl:global:{ip}:{window}"))
-            if count == 1:
-                store.expire(f"rl:global:{ip}:{window}", 70)
+            count = await asyncio.to_thread(_increment_global_rate_limit, ip, window)
         except Exception as exc:
             logger.warning("Global rate limiter unavailable, allowing request: %s", exc)
             await self.app(scope, receive, send)
@@ -629,9 +636,55 @@ def request_body_limit() -> int:
     return largest_payload + 256 * 1024
 
 
+class HTTPRequestTimeoutMiddleware:
+    """Bound each HTTP request, including body reads and response generation."""
+
+    def __init__(self, app, timeout_seconds: int):
+        self.app = app
+        self.timeout_seconds = timeout_seconds
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+        response_finished = False
+
+        async def tracked_send(message):
+            nonlocal response_started, response_finished
+            if message["type"] == "http.response.start":
+                response_started = True
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_finished = True
+            await send(message)
+
+        try:
+            async with asyncio.timeout(self.timeout_seconds) as deadline:
+                await self.app(scope, receive, tracked_send)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            logger.warning(
+                "HTTP request exceeded %s second deadline: %s %s",
+                self.timeout_seconds, scope.get("method"), scope.get("path"),
+            )
+            if not response_started:
+                await JSONResponse(
+                    {"detail": "Request timed out"}, status_code=504
+                )(scope, receive, send)
+            elif not response_finished:
+                # End an already-started streaming response so the connection is
+                # released; its status cannot be changed after headers were sent.
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
 # Registered before CORS so that CORS ends up outermost: a 413 answered here still has to
 # be readable by the browser, and a response without the CORS headers surfaces as an
 # opaque network error instead of the status the client needs to see.
+# Body parsing and the route run inside this deadline. WebSockets have their own
+# idle limits and can remain connected for longer than an HTTP request.
+app.add_middleware(HTTPRequestTimeoutMiddleware, timeout_seconds=settings.HTTP_REQUEST_TIMEOUT_SECONDS)
 app.add_middleware(RequestBodyLimitMiddleware, max_bytes=request_body_limit())
 app.add_exception_handler(RequestValidationError, _request_validation_response)
 # Registered for the subclass, so it does not shadow the ordinary HTTPException handler: FastAPI
