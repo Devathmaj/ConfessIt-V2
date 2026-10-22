@@ -63,26 +63,23 @@ datasources:
     jsonData:
       # loki-config.yml sets auth_enabled: true, so every read must carry the tenant
       # header or the query is rejected. Sent the same way promtail and the
-      # collector's loki exporter send it, which is what keeps Grafana pointed at the
+      # collector's OTLP/HTTP exporter send it, which is what keeps Grafana pointed at the
       # same tenant those two write to -- querying without it returns nothing even
       # while logs are visibly arriving.
       httpHeaderName1: X-Scope-OrgID
       maxLines: 1000
-      # Logs -> traces. The otel-collector's loki exporter stores each record as JSON
-      # with the active trace id in a top-level "traceid" field of the log body (for
-      # example {"body":"...","traceid":"cdc67d5f...","spanid":"0a1f70b7..."}). This
-      # derived field pulls that value out of the line at display time and links it to
-      # the matching trace, which is the logs-to-traces half of the correlation. The
+      # Logs -> traces. Loki's native OTLP ingestion stores trace IDs as structured
+      # metadata (trace_id), not as an indexed label or part of the log body. This
+      # derived field links that metadata value to the matching trace. The
       # reverse direction, trace to logs, is tracesToLogsV2 on the Tempo datasource
       # below.
       #
-      # This is deliberately a derived field rather than a Loki label. A trace id is
-      # unique per request, so promoting one to a label would create a new stream per
-      # request and blow up the index; the id stays in the body and is read from there
-      # only when a line is rendered.
+      # Grafana matches the structured metadata key without promoting it to an
+      # indexed stream label, avoiding one Loki stream per request.
       derivedFields:
         - name: TraceID
-          matcherRegex: '"traceid"\s*:\s*"([a-f0-9]{32})"'
+          matcherType: label
+          matcherRegex: '^trace_id$'
           # Grafana parses the trace id itself and opens the Tempo datasource with it.
           # The doubled $$ escapes the provisioning loader's environment variable
           # expansion, so the placeholder survives into the datasource as a literal.
@@ -101,7 +98,7 @@ datasources:
     url: http://tempo:3200
     access: proxy
     jsonData:
-      # No search path override: /api/search is Tempo 2.5's default and is what
+      # No search path override: /api/search is Tempo's default and is what
       # Grafana uses to turn a trace ID into a trace.
       tracesToLogsV2:
         datasourceUid: confessit-loki

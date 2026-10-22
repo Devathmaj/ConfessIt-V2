@@ -16,6 +16,8 @@ services:
       - "127.0.0.1:5173:8080"
       - "127.0.0.1:8001:8101"
     volumes:
+      # This standalone dev stack uses its HMR/API proxy config. The default
+      # docker-compose.yml builds the production image with nginx.prod.conf.template.
       - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - frontend
@@ -72,6 +74,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+      target: runtime-base
     command: [
       "uvicorn",
       "app.main:app",
@@ -123,6 +126,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+      target: scheduler
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
     user: "0:0"
     cap_drop:
@@ -192,7 +196,7 @@ services:
   otel-collector:
     networks: [observability]
     pids_limit: 256
-    image: otel/opentelemetry-collector-contrib:0.99.0
+    image: otel/opentelemetry-collector-contrib:0.163.0
     command: ["--config=/etc/otel-collector-config.yml"]
     expose:
       - "4317"
@@ -209,7 +213,7 @@ services:
   prometheus:
     networks: [observability]
     pids_limit: 256
-    image: prom/prometheus:v2.52.0
+    image: prom/prometheus:v3.15.0
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -232,7 +236,7 @@ services:
   grafana:
     networks: [observability]
     pids_limit: 256
-    image: grafana/grafana:10.4.3
+    image: grafana/grafana:13.2.2-distroless-slim
     ports:
       - "127.0.0.1:3000:3000"
     environment:
@@ -257,13 +261,13 @@ services:
   loki:
     networks: [observability]
     pids_limit: 256
-    image: grafana/loki:2.9.8
+    image: grafana/loki:3.7.8
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
+      test: ["CMD", "/usr/bin/loki", "-health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -272,7 +276,7 @@ services:
   tempo:
     networks: [observability]
     pids_limit: 256
-    image: grafana/tempo:2.5.0
+    image: grafana/tempo:2.10.8
     command: ["-config.file=/etc/tempo.yml"]
     expose:
       - "3200"
@@ -282,7 +286,7 @@ services:
       - ./observability/.rw-password:/etc/tempo/rw-password:ro
       - tempo_data:/var/tempo
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
+      test: ["CMD", "/tempo", "--health"]
       interval: 10s
       timeout: 5s
       retries: 5

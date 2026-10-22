@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => ({
     // Document-level hardening for local dev. Deliberately no `Content-Security-Policy`
     // here: Vite's dev server needs inline scripts and eval for HMR, so any dev CSP is
     // either broken or `unsafe-*` theatre -- the real policy is enforced by prod Nginx
-    // (see nginx.prod.conf.example). Framing, sniffing and referrers need no such
+    // (see nginx.prod.conf.template). Framing, sniffing and referrers need no such
     // exemption, so they are locked down in dev too.
     headers: {
       "X-Content-Type-Options": "nosniff",

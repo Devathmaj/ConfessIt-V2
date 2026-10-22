@@ -1,5 +1,5 @@
 # Multi-tenancy on: every read and write must carry an X-Scope-OrgID header, which
-# the otel-collector's loki exporter sends. This is tenant isolation, not
+# the OTel Collector's OTLP/HTTP exporter sends. This is tenant isolation, not
 # authentication -- it stops anonymous queries and keeps tenants apart, but anyone who can
 # reach the port can still claim a tenant. The real control is that the port is not
 # published off the host (see docker-compose.yml).
@@ -27,6 +27,16 @@ schema_config:
       schema: v13
       index:
         prefix: index_
+        period: 24h
+    # Loki's native OTLP ingestion requires structured metadata, supported by the
+    # TSDB index. This preserves existing BoltDB-shipped data and applies TSDB
+    # only to logs written on or after this date.
+    - from: 2026-10-23
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_tsdb_
         period: 24h
 
 # The log store accumulates request paths and user identifiers, so retention is

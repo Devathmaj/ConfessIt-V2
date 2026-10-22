@@ -41,7 +41,7 @@ metrics_generator:
     collection_interval: 15s
   storage:
     path: /var/tempo/generator/wal
-    # Tempo 2.5 publishes generated metrics by remote write only, so the
+    # Tempo 2.x publishes generated metrics by remote write, so the
     # collector in this stack is the same single Prometheus that serves the rest
     # of the observability data. send_exemplars lets Grafana jump from a RED
     # metric straight to the trace it came from.

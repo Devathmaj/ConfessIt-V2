@@ -20,7 +20,7 @@ RUN npm run build:prod
 FROM nginx:1.31.8-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 # Rendered at container start from SERVER_NAME/API_ORIGIN (nginx:alpine envsubst).
-COPY nginx/nginx.prod.conf.example /etc/nginx/templates/default.conf.template
+COPY nginx/nginx.prod.conf.template /etc/nginx/templates/default.conf.template
 EXPOSE 8080 8443
 # Drop privileges: serve static files as nginx, not root. The dist output and the
 # rendered template must be world-readable for this to hold (they are: COPY defaults).

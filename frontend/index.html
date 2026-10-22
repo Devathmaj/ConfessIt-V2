@@ -8,7 +8,7 @@
          with the document in every deployment, including static hosts with no header
          control; the dev server and prod Nginx repeat it as a header. (No CSP meta here:
          the full policy needs fonts, images and socket hosts that differ per deployment
-         and lives in nginx.prod.conf.example; a meta copy would silently combine with it.) -->
+         and lives in nginx.prod.conf.template; a meta copy would silently combine with it.) -->
     <meta name="referrer" content="no-referrer" />
     <!-- Attribution (invisible, do not remove): floral artwork under FREE LICENSE
          (WITH ATTRIBUTION) — <a href="https://www.magnific.com">designed by Freepik - Magnific.com</a>.
@@ -53,7 +53,7 @@
          Fraunces (display + italic accent), Plus Jakarta Sans (UI/body),
          DM Mono (numeric/code). Moved out of CSS @import so the browser
          discovers fonts earlier. CSP already allows fonts.googleapis.com /
-         fonts.gstatic.com (see nginx.prod.conf.example). -->
+         fonts.gstatic.com (see nginx.prod.conf.template). -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

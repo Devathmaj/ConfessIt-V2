@@ -5,14 +5,14 @@ receivers:
       http:
 
 exporters:
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
-    # Required now that loki-config.yml sets auth_enabled: true.
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+    # Loki's native OTLP endpoint uses this tenant header when auth is enabled.
     headers:
       X-Scope-OrgID: confessit
   prometheus:
     endpoint: 0.0.0.0:8889
-  otlp/tempo:
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       # Inside the Compose network only; tempo's OTLP port is not published to the host.
@@ -21,17 +21,17 @@ exporters:
 processors:
   # Keep the Loki stream label set bounded to values that do not change per process.
   #
-  # The loki exporter turns the standard OpenTelemetry service identity attributes into
-  # Loki labels: service.name becomes job and service.instance.id becomes instance. The
-  # SDK generates a fresh service.instance.id for every process, and this container is
+  # Loki's OTLP ingestion promotes stable service identity attributes to labels and
+  # keeps high-cardinality fields such as trace IDs as structured metadata. The SDK
+  # generates a fresh service.instance.id for every process, and this container is
   # recreated on every image rebuild, so every recreation opened a brand new Loki stream
   # for the same service. That is the classic Loki stream-explosion shape: the label is
   # unbounded, the old streams are retained until they age out, and a query for recent
   # logs has to fan out across a stream per restart to find anything.
   #
   # service.name is left alone -- that one is stable and is the label worth grouping by.
-  # service.instance.id is deleted, so log streams key on job, exporter and level: a
-  # handful of streams for the life of the volume.
+  # service.instance.id is deleted, so log streams key on stable service identity
+  # and severity fields: a handful of streams for the life of the volume.
   #
   # This is scoped to the logs pipeline on purpose. Traces keep their real
   # service.instance.id in Tempo, where a per-process attribute is free -- Tempo stores it
@@ -48,10 +48,10 @@ service:
     logs:
       receivers: [otlp]
       processors: [resource/drop_instance_id]
-      exporters: [loki]
+      exporters: [otlp_http/loki]
     metrics:
       receivers: [otlp]
       exporters: [prometheus]
     traces:
       receivers: [otlp]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]

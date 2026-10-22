@@ -1,5 +1,5 @@
 # Production stack; Nginx terminates TLS and publishes host ports 80/443
-# (see nginx/nginx.prod.conf.example). Replace the empty PEM placeholders in
+# (see nginx/nginx.prod.conf.template). Replace the empty PEM placeholders in
 # nginx/tls/ before starting the stack.
 #
 # Only two services are published to the host: nginx (80/443) and Grafana
@@ -66,6 +66,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: runtime-base
     command: [
       "uvicorn",
       "app.main:app",
@@ -124,6 +125,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: scheduler
     command: ["sh", "/app/scripts/game-scheduler-entrypoint.sh"]
     # The entrypoint writes a system cron file and cron switches to appuser for
     # each job. It needs root plus only the UID/GID switching capabilities.
@@ -209,7 +211,7 @@ services:
   otel-collector:
     networks: [observability]
     pids_limit: 256
-    image: otel/opentelemetry-collector-contrib:0.99.0
+    image: otel/opentelemetry-collector-contrib:0.163.0
     command: ["--config=/etc/otel-collector-config.yml"]
     expose:
       - "4317"
@@ -233,7 +235,7 @@ services:
   prometheus:
     networks: [observability]
     pids_limit: 256
-    image: prom/prometheus:v2.52.0
+    image: prom/prometheus:v3.15.0
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -263,7 +265,7 @@ services:
   grafana:
     networks: [observability]
     pids_limit: 256
-    image: grafana/grafana:10.4.3
+    image: grafana/grafana:13.2.2-distroless-slim
     ports:
       - "127.0.0.1:3000:3000"
     environment:
@@ -295,7 +297,7 @@ services:
   loki:
     networks: [observability]
     pids_limit: 256
-    image: grafana/loki:2.9.8
+    image: grafana/loki:3.7.8
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./observability/loki-config.yml:/etc/loki/config.yml:ro
@@ -308,7 +310,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
+      test: ["CMD", "/usr/bin/loki", "-health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -317,7 +319,7 @@ services:
   tempo:
     networks: [observability]
     pids_limit: 256
-    image: grafana/tempo:2.5.0
+    image: grafana/tempo:2.10.8
     command: ["-config.file=/etc/tempo.yml"]
     expose:
       - "3200"
@@ -334,7 +336,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3200/ready"]
+      test: ["CMD", "/tempo", "--health"]
       interval: 10s
       timeout: 5s
       retries: 5

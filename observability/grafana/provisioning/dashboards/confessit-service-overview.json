@@ -1228,7 +1228,7 @@
         "type": "prometheus",
         "uid": "confessit-prometheus"
       },
-      "description": "Log records the collector accepted and forwarded to Loki, per second. The Loki exporter drops only resource.drop_instance_id; the job and level labels are low-cardinality and are kept on purpose so this dashboard can aggregate by them.",
+      "description": "Log records the collector accepted and forwarded to Loki, per second. The pipeline drops resource.service.instance.id; Loki keeps stable service identity as low-cardinality labels and high-cardinality fields as structured metadata.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1511,7 +1511,7 @@
         "type": "prometheus",
         "uid": "confessit-prometheus"
       },
-      "description": "Failed exports and refused items, split by exporter and receiver. A non-zero line names the exact hop that dropped the telemetry: otlp/tempo for traces, loki for logs, prometheus for metrics, and a refused count on the otlp receiver means the backend or collector rejected the payload before it was ever enqueued.",
+      "description": "Failed exports and refused items, split by exporter and receiver. A non-zero line names the hop that dropped the telemetry: otlp_grpc/tempo for traces, otlp_http/loki for logs, prometheus for metrics, and a refused count on the otlp receiver means the backend or collector rejected the payload before it was ever enqueued.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2416,7 +2416,7 @@
         "type": "tempo",
         "uid": "confessit-tempo"
       },
-      "description": "Newest traces for the backend service, straight from Tempo's search API, so one can be opened as a waterfall.\n\nKNOWN LIMITATION, verified 2026-09-28: this panel does not populate on the current stack, and that is a version gap rather than an empty result. Grafana 10.4.3 predates Tempo 2.5.0, and Grafana's Tempo datasource cannot map Tempo 2.5's search response, so the panel reports no data even when traces exist. The evidence: the same window returns twenty traces from Tempo's /api/search with this exact TraceQL filter; the same panel renders a trace when handed a trace ID rather than a search; and Grafana's log shows no query error, so nothing is failing silently upstream.\n\nUntil Grafana is upgraded, read span-level behaviour from the panels above, which are Prometheus-backed and working: span calls by kind, slowest span operations, and error-status spans by name. To drill into an individual trace, query TraceQL in Explore, where the response is fetched directly and the trace view opens.\n\nThe query itself is correct and is kept so the panel starts working as soon as Grafana is upgraded, with no dashboard change.",
+      "description": "Newest traces for the backend service, straight from Tempo's search API, so one can open a trace as a waterfall.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -2814,7 +2814,7 @@
         "type": "loki",
         "uid": "confessit-loki"
       },
-      "description": "The matching log lines, newest first. Each line carries the active trace id in its body, and the TraceID derived field configured on the Loki datasource turns that into a link: clicking it opens the exact trace for that request, which is the logs-to-traces half of the correlation. The reverse direction is available from the Recent traces panel above.",
+      "description": "The matching log lines, newest first. Loki stores the active trace ID as structured metadata, and the TraceID derived field configured on the Loki datasource links it to the trace. The reverse direction is available from the Recent traces panel above.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
