@@ -15,6 +15,9 @@ distributor:
     otlp:
       protocols:
         grpc:
+          # Listen on the container interface so the collector can reach Tempo
+          # over the Compose network (the default may bind to loopback).
+          endpoint: 0.0.0.0:4317
 
 storage:
   trace:

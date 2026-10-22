@@ -4,7 +4,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy import CheckConstraint, Table, create_engine, text
+from sqlalchemy import CheckConstraint, Table, create_engine, event, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -15,6 +15,16 @@ from .db_models import Base
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _set_transaction_statement_timeout(connection, timeout_ms: int) -> None:
+    """Apply the statement deadline inside each transaction.
+
+    Azure's PgBouncer rejects ``statement_timeout`` as a PostgreSQL startup
+    option. SET LOCAL is issued after the transaction starts, is compatible
+    with transaction pooling, and automatically resets at transaction end.
+    """
+    connection.exec_driver_sql(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
 
 
 # Advisory lock serialising schema convergence across workers: the convergence is a series of
@@ -184,13 +194,9 @@ class PostgresClient:
         # timezone is pinned to UTC: every column is TIMESTAMPTZ so the instant is always
         # correct, but a non-UTC session changes how values are read back in logs/psql.
         # Kept on the instance for :meth:`schema_lock`, which connects the same way.
-        self._connect_args = {
-            "options": (
-                f"-c timezone=UTC "
-                f"-c statement_timeout={settings.DATABASE_STATEMENT_TIMEOUT_MS}"
-            ),
-            "connect_timeout": 10,
-        }
+        # Keep startup options limited to ones accepted by Azure PgBouncer;
+        # statement_timeout is applied with SET LOCAL at each transaction start.
+        self._connect_args = {"options": "-c timezone=UTC", "connect_timeout": 10}
         self.engine = create_engine(
             database_url or settings.DATABASE_URL,
             pool_pre_ping=True,
@@ -203,6 +209,13 @@ class PostgresClient:
             # instead of failing fast like an exhausted pool does.
             connect_args=self._connect_args,
         )
+        event.listen(
+            self.engine,
+            "begin",
+            lambda connection: _set_transaction_statement_timeout(
+                connection, settings.DATABASE_STATEMENT_TIMEOUT_MS
+            ),
+        )
         self.sessions = sessionmaker(self.engine, expire_on_commit=False, class_=Session)
 
         # Engine for the schema-initialisation lock connection only: NullPool so the
@@ -211,6 +224,13 @@ class PostgresClient:
             database_url or settings.DATABASE_URL,
             poolclass=NullPool,
             connect_args=self._connect_args,
+        )
+        event.listen(
+            self._lock_engine,
+            "begin",
+            lambda connection: _set_transaction_statement_timeout(
+                connection, settings.DATABASE_SCHEMA_LOCK_TIMEOUT_MS
+            ),
         )
 
     def initialize(self) -> None:

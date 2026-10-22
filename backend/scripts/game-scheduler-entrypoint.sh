@@ -123,20 +123,22 @@ esac
     "'$(escape_single_quotes "$PYTHON_BIN")'" \
     "'$(escape_single_quotes "$APP_DIR")/scripts/run_game_resets.py'"
 } > "$WRAPPER"
-chmod 755 "$WRAPPER"
+# /tmp is a hardened tmpfs and may be mounted noexec. Keep the generated
+# wrapper readable and invoke it through /bin/sh instead of executing it.
+chmod 644 "$WRAPPER"
 
 # Configure daily cron job running as unprivileged user.
 {
   printf 'CRON_TZ=UTC\n'
   printf 'TZ=UTC\n'
-  printf '1 0 * * * %s %s > /proc/1/fd/1 2>&1\n' "$CRON_USER" "$WRAPPER"
+  printf '1 0 * * * %s /bin/sh %s > /proc/1/fd/1 2>&1\n' "$CRON_USER" "$WRAPPER"
 } > "$CRON_FILE"
 chmod 644 "$CRON_FILE"
 
 echo "[game-scheduler] running catch-up reset pass at container start"
 _attempt=1
 while [ "$_attempt" -le 5 ]; do
-  if runuser -u "$CRON_USER" -- "$WRAPPER"; then
+  if runuser -u "$CRON_USER" -- /bin/sh "$WRAPPER"; then
     echo "[game-scheduler] catch-up pass complete"
     break
   fi

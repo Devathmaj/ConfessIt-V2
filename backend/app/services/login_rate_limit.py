@@ -22,6 +22,10 @@ SCOPE_IP = "ip"
 SCOPE_ACCOUNT = "account"
 SCOPE_ACCOUNT_LONG = "account_long"
 
+# An account's cooldown is deliberately bounded even when its wider rolling
+# window is longer. Browser and IP limits retain their own configured waits.
+MAX_ACCOUNT_RETRY_AFTER_SECONDS = 15 * 60
+
 # Only the exact minted shape is accepted; anything else is treated as no cookie, so a
 # caller cannot choose its rate-limit key or overflow the key column.
 _CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
@@ -159,9 +163,12 @@ def evaluate_login_rate_limits(
     for scope, window, limit, hits, window_started_at in counts:
         if hits > limit:
             remaining = (window_started_at + timedelta(seconds=window) - now).total_seconds()
+            retry_after = max(1, math.ceil(remaining))
+            if scope in (SCOPE_ACCOUNT, SCOPE_ACCOUNT_LONG):
+                retry_after = min(retry_after, MAX_ACCOUNT_RETRY_AFTER_SECONDS)
             return RateLimitVerdict(
                 allowed=False,
                 scope=scope,
-                retry_after=max(1, math.ceil(remaining)),
+                retry_after=retry_after,
             )
     return RateLimitVerdict(allowed=True)

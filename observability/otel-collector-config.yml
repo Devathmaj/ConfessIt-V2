@@ -2,7 +2,11 @@ receivers:
   otlp:
     protocols:
       grpc:
+        # Bind to the container interface so backend containers can export to
+        # the collector over the Compose network.
+        endpoint: 0.0.0.0:4317
       http:
+        endpoint: 0.0.0.0:4318
 
 exporters:
   otlp_http/loki:

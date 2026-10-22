@@ -134,6 +134,10 @@ server {
     location /api/ {
         limit_req zone=edge burst=100 nodelay;
         proxy_pass http://backend:8000/;
+        # The backend sees the stripped /auth path, but browsers call it through
+        # /api/auth. Rewrite both refresh-cookie issuance and deletion so the
+        # browser sends the HttpOnly cookie on subsequent proxied auth requests.
+        proxy_cookie_path /auth /api/auth;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         # Overwrite rather than append: this edge is the public hop, so a

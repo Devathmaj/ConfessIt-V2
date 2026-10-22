@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     DATABASE_POOL_TIMEOUT: int = 10
     # Stop one expensive or stalled statement from occupying a request worker forever.
     DATABASE_STATEMENT_TIMEOUT_MS: int = Field(default=120_000, ge=1_000)
+    # Schema initialization is serialized across workers; let a second worker wait
+    # while the first performs a large migration/index build.
+    DATABASE_SCHEMA_LOCK_TIMEOUT_MS: int = Field(default=900_000, ge=1_000)
     # Recycle before a proxy, load balancer or server idle timeout drops connections, so a
     # stale socket is never handed to a request.
     DATABASE_POOL_RECYCLE: int = 300

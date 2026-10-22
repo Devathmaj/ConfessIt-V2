@@ -114,6 +114,12 @@ services:
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: "confessit-backend"
       OTEL_SEMCONV_STABILITY_OPT_IN: "http"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; h=os.environ['ALLOWED_HOSTS'].split(',')[0].strip(); r=urllib.request.Request('http://127.0.0.1:8000/healthz',headers={'Host':h}); urllib.request.urlopen(r,timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
     deploy:
       resources:
         limits:
@@ -154,7 +160,10 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379"
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -189,8 +198,7 @@ services:
     command: >
       sh -c 'exec redis-server
       --maxmemory 128mb
-      --save 900 1
-      --save 300 10
+      --save ""
       --requirepass "$$REDIS_PASSWORD"'
     expose:
       - "6379"
@@ -213,7 +221,7 @@ services:
   otel-collector:
     networks: [observability]
     pids_limit: 256
-    image: otel/opentelemetry-collector-contrib:0.163.0
+    image: otel/opentelemetry-collector-contrib:0.163.2
     command: ["--config=/etc/otel-collector-config.yml"]
     expose:
       - "4317"
@@ -321,7 +329,10 @@ services:
   tempo:
     networks: [observability]
     pids_limit: 256
-    image: grafana/tempo:2.10.8
+    image: confessit-tempo:2.10.8
+    build:
+      context: ./observability
+      dockerfile: tempo.Dockerfile
     command: ["-config.file=/etc/tempo.yml"]
     expose:
       - "3200"
@@ -338,7 +349,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "/tempo", "--health"]
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -795,6 +795,12 @@ def read_root():
     logger.info("Root endpoint accessed")
     return {"message": "Welcome to the ConfessIt API!"}
 
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Compose readiness probe; lifespan startup completes before this can answer."""
+    return {"status": "ok"}
+
 @app.get("/api/time", tags=["Root"])
 def read_server_time():
     """Report the server's own UTC time so clients need not trust the device clock.
